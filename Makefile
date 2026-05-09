@@ -61,6 +61,12 @@ cmd:
 	ls -lah .local/bin/wanix
 .PHONY: cmd
 
+## Build wanix-cli (headless Chrome bridge: stdin/stdout <-> in-browser wanix term)
+wanix-cli: $(DIST_DIR)/wanix.min.js $(DIST_DIR)/wanix.debug.wasm
+	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o .local/bin/wanix-cli $(GOARGS) ./cmd/wanix-cli
+	ls -lah .local/bin/wanix-cli
+.PHONY: wanix-cli
+
 ## Build WASM modules
 wasm: $(if $(WASM_DEBUG),wasm-go,) wasm-tinygo
 .PHONY: wasm
