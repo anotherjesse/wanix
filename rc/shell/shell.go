@@ -1,7 +1,6 @@
 package shell
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -84,40 +83,49 @@ func tryFlush(w io.Writer) {
 }
 
 func runREPL(ctx context.Context, r *interp.Runner, parser *syntax.Parser, stdin io.Reader, stdout, stderr io.Writer) error {
-	scanner := bufio.NewScanner(stdin)
-	for {
-		fmt.Fprint(stderr, "rc% ")
-		// Flush so the prompt is visible before we block on stdin.
-		tryFlush(stderr)
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return err
+	// Use parser.Interactive so multiple statements share runner state
+	// (variable assignments, cwd, etc.). Calling Runner.Run with separately
+	// parsed scripts gives each script its own variable scope, so top-level
+	// assignments wouldn't survive across REPL iterations.
+	fmt.Fprint(stderr, "rc% ")
+	tryFlush(stderr)
+	var runErr error
+	err := parser.Interactive(stdin, func(stmts []*syntax.Stmt) bool {
+		if parser.Incomplete() {
+			fmt.Fprint(stderr, "> ")
+			tryFlush(stderr)
+			return true
+		}
+		for _, stmt := range stmts {
+			if err := r.Run(ctx, stmt); err != nil {
+				var status interp.ExitStatus
+				if errors.As(err, &status) {
+					fmt.Fprintf(stderr, "exit status %d\n", status)
+					tryFlush(stdout)
+					tryFlush(stderr)
+					continue
+				}
+				runErr = err
+				return false
 			}
-			return nil
-		}
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		if err := runSource(ctx, r, parser, "<stdin>", strings.NewReader(line+"\n")); err != nil {
-			var status interp.ExitStatus
-			if errors.As(err, &status) {
-				fmt.Fprintf(stderr, "exit status %d\n", status)
+			if r.Exited() {
 				tryFlush(stdout)
 				tryFlush(stderr)
-				continue
+				return false
 			}
-			tryFlush(stdout)
-			tryFlush(stderr)
-			return err
 		}
-		// Drain anything the command wrote before showing the next prompt.
 		tryFlush(stdout)
 		tryFlush(stderr)
-		if r.Exited() {
-			return nil
-		}
+		fmt.Fprint(stderr, "rc% ")
+		tryFlush(stderr)
+		return true
+	})
+	tryFlush(stdout)
+	tryFlush(stderr)
+	if runErr != nil {
+		return runErr
 	}
+	return err
 }
 
 func runSource(ctx context.Context, r *interp.Runner, parser *syntax.Parser, name string, src io.Reader) error {
