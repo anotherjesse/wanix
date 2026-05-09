@@ -2,9 +2,17 @@
 // the in-browser terminal to local stdin/stdout.
 //
 // Usage:
-//   wanix-cli                       # serves repo root, runs examples/repl-rc
-//   wanix-cli -page /examples/repl-gojs/
-//   wanix-cli -dir . -listen :7654 -path '#task/repl/term/data'
+//
+//	wanix-cli                                  # serves repo root, runs examples/repl-rc
+//	wanix-cli -page /examples/repl-gojs/ -task '#task/repl'
+//	wanix-cli -dir . -listen :7654
+//
+// The bridge serves the named directory over HTTP with cross-origin isolation
+// headers, opens the page in headless Chrome, attaches reader+writer to the
+// task's terminal, and watches the task's exit file. When the task records an
+// exit code, wanix-cli prints buffered output and exits with the same code.
+// Closing local stdin (EOF) closes the page-side writer so the in-browser
+// program sees EOF on stdin.
 package main
 
 import (
@@ -19,6 +27,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -32,10 +42,12 @@ func main() {
 		listen     = flag.String("listen", "127.0.0.1:0", "http listen addr (random port if :0)")
 		dir        = flag.String("dir", ".", "directory to serve")
 		page       = flag.String("page", "/examples/repl-rc/", "page path to open")
-		termPath   = flag.String("path", "#task/repl/term/data", "wanix term file path")
+		taskPath   = flag.String("task", "#task/repl", "wanix task base path (term=<task>/term/data, exit=<task>/exit)")
 		chromePath = flag.String("chrome", defaultChrome(), "chrome/chromium executable path")
 		showHead   = flag.Bool("head", false, "show browser window (debug)")
 		verbose    = flag.Bool("v", false, "verbose logging")
+		readyTO    = flag.Duration("ready-timeout", 15*time.Second, "timeout waiting for page bridge ready")
+		exitGrace  = flag.Duration("exit-grace", 500*time.Millisecond, "drain delay after task exit before this process exits")
 	)
 	flag.Parse()
 
@@ -72,11 +84,12 @@ func main() {
 	ctx, cancel := chromedp.NewContext(allocCtx, ctxOpts...)
 	defer cancel()
 
-	// stdin->page serialized through this mutex; chromedp.Run isn't safe for
-	// concurrent calls on the same context.
+	// chromedp.Run isn't safe for concurrent calls on the same context; serialize
+	// stdin->page writes through this mutex.
 	var sendMu sync.Mutex
 	ready := make(chan struct{})
-	var readyOnce sync.Once
+	exitCh := make(chan int, 1)
+	var readyOnce, exitOnce sync.Once
 
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		switch e := ev.(type) {
@@ -91,6 +104,12 @@ func main() {
 				os.Stdout.Write(data)
 			case "wanixReady":
 				readyOnce.Do(func() { close(ready) })
+			case "wanixExit":
+				code, perr := strconv.Atoi(strings.TrimSpace(e.Payload))
+				if perr != nil {
+					code = 1
+				}
+				exitOnce.Do(func() { exitCh <- code })
 			case "wanixLog":
 				if *verbose {
 					log.Println("page:", e.Payload)
@@ -109,8 +128,9 @@ func main() {
 		runtime.AddBinding("wanixOut"),
 		runtime.AddBinding("wanixLog"),
 		runtime.AddBinding("wanixReady"),
+		runtime.AddBinding("wanixExit"),
 		chromedp.Navigate(url),
-		chromedp.Evaluate(setupJS(*termPath), nil),
+		chromedp.Evaluate(setupJS(*taskPath), nil),
 	); err != nil {
 		log.Fatal(err)
 	}
@@ -121,34 +141,39 @@ func main() {
 		if *verbose {
 			log.Println("bridge ready")
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(*readyTO):
 		log.Fatal("timeout waiting for page bridge to become ready")
 	case <-ctx.Done():
 		return
 	}
 
-	// stdin -> page writer
+	// stdin -> page writer; on EOF, close page-side writer to signal EOF to the task.
+	stdinDone := make(chan struct{})
 	go func() {
+		defer close(stdinDone)
 		buf := make([]byte, 4096)
 		for {
-			n, err := os.Stdin.Read(buf)
+			n, rerr := os.Stdin.Read(buf)
 			if n > 0 {
 				payload := base64.StdEncoding.EncodeToString(buf[:n])
 				js := fmt.Sprintf("window.wanixSend(%q)", payload)
 				sendMu.Lock()
-				rerr := chromedp.Run(ctx, chromedp.Evaluate(js, nil))
+				perr := chromedp.Run(ctx, chromedp.Evaluate(js, nil))
 				sendMu.Unlock()
-				if rerr != nil {
+				if perr != nil {
 					if *verbose {
-						log.Println("send:", rerr)
+						log.Println("send:", perr)
 					}
 					return
 				}
 			}
-			if err != nil {
-				if err != io.EOF && *verbose {
-					log.Println("stdin:", err)
+			if rerr != nil {
+				if rerr != io.EOF && *verbose {
+					log.Println("stdin:", rerr)
 				}
+				sendMu.Lock()
+				_ = chromedp.Run(ctx, chromedp.Evaluate(`window.wanixCloseWriter && window.wanixCloseWriter()`, nil))
+				sendMu.Unlock()
 				return
 			}
 		}
@@ -156,10 +181,23 @@ func main() {
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+	exitCode := 0
 	select {
+	case code := <-exitCh:
+		exitCode = code
+		if *verbose {
+			log.Printf("task exited with %d", code)
+		}
+		// Give any final output time to drain.
+		time.Sleep(*exitGrace)
 	case <-sig:
+		exitCode = 130
 	case <-ctx.Done():
+		exitCode = 1
 	}
+	_ = stdinDone
+	os.Exit(exitCode)
 }
 
 func defaultChrome() string {
@@ -198,33 +236,38 @@ func startServer(listenAddr, dir string) (*http.Server, string, error) {
 	return srv, ln.Addr().String(), nil
 }
 
-// setupJS waits for the wanix-system to be ready, opens reader+writer on the
-// term file, and wires them to the chromedp bindings.
-func setupJS(path string) string {
+// setupJS attaches to the wanix-system, opens reader+writer on the task's
+// terminal, and starts watching the task's exit file. Once an exit code is
+// recorded, it is delivered to the host via the wanixExit binding.
+func setupJS(taskBase string) string {
 	return fmt.Sprintf(`(async () => {
-		const findSystem = () => {
-			const sys = document.querySelector('wanix-system');
-			return sys || null;
-		};
 		const sleep = ms => new Promise(r => setTimeout(r, ms));
-		let sys = findSystem();
-		while (!sys) { await sleep(50); sys = findSystem(); }
+		let sys = document.querySelector('wanix-system');
+		while (!sys) { await sleep(50); sys = document.querySelector('wanix-system'); }
 		while (!sys.isReady) await sleep(50);
 		await window.wanixLog('system ready');
 
-		const path = %q;
-		await sys.root.waitFor(path);
-		const readable = await sys.root.openReadable(path);
-		const writable = await sys.root.openWritable(path);
+		const taskBase = %q;
+		const dataPath = taskBase + '/term/data';
+		const exitPath = taskBase + '/exit';
+
+		await sys.root.waitFor(dataPath);
+		const readable = await sys.root.openReadable(dataPath);
+		// open an explicit fd for writes so we can close it (signals EOF to the
+		// reader). WritableStream.close() doesn't touch the underlying fd.
+		const wfd = await sys.root.openFile(dataPath, 1, 0);
 		const reader = readable.getReader();
-		const writer = writable.getWriter();
 
 		window.wanixSend = async (b64) => {
 			const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-			await writer.write(bin);
+			await sys.root.write(wfd, bin);
+		};
+		window.wanixCloseWriter = async () => {
+			try { await sys.root.close(wfd); } catch (e) {}
 		};
 		await window.wanixReady('');
 
+		// term reader -> stdout
 		(async () => {
 			try {
 				while (true) {
@@ -239,5 +282,23 @@ func setupJS(path string) string {
 				await window.wanixLog('reader error: ' + e);
 			}
 		})();
-	})().catch(e => window.wanixLog('setup error: ' + e));`, path)
+
+		// poll exit file for non-empty content.
+		(async () => {
+			try {
+				await sys.root.waitFor(exitPath);
+				while (true) {
+					const txt = (await sys.root.readText(exitPath)).trim();
+					if (txt.length > 0) {
+						await window.wanixExit(txt);
+						return;
+					}
+					await sleep(150);
+				}
+			} catch (e) {
+				await window.wanixLog('exit watcher: ' + e);
+				await window.wanixExit('1');
+			}
+		})();
+	})().catch(e => window.wanixLog('setup error: ' + e));`, taskBase)
 }
