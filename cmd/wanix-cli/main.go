@@ -91,6 +91,7 @@ func main() {
 	exitCh := make(chan int, 1)
 	var readyOnce, exitOnce sync.Once
 
+	var stdoutMu sync.Mutex
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		switch e := ev.(type) {
 		case *runtime.EventBindingCalled:
@@ -101,7 +102,9 @@ func main() {
 					log.Println("decode:", err)
 					return
 				}
+				stdoutMu.Lock()
 				os.Stdout.Write(data)
+				stdoutMu.Unlock()
 			case "wanixReady":
 				readyOnce.Do(func() { close(ready) })
 			case "wanixExit":
