@@ -120,12 +120,18 @@ function cleanpath(path) {
 					callback(enosys());
 					return;
 				}
+                // Copy synchronously: `buf` is a Uint8Array view into wasm
+                // linear memory. The downstream sys.write/peer.call chain is
+                // async, so Go can issue another write that clobbers this
+                // region before serialization completes.
+                const data = new Uint8Array(buf.length);
+                data.set(buf);
                 try {
                     if (position !== null) {
-                        callback(null, await sys.writeAt(fd, buf, position));
+                        callback(null, await sys.writeAt(fd, data, position));
                         return;
                     }
-                    callback(null, await sys.write(fd, buf));
+                    callback(null, await sys.write(fd, data));
                 } catch (e) {
                     errback(callback, e);
                 }
