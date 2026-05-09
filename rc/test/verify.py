@@ -126,6 +126,69 @@ CASES: list[Case] = [
         # Default `exit\n` suffix exits 0.
         expected=lambda s: None,
     ),
+    # Variable expansion
+    Case(
+        name="var.assign_and_echo",
+        input='x=hello\necho $x\n',
+        expected=equals("hello\n"),
+    ),
+    Case(
+        name="var.with_braces",
+        input='x=world\necho ${x}!\n',
+        expected=equals("world!\n"),
+    ),
+    # Pipes
+    Case(
+        name="pipe.echo_to_cat",
+        input='echo hi | cat\n',
+        expected=equals("hi\n"),
+    ),
+    # Redirection: capture echo output to a file under /tmp and read it back.
+    Case(
+        name="redirect.write_and_read",
+        input='echo persisted > /tmp/verify.txt\ncat /tmp/verify.txt\n',
+        expected=equals("persisted\n"),
+    ),
+    # Builtins
+    Case(
+        name="builtin.true",
+        input='true && echo ok\n',
+        expected=equals("ok\n"),
+    ),
+    Case(
+        name="builtin.false",
+        input='false || echo recovered\n',
+        expected=equals("recovered\n"),
+    ),
+    # Command substitution
+    Case(
+        name="cmdsub.dollar_paren",
+        input='echo "got: $(echo nested)"\n',
+        expected=equals("got: nested\n"),
+    ),
+    # Arithmetic
+    Case(
+        name="arith.add",
+        input='echo $((2 + 3))\n',
+        expected=equals("5\n"),
+    ),
+    # Quoting / escapes
+    Case(
+        name="quote.single",
+        input="echo 'a $x b'\n",
+        expected=equals("a $x b\n"),
+    ),
+    Case(
+        name="quote.escaped_dollar",
+        input='echo "a \\$x b"\n',
+        expected=equals("a $x b\n"),
+    ),
+    # cd / pwd
+    Case(
+        name="cd.then_pwd",
+        input='cd /tmp\npwd\n',
+        expected=equals("/tmp\n"),
+    ),
 ]
 
 # ---- Runner ----------------------------------------------------------------
@@ -146,22 +209,23 @@ def build_cli() -> None:
 
 def run_case(case: Case, verbose: bool) -> tuple[bool, str, str]:
     """Run a single case through wanix-cli. Returns (passed, normalized_output, message)."""
-    stdin_payload = case.input + "exit\n"
+    stdin_payload = (case.input + "exit\n").encode("utf-8")
     started = time.time()
     try:
         proc = subprocess.run(
             [str(WANIX_CLI)],
             input=stdin_payload,
-            text=True,
             capture_output=True,
             timeout=case.timeout,
             cwd=REPO,
         )
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         return False, "", f"timed out after {case.timeout}s"
     elapsed = time.time() - started
 
-    raw = proc.stdout
+    # Output may contain non-utf8 bytes from stray ANSI/control sequences;
+    # decode permissively so the harness can still report a useful diff.
+    raw = proc.stdout.decode("utf-8", errors="replace")
     actual = normalize(raw)
 
     if verbose:
