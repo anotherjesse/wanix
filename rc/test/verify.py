@@ -183,11 +183,11 @@ CASES: list[Case] = [
         input='echo "a \\$x b"\n',
         expected=equals("a $x b\n"),
     ),
-    # cd / pwd
+    # cd / pwd. /web is the working dir; /web/dom exists (web platform fs).
     Case(
         name="cd.then_pwd",
-        input='cd /tmp\npwd\n',
-        expected=equals("/tmp\n"),
+        input='cd /web/dom\npwd\n',
+        expected=equals("/web/dom\n"),
     ),
 ]
 
