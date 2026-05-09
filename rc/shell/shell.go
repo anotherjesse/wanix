@@ -67,17 +67,28 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return exitCodeForErr(stderr, err)
 		}
 	default:
-		if err := runREPL(ctx, runner, parser, stdin, stderr); err != nil {
+		if err := runREPL(ctx, runner, parser, stdin, stdout, stderr); err != nil {
 			return exitCodeForErr(stderr, err)
 		}
 	}
 	return 0
 }
 
-func runREPL(ctx context.Context, r *interp.Runner, parser *syntax.Parser, stdin io.Reader, stderr io.Writer) error {
+// flusher matches *bufio.Writer; implementations may flush user-visible output.
+type flusher interface{ Flush() error }
+
+func tryFlush(w io.Writer) {
+	if f, ok := w.(flusher); ok {
+		_ = f.Flush()
+	}
+}
+
+func runREPL(ctx context.Context, r *interp.Runner, parser *syntax.Parser, stdin io.Reader, stdout, stderr io.Writer) error {
 	scanner := bufio.NewScanner(stdin)
 	for {
 		fmt.Fprint(stderr, "rc% ")
+		// Flush so the prompt is visible before we block on stdin.
+		tryFlush(stderr)
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil {
 				return err
@@ -92,10 +103,17 @@ func runREPL(ctx context.Context, r *interp.Runner, parser *syntax.Parser, stdin
 			var status interp.ExitStatus
 			if errors.As(err, &status) {
 				fmt.Fprintf(stderr, "exit status %d\n", status)
+				tryFlush(stdout)
+				tryFlush(stderr)
 				continue
 			}
+			tryFlush(stdout)
+			tryFlush(stderr)
 			return err
 		}
+		// Drain anything the command wrote before showing the next prompt.
+		tryFlush(stdout)
+		tryFlush(stderr)
 		if r.Exited() {
 			return nil
 		}
