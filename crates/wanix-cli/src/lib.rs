@@ -1473,6 +1473,26 @@ std.err.flush();
     }
 
     #[test]
+    fn qjs_term_example_ready_io_handler_reads_terminal_stdin_in_turns() {
+        let output = run([
+            "qjs-term".into(),
+            "--stdin".into(),
+            "abcdef".into(),
+            "--ready-io-turns".into(),
+            "2".into(),
+            example_script("qjs-term-ready-io-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"terminal task: 1\r\nterminal id: 1\r\nsync\r\nterminal chunk 1: abcd\r\nterminal chunk 2: ef\r\nterminal handler done\r\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_reads_script_sibling_with_quickjs_std_load_file() {
         let script = write_temp_script(
             "std-read-demo.js",

@@ -58,7 +58,9 @@ QuickJS.
 
 The next terminal-facing demo is `wanix-rust qjs-term main.js`: JavaScript still
 runs as a Wanix `qjs` task, but fd 0/1/2 are bound through `#term/<id>/program`
-and the CLI emits the terminal `data` transcript.
+and the CLI emits the terminal `data` transcript. The checked-in
+`qjs-term-ready-io-demo.js` also proves QuickJS ready-IO handlers can consume
+terminal-backed fd 0 in bounded turns.
 
 ## Code Quality Guardrails
 
