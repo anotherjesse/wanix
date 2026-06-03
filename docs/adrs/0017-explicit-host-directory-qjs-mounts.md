@@ -26,6 +26,7 @@ Expose host access in the native CLI through explicit qjs mounts:
 
 ```sh
 wanix-rust qjs --mount HOST=GUEST script.js
+wanix-rust qjs-restore --mount HOST=GUEST before.js after.js
 ```
 
 The CLI binds each host root at the requested non-root Wanix guest path. Guest
@@ -38,6 +39,11 @@ accidentally replace the CLI's task root.
 QuickJS/WASI tasks can now demonstrate durable reads and writes against a real
 host directory while still going through Wanix namespace resolution, task fd
 state, and Wanix-owned WASI adapters.
+
+For snapshot/restore demos, the QuickJS VM image keeps guest memory while the
+mounted host directory is live namespace state cloned onto the restored Wanix
+task. This keeps host resources outside the snapshot bytes while making the
+reattachment visible through host filesystem writes.
 
 This is a native CLI composition feature, not a change to core task identity or
 QuickJS engine policy. Browser deployments and future persisted namespace

@@ -13,7 +13,7 @@ use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
 use wanix_task::{Fd, Task, TaskSpec, TaskTable};
 use wanix_vfs::BindOptions;
 
-const USAGE: &str = "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] [--mount HOST=GUEST ...] <script.js> [-- arg ...]\n       wanix-rust qjs-restore [--cwd DIR] <before.js> <after.js>\n       wanix-rust --help";
+const USAGE: &str = "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] [--mount HOST=GUEST ...] <script.js> [-- arg ...]\n       wanix-rust qjs-restore [--cwd DIR] [--mount HOST=GUEST ...] <before.js> <after.js>\n       wanix-rust --help";
 const QJS_GUEST_SCRIPT: &str = "main.js";
 const QJS_RESTORE_BEFORE_SCRIPT: &str = "__wanix_restore/before/main.js";
 const QJS_RESTORE_AFTER_SCRIPT: &str = "__wanix_restore/after/main.js";
@@ -151,6 +151,7 @@ struct QjsRestoreCommand {
     before_script_path: PathBuf,
     after_script_path: PathBuf,
     cwd: NormalizedPath,
+    mounts: Vec<HostMount>,
 }
 
 fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
@@ -246,6 +247,7 @@ fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
     root.write_file(before_guest_script.as_str(), before_script.as_bytes())?;
     root.write_file(after_guest_script.as_str(), after_script.as_bytes())?;
     before_task.bind(root, ".", ".", BindOptions::default())?;
+    bind_host_mounts(&before_task, &command.mounts)?;
 
     let stdout = Arc::new(MemFs::new());
     stdout.write_file("stdout", b"")?;
@@ -346,7 +348,10 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
             let value = args
                 .get(i)
                 .ok_or_else(|| CliError::usage("qjs --mount expects HOST=GUEST"))?;
-            mounts.push(parse_host_mount(&os_arg_to_string(value, "qjs --mount")?)?);
+            mounts.push(parse_host_mount(
+                &os_arg_to_string(value, "qjs --mount")?,
+                "qjs --mount",
+            )?);
             i += 1;
         } else if args[i] == "--" {
             i += 1;
@@ -381,18 +386,18 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
     })
 }
 
-fn parse_host_mount(value: &str) -> Result<HostMount, CliError> {
+fn parse_host_mount(value: &str, label: &str) -> Result<HostMount, CliError> {
     let Some((host, guest)) = value.split_once('=') else {
-        return Err(CliError::usage("qjs --mount expects HOST=GUEST"));
+        return Err(CliError::usage(format!("{label} expects HOST=GUEST")));
     };
     if host.is_empty() || guest.is_empty() {
-        return Err(CliError::usage("qjs --mount expects HOST=GUEST"));
+        return Err(CliError::usage(format!("{label} expects HOST=GUEST")));
     }
     let guest_path = NormalizedPath::new(guest)?;
     if guest_path.as_str() == "." {
-        return Err(CliError::usage(
-            "qjs --mount guest path must not be . in this demo",
-        ));
+        return Err(CliError::usage(format!(
+            "{label} guest path must not be . in this demo"
+        )));
     }
     Ok(HostMount {
         host_path: PathBuf::from(host),
@@ -402,6 +407,7 @@ fn parse_host_mount(value: &str) -> Result<HostMount, CliError> {
 
 fn parse_qjs_restore_command(args: &[OsString]) -> Result<QjsRestoreCommand, CliError> {
     let mut cwd = NormalizedPath::new(".")?;
+    let mut mounts = Vec::new();
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--cwd" {
@@ -410,6 +416,16 @@ fn parse_qjs_restore_command(args: &[OsString]) -> Result<QjsRestoreCommand, Cli
                 .get(i)
                 .ok_or_else(|| CliError::usage("qjs-restore --cwd expects a Wanix path"))?;
             cwd = NormalizedPath::new(os_arg_to_string(value, "qjs-restore --cwd")?)?;
+            i += 1;
+        } else if args[i] == "--mount" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs-restore --mount expects HOST=GUEST"))?;
+            mounts.push(parse_host_mount(
+                &os_arg_to_string(value, "qjs-restore --mount")?,
+                "qjs-restore --mount",
+            )?);
             i += 1;
         } else if args[i] == "--" {
             i += 1;
@@ -442,6 +458,7 @@ fn parse_qjs_restore_command(args: &[OsString]) -> Result<QjsRestoreCommand, Cli
         before_script_path,
         after_script_path,
         cwd,
+        mounts,
     })
 }
 
@@ -925,7 +942,11 @@ std.out.flush();
 
         let missing_value = run(["qjs", "--mount"]).unwrap_err();
         assert_eq!(missing_value.exit_code(), 2);
-        assert!(missing_value.to_string().contains("HOST=GUEST"));
+        assert!(
+            missing_value
+                .to_string()
+                .contains("qjs --mount expects HOST=GUEST")
+        );
 
         let root_guest = run([
             "qjs".into(),
@@ -935,7 +956,11 @@ std.out.flush();
         ])
         .unwrap_err();
         assert_eq!(root_guest.exit_code(), 2);
-        assert!(root_guest.to_string().contains("must not be ."));
+        assert!(
+            root_guest
+                .to_string()
+                .contains("qjs --mount guest path must not be .")
+        );
 
         let missing_host = run([
             "qjs".into(),
@@ -1249,6 +1274,128 @@ print("opened task fd");
             b"before task: 1\nafter task: 2\nvm state: preserved from task 1\nnamespace: namespace from task 1\n"
         );
         assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_restore_mounts_host_directory_into_reattached_task_namespace() {
+        let host = temp_dir("wanix-cli-restore-mount");
+        let before_script = write_temp_script(
+            "restore-before-host.js",
+            r##"
+import * as std from "qjs:std";
+
+const task = std.loadFile("#task/self/id").trim();
+globalThis.snapshotValue = "vm from " + task;
+std.writeFile("host/before.txt", "before host task " + task);
+std.out.puts("before " + task + "\n");
+std.out.flush();
+"##,
+        );
+        let after_script = write_temp_script(
+            "restore-after-host.js",
+            r##"
+import * as std from "qjs:std";
+
+const task = std.loadFile("#task/self/id").trim();
+std.writeFile("host/after.txt", "after host task " + task + " with " + globalThis.snapshotValue);
+std.out.puts("after " + task + "\n");
+std.out.puts(std.loadFile("host/before.txt") + "\n");
+std.out.puts(std.loadFile("host/after.txt") + "\n");
+std.out.flush();
+std.exit(6);
+"##,
+        );
+
+        let output = run([
+            "qjs-restore".into(),
+            "--mount".into(),
+            format!("{}=host", host.display()).into(),
+            before_script.into_os_string(),
+            after_script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 6);
+        assert_eq!(
+            output.stdout(),
+            b"before 1\nafter 2\nbefore host task 1\nafter host task 2 with vm from 1\n"
+        );
+        assert!(output.stderr().is_empty());
+        assert_eq!(
+            fs::read(host.join("before.txt")).unwrap(),
+            b"before host task 1"
+        );
+        assert_eq!(
+            fs::read(host.join("after.txt")).unwrap(),
+            b"after host task 2 with vm from 1"
+        );
+        fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn qjs_restore_host_mount_example_writes_host_visible_file() {
+        let host = temp_dir("wanix-cli-restore-mount-example");
+
+        let output = run([
+            "qjs-restore".into(),
+            "--mount".into(),
+            format!("{}=host", host.display()).into(),
+            example_script("qjs-snapshot-before.js").into_os_string(),
+            example_script("qjs-snapshot-host-after.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 8);
+        assert_eq!(
+            output.stdout(),
+            b"before task: 1\nafter task: 2\nhost output: restored task 2 saw preserved from task 1\n"
+        );
+        assert!(output.stderr().is_empty());
+        assert_eq!(
+            fs::read(host.join("restored-output.txt")).unwrap(),
+            b"restored task 2 saw preserved from task 1"
+        );
+        fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn qjs_restore_rejects_invalid_host_mounts() {
+        let before_script = write_temp_script("restore-mount-error-before.js", "print('unused');");
+        let after_script = write_temp_script("restore-mount-error-after.js", "print('unused');");
+
+        let missing_value = run(["qjs-restore", "--mount"]).unwrap_err();
+        assert_eq!(missing_value.exit_code(), 2);
+        assert!(
+            missing_value
+                .to_string()
+                .contains("qjs-restore --mount expects HOST=GUEST")
+        );
+
+        let root_guest = run([
+            "qjs-restore".into(),
+            "--mount".into(),
+            "/tmp=.".into(),
+            before_script.clone().into_os_string(),
+            after_script.clone().into_os_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(root_guest.exit_code(), 2);
+        assert!(
+            root_guest
+                .to_string()
+                .contains("qjs-restore --mount guest path must not be .")
+        );
+
+        let missing_host = run([
+            "qjs-restore".into(),
+            "--mount".into(),
+            "/definitely/not/a/wanix/test/path=host".into(),
+            before_script.into_os_string(),
+            after_script.into_os_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(missing_host.exit_code(), 1);
+        assert!(missing_host.to_string().contains("failed to mount"));
     }
 
     #[test]
