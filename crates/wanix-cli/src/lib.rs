@@ -9,12 +9,16 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use wanix_fs::{FileSystem, FsError, MemFs, NormalizedPath, OpenOptions};
-use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver};
-use wanix_task::{Fd, TaskSpec, TaskTable};
+use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
+use wanix_task::{Fd, Task, TaskSpec, TaskTable};
 use wanix_vfs::BindOptions;
 
-const USAGE: &str = "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] <script.js> [-- arg ...]\n       wanix-rust --help";
+const USAGE: &str = "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] <script.js> [-- arg ...]\n       wanix-rust qjs-restore [--cwd DIR] <before.js> <after.js>\n       wanix-rust --help";
 const QJS_GUEST_SCRIPT: &str = "main.js";
+const QJS_RESTORE_BEFORE_SCRIPT: &str = "__wanix_restore/before/main.js";
+const QJS_RESTORE_AFTER_SCRIPT: &str = "__wanix_restore/after/main.js";
+const QJS_RESTORE_BEFORE_DIR: &str = "__wanix_restore/before";
+const QJS_RESTORE_AFTER_DIR: &str = "__wanix_restore/after";
 
 /// Captured native CLI output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +112,9 @@ where
         [] => Ok(help_output()),
         [help] if help == "--help" || help == "-h" => Ok(help_output()),
         [command, rest @ ..] if command == "qjs" => run_qjs(parse_qjs_command(rest)?),
+        [command, rest @ ..] if command == "qjs-restore" => {
+            run_qjs_restore(parse_qjs_restore_command(rest)?)
+        }
         [command, ..] => Err(CliError::usage(format!(
             "unknown wanix-rust command: {}",
             command.to_string_lossy()
@@ -132,30 +139,23 @@ struct QjsCommand {
     stdin: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QjsRestoreCommand {
+    before_script_path: PathBuf,
+    after_script_path: PathBuf,
+    cwd: NormalizedPath,
+}
+
 fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
     let script_path = command.script_path.as_path();
-    let script = std::fs::read(script_path).map_err(|error| {
-        CliError::new(
-            format!("failed to read {}: {error}", script_path.display()),
-            1,
-        )
-    })?;
-    let script = String::from_utf8(script).map_err(|error| {
-        CliError::new(
-            format!(
-                "script {} is not valid UTF-8: {error}",
-                script_path.display()
-            ),
-            1,
-        )
-    })?;
+    let script = read_utf8_script(script_path)?;
 
     let table = TaskTable::new();
     let runner = quickjs_runner()?;
     table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(runner)))?;
     let task = table.allocate_root("qjs")?;
-    let task_spec = qjs_task_spec(&command)?;
-    let task_cmd = qjs_task_cmd(&command.args);
+    let task_spec = qjs_task_spec(QJS_GUEST_SCRIPT, &command.args, &command.env, &command.cwd)?;
+    let task_cmd = task_cmd(QJS_GUEST_SCRIPT, &command.args);
     let task_env = command.env.join("\n");
     let task_dir = command.cwd.to_string();
 
@@ -204,6 +204,100 @@ fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
                 stderr.push(b'\n');
             }
             stderr.extend_from_slice(format!("wanix-rust qjs: {error}\n").as_bytes());
+            Ok(CliOutput::new(stdout, stderr, 1))
+        }
+    }
+}
+
+fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
+    let before_script_path = command.before_script_path.as_path();
+    let after_script_path = command.after_script_path.as_path();
+    let before_script = read_utf8_script(before_script_path)?;
+    let after_script = read_utf8_script(after_script_path)?;
+
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs")?;
+    let runner = quickjs_runner()?;
+    let before_task = table.allocate_root("qjs")?;
+
+    let root = Arc::new(MemFs::new());
+    copy_script_directory_into(
+        before_script_path,
+        &root,
+        &command.cwd,
+        QJS_RESTORE_BEFORE_DIR,
+    )?;
+    copy_script_directory_into(
+        after_script_path,
+        &root,
+        &command.cwd,
+        QJS_RESTORE_AFTER_DIR,
+    )?;
+    let before_guest_script = guest_path_in_cwd(&command.cwd, QJS_RESTORE_BEFORE_SCRIPT)?;
+    let after_guest_script = guest_path_in_cwd(&command.cwd, QJS_RESTORE_AFTER_SCRIPT)?;
+    root.write_file(before_guest_script.as_str(), before_script.as_bytes())?;
+    root.write_file(after_guest_script.as_str(), after_script.as_bytes())?;
+    before_task.bind(root, ".", ".", BindOptions::default())?;
+
+    let stdout = Arc::new(MemFs::new());
+    stdout.write_file("stdout", b"")?;
+    before_task.insert_fd(
+        Fd::STDOUT,
+        stdout.open(&NormalizedPath::new("stdout")?, OpenOptions::read_write())?,
+        NormalizedPath::new("stdout")?,
+    )?;
+    let stderr = Arc::new(MemFs::new());
+    stderr.write_file("stderr", b"")?;
+    before_task.insert_fd(
+        Fd::STDERR,
+        stderr.open(&NormalizedPath::new("stderr")?, OpenOptions::read_write())?,
+        NormalizedPath::new("stderr")?,
+    )?;
+    configure_qjs_task(
+        &before_task,
+        QJS_RESTORE_BEFORE_SCRIPT,
+        &[],
+        &[],
+        &command.cwd,
+    )?;
+
+    let mut after_exit = 0;
+    let restore_result = (|| -> Result<(), CliError> {
+        let mut runtime = runner.create_task_runtime(&before_task)?;
+        eval_qjs_source(&mut runtime, &before_script, &before_guest_script)?;
+        ensure_snapshot_task_fds_closed(&before_task)?;
+        let snapshot = runtime.snapshot_bytes()?;
+        drop(runtime);
+
+        let after_task = table.allocate_child_of("qjs", &before_task)?;
+        configure_qjs_task(
+            &after_task,
+            QJS_RESTORE_AFTER_SCRIPT,
+            &[],
+            &[],
+            &command.cwd,
+        )?;
+        bind_child_output_to_parent(&after_task, &before_task)?;
+
+        let mut restored = runner.restore_task_runtime_from_bytes(&after_task, &snapshot)?;
+        if let Err(error) = eval_qjs_source(&mut restored, &after_script, &after_guest_script) {
+            let _ = after_task.set_exit("1");
+            return Err(error);
+        }
+        restored.finish()?;
+        after_exit = parse_exit(&after_task.exit());
+        Ok(())
+    })();
+
+    let stdout = read_file(&*stdout, "stdout")?;
+    let mut stderr = read_file(&*stderr, "stderr")?;
+    match restore_result {
+        Ok(()) => Ok(CliOutput::new(stdout, stderr, after_exit)),
+        Err(error) => {
+            if !stderr.is_empty() && !stderr.ends_with(b"\n") {
+                stderr.push(b'\n');
+            }
+            stderr.extend_from_slice(format!("wanix-rust qjs-restore: {error}\n").as_bytes());
             Ok(CliOutput::new(stdout, stderr, 1))
         }
     }
@@ -270,6 +364,51 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
     })
 }
 
+fn parse_qjs_restore_command(args: &[OsString]) -> Result<QjsRestoreCommand, CliError> {
+    let mut cwd = NormalizedPath::new(".")?;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--cwd" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs-restore --cwd expects a Wanix path"))?;
+            cwd = NormalizedPath::new(os_arg_to_string(value, "qjs-restore --cwd")?)?;
+            i += 1;
+        } else if args[i] == "--" {
+            i += 1;
+            break;
+        } else {
+            break;
+        }
+    }
+
+    let before_script = args
+        .get(i)
+        .ok_or_else(|| CliError::usage("qjs-restore expects before.js and after.js"))?;
+    let before_script_path = PathBuf::from(before_script);
+    i += 1;
+
+    let after_script = args
+        .get(i)
+        .ok_or_else(|| CliError::usage("qjs-restore expects before.js and after.js"))?;
+    let after_script_path = PathBuf::from(after_script);
+    i += 1;
+
+    if let Some(extra) = args.get(i) {
+        return Err(CliError::usage(format!(
+            "unexpected qjs-restore argument: {}",
+            extra.to_string_lossy()
+        )));
+    }
+
+    Ok(QjsRestoreCommand {
+        before_script_path,
+        after_script_path,
+        cwd,
+    })
+}
+
 fn os_arg_to_string(arg: &OsString, label: &str) -> Result<String, CliError> {
     arg.clone()
         .into_string()
@@ -286,19 +425,84 @@ fn validate_env_line(line: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-fn qjs_task_cmd(args: &[String]) -> String {
-    std::iter::once(QJS_GUEST_SCRIPT)
+fn task_cmd(program: &str, args: &[String]) -> String {
+    std::iter::once(program)
         .chain(args.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-fn qjs_task_spec(command: &QjsCommand) -> Result<TaskSpec, CliError> {
-    let mut spec = TaskSpec::new(QJS_GUEST_SCRIPT)?;
-    spec.args = command.args.clone();
-    spec.env = env_map(&command.env);
-    spec.cwd = command.cwd.clone();
+fn qjs_task_spec(
+    program: &str,
+    args: &[String],
+    env: &[String],
+    cwd: &NormalizedPath,
+) -> Result<TaskSpec, CliError> {
+    let mut spec = TaskSpec::new(program)?;
+    spec.args = args.to_vec();
+    spec.env = env_map(env);
+    spec.cwd = cwd.clone();
     Ok(spec)
+}
+
+fn configure_qjs_task(
+    task: &Task,
+    program: &str,
+    args: &[String],
+    env: &[String],
+    cwd: &NormalizedPath,
+) -> Result<(), CliError> {
+    task.set_spec(qjs_task_spec(program, args, env, cwd)?)?;
+    task.set_cmd(task_cmd(program, args))?;
+    task.set_env_lines(env.join("\n"))?;
+    task.set_dir(cwd.to_string())?;
+    Ok(())
+}
+
+fn bind_child_output_to_parent(child: &Task, parent: &Task) -> Result<(), CliError> {
+    let parent_id = parent.id().get();
+    child.bind_fd_from_namespace(format!("#task/{parent_id}/fd/1"), Fd::STDOUT)?;
+    child.bind_fd_from_namespace(format!("#task/{parent_id}/fd/2"), Fd::STDERR)?;
+    Ok(())
+}
+
+fn ensure_snapshot_task_fds_closed(task: &Task) -> Result<(), CliError> {
+    let dynamic_fds = task
+        .fd_numbers()
+        .into_iter()
+        .filter(|fd| fd.get() > Fd::STDERR.get())
+        .map(|fd| fd.get().to_string())
+        .collect::<Vec<_>>();
+    if dynamic_fds.is_empty() {
+        return Ok(());
+    }
+    Err(CliError::new(
+        format!(
+            "cannot snapshot qjs task with open Wanix task fds: {}",
+            dynamic_fds.join(", ")
+        ),
+        1,
+    ))
+}
+
+fn eval_qjs_source(
+    runtime: &mut QuickJsTaskRuntime,
+    source: &str,
+    filename: &str,
+) -> Result<(), CliError> {
+    if uses_module_syntax(source) {
+        runtime.eval_module_discard(source, filename)?;
+    } else {
+        runtime.eval_discard(source)?;
+    }
+    Ok(())
+}
+
+fn uses_module_syntax(source: &str) -> bool {
+    source.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("import ") || line.starts_with("export ")
+    })
 }
 
 fn env_map(lines: &[String]) -> BTreeMap<String, String> {
@@ -342,8 +546,18 @@ fn copy_script_directory(
     root: &MemFs,
     cwd: &NormalizedPath,
 ) -> Result<(), CliError> {
+    copy_script_directory_into(script_path, root, cwd, ".")
+}
+
+fn copy_script_directory_into(
+    script_path: &Path,
+    root: &MemFs,
+    cwd: &NormalizedPath,
+    guest_dir: &str,
+) -> Result<(), CliError> {
     let base = script_path.parent().unwrap_or_else(|| Path::new("."));
-    copy_directory_tree(base, base, root, cwd)
+    let guest_dir = NormalizedPath::new(guest_dir)?;
+    copy_directory_tree(base, base, root, cwd, &guest_dir)
 }
 
 fn copy_directory_tree(
@@ -351,6 +565,7 @@ fn copy_directory_tree(
     dir: &Path,
     root: &MemFs,
     cwd: &NormalizedPath,
+    guest_dir: &NormalizedPath,
 ) -> Result<(), CliError> {
     for entry in std::fs::read_dir(dir).map_err(|error| {
         CliError::new(
@@ -372,7 +587,7 @@ fn copy_directory_tree(
             CliError::new(format!("failed to stat {}: {error}", path.display()), 1)
         })?;
         if file_type.is_dir() {
-            copy_directory_tree(base, &path, root, cwd)?;
+            copy_directory_tree(base, &path, root, cwd, guest_dir)?;
             continue;
         }
         if !file_type.is_file() {
@@ -384,10 +599,18 @@ fn copy_directory_tree(
         let bytes = std::fs::read(&path).map_err(|error| {
             CliError::new(format!("failed to read {}: {error}", path.display()), 1)
         })?;
+        let guest_path = guest_path_under_dir(guest_dir, &guest_path)?;
         let guest_path = guest_path_in_cwd(cwd, &guest_path)?;
         root.write_file(guest_path, bytes)?;
     }
     Ok(())
+}
+
+fn guest_path_under_dir(guest_dir: &NormalizedPath, path: &str) -> Result<String, CliError> {
+    if guest_dir.as_str() == "." {
+        return Ok(path.to_owned());
+    }
+    Ok(NormalizedPath::new(format!("{guest_dir}/{path}"))?.to_string())
 }
 
 fn guest_path_in_cwd(cwd: &NormalizedPath, path: &str) -> Result<String, CliError> {
@@ -416,6 +639,17 @@ fn guest_path_for_host_file(base: &Path, path: &Path) -> Result<Option<String>, 
         return Ok(None);
     }
     Ok(Some(path))
+}
+
+fn read_utf8_script(path: &Path) -> Result<String, CliError> {
+    let script = std::fs::read(path)
+        .map_err(|error| CliError::new(format!("failed to read {}: {error}", path.display()), 1))?;
+    String::from_utf8(script).map_err(|error| {
+        CliError::new(
+            format!("script {} is not valid UTF-8: {error}", path.display()),
+            1,
+        )
+    })
 }
 
 fn read_file(fs: &dyn FileSystem, path: &str) -> Result<Vec<u8>, CliError> {
@@ -451,6 +685,7 @@ mod tests {
 
         assert_eq!(output.exit_code(), 0);
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-restore"));
         assert!(output.stderr().is_empty());
     }
 
@@ -732,6 +967,143 @@ std.exit(5);
             b"parent task: 1\nchild task: 2\nchild task 2 args qjs-task-spawn-child.js|alpha|two words||beta mode spawned stdin stdin from parent\nchild exit: 5\n"
         );
         assert_eq!(output.stderr(), b"child stderr mode spawned\n");
+    }
+
+    #[test]
+    fn qjs_restore_command_restores_vm_image_into_child_task() {
+        let before_script = write_temp_script(
+            "restore-before.js",
+            r##"
+import * as std from "qjs:std";
+
+const task = std.loadFile("#task/self/id").trim();
+globalThis.snapshotValue = "saved by task " + task;
+std.writeFile("note.txt", "namespace note from " + task);
+std.out.puts("before " + task + "\n");
+std.out.flush();
+"##,
+        );
+        let after_script = write_temp_script(
+            "restore-after.js",
+            r##"
+import * as std from "qjs:std";
+
+const task = std.loadFile("#task/self/id").trim();
+std.out.puts("after " + task + "\n");
+std.out.puts("vm " + globalThis.snapshotValue + "\n");
+std.out.puts("file " + std.loadFile("note.txt") + "\n");
+std.out.flush();
+std.exit(7);
+"##,
+        );
+
+        let output = run([
+            "qjs-restore".into(),
+            before_script.into_os_string(),
+            after_script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 7);
+        assert_eq!(
+            output.stdout(),
+            b"before 1\nafter 2\nvm saved by task 1\nfile namespace note from 1\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_restore_keeps_before_and_after_script_dependencies_isolated() {
+        let before_script = write_temp_script(
+            "restore-before.js",
+            r#"
+import * as std from "qjs:std";
+import { label } from "./dep.js";
+
+globalThis.beforeDep = label;
+std.out.puts("before " + label + "\n");
+std.out.flush();
+"#,
+        );
+        fs::write(
+            before_script.parent().unwrap().join("dep.js"),
+            "export const label = 'before dep';",
+        )
+        .unwrap();
+
+        let after_script = write_temp_script(
+            "restore-after.js",
+            r#"
+import * as std from "qjs:std";
+import { label } from "./dep.js";
+
+std.out.puts("after " + label + "\n");
+std.out.puts("snapshot " + globalThis.beforeDep + "\n");
+std.out.flush();
+"#,
+        );
+        fs::write(
+            after_script.parent().unwrap().join("dep.js"),
+            "export const label = 'after dep';",
+        )
+        .unwrap();
+
+        let output = run([
+            "qjs-restore".into(),
+            before_script.into_os_string(),
+            after_script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"before before dep\nafter after dep\nsnapshot before dep\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_restore_rejects_open_wanix_task_fds_before_snapshot() {
+        let before_script = write_temp_script(
+            "restore-before-fd.js",
+            r##"
+Wanix.open("__wanix_restore/before/main.js", "r");
+print("opened task fd");
+"##,
+        );
+        let after_script = write_temp_script("restore-after-fd.js", "print('after');");
+
+        let output = run([
+            "qjs-restore".into(),
+            before_script.into_os_string(),
+            after_script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 1);
+        assert_eq!(output.stdout(), b"opened task fd\n");
+        assert!(
+            String::from_utf8_lossy(output.stderr())
+                .contains("cannot snapshot qjs task with open Wanix task fds: 3")
+        );
+    }
+
+    #[test]
+    fn qjs_restore_example_runs_checked_in_snapshot_demo() {
+        let output = run([
+            "qjs-restore".into(),
+            example_script("qjs-snapshot-before.js").into_os_string(),
+            example_script("qjs-snapshot-after.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 7);
+        assert_eq!(
+            output.stdout(),
+            b"before task: 1\nafter task: 2\nvm state: preserved from task 1\nnamespace: namespace from task 1\n"
+        );
+        assert!(output.stderr().is_empty());
     }
 
     #[test]
