@@ -92,6 +92,24 @@ pub(crate) fn define_wasi_imports(linker: &mut Linker<HostState>) -> Result<()> 
 
     linker.func_wrap(
         "wasi_snapshot_preview1",
+        "poll_oneoff",
+        |mut caller: Caller<'_, HostState>,
+         _in_ptr: i32,
+         _out_ptr: i32,
+         nsubscriptions: i32,
+         nevents_ptr: i32|
+         -> wasmtime::Result<i32> {
+            if nsubscriptions != 0 {
+                return Ok(ERRNO_NOSYS);
+            }
+            let memory = caller_memory(&caller)?;
+            memory.write(&mut caller, guest_offset(nevents_ptr), &0_u32.to_le_bytes())?;
+            Ok(ERRNO_SUCCESS)
+        },
+    )?;
+
+    linker.func_wrap(
+        "wasi_snapshot_preview1",
         "random_get",
         |mut caller: Caller<'_, HostState>, buf_ptr: i32, buf_len: i32| -> wasmtime::Result<i32> {
             let memory = caller_memory(&caller)?;

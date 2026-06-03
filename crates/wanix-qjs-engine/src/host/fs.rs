@@ -72,11 +72,37 @@ pub(super) fn define_imports(linker: &mut Linker<HostState>) -> anyhow::Result<(
     linker.func_wrap("wasi_snapshot_preview1", "fd_tell", fd_tell)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_close", fd_close)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_fdstat_get", fd_fdstat_get)?;
+    linker.func_wrap(
+        "wasi_snapshot_preview1",
+        "fd_fdstat_set_flags",
+        fd_fdstat_set_flags,
+    )?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_filestat_get", fd_filestat_get)?;
+    linker.func_wrap(
+        "wasi_snapshot_preview1",
+        "path_create_directory",
+        path_create_directory,
+    )?;
     linker.func_wrap(
         "wasi_snapshot_preview1",
         "path_filestat_get",
         path_filestat_get,
+    )?;
+    linker.func_wrap(
+        "wasi_snapshot_preview1",
+        "path_filestat_set_times",
+        path_filestat_set_times,
+    )?;
+    linker.func_wrap(
+        "wasi_snapshot_preview1",
+        "path_remove_directory",
+        path_remove_directory,
+    )?;
+    linker.func_wrap("wasi_snapshot_preview1", "path_rename", path_rename)?;
+    linker.func_wrap(
+        "wasi_snapshot_preview1",
+        "path_unlink_file",
+        path_unlink_file,
     )?;
     Ok(())
 }
@@ -337,6 +363,70 @@ fn path_filestat_get(
 
     write_filestat(&memory, &mut caller, stat_ptr, filetype, size)?;
     Ok(ERRNO_SUCCESS)
+}
+
+fn path_create_directory(
+    caller: Caller<'_, HostState>,
+    dirfd: i32,
+    path_ptr: i32,
+    path_len: i32,
+) -> wasmtime::Result<i32> {
+    unsupported_path_mutation(&caller, dirfd, path_ptr, path_len)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn path_filestat_set_times(
+    caller: Caller<'_, HostState>,
+    dirfd: i32,
+    flags: i32,
+    path_ptr: i32,
+    path_len: i32,
+    _atim: i64,
+    _mtim: i64,
+    _fstflags: i32,
+) -> wasmtime::Result<i32> {
+    if unsupported_lookupflags(flags) {
+        return Ok(ERRNO_NOTCAPABLE);
+    }
+    unsupported_path_mutation(&caller, dirfd, path_ptr, path_len)
+}
+
+fn path_remove_directory(
+    caller: Caller<'_, HostState>,
+    dirfd: i32,
+    path_ptr: i32,
+    path_len: i32,
+) -> wasmtime::Result<i32> {
+    unsupported_path_mutation(&caller, dirfd, path_ptr, path_len)
+}
+
+fn path_rename(
+    caller: Caller<'_, HostState>,
+    old_fd: i32,
+    old_path_ptr: i32,
+    old_path_len: i32,
+    new_fd: i32,
+    new_path_ptr: i32,
+    new_path_len: i32,
+) -> wasmtime::Result<i32> {
+    let old_errno = unsupported_path_mutation(&caller, old_fd, old_path_ptr, old_path_len)?;
+    if old_errno != ERRNO_NOSYS {
+        return Ok(old_errno);
+    }
+    let new_errno = unsupported_path_mutation(&caller, new_fd, new_path_ptr, new_path_len)?;
+    if new_errno != ERRNO_NOSYS {
+        return Ok(new_errno);
+    }
+    Ok(ERRNO_NOSYS)
+}
+
+fn path_unlink_file(
+    caller: Caller<'_, HostState>,
+    dirfd: i32,
+    path_ptr: i32,
+    path_len: i32,
+) -> wasmtime::Result<i32> {
+    unsupported_path_mutation(&caller, dirfd, path_ptr, path_len)
 }
 
 fn fd_readdir(
@@ -627,6 +717,33 @@ fn fd_fdstat_get(
     Ok(ERRNO_SUCCESS)
 }
 
+fn fd_fdstat_set_flags(
+    caller: Caller<'_, HostState>,
+    fd: i32,
+    flags: i32,
+) -> wasmtime::Result<i32> {
+    if let Err(errno) = preview1_fd(fd) {
+        return Ok(errno);
+    }
+    if preview1_u16_flags(flags).is_err() {
+        return Ok(ERRNO_NOTCAPABLE);
+    }
+    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| host.fd_fdstat_get(fd))? {
+        return Ok(match result {
+            Ok(_) => ERRNO_NOSYS,
+            Err(errno) => errno.preview1_result(),
+        });
+    }
+    if wasi_stdio_fd(fd).is_some()
+        || caller.data().is_virtual_preopen_fd(fd)
+        || caller.data().virtual_file(fd).is_some()
+    {
+        Ok(ERRNO_NOSYS)
+    } else {
+        Ok(ERRNO_BADF)
+    }
+}
+
 #[derive(Debug)]
 struct GuestIov {
     ptr: usize,
@@ -689,6 +806,31 @@ fn checked_wasi_size_add(left: u32, right: u32) -> wasmtime::Result<u32> {
 
 fn unsupported_lookupflags(flags: i32) -> bool {
     flags.cast_unsigned() & !LOOKUPFLAGS_SYMLINK_FOLLOW != 0
+}
+
+fn unsupported_path_mutation(
+    caller: &Caller<'_, HostState>,
+    dirfd: i32,
+    path_ptr: i32,
+    path_len: i32,
+) -> wasmtime::Result<i32> {
+    if let Err(errno) = preview1_fd(dirfd) {
+        return Ok(errno);
+    }
+    if let Some(result) = with_wasi_host(caller, dirfd, |host, fd| host.fd_fdstat_get(fd))? {
+        if let Err(errno) = result {
+            return Ok(errno.preview1_result());
+        }
+    } else if !caller.data().is_virtual_preopen_fd(dirfd) {
+        return Ok(ERRNO_BADF);
+    }
+    let path_len = match checked_wasi_path_len(path_len)? {
+        Ok(path_len) => path_len,
+        Err(errno) => return Ok(errno),
+    };
+    let memory = caller_memory(caller)?;
+    let _path = read_guest_path(&memory, caller, path_ptr, path_len)?;
+    Ok(ERRNO_NOSYS)
 }
 
 fn write_filestat(
