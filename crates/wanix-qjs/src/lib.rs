@@ -597,12 +597,13 @@ mod tests {
 
     use super::{
         CRATE_PURPOSE, FIRST_DEMO_TARGET, QuickJsRunner, QuickJsTaskDriver, QuickJsWanixConfig,
-        wasi_contract_purpose,
+        WanixQuickJsWasiHost, captured_stdio_config, captured_stdio_options, wasi_contract_purpose,
     };
     use crate::task_stdio::task_wasi_config;
+    use rust_wasi_quickjs::QuickJsRestoreOptions;
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
     use wanix_task::{Fd, Task, TaskDriver, TaskId, TaskSpec, TaskTable};
-    use wanix_vfs::BindOptions;
+    use wanix_vfs::{BindOptions, Namespace};
     use wanix_wasi::{Errno, WasiConfig, WasiCtx, WasiFd, WasiOpenOptions};
 
     fn runner() -> Arc<QuickJsRunner> {
@@ -1608,6 +1609,99 @@ print("os", text);
             b"std from qjs stdlib\nos from qjs stdlib\n"
         );
         assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn quickjs_snapshot_restore_reattaches_wanix_wasi_host() {
+        let runner = runner();
+        let root = Arc::new(MemFs::new());
+        root.write_file("input.txt", b"from namespace").unwrap();
+        root.write_file("before-stdout", b"").unwrap();
+        root.write_file("after-stdout", b"").unwrap();
+        let mut namespace = Namespace::new();
+        namespace
+            .bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+
+        let before_stdout = root
+            .open(
+                &NormalizedPath::new("before-stdout").unwrap(),
+                OpenOptions::read_write(),
+            )
+            .unwrap();
+        let before_host = WanixQuickJsWasiHost::new(
+            WasiConfig::new(namespace.clone()).with_stdout(before_stdout, "before stdout"),
+        )
+        .unwrap();
+        let create_options = captured_stdio_options().with_wasi_host(before_host);
+        let mut runtime = runner
+            .module
+            .create_runtime_with_options(create_options)
+            .unwrap();
+
+        runtime
+            .eval_module_discard(
+                r#"
+import * as std from "qjs:std";
+
+globalThis.before = std.loadFile("input.txt").trimEnd();
+std.out.puts("before " + globalThis.before + "\n");
+std.out.flush();
+"#,
+                "before-snapshot.mjs",
+            )
+            .unwrap();
+        assert_eq!(
+            read_file(&*root, "before-stdout"),
+            b"before from namespace\n"
+        );
+        let snapshot_bytes = runtime.snapshot().unwrap().try_to_bytes().unwrap();
+        drop(runtime);
+
+        let after_stdout = root
+            .open(
+                &NormalizedPath::new("after-stdout").unwrap(),
+                OpenOptions::read_write(),
+            )
+            .unwrap();
+        let after_host = WanixQuickJsWasiHost::new(
+            WasiConfig::new(namespace).with_stdout(after_stdout, "after stdout"),
+        )
+        .unwrap();
+        let restore_options = QuickJsRestoreOptions::new()
+            .with_host_config(captured_stdio_config())
+            .with_wasi_host(after_host);
+        let mut restored = runner
+            .module
+            .restore_runtime_from_bytes_with_options(&snapshot_bytes, restore_options)
+            .unwrap();
+
+        restored
+            .eval_module_discard(
+                r#"
+import * as std from "qjs:std";
+
+const text = globalThis.before + " -> restored";
+std.writeFile("after.txt", text);
+std.out.puts("after " + std.loadFile("after.txt") + "\n");
+std.out.flush();
+"#,
+                "after-restore.mjs",
+            )
+            .unwrap();
+
+        assert_eq!(
+            read_file(&*root, "after.txt"),
+            b"from namespace -> restored"
+        );
+        assert_eq!(
+            read_file(&*root, "after-stdout"),
+            b"after from namespace -> restored\n"
+        );
+        assert_eq!(
+            read_file(&*root, "before-stdout"),
+            b"before from namespace\n"
+        );
     }
 
     #[test]
