@@ -41,6 +41,7 @@ This makes runaway-script handling observable as Wanix task policy instead of a
 QuickJS-owned process model.
 
 The budget is based on QuickJS interrupt polls, not wall-clock time or
-instruction fuel. It is suitable for bounded demos and host policy tests, but it
-does not add signals, asynchronous cancellation, preemptive scheduling, or
-long-running task liveness management.
+instruction fuel. ADR 0046 adds a separate QuickJS heap memory limit for
+allocation-heavy JavaScript. Together they are bounded host policies for demos
+and tests, but they do not add signals, asynchronous cancellation, preemptive
+scheduling, or long-running task liveness management.

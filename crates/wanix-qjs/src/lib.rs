@@ -113,6 +113,7 @@ struct RunControl {
     event_loop_wait_budget: Duration,
     ready_io_turns: usize,
     interrupt_poll_budget: Option<usize>,
+    memory_limit_bytes: Option<u32>,
 }
 
 impl Default for RunControl {
@@ -123,6 +124,7 @@ impl Default for RunControl {
             event_loop_wait_budget: Duration::ZERO,
             ready_io_turns: 1,
             interrupt_poll_budget: None,
+            memory_limit_bytes: None,
         }
     }
 }
@@ -309,6 +311,9 @@ impl QuickJsRunner {
         let stdout = Arc::new(Mutex::new(Vec::new()));
         let stderr = Arc::new(Mutex::new(Vec::new()));
         let result = (|| -> FsResult<()> {
+            if let Some(bytes) = control.memory_limit_bytes {
+                runtime.set_memory_limit(bytes).map_err(qjs_error)?;
+            }
             define_task_output_callback(
                 &mut runtime,
                 "__wanix_stdout",
@@ -416,7 +421,7 @@ impl QuickJsRunner {
         event_loop_wait_budget: Duration,
         ready_io_turns: usize,
     ) -> FsResult<RunOutput> {
-        self.run_task_with_runtime_limits(task, event_loop_wait_budget, ready_io_turns, None)
+        self.run_task_with_runtime_limits(task, event_loop_wait_budget, ready_io_turns, None, None)
     }
 
     /// Runs the script named in `task.cmd()` with bounded runtime limits.
@@ -425,6 +430,7 @@ impl QuickJsRunner {
     /// stdlib fd poll hook cannot distinguish an idle poll from a successful
     /// callback. `interrupt_poll_budget` bounds CPU-bound eval by asking
     /// QuickJS to interrupt after the configured number of interrupt polls.
+    /// `memory_limit_bytes` bounds QuickJS heap allocation.
     ///
     /// # Errors
     ///
@@ -437,6 +443,7 @@ impl QuickJsRunner {
         event_loop_wait_budget: Duration,
         ready_io_turns: usize,
         interrupt_poll_budget: Option<usize>,
+        memory_limit_bytes: Option<u32>,
     ) -> FsResult<RunOutput> {
         let command = task_command(task)?;
         let script_path = command.program.clone();
@@ -465,6 +472,7 @@ impl QuickJsRunner {
                 event_loop_wait_budget,
                 ready_io_turns,
                 interrupt_poll_budget,
+                memory_limit_bytes,
             },
             move |runtime| {
                 define_wanix_module_loader(runtime, namespace.clone())?;
@@ -2015,6 +2023,53 @@ std.out.flush();
             err.to_string().contains("interrupted"),
             "unexpected error: {err}"
         );
+        assert_eq!(task.exit(), "1");
+    }
+
+    #[test]
+    fn task_driver_memory_limit_stops_allocation_heavy_quickjs() {
+        let table = TaskTable::new();
+        let runner = runner();
+        let driver = QuickJsTaskDriver::new(runner).with_memory_limit_bytes(1024 * 1024);
+        table
+            .register_driver("qjs", std::sync::Arc::new(driver))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+print("before allocation");
+globalThis.tooBig = new ArrayBuffer(16 * 1024 * 1024);
+print("after allocation");
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        let err = table
+            .start(task.id())
+            .expect_err("memory limit should stop a large allocation");
+
+        assert!(
+            err.to_string().contains("QuickJS exception"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(read_file(&*stdout, "out"), b"before allocation\n");
         assert_eq!(task.exit(), "1");
     }
 

@@ -13,6 +13,7 @@ pub struct QuickJsTaskDriver {
     event_loop_wait_budget: Duration,
     ready_io_turns: usize,
     interrupt_poll_budget: Option<usize>,
+    memory_limit_bytes: Option<u32>,
 }
 
 impl QuickJsTaskDriver {
@@ -24,6 +25,7 @@ impl QuickJsTaskDriver {
             event_loop_wait_budget: Duration::ZERO,
             ready_io_turns: 1,
             interrupt_poll_budget: None,
+            memory_limit_bytes: None,
         }
     }
 
@@ -59,6 +61,16 @@ impl QuickJsTaskDriver {
         self
     }
 
+    /// Sets the QuickJS heap allocation limit in bytes.
+    ///
+    /// This is a task-driver host policy for allocation-heavy JavaScript. The
+    /// default is no limit.
+    #[must_use]
+    pub fn with_memory_limit_bytes(mut self, bytes: u32) -> Self {
+        self.memory_limit_bytes = Some(bytes);
+        self
+    }
+
     /// Returns the shared runner.
     #[must_use]
     pub fn runner(&self) -> &Arc<QuickJsRunner> {
@@ -77,6 +89,7 @@ impl TaskDriver for QuickJsTaskDriver {
             self.event_loop_wait_budget,
             self.ready_io_turns,
             self.interrupt_poll_budget,
+            self.memory_limit_bytes,
         ) {
             Ok(_) => Ok(()),
             Err(err) => {

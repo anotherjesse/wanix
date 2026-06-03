@@ -61,8 +61,9 @@ driver into a task table.
   explicit source such as `#task/1/fd/1` when the child should write through a
   parent fd, because `#task/self` is target-task-relative.
 - The synchronous process demo comes before richer lifecycle work. Later ADRs
-  add bounded event-loop slices and ADR 0045 adds an interrupt-poll budget for
-  CPU-bound JavaScript, but full signals, asynchronous cancellation, and
+  add bounded event-loop slices, ADR 0045 adds an interrupt-poll budget for
+  CPU-bound JavaScript, and ADR 0046 adds a QuickJS heap memory limit for
+  allocation-heavy JavaScript, but full signals, asynchronous cancellation, and
   scheduler policy remain future work.
 - A useful demo should show JavaScript reading `#task/self/id`, using stdio,
   and leaving an observable task exit status.

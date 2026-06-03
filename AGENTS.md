@@ -202,6 +202,9 @@ cargo test --workspace --locked
 - [ADR 0045](docs/adrs/0045-qjs-interrupt-poll-budget.md):
   Wanix `qjs` tasks can stop CPU-bound JavaScript through an explicit QuickJS
   interrupt-poll budget without adding signals or a scheduler.
+- [ADR 0046](docs/adrs/0046-qjs-memory-limit-policy.md):
+  Wanix `qjs` tasks can apply an explicit QuickJS heap memory limit while
+  preserving default unlimited behavior.
 
 ## Cycle Rules
 
