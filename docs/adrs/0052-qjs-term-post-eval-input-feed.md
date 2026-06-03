@@ -17,11 +17,19 @@ ready-IO handler turns against the live Wanix task fds.
 
 ## Decision
 
-Add `qjs-term --feed-after-eval TEXT`, accepted before the script path and
-repeatable. When one or more post-eval feeds are supplied, `qjs-term` evaluates
-the script without initial ready-IO turns, writes the feed chunks to
-`#term/<id>/data`, then runs the configured `--ready-io-turns` against the still
-live `QuickJsTaskRuntime`.
+Add post-eval terminal feeds accepted before the script path:
+
+- `qjs-term --feed-after-eval TEXT` writes a literal byte chunk.
+- `qjs-term --feed-after-eval-file PATH|-` writes one host file or native stdin
+  byte chunk.
+- `qjs-term --feed-after-eval-lines PATH|-` splits a host file or native stdin
+  source into line-preserving chunks.
+
+When one or more post-eval feeds are supplied, `qjs-term` evaluates the script
+without initial ready-IO turns, writes each feed batch to `#term/<id>/data`, then
+runs the configured `--ready-io-turns` against the still live
+`QuickJsTaskRuntime` after each batch. Contiguous literal/file feeds stay in one
+batch for compatibility; line-segmented feeds create one batch per input line.
 
 Expose a small `QuickJsTaskRuntime::run_ready_io_turns` method so composition
 layers can pump task fd readiness without reaching through to the raw QuickJS
@@ -30,7 +38,9 @@ engine API.
 ## Consequences
 
 The terminal CLI can now demonstrate input arriving after the script registers a
-read handler. This is not a native TTY streaming loop yet, but it proves the
-core lifecycle needed by one: create a qjs task runtime, evaluate setup code,
-feed terminal bytes later, and explicitly drive ready-fd handlers while Wanix
-task identity, namespace, and fds remain attached.
+read handler. The line-segmented feed mode gives tests and demos a deterministic
+scripted-session harness where separate native input lines become separate
+terminal readiness events. This is not a native TTY streaming loop yet, but it
+proves the core lifecycle needed by one: create a qjs task runtime, evaluate
+setup code, feed terminal bytes later, and explicitly drive ready-fd handlers
+while Wanix task identity, namespace, and fds remain attached.

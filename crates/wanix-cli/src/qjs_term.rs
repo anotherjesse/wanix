@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
-use wanix_qjs::QuickJsTaskDriver;
+use wanix_qjs::{QuickJsTaskDriver, QuickJsTaskRuntime};
 use wanix_task::{Fd, Task, TaskTable};
 use wanix_term::TermDevice;
 use wanix_vfs::BindOptions;
@@ -27,6 +27,8 @@ enum PostEvalFeed {
     Bytes(Vec<u8>),
     File(PathBuf),
     Process,
+    LinesFile(PathBuf),
+    LinesProcess,
 }
 
 pub(super) fn parse_qjs_term_command(args: &[OsString]) -> Result<QjsTermCommand, CliError> {
@@ -52,6 +54,17 @@ pub(super) fn parse_qjs_term_command(args: &[OsString]) -> Result<QjsTermCommand
                 feed_after_eval.push(PostEvalFeed::Process);
             } else {
                 feed_after_eval.push(PostEvalFeed::File(PathBuf::from(value)));
+            }
+            i += 1;
+        } else if args[i] == "--feed-after-eval-lines" {
+            i += 1;
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage("qjs-term --feed-after-eval-lines expects PATH or -")
+            })?;
+            if value == "-" {
+                feed_after_eval.push(PostEvalFeed::LinesProcess);
+            } else {
+                feed_after_eval.push(PostEvalFeed::LinesFile(PathBuf::from(value)));
             }
             i += 1;
         } else if args[i] == "--" {
@@ -152,9 +165,14 @@ pub(super) fn run_qjs_term(
             eval_ready_io_turns,
         )?;
         if !feed_after_eval.is_empty() {
-            let post_eval_chunks = read_post_eval_feeds(feed_after_eval, process_stdin)?;
-            feed_terminal_after_eval(&terminal, &terminal_id, &post_eval_chunks)?;
-            runtime.run_ready_io_turns(qjs_command.ready_io_turns)?;
+            let post_eval_batches = read_post_eval_feed_batches(feed_after_eval, process_stdin)?;
+            run_terminal_feed_session_after_eval(
+                &terminal,
+                &terminal_id,
+                &mut runtime,
+                &post_eval_batches,
+                qjs_command.ready_io_turns,
+            )?;
         }
         runtime.finish()?;
         Ok(())
@@ -163,14 +181,15 @@ pub(super) fn run_qjs_term(
     finish_terminal_task_output(start_result, &task, &terminal, &terminal_id)
 }
 
-fn read_post_eval_feeds(
+fn read_post_eval_feed_batches(
     feeds: Vec<PostEvalFeed>,
     process_stdin: &mut dyn Read,
-) -> Result<Vec<Vec<u8>>, CliError> {
-    let mut chunks = Vec::with_capacity(feeds.len());
+) -> Result<Vec<Vec<Vec<u8>>>, CliError> {
+    let mut batches = Vec::new();
+    let mut current_batch = Vec::new();
     for feed in feeds {
         match feed {
-            PostEvalFeed::Bytes(bytes) => chunks.push(bytes),
+            PostEvalFeed::Bytes(bytes) => current_batch.push(bytes),
             PostEvalFeed::File(path) => {
                 let bytes = std::fs::read(&path).map_err(|error| {
                     CliError::new(
@@ -181,7 +200,7 @@ fn read_post_eval_feeds(
                         1,
                     )
                 })?;
-                chunks.push(bytes);
+                current_batch.push(bytes);
             }
             PostEvalFeed::Process => {
                 let mut bytes = Vec::new();
@@ -191,19 +210,86 @@ fn read_post_eval_feeds(
                         1,
                     )
                 })?;
-                chunks.push(bytes);
+                current_batch.push(bytes);
+            }
+            PostEvalFeed::LinesFile(path) => {
+                let bytes = std::fs::read(&path).map_err(|error| {
+                    CliError::new(
+                        format!(
+                            "failed to read post-eval feed lines file {}: {error}",
+                            path.display()
+                        ),
+                        1,
+                    )
+                })?;
+                push_line_batches(&mut batches, &mut current_batch, split_feed_lines(bytes));
+            }
+            PostEvalFeed::LinesProcess => {
+                let mut bytes = Vec::new();
+                process_stdin.read_to_end(&mut bytes).map_err(|error| {
+                    CliError::new(
+                        format!("failed to read process stdin lines after eval: {error}"),
+                        1,
+                    )
+                })?;
+                push_line_batches(&mut batches, &mut current_batch, split_feed_lines(bytes));
             }
         }
     }
-    Ok(chunks)
+    if !current_batch.is_empty() {
+        batches.push(current_batch);
+    }
+    Ok(batches)
+}
+
+fn push_line_batches(
+    batches: &mut Vec<Vec<Vec<u8>>>,
+    current_batch: &mut Vec<Vec<u8>>,
+    lines: Vec<Vec<u8>>,
+) {
+    if !current_batch.is_empty() {
+        batches.push(std::mem::take(current_batch));
+    }
+    batches.extend(lines.into_iter().map(|line| vec![line]));
+}
+
+fn split_feed_lines(bytes: Vec<u8>) -> Vec<Vec<u8>> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'\n' {
+            chunks.push(bytes[start..=index].to_vec());
+            start = index + 1;
+        }
+    }
+    if start < bytes.len() {
+        chunks.push(bytes[start..].to_vec());
+    }
+    chunks
+}
+
+fn run_terminal_feed_session_after_eval(
+    terminal: &TermDevice,
+    terminal_id: &str,
+    runtime: &mut QuickJsTaskRuntime,
+    batches: &[Vec<Vec<u8>>],
+    ready_io_turns: usize,
+) -> Result<(), CliError> {
+    for batch in batches {
+        for chunk in batch {
+            feed_terminal_after_eval(terminal, terminal_id, chunk)?;
+        }
+        runtime.run_ready_io_turns(ready_io_turns)?;
+    }
+    Ok(())
 }
 
 fn feed_terminal_after_eval(
     terminal: &TermDevice,
     terminal_id: &str,
-    chunks: &[Vec<u8>],
+    chunk: &[u8],
 ) -> Result<(), CliError> {
-    if chunks.is_empty() {
+    if chunk.is_empty() {
         return Ok(());
     }
     let mut data = terminal.open(
@@ -213,9 +299,7 @@ fn feed_terminal_after_eval(
             ..OpenOptions::default()
         },
     )?;
-    for chunk in chunks {
-        data.write(chunk)?;
-    }
+    data.write(chunk)?;
     Ok(())
 }
 
@@ -323,6 +407,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(command.feed_after_eval, [PostEvalFeed::Process]);
+        assert_eq!(command.qjs.script_path, PathBuf::from("demo.js"));
+    }
+
+    #[test]
+    fn parse_qjs_term_collects_line_segmented_post_eval_feed() {
+        let command = parse_qjs_term_command(&[
+            "--feed-after-eval-lines".into(),
+            "session.txt".into(),
+            "--feed-after-eval-lines".into(),
+            "-".into(),
+            "demo.js".into(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            command.feed_after_eval,
+            [
+                PostEvalFeed::LinesFile(PathBuf::from("session.txt")),
+                PostEvalFeed::LinesProcess
+            ]
+        );
         assert_eq!(command.qjs.script_path, PathBuf::from("demo.js"));
     }
 }

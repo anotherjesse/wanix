@@ -60,9 +60,10 @@ The next terminal-facing demo is `wanix-rust qjs-term main.js`: JavaScript still
 runs as a Wanix `qjs` task, but fd 0/1/2 are bound through `#term/<id>/program`
 and the CLI emits the terminal `data` transcript. The checked-in
 `qjs-term-ready-io-demo.js` also proves QuickJS ready-IO handlers can consume
-terminal-backed fd 0 in bounded turns. The `--feed-after-eval` option proves
-terminal input can arrive after JS has registered a read handler while the
-runtime remains live.
+terminal-backed fd 0 in bounded turns. The `--feed-after-eval`,
+`--feed-after-eval-file`, and `--feed-after-eval-lines` options prove terminal
+input can arrive after JS has registered a read handler while the runtime
+remains live, including deterministic line-by-line scripted sessions.
 
 ## Code Quality Guardrails
 
@@ -233,8 +234,9 @@ cargo test --workspace --locked
   `wanix-rust qjs-term` runs a QuickJS task through `#term` fd bindings and
   returns the terminal transcript as the native CLI output.
 - [ADR 0052](docs/adrs/0052-qjs-term-post-eval-input-feed.md):
-  `qjs-term --feed-after-eval` keeps the task runtime alive after initial eval,
-  feeds terminal data, and pumps ready-IO handlers.
+  `qjs-term` post-eval feeds keep the task runtime alive after initial eval,
+  feed terminal data, and pump ready-IO handlers after each scripted input
+  batch.
 
 ## Cycle Rules
 
@@ -250,5 +252,6 @@ cycle before starting the next one.
   intentional runtime decision.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
-- Make `qjs-term` genuinely interactive by streaming native terminal input and
-  output while the task runtime remains active.
+- Make `qjs-term` genuinely interactive by replacing scripted session feeds with
+  live native terminal input and output streaming while the task runtime remains
+  active.

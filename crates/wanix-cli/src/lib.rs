@@ -25,6 +25,7 @@ const USAGE: &str = concat!(
     "       wanix-rust qjs-term [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
     "[--feed-after-eval TEXT ...] [--feed-after-eval-file PATH|- ...] ",
+    "[--feed-after-eval-lines PATH|- ...] ",
     "[--interrupt-after N] [--memory-limit-bytes N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
@@ -1361,6 +1362,9 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-term"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval-file PATH|-"));
+        assert!(
+            String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval-lines PATH|-")
+        );
         assert!(String::from_utf8_lossy(output.stdout()).contains("--mount HOST=GUEST"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--stdin-file PATH|-"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-snapshot"));
@@ -1536,6 +1540,66 @@ std.err.flush();
         assert_eq!(
             output.stdout(),
             b"shell task: 1\r\n$ hello terminal\r\n$ 1\r\n$ bye\r\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_term_line_session_feeds_native_stdin_as_terminal_events() {
+        let script = write_temp_script(
+            "term-line-session.js",
+            r##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+function stringFromBytes(bytes, count) {
+  return Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+}
+
+function escaped(text) {
+  return text.replace(/\n/g, "\\n");
+}
+
+let events = 0;
+const bytes = new Uint8Array(64);
+
+std.out.puts("session task: " + std.loadFile("#task/self/id").trim() + "\n");
+
+os.setReadHandler(0, () => {
+  const count = os.read(0, bytes.buffer, 0, bytes.length);
+  if (count < 0) {
+    throw new Error("line session terminal read failed: " + count);
+  }
+  events += 1;
+  const text = stringFromBytes(bytes, count);
+  std.out.puts("event " + events + ": " + escaped(text) + "\n");
+  if (text === "exit\n") {
+    os.setReadHandler(0, null);
+  }
+  std.out.flush();
+});
+
+std.out.flush();
+"##,
+        );
+
+        let output = run_with_process_stdin(
+            [
+                "qjs-term".into(),
+                "--ready-io-turns".into(),
+                "1".into(),
+                "--feed-after-eval-lines".into(),
+                "-".into(),
+                script.into_os_string(),
+            ],
+            b"first\nsecond\nexit\n".as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"session task: 1\r\nevent 1: first\\n\r\nevent 2: second\\n\r\nevent 3: exit\\n\r\n"
         );
         assert!(output.stderr().is_empty());
     }
