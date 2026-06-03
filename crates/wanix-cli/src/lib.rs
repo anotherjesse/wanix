@@ -224,9 +224,9 @@ fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
     let before_script = read_utf8_script(before_script_path)?;
     let after_script = read_utf8_script(after_script_path)?;
 
-    let table = TaskTable::new();
-    table.register_noop_driver("qjs")?;
     let runner = quickjs_runner()?;
+    let table = TaskTable::new();
+    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(Arc::clone(&runner))))?;
     let before_task = table.allocate_root("qjs")?;
 
     let root = Arc::new(MemFs::new());
@@ -1313,6 +1313,23 @@ print("opened task fd");
             b"before task: 1\nafter task: 2\nvm state: preserved from task 1\nnamespace: namespace from task 1\n"
         );
         assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_restore_example_starts_child_task_after_restore() {
+        let output = run([
+            "qjs-restore".into(),
+            example_script("qjs-restore-spawn-before.js").into_os_string(),
+            example_script("qjs-restore-spawn-after.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 9);
+        assert_eq!(
+            output.stdout(),
+            b"before task: 1\nafter task: 2\nvm state: preserved from task 1\nnamespace: namespace from task 1\nchild task: 3\nrestore child task: 3\nrestore child argv: __wanix_restore/after/qjs-restore-spawn-child.js|from-restore|two words\nrestore child env: restored-child\nrestore child note: child namespace from task 2 / preserved from task 1\nrestore child snapshot global: undefined\nchild exit: 5\n"
+        );
+        assert_eq!(output.stderr(), b"restore child stderr: restored-child\n");
     }
 
     #[test]
