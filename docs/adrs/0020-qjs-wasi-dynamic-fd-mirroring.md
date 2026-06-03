@@ -25,7 +25,10 @@ optional dynamic-fd observer. For qjs task runtimes, install a task observer tha
 - stores a clone of the same shared `WasiFile` handle, preserving file offset
   and read/write access;
 - removes the mirrored task fd when WASI `fd_close` closes the dynamic fd, and
-  also when the owning `WasiCtx` drops with guest fds still open.
+  also when the owning `WasiCtx` drops with guest fds still open;
+- treats `fd_close` as transactional with respect to the observer: if the
+  mirrored Wanix fd cannot be closed, the WASI fd remains open rather than
+  silently leaving the two fd views out of sync.
 
 Standard fds and preopens keep their existing fixed attachment behavior.
 Directory fds remain WASI-internal for now because Wanix task fd proxy files

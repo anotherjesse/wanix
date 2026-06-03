@@ -329,12 +329,11 @@ impl WasiCtx {
         if fd.get() < self.next_dynamic_floor() {
             return Err(Errno::Badf);
         }
-        let handle = self.fds.remove(&fd).ok_or(Errno::Badf)?;
-        if matches!(handle, Handle::File { .. })
-            && let Some(observer) = &self.fd_observer
-        {
+        let is_file = matches!(self.fds.get(&fd).ok_or(Errno::Badf)?, Handle::File { .. });
+        if is_file && let Some(observer) = &self.fd_observer {
             observer.fd_closed(fd)?;
         }
+        self.fds.remove(&fd).ok_or(Errno::Badf)?;
         Ok(())
     }
 

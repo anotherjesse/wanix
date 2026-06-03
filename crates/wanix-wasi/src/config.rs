@@ -198,7 +198,10 @@ pub trait WasiFdObserver: fmt::Debug + Send + Sync {
     /// Returning an error rejects the open.
     fn file_opened(&self, fd: WasiFd, file: WasiFile, path: &NormalizedPath) -> Result<(), Errno>;
 
-    /// Called after a mirrored regular file fd is closed.
+    /// Called when a mirrored regular file fd should be closed.
+    ///
+    /// During explicit `WasiCtx::fd_close`, returning an error rejects the
+    /// close and keeps the WASI fd open. Drop-time cleanup ignores errors.
     fn fd_closed(&self, fd: WasiFd) -> Result<(), Errno>;
 }
 

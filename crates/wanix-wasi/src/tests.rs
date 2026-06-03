@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::{
-    CRATE_PURPOSE, Errno, FileStat, Preopen, WasiConfig, WasiCtx, WasiFd, WasiFileType,
-    WasiOpenOptions, WasiPathOpen, WasiRights, WasiWhence,
+    CRATE_PURPOSE, Errno, FileStat, Preopen, WasiConfig, WasiCtx, WasiFd, WasiFdObserver, WasiFile,
+    WasiFileType, WasiOpenOptions, WasiPathOpen, WasiRights, WasiWhence,
 };
 use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
 use wanix_task::TaskTable;
@@ -482,6 +482,49 @@ fn close_only_accepts_dynamic_fds() {
     ctx.fd_close(fd).unwrap();
     assert_eq!(ctx.open_dynamic_fd_count(), 0);
     assert_eq!(ctx.fd_read(fd, &mut [0; 1]), Err(Errno::Badf));
+}
+
+#[derive(Debug)]
+struct FailingCloseObserver {
+    closed: Arc<Mutex<Vec<WasiFd>>>,
+}
+
+impl WasiFdObserver for FailingCloseObserver {
+    fn file_opened(
+        &self,
+        _fd: WasiFd,
+        _file: WasiFile,
+        _path: &NormalizedPath,
+    ) -> Result<(), Errno> {
+        Ok(())
+    }
+
+    fn fd_closed(&self, fd: WasiFd) -> Result<(), Errno> {
+        self.closed.lock().unwrap().push(fd);
+        Err(Errno::Io)
+    }
+}
+
+#[test]
+fn fd_close_keeps_wasi_fd_open_when_observer_close_fails() {
+    let root = fixture(&[("hello.txt", b"hello")]);
+    let closed = Arc::new(Mutex::new(Vec::new()));
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)).with_fd_observer(
+        FailingCloseObserver {
+            closed: Arc::clone(&closed),
+        },
+    ));
+    let fd = ctx
+        .path_open(WasiFd::ROOT, "hello.txt", WasiOpenOptions::read())
+        .unwrap();
+
+    assert_eq!(ctx.fd_close(fd), Err(Errno::Io));
+    assert_eq!(closed.lock().unwrap().as_slice(), [fd]);
+    assert_eq!(ctx.open_dynamic_fd_count(), 1);
+
+    let mut buf = [0; 8];
+    let count = ctx.fd_read(fd, &mut buf).unwrap();
+    assert_eq!(&buf[..count], b"hello");
 }
 
 #[test]
