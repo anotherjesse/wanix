@@ -1,0 +1,6 @@
+const source = Wanix.readText("main.js");
+Wanix.writeText("hello.txt", "hello from a Wanix namespace");
+
+print("outside Chrome:", source.includes("Wanix.readText"));
+print("task id:", Wanix.readText("#task/self/id").trim());
+print(Wanix.readText("hello.txt"));
