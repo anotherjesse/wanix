@@ -135,6 +135,18 @@ impl WasiRights {
     pub const fn contains(self, right: Self) -> bool {
         self.0 & right.0 == right.0
     }
+
+    /// Returns the rights present in both sets.
+    #[must_use]
+    pub const fn intersection(self, rights: Self) -> Self {
+        Self(self.0 & rights.0)
+    }
+
+    /// Returns whether no rights are set.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
 }
 
 impl BitOr for WasiRights {
@@ -342,6 +354,72 @@ impl WasiOpenOptions {
             create,
             truncate,
         })
+    }
+}
+
+/// Preview 1 path-open request with requested fd rights preserved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WasiPathOpen {
+    options: WasiOpenOptions,
+    rights_base: WasiRights,
+    rights_inheriting: WasiRights,
+}
+
+impl WasiPathOpen {
+    /// Converts raw Preview 1 `path_open` flags and rights into a request.
+    ///
+    /// Directory-only opens, exclusive creation, and fdflags are rejected until
+    /// `WasiCtx::path_open_preview1` has explicit semantics for those modes.
+    pub fn from_preview1(
+        oflags: u16,
+        rights_base: WasiRights,
+        rights_inheriting: WasiRights,
+        fdflags: u16,
+    ) -> Result<Self, Errno> {
+        if oflags & !WasiOpenOptions::SUPPORTED_OFLAGS != 0
+            || fdflags & !WasiOpenOptions::SUPPORTED_FDFLAGS != 0
+        {
+            return Err(Errno::Notcapable);
+        }
+        if !WasiRights::DIRECTORY_INHERITING.contains(rights_base)
+            || !WasiRights::DIRECTORY_INHERITING.contains(rights_inheriting)
+        {
+            return Err(Errno::Notcapable);
+        }
+        let create = oflags & WasiOpenOptions::OFLAGS_CREATE != 0;
+        let truncate = oflags & WasiOpenOptions::OFLAGS_TRUNCATE != 0;
+        if (create || truncate) && !rights_base.contains(WasiRights::FD_WRITE) {
+            return Err(Errno::Notcapable);
+        }
+        let options = WasiOpenOptions {
+            read: rights_base.contains(WasiRights::FD_READ),
+            write: rights_base.contains(WasiRights::FD_WRITE),
+            create,
+            truncate,
+        };
+        Ok(Self {
+            options,
+            rights_base,
+            rights_inheriting,
+        })
+    }
+
+    /// Returns Wanix open options derived from requested rights and flags.
+    #[must_use]
+    pub const fn options(self) -> WasiOpenOptions {
+        self.options
+    }
+
+    /// Returns rights requested for the opened fd.
+    #[must_use]
+    pub const fn rights_base(self) -> WasiRights {
+        self.rights_base
+    }
+
+    /// Returns rights requested for child fds opened from the opened fd.
+    #[must_use]
+    pub const fn rights_inheriting(self) -> WasiRights {
+        self.rights_inheriting
     }
 }
 

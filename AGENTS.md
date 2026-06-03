@@ -105,6 +105,3 @@ cycle before starting the next one.
   qjs task-driver tests to clone the cached runner, and consider a similar
   injection seam for `wanix-cli` qjs tests. Keep production runner caching out
   of scope unless it becomes an intentional runtime decision.
-- Before wiring a live QuickJS WASI provider, preserve reduced rights from
-  Preview 1 `path_open` on opened file and directory handles so `fdstat` does
-  not re-advertise broader rights than the guest requested.

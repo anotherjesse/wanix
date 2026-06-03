@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::{
     CRATE_PURPOSE, Errno, FileStat, Preopen, WasiConfig, WasiCtx, WasiFd, WasiFileType,
-    WasiOpenOptions, WasiRights, WasiWhence,
+    WasiOpenOptions, WasiPathOpen, WasiRights, WasiWhence,
 };
 use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
 use wanix_task::TaskTable;
@@ -601,6 +601,180 @@ fn preview1_path_open_flags_convert_to_wanix_open_options() {
     );
     assert_eq!(
         WasiRights::from_preview1_bits(WasiRights::FD_READ.bits()),
+        WasiRights::FD_READ
+    );
+
+    let directory = WasiPathOpen::from_preview1(
+        0,
+        WasiRights::PATH_OPEN | WasiRights::FD_READDIR,
+        WasiRights::FD_READ,
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        directory.options(),
+        WasiOpenOptions {
+            read: false,
+            write: false,
+            create: false,
+            truncate: false,
+        }
+    );
+    assert_eq!(
+        directory.rights_base(),
+        WasiRights::PATH_OPEN | WasiRights::FD_READDIR
+    );
+    assert_eq!(directory.rights_inheriting(), WasiRights::FD_READ);
+    assert_eq!(
+        WasiPathOpen::from_preview1(
+            0,
+            WasiRights::FD_READ,
+            WasiRights::from_preview1_bits(1 << 63),
+            0
+        ),
+        Err(Errno::Notcapable)
+    );
+}
+
+#[test]
+fn preview1_path_open_preserves_reduced_file_rights() {
+    let root = fixture(&[("data.txt", b"data")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+
+    let fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "data.txt",
+            0,
+            WasiRights::FD_READ,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+    let fdstat = ctx.fd_fdstat_get(fd).unwrap();
+    assert_eq!(fdstat.file_type(), WasiFileType::RegularFile);
+    assert_eq!(fdstat.rights_base(), WasiRights::FD_READ);
+    assert_eq!(fdstat.rights_inheriting(), WasiRights::NONE);
+
+    let mut buf = [0; 8];
+    let count = ctx.fd_read(fd, &mut buf).unwrap();
+    assert_eq!(&buf[..count], b"data");
+    assert_eq!(ctx.fd_write(fd, b"nope"), Err(Errno::Notcapable));
+    assert_eq!(ctx.fd_filestat_get(fd), Err(Errno::Notcapable));
+    assert_eq!(ctx.fd_seek(fd, 0, WasiWhence::Set), Err(Errno::Notcapable));
+    assert_eq!(ctx.fd_tell(fd), Err(Errno::Notcapable));
+}
+
+#[test]
+fn preview1_path_open_preserves_reduced_directory_rights() {
+    let root = fixture(&[("dir/file.txt", b"data")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+
+    let dir_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "dir",
+            0,
+            WasiRights::FD_READDIR,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+    let fdstat = ctx.fd_fdstat_get(dir_fd).unwrap();
+    assert_eq!(fdstat.file_type(), WasiFileType::Directory);
+    assert_eq!(fdstat.rights_base(), WasiRights::FD_READDIR);
+    assert_eq!(fdstat.rights_inheriting(), WasiRights::NONE);
+    assert_eq!(
+        ctx.fd_read_dir(dir_fd)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name().to_owned())
+            .collect::<Vec<_>>(),
+        ["file.txt"]
+    );
+    assert_eq!(
+        ctx.path_open_preview1(
+            dir_fd,
+            "file.txt",
+            0,
+            WasiRights::FD_READ,
+            WasiRights::NONE,
+            0
+        ),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.path_filestat_get(dir_fd, "file.txt"),
+        Err(Errno::Notcapable)
+    );
+}
+
+#[test]
+fn preview1_path_open_enforces_parent_inheriting_rights() {
+    let root = fixture(&[("dir/file.txt", b"data")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+
+    let dir_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "dir",
+            0,
+            WasiRights::PATH_OPEN | WasiRights::PATH_FILESTAT_GET,
+            WasiRights::FD_READ,
+            0,
+        )
+        .unwrap();
+    assert_eq!(ctx.fd_read_dir(dir_fd), Err(Errno::Notcapable));
+    assert_eq!(
+        ctx.path_filestat_get(dir_fd, "file.txt")
+            .unwrap()
+            .file_type(),
+        FileType::File
+    );
+    assert_eq!(
+        ctx.path_open_preview1(
+            dir_fd,
+            "file.txt",
+            0,
+            WasiRights::FD_WRITE,
+            WasiRights::NONE,
+            0
+        ),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.path_open(
+            dir_fd,
+            "file.txt",
+            WasiOpenOptions {
+                read: false,
+                write: true,
+                create: false,
+                truncate: false,
+            },
+        ),
+        Err(Errno::Notcapable)
+    );
+    let logical_file_fd = ctx
+        .path_open(dir_fd, "file.txt", WasiOpenOptions::read())
+        .unwrap();
+    assert_eq!(
+        ctx.fd_fdstat_get(logical_file_fd).unwrap().rights_base(),
+        WasiRights::FD_READ
+    );
+    assert_eq!(ctx.fd_filestat_get(logical_file_fd), Err(Errno::Notcapable));
+    let file_fd = ctx
+        .path_open_preview1(
+            dir_fd,
+            "file.txt",
+            0,
+            WasiRights::FD_READ,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        ctx.fd_fdstat_get(file_fd).unwrap().rights_base(),
         WasiRights::FD_READ
     );
 }

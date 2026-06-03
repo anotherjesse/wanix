@@ -37,6 +37,9 @@ does not depend upward on `wanix-task`.
 - Engine-specific providers also use `wanix-wasi` helpers for Preview 1
   filestat layout and supported `path_open` flag/rights conversion. Unsupported
   Preview 1 modes remain explicit errors until Wanix owns their semantics.
+- Preview 1 `path_open` requests preserve reduced base and inheriting rights on
+  opened file and directory fds. `fdstat` and later fd/path operations report
+  and enforce those effective rights instead of re-advertising broader defaults.
 - Directory fdstat rights should describe the operations Wanix already allows:
   directory reads, recursive path opens, file creation, and truncation during
   path open. Directory fds inherit both regular-file and child-directory rights.
