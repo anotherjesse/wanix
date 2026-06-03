@@ -20,7 +20,7 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
   server-facing 9P2000.L operation codecs.
 - `wanix-9p`: 9P server adapters backed by Wanix filesystems, starting with
   an in-process frame handler for attach/walk/open/read/write/clunk and
-  directory listing.
+  directory listing, plus a synchronous byte-stream transport loop.
 - `wanix-vfs`: Plan 9-style namespace binding and resolution.
 - `wanix-task`: task model, `#task`, fd table, and driver registry.
 - `wanix-term`: terminal device filesystem for `#term/new`,
@@ -87,10 +87,11 @@ line editing while still delivering complete lines to the guest task.
 resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
 can observe terminal resize broadcasts through live Wanix-backed fd readiness.
 
-The next 9P-facing demo target is a native `wanix-9p` transport loop that lets
+The next 9P-facing demo target is a native listener or CLI demo that lets
 external clients browse a Wanix namespace. The server core already negotiates
 9P2000.L, attaches, walks, opens regular files and read-only directories,
-reads/writes regular files, lists directories with `Treaddir`, and clunks fids.
+reads/writes regular files, lists directories with `Treaddir`, clunks fids, and
+serves encoded request/response frames through a synchronous stream loop.
 
 ## Code Quality Guardrails
 
@@ -290,6 +291,9 @@ cargo test --workspace --locked
 - [ADR 0061](docs/adrs/0061-9p-directory-read-cookies.md):
   `wanix-9p` serves `Treaddir` from Wanix directory entries using opaque
   one-based cookies that preserve the Go p9kit behavior.
+- [ADR 0062](docs/adrs/0062-sync-9p-stream-transport-loop.md):
+  `wanix-9p` serves decoded request frames from synchronous byte streams while
+  keeping socket/listener policy outside the server core.
 
 ## Cycle Rules
 
@@ -309,4 +313,4 @@ cycle before starting the next one.
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
 - Extend `wanix-9p` with create/remove/rename, getattr/stat, and a native
-  transport loop for serve/v86 integration.
+  listener or CLI demo for serve/v86 integration.

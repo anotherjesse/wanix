@@ -4,6 +4,8 @@
 //! filesystems. It owns fid state and filesystem error mapping, while the
 //! protocol crate remains dependency-free and wire-only.
 
+mod transport;
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -19,6 +21,8 @@ use wanix_protocol::{
     p9_decode_twalk, p9_decode_twrite, p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rlerror,
     p9_rlopen, p9_rread, p9_rreaddir, p9_rversion, p9_rwalk, p9_rwrite,
 };
+
+pub use transport::{P9TransportError, P9TransportStats};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix 9P filesystem server adapters";
