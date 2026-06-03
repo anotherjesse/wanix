@@ -155,10 +155,13 @@ fn convert_whence(whence: QuickJsWasiWhence) -> WasiWhence {
 mod tests {
     use std::sync::Arc;
 
-    use rust_wasi_quickjs::QuickJsWasiHost;
+    use rust_wasi_quickjs::{
+        QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType, QuickJsWasiHost,
+        QuickJsWasiPrestat,
+    };
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
     use wanix_vfs::{BindOptions, Namespace};
-    use wanix_wasi::WasiConfig;
+    use wanix_wasi::{WasiConfig, WasiRights};
 
     use super::WanixQuickJsWasiHost;
 
@@ -190,5 +193,68 @@ mod tests {
         let mut bytes = [0; 16];
         let count = output.read(&mut bytes).unwrap();
         assert_eq!(&bytes[..count], b"via wasi");
+    }
+
+    #[test]
+    fn adapter_path_open_and_fd_read_reach_wanix_namespace() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        root.write_file("input.txt", b"from namespace").unwrap();
+        namespace
+            .bind(root, ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        assert_eq!(
+            host.fd_prestat_get(3).unwrap(),
+            QuickJsWasiPrestat::new("/")
+        );
+        let stat = host.path_filestat_get(3, 0, b"input.txt").unwrap();
+        assert_eq!(
+            stat,
+            QuickJsWasiFileStat::new(QuickJsWasiFileType::RegularFile, 14)
+        );
+
+        let fd = host
+            .path_open(3, 0, b"input.txt", 0, WasiRights::FD_READ.bits(), 0, 0)
+            .unwrap();
+        assert_eq!(
+            host.fd_fdstat_get(fd).unwrap(),
+            QuickJsWasiFdStat::new(
+                QuickJsWasiFileType::RegularFile,
+                WasiRights::FD_READ.bits(),
+                0
+            )
+        );
+        let mut buf = [0; 32];
+        let count = host.fd_read(fd, &mut buf).unwrap();
+        assert_eq!(&buf[..count], b"from namespace");
+        host.fd_close(fd).unwrap();
+    }
+
+    #[test]
+    fn adapter_extra_preopen_metadata_and_reads_come_from_wanix_wasi_ctx() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        root.write_file("mnt/extra.txt", b"from extra preopen")
+            .unwrap();
+        namespace
+            .bind(root, ".", ".", BindOptions::default())
+            .unwrap();
+        let config = WasiConfig::new(namespace).with_preopen("mnt").unwrap();
+        let mut host = WanixQuickJsWasiHost::new(config).unwrap();
+
+        assert_eq!(
+            host.fd_prestat_get(4).unwrap(),
+            QuickJsWasiPrestat::new("/mnt")
+        );
+
+        let fd = host
+            .path_open(4, 0, b"extra.txt", 0, WasiRights::FD_READ.bits(), 0, 0)
+            .unwrap();
+        let mut buf = [0; 32];
+        let count = host.fd_read(fd, &mut buf).unwrap();
+        assert_eq!(&buf[..count], b"from extra preopen");
+        host.fd_close(fd).unwrap();
     }
 }
