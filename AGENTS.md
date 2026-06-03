@@ -127,6 +127,9 @@ cargo test --workspace --locked
 - [ADR 0020](docs/adrs/0020-qjs-wasi-dynamic-fd-mirroring.md): qjs task
   runtimes mirror dynamic regular-file WASI fds into the Wanix task fd table at
   the same numeric fd.
+- [ADR 0021](docs/adrs/0021-native-qjs-stdin-sources.md): `wanix-rust qjs`
+  accepts text, host-file, or native stdin sources and installs them as Wanix
+  task fd 0.
 
 ## Cycle Rules
 
@@ -142,3 +145,12 @@ cycle before starting the next one.
   qjs task-driver tests to clone the cached runner, and consider a similar
   injection seam for `wanix-cli` qjs tests. Keep production runner caching out
   of scope unless it becomes an intentional runtime decision.
+- Tighten dynamic WASI fd observer close semantics so `fd_close` cannot report
+  an observer error after removing the WASI handle and leaving a mirrored task fd
+  stale.
+- Clarify and test cross-task fd bind handoff semantics: today fd binds are live
+  task-fd proxies, not duplicated open handles, so closing the source fd can
+  affect a child.
+- Consider moving remaining Wasmtime mechanics out of `wanix-qjs` and into
+  `wanix-qjs-engine`, then split large `wanix-qjs`, `wanix-cli`, and
+  `wanix-wasi` modules before adding broad new behavior.

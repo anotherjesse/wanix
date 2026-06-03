@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(test)]
@@ -14,7 +15,8 @@ use wanix_task::{Fd, Task, TaskSpec, TaskTable, quote_cmd_argv};
 use wanix_vfs::BindOptions;
 
 const USAGE: &str = concat!(
-    "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] ",
+    "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
+    "[--stdin TEXT | --stdin-file PATH|-] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
     "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
@@ -114,11 +116,28 @@ where
     I: IntoIterator<Item = S>,
     S: Into<OsString>,
 {
+    run_with_process_stdin(args, io::empty())
+}
+
+/// Runs the native CLI command with a supplied native-process stdin reader.
+///
+/// # Errors
+///
+/// Returns a CLI error when arguments are invalid, files cannot be read, stdin
+/// cannot be read, or the selected Wanix runtime cannot be initialized.
+pub fn run_with_process_stdin<I, S, R>(args: I, mut process_stdin: R) -> Result<CliOutput, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+    R: Read,
+{
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
     match args.as_slice() {
         [] => Ok(help_output()),
         [help] if help == "--help" || help == "-h" => Ok(help_output()),
-        [command, rest @ ..] if command == "qjs" => run_qjs(parse_qjs_command(rest)?),
+        [command, rest @ ..] if command == "qjs" => {
+            run_qjs(parse_qjs_command(rest)?, &mut process_stdin)
+        }
         [command, rest @ ..] if command == "qjs-restore" => {
             run_qjs_restore(parse_qjs_restore_command(rest)?)
         }
@@ -143,8 +162,15 @@ struct QjsCommand {
     args: Vec<String>,
     env: Vec<String>,
     cwd: NormalizedPath,
-    stdin: Option<Vec<u8>>,
+    stdin: Option<QjsStdin>,
     mounts: Vec<HostMount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum QjsStdin {
+    Bytes(Vec<u8>),
+    File(PathBuf),
+    Process,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,9 +191,10 @@ struct QjsRestoreCommand {
     mounts: Vec<HostMount>,
 }
 
-fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
+fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
     let script_path = command.script_path.as_path();
     let script = read_utf8_script(script_path)?;
+    let stdin_bytes = read_qjs_stdin(command.stdin, process_stdin)?;
 
     let table = TaskTable::new();
     let runner = quickjs_runner()?;
@@ -185,7 +212,7 @@ fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
     task.bind(root, ".", ".", BindOptions::default())?;
     bind_host_mounts(&task, &command.mounts)?;
 
-    if let Some(stdin_bytes) = command.stdin {
+    if let Some(stdin_bytes) = stdin_bytes {
         let stdin = Arc::new(MemFs::new());
         stdin.write_file("stdin", stdin_bytes)?;
         task.insert_fd(
@@ -352,7 +379,22 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
             let value = args
                 .get(i)
                 .ok_or_else(|| CliError::usage("qjs --stdin expects text"))?;
-            stdin = Some(os_arg_to_string(value, "qjs --stdin")?.into_bytes());
+            set_qjs_stdin(
+                &mut stdin,
+                QjsStdin::Bytes(os_arg_to_string(value, "qjs --stdin")?.into_bytes()),
+            )?;
+            i += 1;
+        } else if args[i] == "--stdin-file" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs --stdin-file expects PATH or -"))?;
+            let source = if value == "-" {
+                QjsStdin::Process
+            } else {
+                QjsStdin::File(PathBuf::from(value))
+            };
+            set_qjs_stdin(&mut stdin, source)?;
             i += 1;
         } else if args[i] == "--mount" {
             i += 1;
@@ -395,6 +437,39 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
         stdin,
         mounts,
     })
+}
+
+fn set_qjs_stdin(stdin: &mut Option<QjsStdin>, source: QjsStdin) -> Result<(), CliError> {
+    if stdin.is_some() {
+        return Err(CliError::usage(
+            "qjs accepts only one of --stdin or --stdin-file",
+        ));
+    }
+    *stdin = Some(source);
+    Ok(())
+}
+
+fn read_qjs_stdin(
+    source: Option<QjsStdin>,
+    process_stdin: &mut dyn Read,
+) -> Result<Option<Vec<u8>>, CliError> {
+    match source {
+        None => Ok(None),
+        Some(QjsStdin::Bytes(bytes)) => Ok(Some(bytes)),
+        Some(QjsStdin::File(path)) => std::fs::read(&path).map(Some).map_err(|error| {
+            CliError::new(
+                format!("failed to read stdin file {}: {error}", path.display()),
+                1,
+            )
+        }),
+        Some(QjsStdin::Process) => {
+            let mut bytes = Vec::new();
+            process_stdin.read_to_end(&mut bytes).map_err(|error| {
+                CliError::new(format!("failed to read process stdin: {error}"), 1)
+            })?;
+            Ok(Some(bytes))
+        }
+    }
 }
 
 fn parse_host_mount(value: &str, label: &str) -> Result<HostMount, CliError> {
@@ -798,7 +873,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::run;
+    use super::{run, run_with_process_stdin};
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -809,6 +884,7 @@ mod tests {
         assert_eq!(output.exit_code(), 0);
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--mount HOST=GUEST"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--stdin-file PATH|-"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-restore"));
         assert!(output.stderr().is_empty());
     }
@@ -1767,6 +1843,42 @@ print("task", Wanix.readText("#task/self/id").trim());
     }
 
     #[test]
+    fn qjs_command_reads_task_stdin_from_file() {
+        let stdin_path = temp_dir("wanix-cli-stdin-file").join("input.txt");
+        fs::write(&stdin_path, b"from stdin file\n").unwrap();
+
+        let output = run([
+            "qjs".into(),
+            "--stdin-file".into(),
+            stdin_path.into_os_string(),
+            example_script("qjs-stdin-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"stdin: from stdin file\ntask id: 1\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_command_reads_task_stdin_from_native_stdin_dash() {
+        let output = run_with_process_stdin(
+            [
+                "qjs".into(),
+                "--stdin-file".into(),
+                "-".into(),
+                example_script("qjs-stdin-demo.js").into_os_string(),
+            ],
+            b"from host pipe\n".as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"stdin: from host pipe\ntask id: 1\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_flows_env_cwd_and_args_from_wanix_task_state() {
         let script = write_temp_script(
             "context.js",
@@ -1822,6 +1934,46 @@ print("id", Wanix.readText("#task/self/id").trim());
         let stdin_error = run(["qjs", "--stdin"]).unwrap_err();
         assert_eq!(stdin_error.exit_code(), 2);
         assert!(stdin_error.to_string().contains("--stdin expects text"));
+
+        let stdin_file_error = run(["qjs", "--stdin-file"]).unwrap_err();
+        assert_eq!(stdin_file_error.exit_code(), 2);
+        assert!(
+            stdin_file_error
+                .to_string()
+                .contains("--stdin-file expects PATH or -")
+        );
+
+        let duplicate_stdin = run([
+            "qjs".into(),
+            "--stdin".into(),
+            "text".into(),
+            "--stdin-file".into(),
+            "-".into(),
+            script.into_os_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(duplicate_stdin.exit_code(), 2);
+        assert!(
+            duplicate_stdin
+                .to_string()
+                .contains("only one of --stdin or --stdin-file")
+        );
+    }
+
+    #[test]
+    fn qjs_command_reports_missing_stdin_file() {
+        let script = write_temp_script("context.js", "print('unused');");
+
+        let error = run([
+            "qjs".into(),
+            "--stdin-file".into(),
+            "/definitely/not/a/wanix/stdin/file".into(),
+            script.into_os_string(),
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("failed to read stdin file"));
     }
 
     fn write_temp_script(name: &str, source: &str) -> PathBuf {

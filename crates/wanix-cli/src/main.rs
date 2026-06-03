@@ -3,7 +3,9 @@
 use std::io::Write;
 
 fn main() {
-    let output = match wanix_cli::run(std::env::args_os().skip(1)) {
+    let args = std::env::args_os().skip(1);
+    let stdin = std::io::stdin();
+    let output = match wanix_cli::run_with_process_stdin(args, stdin.lock()) {
         Ok(output) => output,
         Err(error) => {
             eprintln!("{error}");
