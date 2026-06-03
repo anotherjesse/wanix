@@ -1899,6 +1899,62 @@ std.out.flush();
     }
 
     #[test]
+    fn task_driver_runs_cleared_quickjs_intervals_with_wait_budget() {
+        let table = TaskTable::new();
+        let runner = runner();
+        let driver =
+            QuickJsTaskDriver::new(runner).with_event_loop_wait_budget(Duration::from_millis(10));
+        table
+            .register_driver("qjs", std::sync::Arc::new(driver))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+let count = 0;
+std.out.puts("sync\n");
+const interval = os.setInterval(() => {
+  count += 1;
+  std.out.puts("tick " + count + "\n");
+  if (count >= 3) {
+    os.clearInterval(interval);
+    std.out.flush();
+  }
+}, 1);
+std.out.flush();
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"sync\ntick 1\ntick 2\ntick 3\n"
+        );
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
     fn task_driver_runs_quickjs_read_handler_for_ready_stdin() {
         let table = TaskTable::new();
         let runner = runner();

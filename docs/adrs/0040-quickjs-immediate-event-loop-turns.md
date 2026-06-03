@@ -40,7 +40,8 @@ policy rather than this immediate pump.
 
 Future timers are initially reported as a wait status rather than slept in the
 immediate task pump. ADR 0042 later adds an explicit bounded wait budget for
-future timer demos. Long-lived timers, intervals, fd handler scheduling,
+future timer demos, and ADR 0044 proves self-clearing intervals inside that
+bounded pump. Long-lived timers, open-ended intervals, fd handler scheduling,
 signals, cancellation, and a Wanix task scheduler remain future lifecycle work.
 
 The event-loop state remains QuickJS VM state. Snapshot bytes continue to be VM

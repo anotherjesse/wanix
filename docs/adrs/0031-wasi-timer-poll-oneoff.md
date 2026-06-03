@@ -49,6 +49,7 @@ non-zero sleeps block the current host thread.
 This did not initially implement `sleepAsync`, `setTimeout`, `setInterval`,
 signal delivery, task cancellation, or a Wanix scheduler. ADR 0040 later adds
 bounded immediate event-loop turns for due async timers, and ADR 0042 adds an
-explicit bounded wait budget for future timer demos. Scheduler integration
-remains out of scope. Snapshot bytes remain QuickJS/Wasm memory only; pending
-async timer state is still out of scope for persisted task policy.
+explicit bounded wait budget for future timer demos. ADR 0044 later proves
+self-clearing intervals inside that bounded pump. Scheduler integration remains
+out of scope. Snapshot bytes remain QuickJS/Wasm memory only; pending async
+timer state is still out of scope for persisted task policy.

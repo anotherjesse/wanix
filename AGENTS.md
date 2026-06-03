@@ -196,6 +196,9 @@ cargo test --workspace --locked
 - [ADR 0043](docs/adrs/0043-bounded-quickjs-ready-io-turns.md):
   QuickJS ready-fd handlers can run for an explicit fixed number of
   nonblocking turns after Wanix `qjs` task evaluation.
+- [ADR 0044](docs/adrs/0044-bounded-quickjs-interval-timers.md):
+  QuickJS self-clearing interval timers run inside the bounded future-timer pump
+  without defining a general scheduler.
 
 ## Cycle Rules
 

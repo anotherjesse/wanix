@@ -2419,6 +2419,21 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_example_interval_demo_runs_with_wait_budget() {
+        let output = run([
+            "qjs".into(),
+            "--event-loop-ms".into(),
+            "10".into(),
+            example_script("qjs-interval-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"sync\ntick 1\ntick 2\ntick 3\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_example_fd_handler_demo_reads_ready_stdin() {
         let output = run([
             "qjs".into(),

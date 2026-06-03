@@ -387,6 +387,37 @@ fn quickjs_os_future_timer_runs_with_wait_budget() -> Result<()> {
 }
 
 #[test]
+fn quickjs_os_interval_runs_with_wait_budget_until_cleared() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+        globalThis.intervalEvents = [];
+        const interval = os.setInterval(() => {
+          intervalEvents.push("tick" + (intervalEvents.length + 1));
+          if (intervalEvents.length >= 3) {
+            os.clearInterval(interval);
+          }
+        }, 1);
+        "#,
+        "stdlib-interval-budget.mjs",
+    )?;
+
+    assert_eq!(vm.eval_string("intervalEvents.join(',')")?, "");
+    assert_eq!(
+        vm.execute_event_loop_with_wait_budget(16, Duration::from_millis(10))?,
+        QuickJsEventLoopStatus::Idle
+    );
+    assert_eq!(
+        vm.eval_string("intervalEvents.join(',')")?,
+        "tick1,tick2,tick3"
+    );
+    Ok(())
+}
+
+#[test]
 fn quickjs_os_fd_handlers_run_on_ready_io_event_loop_turns() -> Result<()> {
     let (_engine, module) = quickjs_fixture()?;
     let host = ReadyFdWasiHost::with_stdin(b"ready input".to_vec());
