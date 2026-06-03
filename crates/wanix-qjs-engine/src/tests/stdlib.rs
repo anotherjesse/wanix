@@ -153,6 +153,44 @@ fn quickjs_os_sleep_uses_timer_poll_oneoff() -> Result<()> {
 }
 
 #[test]
+fn quickjs_os_async_timers_remain_event_loop_work() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+        globalThis.timerExports = [
+          typeof os.sleepAsync,
+          typeof os.setTimeout,
+          typeof os.setInterval,
+        ].join(",");
+        globalThis.asyncTimerFired = false;
+        if (typeof os.sleepAsync === "function") {
+          os.sleepAsync(0).then(() => {
+            globalThis.asyncTimerFired = true;
+          });
+        }
+        if (typeof os.setTimeout === "function") {
+          os.setTimeout(() => {
+            globalThis.asyncTimerFired = true;
+          }, 0);
+        }
+        "#,
+        "stdlib-async-timers.mjs",
+    )?;
+
+    let exports = vm.eval_string("timerExports")?;
+    assert_eq!(
+        vm.execute_pending_jobs_with_limit(4)?,
+        0,
+        "async timer exports: {exports}"
+    );
+    assert_eq!(vm.eval_string("String(asyncTimerFired)")?, "false");
+    Ok(())
+}
+
+#[test]
 fn quickjs_std_stdout_uses_wasi_capture() -> Result<()> {
     let (engine, module) = quickjs_fixture()?;
     let config = QuickJsHostConfig::new().with_stdout_capture(true);

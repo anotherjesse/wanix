@@ -160,7 +160,7 @@ cargo test --workspace --locked
   mutation and stat-visible atime/mtime through live WASI providers.
 - [ADR 0031](docs/adrs/0031-wasi-timer-poll-oneoff.md):
   `qjs:os.sleep(...)` reaches timer-only Preview 1 `poll_oneoff`, while fd
-  readiness and async lifecycle polling remain Wanix task work.
+  readiness, async timers, and lifecycle polling remain Wanix task work.
 - [ADR 0032](docs/adrs/0032-wasi-directory-listing-through-quickjs.md):
   `qjs:os.readdir(...)` reaches Wanix-owned directory listing through live WASI
   providers and libc-style directory rights.
