@@ -14,7 +14,7 @@ use wanix_protocol::{P9Error, P9FrameBuffer};
 use crate::{CliError, write_process_output};
 
 #[derive(Debug)]
-enum P9WsConnectionError {
+pub(super) enum P9WsConnectionError {
     Handshake(String),
     WebSocket(WsError),
     Protocol(P9Error),
@@ -200,7 +200,7 @@ fn serve_one_websocket(
     }
 }
 
-fn serve_websocket_connection(
+pub(super) fn serve_websocket_connection(
     root: Arc<dyn FileSystem>,
     mut socket: WebSocket<TcpStream>,
 ) -> Result<(), P9WsConnectionError> {

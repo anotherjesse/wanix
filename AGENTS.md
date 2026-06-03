@@ -99,8 +99,11 @@ stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
 for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
 --addr 127.0.0.1:5640` exposes the same `LocalFs` export over a native TCP
 listener. `wanix-rust p9-ws --root DIR --addr 127.0.0.1:7654` exposes the same
-server over binary WebSocket frames for browser/v86 experiments. Both listener
-commands accept `--once` for tests and scripted demos.
+server over binary WebSocket frames for browser/v86 experiments. `wanix-rust
+serve --root DIR --addr 127.0.0.1:7654` serves static files with
+COOP/COEP/CORS headers and reuses the binary WebSocket 9P handler on the same
+listener, which is the first Rust-native serve shape for browser/v86/VS Code
+experiments. Listener commands accept `--once` for tests and scripted demos.
 
 ## Code Quality Guardrails
 
@@ -318,6 +321,9 @@ cargo test --workspace --locked
 - [ADR 0067](docs/adrs/0067-browser-websocket-9p-bridge.md):
   `wanix-rust p9-ws --root DIR --addr HOST:PORT` exposes the Rust 9P server
   over binary WebSocket messages for browser/v86 experiments.
+- [ADR 0068](docs/adrs/0068-rust-serve-http-websocket-9p.md):
+  `wanix-rust serve --root DIR --addr HOST:PORT` combines static HTTP assets
+  and binary WebSocket 9P export on one browser-facing listener.
 
 ## Cycle Rules
 
@@ -337,4 +343,5 @@ cycle before starting the next one.
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
-  integration, then wire the native 9P listener into the serve/v86 path.
+  integration, then wire qemu/v86 bundles, vnet, and VS Code routes onto the
+  Rust `serve` endpoint.
