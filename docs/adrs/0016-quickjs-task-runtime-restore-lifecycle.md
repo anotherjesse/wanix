@@ -25,15 +25,15 @@ restores QuickJS VM bytes and reattaches host state from the supplied task.
 
 The snapshot bytes remain QuickJS/Wasm memory only. On each create or restore,
 `wanix-qjs` installs Wanix-backed WASI imports, task stdout/stderr callbacks,
-the namespace module loader, the interim `Wanix` host API, an interrupt handler,
-and a fresh exit-state cell. `QuickJsTaskRuntime::finish` records the observed
-exit code on the task, defaulting to `0` when JavaScript has not requested a
-status.
+the namespace module loader, `scriptArgs`, the remaining fd-only `Wanix` bridge,
+an interrupt handler, and a fresh exit-state cell. `QuickJsTaskRuntime::finish`
+records the observed exit code on the task, defaulting to `0` when JavaScript
+has not requested a status.
 
 Guest memory and initialized guest process state, such as globals and QuickJS
 libc environment data, may survive restore. Wanix host context exposed through
-callbacks, such as `Wanix.env()`, task service files, stdio fds, namespace
-files, and task exit state, is restore-time state from the supplied task.
+`scriptArgs`, `qjs:std`/`qjs:os`, task service files, stdio fds, namespace
+files, and task exit state is restore-time state from the supplied task.
 
 Snapshots must reject open dynamic WASI descriptors. The engine asks the live
 `QuickJsWasiHost` provider for snapshot blockers, and the Wanix adapter reports
@@ -43,7 +43,7 @@ open dynamic fds from `wanix_wasi::WasiCtx`.
 
 Wanix can prove a `qjs` task can run JavaScript, snapshot, restore, and continue
 with preserved VM state while observing restore-time Wanix task identity,
-namespace, stdio, host API context, and exit handling.
+namespace, stdio, service-file context, and exit handling.
 
 This is not yet a full persisted task snapshot format. Future persisted task
 snapshots still need explicit metadata for task identity, namespace bindings,

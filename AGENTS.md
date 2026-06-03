@@ -84,8 +84,8 @@ cargo test --workspace --locked
 - [ADR 0005](docs/adrs/0005-crate-boundaries-and-dependency-graph.md): Crate
   boundaries keep core Wanix contracts independent from Wasmtime and QuickJS.
 - [ADR 0006](docs/adrs/0006-interim-quickjs-wanix-host-api.md): The remaining
-  temporary `Wanix` host API is a legacy bridge being replaced by qjs std/os and
-  live Wanix-backed WASI.
+  temporary `Wanix` host API is fd-only legacy bridge code; namespace, context,
+  and exit helpers now use qjs std/os, `scriptArgs`, `#task`, and live WASI.
 - [ADR 0007](docs/adrs/0007-workspace-local-rust-quality-gate.md): Formatting
   checks enumerate Wanix crates while sibling prototypes remain path
   dependencies.

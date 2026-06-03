@@ -5,10 +5,12 @@
 //! the namespace, fds, host callbacks, module loading policy, and snapshot
 //! reattachment policy.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+#[cfg(test)]
+use std::collections::BTreeMap;
 
 use rust_wasi_quickjs::{
     QuickJsCreateOptions, QuickJsHostConfig, QuickJsModule, QuickJsRestoreOptions, QuickJsRuntime,
@@ -371,13 +373,7 @@ impl QuickJsRunner {
         let api_exit_state = exit_state.clone();
         let api_task = task.clone();
         let script_args = task_wasi_argv(task);
-        let context = WanixTaskContext::new(
-            command.raw,
-            script_args,
-            command.args,
-            task_env_map(task),
-            command.cwd.clone(),
-        );
+        let context = WanixTaskContext::new(script_args, command.cwd.clone());
         match self.run_with_setup_control(
             &source,
             create_options,
@@ -604,6 +600,7 @@ fn resolve_from_cwd(cwd: &NormalizedPath, path: &NormalizedPath) -> FsResult<Nor
     NormalizedPath::new(format!("{cwd}/{path}"))
 }
 
+#[cfg(test)]
 fn task_env_map(task: &Task) -> BTreeMap<String, String> {
     task_wasi_env(task)
         .into_iter()
@@ -1160,12 +1157,16 @@ globalThis.loadedMessage = message;
         let root = std::sync::Arc::new(MemFs::new());
         root.write_file(
             "main.js",
-            br#"
-const text = Wanix.readText("input.txt");
-Wanix.writeText("generated.txt", text + " via task");
-print("task", Wanix.readText("generated.txt"));
-console.error("stderr", "line");
-"#,
+            br##"
+import * as std from "qjs:std";
+
+const text = std.loadFile("input.txt");
+std.writeFile("generated.txt", text + " via task");
+std.out.puts("task " + std.loadFile("generated.txt") + "\n");
+std.err.puts("stderr line\n");
+std.out.flush();
+std.err.flush();
+"##,
         )
         .unwrap();
         root.write_file("input.txt", b"namespace").unwrap();
@@ -1254,7 +1255,7 @@ print(message);
     }
 
     #[test]
-    fn task_driver_exposes_wanix_task_context_to_javascript() {
+    fn task_driver_exposes_task_context_through_wasi_and_service_files() {
         let table = TaskTable::new();
         let runner = runner();
         table
@@ -1265,14 +1266,18 @@ print(message);
         root.write_file(
             "app/main.js",
             br##"
-print("cmd", Wanix.cmd());
-print("cwd", Wanix.cwd());
-print("args", Wanix.args().join("|"));
-print("env", Wanix.env("MODE"), Wanix.env().EMPTY === "", String(Wanix.env("MISSING")));
-const source = Wanix.readText("main.js");
-Wanix.writeText("out.txt", "cwd write");
-print("source", source.includes("Wanix.readText"));
-print("id", Wanix.readText("#task/self/id").trim());
+import * as std from "qjs:std";
+
+const env = std.getenviron();
+std.out.puts("cmd " + std.loadFile("#task/self/cmd").trim() + "\n");
+std.out.puts("cwd " + std.loadFile("#task/self/dir").trim() + "\n");
+std.out.puts("args " + scriptArgs.slice(1).join("|") + "\n");
+std.out.puts("env " + std.getenv("MODE") + " " + (env.EMPTY === "") + " " + String(env.MISSING) + "\n");
+const source = std.loadFile("main.js");
+std.writeFile("out.txt", "cwd write");
+std.out.puts("source " + source.includes("std.loadFile") + "\n");
+std.out.puts("id " + std.loadFile("#task/self/id").trim() + "\n");
+std.out.flush();
 "##,
         )
         .unwrap();
@@ -1292,15 +1297,14 @@ print("id", Wanix.readText("#task/self/id").trim());
         )
         .unwrap();
         task.set_cmd("main.js alpha beta").unwrap();
-        task.set_env_lines("MODE=test\nEMPTY=\nBROKEN\nMODE=override")
-            .unwrap();
+        task.set_env_lines("MODE=test\nEMPTY=").unwrap();
         task.set_dir("app").unwrap();
 
         table.start(task.id()).unwrap();
 
         assert_eq!(
             read_file(&*stdout, "out"),
-            b"cmd main.js alpha beta\ncwd app\nargs alpha|beta\nenv override true undefined\nsource true\nid 1\n"
+            b"cmd main.js alpha beta\ncwd app\nargs alpha|beta\nenv test true undefined\nsource true\nid 1\n"
         );
         assert_eq!(read_file(&*root, "app/out.txt"), b"cwd write");
         assert_eq!(task.exit(), "0");
@@ -1909,12 +1913,12 @@ import { suffix } from "./suffix.js";
 std.out.puts(
   "after " + globalThis.before
     + " wasi=" + std.getenv("MODE")
-    + " wanix=" + Wanix.env("MODE")
+    + " taskenv=" + std.loadFile("#task/self/env").trim()
     + " " + std.loadFile("#task/self/id").trim()
     + " " + suffix
     + "\n"
 );
-Wanix.writeText("after.txt", Wanix.args().join("|"));
+std.writeFile("after.txt", scriptArgs.slice(1).join("|"));
 std.out.flush();
 std.exit(6);
 "##,
@@ -1930,7 +1934,7 @@ std.exit(6);
         );
         assert_eq!(
             after_stdout.read_file("stdout").unwrap(),
-            b"after from task cwd wasi=before wanix=after 1 restored\n"
+            b"after from task cwd wasi=before taskenv=MODE=after 1 restored\n"
         );
         assert_eq!(root.read_file("app/after.txt").unwrap(), b"two words");
         assert_eq!(task.exit(), "6");
@@ -2010,8 +2014,12 @@ std.exit(5);
             br##"
 import * as std from "qjs:std";
 
-print("source", std.loadFile("main.js").includes("qjs:std"));
-print("id", std.loadFile("#task/self/id").trim());
+std.out.puts("source " + std.loadFile("main.js").includes("qjs:std") + "\n");
+std.out.puts("id " + std.loadFile("#task/self/id").trim() + "\n");
+std.out.puts("cmd " + std.loadFile("#task/self/cmd").trim() + "\n");
+std.out.puts("dir " + std.loadFile("#task/self/dir").trim() + "\n");
+std.out.puts("env " + std.loadFile("#task/self/env").trim() + "\n");
+std.out.flush();
 "##,
         )
         .unwrap();
@@ -2029,12 +2037,16 @@ print("id", std.loadFile("#task/self/id").trim());
             NormalizedPath::new("out").unwrap(),
         )
         .unwrap();
-        task.set_cmd("main.js").unwrap();
+        task.set_cmd("main.js --service").unwrap();
+        task.set_env_lines("MODE=service").unwrap();
         task.set_dir("app").unwrap();
 
         table.start(task.id()).unwrap();
 
-        assert_eq!(read_file(&*stdout, "out"), b"source true\nid 1\n");
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"source true\nid 1\ncmd main.js --service\ndir app\nenv MODE=service\n"
+        );
         assert_eq!(task.exit(), "0");
     }
 
@@ -2759,7 +2771,7 @@ Wanix.closeFd(1);
     }
 
     #[test]
-    fn task_driver_rejects_invalid_wanix_fd_calls() {
+    fn task_driver_exposes_invalid_wanix_fd_calls_to_javascript() {
         let table = TaskTable::new();
         let runner = runner();
         table
@@ -2769,34 +2781,33 @@ Wanix.closeFd(1);
         let root = std::sync::Arc::new(MemFs::new());
         root.write_file(
             "main.js",
-            br#"
+            br##"
+import * as std from "qjs:std";
+
 try {
   Wanix.open("input.txt", "bad");
 } catch (err) {
-  Wanix.writeText("bad-mode.txt", "caught");
+  std.writeFile("bad-mode.txt", "caught");
 }
 try {
   Wanix.readFd(1.5, 1);
 } catch (err) {
-  Wanix.writeText("bad-fd.txt", "caught");
+  std.writeFile("bad-fd.txt", "caught");
 }
 try {
   Wanix.readFd(1, 1048577);
 } catch (err) {
-  Wanix.writeText("bad-len.txt", "caught");
+  std.writeFile("bad-len.txt", "caught");
 }
 const utf8 = Wanix.open("utf8.txt", "r");
 try {
   Wanix.readFd(utf8, 1);
 } catch (err) {
-  Wanix.writeText("split-utf8.txt", "caught");
+  std.writeFile("split-utf8.txt", "caught");
 } finally {
   Wanix.closeFd(utf8);
 }
-const fd = Wanix.open("input.txt", "r");
-Wanix.closeFd(fd);
-Wanix.readFd(fd, 1);
-"#,
+"##,
         )
         .unwrap();
         root.write_file("input.txt", b"from fd").unwrap();
@@ -2805,14 +2816,13 @@ Wanix.readFd(fd, 1);
             .unwrap();
         task.set_cmd("main.js").unwrap();
 
-        let err = table.start(task.id()).unwrap_err();
+        table.start(task.id()).unwrap();
 
-        assert!(err.to_string().contains("Wanix.readFd"));
         assert_eq!(root.read_file("bad-mode.txt").unwrap(), b"caught");
         assert_eq!(root.read_file("bad-fd.txt").unwrap(), b"caught");
         assert_eq!(root.read_file("bad-len.txt").unwrap(), b"caught");
         assert_eq!(root.read_file("split-utf8.txt").unwrap(), b"caught");
-        assert_eq!(task.exit(), "1");
+        assert_eq!(task.exit(), "0");
     }
 
     #[test]

@@ -1841,7 +1841,7 @@ print("opened task fd");
         assert_eq!(output.exit_code(), 6);
         assert_eq!(
             output.stdout(),
-            b"before task: 1\nbefore cmd: __wanix_restore/before/main.js prep 'two words'\nbefore argv: __wanix_restore/before/main.js|prep|two words\nbefore wasi env: before\nbefore wanix env: before\nafter task: 2\nafter cmd: __wanix_restore/after/main.js resume 'done value'\nafter argv: __wanix_restore/after/main.js|resume|done value\nafter wasi env: before\nafter wanix env: after\nsnapshot argv: __wanix_restore/before/main.js|prep|two words\nsnapshot env: before\n"
+            b"before task: 1\nbefore cmd: __wanix_restore/before/main.js prep 'two words'\nbefore argv: __wanix_restore/before/main.js|prep|two words\nbefore wasi env: before\nbefore task env: before\nafter task: 2\nafter cmd: __wanix_restore/after/main.js resume 'done value'\nafter argv: __wanix_restore/after/main.js|resume|done value\nafter wasi env: before\nafter task env: after\nsnapshot argv: __wanix_restore/before/main.js|prep|two words\nsnapshot env: before\n"
         );
         assert!(output.stderr().is_empty());
     }
@@ -2505,9 +2505,19 @@ std.out.flush();
         let script = write_temp_script(
             "stdin-demo.js",
             r##"
-print("stdin", Wanix.readFd(0, 1024));
-print("again", JSON.stringify(Wanix.readFd(0, 1024)));
-print("task", Wanix.readText("#task/self/id").trim());
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+const readStdin = () => {
+  const bytes = new Uint8Array(1024);
+  const n = os.read(0, bytes.buffer, 0, bytes.length);
+  return Array.from(bytes.slice(0, n)).map((byte) => String.fromCharCode(byte)).join("");
+};
+
+std.out.puts("stdin " + readStdin() + "\n");
+std.out.puts("again " + JSON.stringify(readStdin()) + "\n");
+std.out.puts("task " + std.loadFile("#task/self/id").trim() + "\n");
+std.out.flush();
 "##,
         );
 
@@ -2568,15 +2578,19 @@ print("task", Wanix.readText("#task/self/id").trim());
         let script = write_temp_script(
             "context.js",
             r##"
-print("cmd", Wanix.cmd());
-print("cwd", Wanix.cwd());
-print("args", Wanix.args().join("/"));
-print("mode", Wanix.env("MODE"));
-print("all", Wanix.env().MODE);
-print("source", Wanix.readText("main.js").includes("Wanix.cwd"));
-Wanix.writeText("created.txt", "made in cwd");
-print("created", Wanix.readText("created.txt"));
-print("id", Wanix.readText("#task/self/id").trim());
+import * as std from "qjs:std";
+
+const env = std.getenviron();
+std.out.puts("cmd " + std.loadFile("#task/self/cmd").trim() + "\n");
+std.out.puts("cwd " + std.loadFile("#task/self/dir").trim() + "\n");
+std.out.puts("args " + scriptArgs.slice(1).join("/") + "\n");
+std.out.puts("mode " + std.getenv("MODE") + "\n");
+std.out.puts("all " + env.MODE + "\n");
+std.out.puts("source " + std.loadFile("main.js").includes("std.loadFile") + "\n");
+std.writeFile("created.txt", "made in cwd");
+std.out.puts("created " + std.loadFile("created.txt") + "\n");
+std.out.puts("id " + std.loadFile("#task/self/id").trim() + "\n");
+std.out.flush();
 "##,
         );
 

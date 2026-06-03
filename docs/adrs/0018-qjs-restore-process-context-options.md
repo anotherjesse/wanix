@@ -15,8 +15,8 @@ reattached when the before or after task runtime is created.
 Until now the CLI exposed cwd and mounts for restore demos, but before and after
 argv/env were always empty. That made it harder to demonstrate the important
 restore boundary: QuickJS libc state in the VM image can preserve before-task
-process observations, while Wanix host APIs and task metadata are supplied by
-the after task.
+process observations, while Wanix service files and task metadata are supplied
+by the after task.
 
 ## Decision
 
@@ -37,9 +37,8 @@ explicit host mounts.
 ## Consequences
 
 The CLI can now show both sides of the restore boundary: a restored QuickJS VM
-can retain before-task VM/libc observations, while `scriptArgs`, `Wanix.args()`,
-`Wanix.env()`, task id, stdio, and task service files are reattached from the
-after Wanix task.
+can retain before-task VM/libc observations, while `scriptArgs`, qjs std/os
+stdio, and `#task` service files are reattached from the after Wanix task.
 
 This is still a demo workflow, not a persisted task snapshot format. A future
 format needs explicit task metadata and policy for which process fields are

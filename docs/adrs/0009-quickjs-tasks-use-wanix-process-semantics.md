@@ -35,24 +35,21 @@ driver into a task table.
   before full WASI imports are available, but they must not create a separate
   QuickJS process or fd model.
 - QuickJS task setup consumes `QuickJsWanixConfig`, which wraps
-  `wanix_wasi::WasiConfig` for the current read-only projection adapter. Real
-  WASI imports must continue to attach to Wanix task identity and fds rather
-  than exposing the projection as an independent process model. The projection
-  accepts only the root preopen so extra preopen/fd semantics cannot be
-  accidentally flattened.
+  `wanix_wasi::WasiConfig` for live Wanix-backed WASI imports. Those imports
+  attach to Wanix task identity and fds rather than exposing QuickJS as an
+  independent process model.
 - `wanix-qjs` attaches open task stdio fds to `QuickJsWanixConfig` through
   private `wanix_fs::File` proxy handles. That keeps `wanix-wasi` generic while
   preserving Wanix task fd ownership for the future live WASI import path.
 - `wanix-qjs` maps the task cwd to WASI fd 3 as the guest root preopen. The
   preopen still reports `/`, but bare WASI path calls resolve from the Wanix
-  task cwd so `path_open("main.js")` matches `Wanix.readText("main.js")`.
+  task cwd so `path_open("main.js")` matches `std.loadFile("main.js")`.
 - The qjs stdio proxies are live views by Wanix task fd number. Closing a task
   stdio fd affects the WASI attachment, while WASI `fd_close` still rejects
   stdio fds so lifecycle remains owned by Wanix task/fd APIs.
 - `wanix-qjs` installs a qjs-compatible `scriptArgs` global from Wanix task
   argv. `scriptArgs[0]` is the program name and later entries are script
-  arguments; the interim `Wanix.args()` helper remains args-only for
-  compatibility until that API can be retired.
+  arguments.
 - A parent `qjs` task may allocate and start a child `qjs` task by using
   Wanix-backed WASI calls against `#task/new/qjs` and `#task/<id>/cmd`,
   `env`, `dir`, `ctl`, and `exit`. The child still gets Wanix task identity,

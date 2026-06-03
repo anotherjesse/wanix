@@ -11,7 +11,7 @@ use crate::task_stdio::task_wasi_config;
 use crate::wasi_host::WanixQuickJsWasiHost;
 use crate::{
     CONSOLE_PRELUDE, QuickJsRunner, captured_stdio_config, define_task_output_callback,
-    exit_requested, task_command, task_env_map, task_wasi_argv, wanix_wasi_host_error,
+    exit_requested, task_command, task_wasi_argv, wanix_wasi_host_error,
 };
 
 /// A live QuickJS runtime attached to a Wanix task.
@@ -258,13 +258,7 @@ fn attach_task_host_state(
 
     let namespace = task.namespace();
     define_wanix_module_loader(runtime, namespace.clone())?;
-    let context = WanixTaskContext::new(
-        command.raw,
-        task_wasi_argv(task),
-        command.args,
-        task_env_map(task),
-        command.cwd,
-    );
+    let context = WanixTaskContext::new(task_wasi_argv(task), command.cwd);
     define_wanix_host_api(
         runtime,
         namespace,

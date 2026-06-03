@@ -13,21 +13,7 @@ use crate::{
 const WANIX_HOST_API_PRELUDE: &str = r#"
 (() => {
   globalThis.scriptArgs = Object.freeze(JSON.parse(__wanix_script_args_json()));
-  const api = {
-    readText: (path) => __wanix_read_text(String(path)),
-    writeText: (path, text) => __wanix_write_text(String(path), String(text)),
-    args: () => Object.freeze(JSON.parse(__wanix_args_json())),
-    env: function(name) {
-      const env = JSON.parse(__wanix_env_json());
-      if (arguments.length === 0) {
-        return Object.freeze(env);
-      }
-      const key = String(name);
-      return Object.prototype.hasOwnProperty.call(env, key) ? env[key] : undefined;
-    },
-    cwd: () => __wanix_cwd(),
-    cmd: () => __wanix_cmd(),
-  };
+  const api = {};
   if (typeof __wanix_open === "function") {
     api.open = (path, mode = "r") => __wanix_open(String(path), String(mode));
     api.readFd = (fd, len) => __wanix_read_fd(Number(fd), Number(len));
@@ -83,72 +69,12 @@ pub(crate) fn define_wanix_host_api(
     exit_state: Option<WanixExitState>,
     task: Option<Task>,
 ) -> FsResult<()> {
-    let read_namespace = namespace.clone();
-    let read_cwd = context.cwd().clone();
-    runtime
-        .define_global_host_function("__wanix_read_text", move |args| {
-            let path = one_string_arg(args, "Wanix.readText")?;
-            let text = read_text_path(&read_namespace, &read_cwd, &path)
-                .map_err(|err| anyhow!("Wanix.readText({path:?}) failed: {err}"))?;
-            Ok(QuickJsHostValue::String(text))
-        })
-        .map_err(qjs_error)?;
-
-    let write_namespace = namespace.clone();
-    let write_cwd = context.cwd().clone();
-    let write_exit_state = exit_state.clone();
-    runtime
-        .define_global_host_function("__wanix_write_text", move |args| {
-            if exit_requested(&write_exit_state)? {
-                return Ok(QuickJsHostValue::Undefined);
-            }
-            let (path, text) = two_string_args(args, "Wanix.writeText")?;
-            write_text_path(&write_namespace, &write_cwd, &path, text.as_bytes())
-                .map_err(|err| anyhow!("Wanix.writeText({path:?}) failed: {err}"))?;
-            Ok(QuickJsHostValue::Undefined)
-        })
-        .map_err(qjs_error)?;
-
-    let cmd = context.cmd().to_owned();
-    runtime
-        .define_global_host_function("__wanix_cmd", move |args| {
-            no_args(args, "Wanix.cmd")?;
-            Ok(QuickJsHostValue::String(cmd.clone()))
-        })
-        .map_err(qjs_error)?;
-
-    let args_json = serde_json::to_string(context.args())
-        .map_err(|err| FsError::Other(format!("failed to encode task args: {err}")))?;
-    runtime
-        .define_global_host_function("__wanix_args_json", move |args| {
-            no_args(args, "Wanix.args")?;
-            Ok(QuickJsHostValue::String(args_json.clone()))
-        })
-        .map_err(qjs_error)?;
-
     let script_args_json = serde_json::to_string(context.script_args())
         .map_err(|err| FsError::Other(format!("failed to encode scriptArgs: {err}")))?;
     runtime
         .define_global_host_function("__wanix_script_args_json", move |args| {
             no_args(args, "scriptArgs")?;
             Ok(QuickJsHostValue::String(script_args_json.clone()))
-        })
-        .map_err(qjs_error)?;
-
-    let env_json = serde_json::to_string(context.env())
-        .map_err(|err| FsError::Other(format!("failed to encode task env: {err}")))?;
-    runtime
-        .define_global_host_function("__wanix_env_json", move |args| {
-            no_args(args, "Wanix.env")?;
-            Ok(QuickJsHostValue::String(env_json.clone()))
-        })
-        .map_err(qjs_error)?;
-
-    let cwd = context.cwd().to_string();
-    runtime
-        .define_global_host_function("__wanix_cwd", move |args| {
-            no_args(args, "Wanix.cwd")?;
-            Ok(QuickJsHostValue::String(cwd.clone()))
         })
         .map_err(qjs_error)?;
 
@@ -271,33 +197,6 @@ fn normalize_relative_module_name(base_name: &str, specifier: &str) -> anyhow::R
         .map_err(|err| anyhow!("invalid Wanix module specifier {specifier:?}: {err}"))
 }
 
-fn write_text_path(
-    namespace: &impl FileSystem,
-    cwd: &NormalizedPath,
-    path: &str,
-    bytes: &[u8],
-) -> FsResult<()> {
-    let path = resolve_namespace_path(cwd, path)?;
-    let mut file = namespace.open(
-        &path,
-        OpenOptions {
-            write: true,
-            create: true,
-            truncate: true,
-            ..OpenOptions::default()
-        },
-    )?;
-    let mut written = 0;
-    while written < bytes.len() {
-        let n = file.write(&bytes[written..])?;
-        if n == 0 {
-            return Err(FsError::Other("namespace write returned zero".to_owned()));
-        }
-        written += n;
-    }
-    Ok(())
-}
-
 pub(crate) fn resolve_namespace_path(cwd: &NormalizedPath, path: &str) -> FsResult<NormalizedPath> {
     let path = NormalizedPath::new(path)?;
     if path.as_str().starts_with('#') || cwd.as_str() == "." {
@@ -307,13 +206,6 @@ pub(crate) fn resolve_namespace_path(cwd: &NormalizedPath, path: &str) -> FsResu
         return Ok(cwd.clone());
     }
     NormalizedPath::new(format!("{cwd}/{path}"))
-}
-
-fn one_string_arg(args: &[QuickJsHostValue], function: &str) -> anyhow::Result<String> {
-    match args {
-        [QuickJsHostValue::String(value)] => Ok(value.clone()),
-        _ => bail!("{function} expects one string argument"),
-    }
 }
 
 pub(crate) fn two_string_args(
