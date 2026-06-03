@@ -53,7 +53,8 @@ const USAGE: &str = concat!(
     "       wanix-rust p9-stdio --root DIR\n",
     "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
-    "       wanix-rust serve --root DIR --addr HOST:PORT [--once]\n",
+    "       wanix-rust serve [--root DIR | DIR] [--addr HOST:PORT | --listen HOST:PORT] ",
+    "[--bundle NAME] [--once]\n",
     "       wanix-rust --help",
 );
 const QJS_GUEST_SCRIPT: &str = "main.js";

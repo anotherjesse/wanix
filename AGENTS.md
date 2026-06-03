@@ -100,7 +100,7 @@ for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
 --addr 127.0.0.1:5640` exposes the same `LocalFs` export over a native TCP
 listener. `wanix-rust p9-ws --root DIR --addr 127.0.0.1:7654` exposes the same
 server over binary WebSocket frames for browser/v86 experiments. `wanix-rust
-serve --root DIR --addr 127.0.0.1:7654` serves static files with
+serve [DIR] [--listen HOST:PORT] [--bundle NAME]` serves static files with
 COOP/COEP/CORS headers and reuses the binary WebSocket 9P handler on the same
 listener, including the named `/.well-known/export9p` route, which is the first
 Rust-native serve shape for browser/v86/VS Code experiments. `/.well-known`
@@ -331,6 +331,9 @@ cargo test --workspace --locked
   Rust `serve` reserves `/.well-known` protocol routes, maps
   `/.well-known/export9p` to direct binary 9P, and leaves Ethernet/vnet
   explicitly unimplemented.
+- [ADR 0070](docs/adrs/0070-go-like-rust-serve-cli.md):
+  Rust `serve` defaults to a demo-friendly current-directory root, supports
+  positional directories, `--listen`, and bundle URL reporting.
 
 ## Cycle Rules
 

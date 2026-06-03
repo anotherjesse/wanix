@@ -18,7 +18,8 @@ browser.
 
 ## Decision
 
-Add `wanix-rust serve --root DIR --addr HOST:PORT [--once]` in `wanix-cli`:
+Add `wanix-rust serve --root DIR --addr HOST:PORT [--once]` in `wanix-cli`
+(ADR 0070 later adds Go-like defaults and aliases):
 
 - ordinary HTTP `GET` requests serve files from the host-root directory;
 - static responses include `Cross-Origin-Opener-Policy: same-origin`,
@@ -48,5 +49,5 @@ missing transport.
 ADR 0069 later reserves the well-known route surface and maps
 `/.well-known/export9p` to the same direct binary 9P WebSocket handler. This ADR
 does not decide public auth, writable export exposure, vnet bridging, qemu/v86
-bundle selection, HTTPS, or VS Code-specific routes. Those should be added
+bundle assembly, HTTPS, or VS Code-specific routes. Those should be added
 deliberately once the clients are wired to this endpoint.

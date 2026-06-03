@@ -16,17 +16,20 @@ use crate::p9_ws::{P9WsConnectionError, serve_websocket_connection};
 use crate::{CliError, write_process_output};
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
+const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ServeCommand {
     root_path: PathBuf,
     addr: String,
+    bundle: Option<String>,
     once: bool,
 }
 
 pub(super) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, CliError> {
     let mut root_path = None;
     let mut addr = None;
+    let mut bundle = None;
     let mut once = false;
     let mut i = 0;
     while i < args.len() {
@@ -40,15 +43,27 @@ pub(super) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, Cli
             }
             root_path = Some(PathBuf::from(value));
             i += 1;
-        } else if args[i] == "--addr" {
+        } else if args[i] == "--addr" || args[i] == "--listen" {
+            let option = args[i].to_string_lossy();
+            i += 1;
+            let raw_value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage(format!("serve {option} expects HOST:PORT")))?;
+            if addr.is_some() {
+                return Err(CliError::usage("serve accepts only one --addr or --listen"));
+            }
+            let value = raw_value.to_string_lossy();
+            addr = Some(normalize_listen_addr(&value));
+            i += 1;
+        } else if args[i] == "--bundle" {
             i += 1;
             let value = args
                 .get(i)
-                .ok_or_else(|| CliError::usage("serve --addr expects HOST:PORT"))?;
-            if addr.is_some() {
-                return Err(CliError::usage("serve accepts only one --addr"));
+                .ok_or_else(|| CliError::usage("serve --bundle expects NAME"))?;
+            if bundle.is_some() {
+                return Err(CliError::usage("serve accepts only one --bundle"));
             }
-            addr = Some(value.to_string_lossy().into_owned());
+            bundle = Some(value.to_string_lossy().into_owned());
             i += 1;
         } else if args[i] == "--once" {
             if once {
@@ -56,21 +71,35 @@ pub(super) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, Cli
             }
             once = true;
             i += 1;
-        } else {
+        } else if args[i].to_string_lossy().starts_with('-') {
             return Err(CliError::usage(format!(
                 "unexpected serve argument: {}",
                 args[i].to_string_lossy()
             )));
+        } else if root_path.is_some() {
+            return Err(CliError::usage("serve accepts only one directory"));
+        } else {
+            root_path = Some(PathBuf::from(&args[i]));
+            i += 1;
         }
     }
 
-    let root_path = root_path.ok_or_else(|| CliError::usage("serve requires --root DIR"))?;
-    let addr = addr.ok_or_else(|| CliError::usage("serve requires --addr HOST:PORT"))?;
+    let root_path = root_path.unwrap_or_else(|| PathBuf::from("."));
+    let addr = addr.unwrap_or_else(|| DEFAULT_SERVE_ADDR.to_owned());
     Ok(ServeCommand {
         root_path,
         addr,
+        bundle,
         once,
     })
+}
+
+fn normalize_listen_addr(addr: &str) -> String {
+    if let Some(port) = addr.strip_prefix(':') {
+        format!("0.0.0.0:{port}")
+    } else {
+        addr.to_owned()
+    }
 }
 
 pub(super) fn run_serve_streaming(
@@ -99,7 +128,16 @@ fn run_serve_with_listener(
     write_process_output(
         process_stderr,
         "stderr",
-        format!("wanix-rust serve: listening on http://{local_addr}/\n").as_bytes(),
+        format!(
+            "wanix-rust serve: serving {} files with Wanix overlay\n",
+            roots.static_root.display()
+        )
+        .as_bytes(),
+    )?;
+    write_process_output(
+        process_stderr,
+        "stderr",
+        serve_url_status(local_addr, command.bundle.as_deref()).as_bytes(),
     )?;
 
     if command.once {
@@ -115,6 +153,26 @@ fn run_serve_with_listener(
                 b"wanix-rust serve: continuing after connection error\n",
             )?;
         }
+    }
+}
+
+fn serve_url_status(local_addr: std::net::SocketAddr, bundle: Option<&str>) -> String {
+    let host = if local_addr.ip().is_unspecified() {
+        "localhost".to_owned()
+    } else {
+        local_addr.ip().to_string()
+    };
+    match bundle {
+        Some(bundle) => format!(
+            "wanix-rust serve: bundle available at http://{}:{}/?bundle={bundle}\n",
+            host,
+            local_addr.port()
+        ),
+        None => format!(
+            "wanix-rust serve: listening on http://{}:{}/\n",
+            host,
+            local_addr.port()
+        ),
     }
 }
 
@@ -533,23 +591,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_serve_requires_root_and_addr() {
-        let error =
-            parse_serve_command(&[OsString::from("--root"), OsString::from(".")]).unwrap_err();
-        assert!(error.to_string().contains("requires --addr HOST:PORT"));
+    fn parse_serve_uses_go_like_defaults_and_options() {
+        let default_command = parse_serve_command(&[]).unwrap();
+        assert_eq!(default_command.root_path, PathBuf::from("."));
+        assert_eq!(default_command.addr, DEFAULT_SERVE_ADDR);
+        assert_eq!(default_command.bundle, None);
+        assert!(!default_command.once);
 
         let command = parse_serve_command(&[
-            OsString::from("--root"),
-            OsString::from("."),
-            OsString::from("--addr"),
-            OsString::from("127.0.0.1:0"),
+            OsString::from("examples"),
+            OsString::from("--listen"),
+            OsString::from(":7654"),
+            OsString::from("--bundle"),
+            OsString::from("vm-workbench"),
             OsString::from("--once"),
         ])
         .unwrap();
 
-        assert_eq!(command.root_path, PathBuf::from("."));
-        assert_eq!(command.addr, "127.0.0.1:0");
+        assert_eq!(command.root_path, PathBuf::from("examples"));
+        assert_eq!(command.addr, "0.0.0.0:7654");
+        assert_eq!(command.bundle, Some("vm-workbench".to_owned()));
         assert!(command.once);
+
+        let duplicate_dir =
+            parse_serve_command(&[OsString::from("examples"), OsString::from("dist")]).unwrap_err();
+        assert!(duplicate_dir.to_string().contains("only one directory"));
     }
 
     #[test]
@@ -561,6 +627,7 @@ mod tests {
         let command = ServeCommand {
             root_path: root,
             addr: addr.to_string(),
+            bundle: None,
             once: true,
         };
 
@@ -584,6 +651,7 @@ mod tests {
             stderr.contains("wanix-rust serve: listening on http://127.0.0.1:"),
             "{stderr}"
         );
+        assert!(stderr.contains("files with Wanix overlay"), "{stderr}");
         let response = String::from_utf8(response).unwrap();
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
         assert!(
@@ -602,6 +670,42 @@ mod tests {
     }
 
     #[test]
+    fn serve_once_reports_bundle_url_when_configured() {
+        let root = temp_dir("wanix-cli-serve-bundle");
+        fs::write(root.join("index.html"), b"wanix serve bundle").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some("vm-workbench".to_owned()),
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(addr, b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        let (exit_code, stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert!(
+            String::from_utf8(response)
+                .unwrap()
+                .ends_with("wanix serve bundle")
+        );
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(
+            stderr.contains("bundle available at http://127.0.0.1:"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("/?bundle=vm-workbench"), "{stderr}");
+    }
+
+    #[test]
     fn serve_once_exports_9p_over_binary_websocket() {
         let root = temp_dir("wanix-cli-serve-ws");
         fs::write(root.join("hello.txt"), b"hello serve").unwrap();
@@ -610,6 +714,7 @@ mod tests {
         let command = ServeCommand {
             root_path: root,
             addr: addr.to_string(),
+            bundle: None,
             once: true,
         };
 
@@ -661,6 +766,7 @@ mod tests {
         let command = ServeCommand {
             root_path: root,
             addr: addr.to_string(),
+            bundle: None,
             once: true,
         };
 
@@ -710,6 +816,7 @@ mod tests {
         let command = ServeCommand {
             root_path: root,
             addr: addr.to_string(),
+            bundle: None,
             once: true,
         };
 
@@ -753,6 +860,7 @@ mod tests {
         let command = ServeCommand {
             root_path: root,
             addr: addr.to_string(),
+            bundle: None,
             once: true,
         };
 
