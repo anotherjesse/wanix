@@ -148,7 +148,7 @@ fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
     })?;
 
     let table = TaskTable::new();
-    let runner = Arc::new(QuickJsRunner::from_wasm_file(quickjs_wasm_path())?);
+    let runner = Arc::new(quickjs_runner()?);
     table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(runner)))?;
     let task = table.allocate_root("qjs")?;
 
@@ -298,13 +298,12 @@ fn qjs_task_cmd(args: &[String]) -> String {
         .join(" ")
 }
 
-fn quickjs_wasm_path() -> PathBuf {
-    std::env::var_os("WANIX_QJS_WASM")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../rust-wasi-quickjs/fixtures/quickjs.wasm")
-        })
+fn quickjs_runner() -> Result<QuickJsRunner, CliError> {
+    match std::env::var_os("WANIX_QJS_WASM") {
+        Some(path) => QuickJsRunner::from_wasm_file(PathBuf::from(path)),
+        None => QuickJsRunner::from_bundled_wasm(),
+    }
+    .map_err(CliError::from)
 }
 
 fn copy_script_directory(

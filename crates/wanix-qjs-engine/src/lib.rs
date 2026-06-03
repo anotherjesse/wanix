@@ -70,3 +70,6 @@ pub use memory::QuickJsMemoryUsage;
 pub use module::QuickJsModule;
 pub use runtime::QuickJsRuntime;
 pub use snapshot::{Snapshot, SnapshotMetadata};
+
+/// Checked-in QuickJS WebAssembly fixture used by Wanix workspace demos and tests.
+pub const QUICKJS_WASM_FIXTURE: &[u8] = include_bytes!("../fixtures/quickjs.wasm");

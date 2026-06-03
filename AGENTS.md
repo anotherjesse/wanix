@@ -21,7 +21,7 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
   task fds supplied by adapter configuration.
 - `wanix-qjs-engine`: Wasmtime-hosted QuickJS/WASI engine mechanics relocated
   from the `rust-wasi-quickjs` prototype, keeping the existing Rust import path
-  during the first workspace-local boundary cleanup.
+  while using the workspace-local QuickJS WASM fixture.
 - `wanix-qjs`: QuickJS/WASI task driver that adapts the engine crate to Wanix
   task semantics.
 - `wanix-cli`: native CLI and demo runner.

@@ -126,6 +126,30 @@ impl QuickJsRunner {
         })
     }
 
+    /// Compiles a QuickJS WASM module from in-memory bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error if the module cannot be compiled.
+    pub fn from_wasm_bytes(bytes: impl AsRef<[u8]>) -> FsResult<Self> {
+        let engine = Engine::default();
+        let module = QuickJsModule::from_bytes(&engine, bytes.as_ref())
+            .map_err(|err| FsError::Other(format!("failed to load QuickJS wasm: {err:#}")))?;
+        Ok(Self {
+            _engine: engine,
+            module,
+        })
+    }
+
+    /// Loads the workspace-local QuickJS WASM fixture bundled by the engine crate.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error if the bundled module cannot be compiled.
+    pub fn from_bundled_wasm() -> FsResult<Self> {
+        Self::from_wasm_bytes(rust_wasi_quickjs::QUICKJS_WASM_FIXTURE)
+    }
+
     /// Runs JavaScript source outside Chrome and captures `print`/`console` output.
     ///
     /// # Errors
@@ -491,8 +515,6 @@ fn write_task_output(task: &Task, output: &RunOutput) -> FsResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::{
         CRATE_PURPOSE, FIRST_DEMO_TARGET, QuickJsRunner, QuickJsTaskDriver, QuickJsWanixConfig,
         wasi_contract_purpose,
@@ -503,13 +525,8 @@ mod tests {
     use wanix_vfs::BindOptions;
     use wanix_wasi::{Errno, WasiConfig, WasiCtx, WasiFd, WasiOpenOptions};
 
-    fn prototype_wasm() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../rust-wasi-quickjs/fixtures/quickjs.wasm")
-    }
-
     fn runner() -> QuickJsRunner {
-        QuickJsRunner::from_wasm_file(prototype_wasm()).unwrap()
+        QuickJsRunner::from_bundled_wasm().unwrap()
     }
 
     fn read_file(fs: &dyn FileSystem, path: &str) -> Vec<u8> {

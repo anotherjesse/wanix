@@ -21,7 +21,8 @@ wanix-fs
   -> wanix-task
 
 wanix-wasi -> wanix-fs + wanix-vfs
-wanix-qjs  -> wanix-task + wanix-wasi + rust-wasi-quickjs
+wanix-qjs-engine -> Wasmtime + QuickJS WASM fixture
+wanix-qjs  -> wanix-task + wanix-wasi + wanix-qjs-engine
 wanix-cli  -> runtime crates for orchestration
 ```
 
@@ -34,7 +35,7 @@ composition layer.
 - `wanix-fs` and `wanix-vfs` remain testable without Wasmtime.
 - `wanix-wasi` can evolve as a generic Wanix-backed WASI adapter, not a
   QuickJS-specific layer.
-- `wanix-qjs` can preserve the `rust-wasi-quickjs` lifecycle ergonomics,
+- `wanix-qjs` can preserve the QuickJS engine lifecycle ergonomics,
   implement the task-driver adapter, and keep raw guest memory and QuickJS
   handles private.
 - Future `wanix-protocol` should hold wire DTOs and protocol codecs, with
