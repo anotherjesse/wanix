@@ -18,6 +18,10 @@ const USAGE: &str = concat!(
     "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
+    "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
+    "[--mount HOST=GUEST ...] --snapshot FILE <script.js> [-- arg ...]\n",
+    "       wanix-rust qjs-resume [--env KEY=VALUE ...] [--cwd DIR] ",
+    "[--mount HOST=GUEST ...] --snapshot FILE <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
     "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
     "[--mount HOST=GUEST ...] <before.js> <after.js>\n",
@@ -138,6 +142,12 @@ where
         [command, rest @ ..] if command == "qjs" => {
             run_qjs(parse_qjs_command(rest)?, &mut process_stdin)
         }
+        [command, rest @ ..] if command == "qjs-snapshot" => {
+            run_qjs_snapshot(parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?)
+        }
+        [command, rest @ ..] if command == "qjs-resume" => {
+            run_qjs_resume(parse_qjs_snapshot_file_command(rest, "qjs-resume")?)
+        }
         [command, rest @ ..] if command == "qjs-restore" => {
             run_qjs_restore(parse_qjs_restore_command(rest)?)
         }
@@ -187,6 +197,16 @@ struct QjsRestoreCommand {
     after_args: Vec<String>,
     before_env: Vec<String>,
     after_env: Vec<String>,
+    cwd: NormalizedPath,
+    mounts: Vec<HostMount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QjsSnapshotFileCommand {
+    script_path: PathBuf,
+    snapshot_path: PathBuf,
+    args: Vec<String>,
+    env: Vec<String>,
     cwd: NormalizedPath,
     mounts: Vec<HostMount>,
 }
@@ -254,6 +274,95 @@ fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutpu
             Ok(CliOutput::new(stdout, stderr, 1))
         }
     }
+}
+
+fn run_qjs_snapshot(command: QjsSnapshotFileCommand) -> Result<CliOutput, CliError> {
+    let script_path = command.script_path.as_path();
+    let script = read_utf8_script(script_path)?;
+
+    let runner = quickjs_runner()?;
+    let table = TaskTable::new();
+    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(Arc::clone(&runner))))?;
+    let task = table.allocate_root("qjs")?;
+    let root = Arc::new(MemFs::new());
+    copy_script_directory(script_path, &root, &command.cwd)?;
+    let guest_script = guest_path_in_cwd(&command.cwd, QJS_GUEST_SCRIPT)?;
+    root.write_file(guest_script.as_str(), script.as_bytes())?;
+    task.bind(root, ".", ".", BindOptions::default())?;
+    bind_host_mounts(&task, &command.mounts)?;
+    let (stdout, stderr) = attach_task_stdio(&task)?;
+    configure_qjs_task(
+        &task,
+        QJS_GUEST_SCRIPT,
+        &command.args,
+        &command.env,
+        &command.cwd,
+    )?;
+
+    let snapshot_result = (|| -> Result<(), CliError> {
+        let mut runtime = runner.create_task_runtime(&task)?;
+        eval_qjs_source(&mut runtime, &script, &guest_script)?;
+        ensure_snapshot_task_fds_closed(&task)?;
+        let snapshot = runtime.snapshot_bytes()?;
+        std::fs::write(&command.snapshot_path, snapshot).map_err(|error| {
+            CliError::new(
+                format!(
+                    "failed to write snapshot {}: {error}",
+                    command.snapshot_path.display()
+                ),
+                1,
+            )
+        })?;
+        runtime.finish()?;
+        Ok(())
+    })();
+
+    finish_cli_task_output("qjs-snapshot", snapshot_result, &task, &stdout, &stderr)
+}
+
+fn run_qjs_resume(command: QjsSnapshotFileCommand) -> Result<CliOutput, CliError> {
+    let script_path = command.script_path.as_path();
+    let script = read_utf8_script(script_path)?;
+    let snapshot = std::fs::read(&command.snapshot_path).map_err(|error| {
+        CliError::new(
+            format!(
+                "failed to read snapshot {}: {error}",
+                command.snapshot_path.display()
+            ),
+            1,
+        )
+    })?;
+
+    let runner = quickjs_runner()?;
+    let table = TaskTable::new();
+    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(Arc::clone(&runner))))?;
+    let task = table.allocate_root("qjs")?;
+    let root = Arc::new(MemFs::new());
+    copy_script_directory(script_path, &root, &command.cwd)?;
+    let guest_script = guest_path_in_cwd(&command.cwd, QJS_GUEST_SCRIPT)?;
+    root.write_file(guest_script.as_str(), script.as_bytes())?;
+    task.bind(root, ".", ".", BindOptions::default())?;
+    bind_host_mounts(&task, &command.mounts)?;
+    let (stdout, stderr) = attach_task_stdio(&task)?;
+    configure_qjs_task(
+        &task,
+        QJS_GUEST_SCRIPT,
+        &command.args,
+        &command.env,
+        &command.cwd,
+    )?;
+
+    let resume_result = (|| -> Result<(), CliError> {
+        let mut runtime = runner.restore_task_runtime_from_bytes(&task, &snapshot)?;
+        if let Err(error) = eval_qjs_source(&mut runtime, &script, &guest_script) {
+            let _ = task.set_exit("1");
+            return Err(error);
+        }
+        runtime.finish()?;
+        Ok(())
+    })();
+
+    finish_cli_task_output("qjs-resume", resume_result, &task, &stdout, &stderr)
 }
 
 fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
@@ -491,6 +600,89 @@ fn parse_host_mount(value: &str, label: &str) -> Result<HostMount, CliError> {
     })
 }
 
+fn parse_qjs_snapshot_file_command(
+    args: &[OsString],
+    command: &str,
+) -> Result<QjsSnapshotFileCommand, CliError> {
+    let mut env = Vec::new();
+    let mut cwd = NormalizedPath::new(".")?;
+    let mut mounts = Vec::new();
+    let mut snapshot_path = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--env" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage(format!("{command} --env expects KEY=VALUE")))?;
+            let value = os_arg_to_string(value, &format!("{command} --env"))?;
+            validate_env_line(&value, &format!("{command} --env"))?;
+            env.push(value);
+            i += 1;
+        } else if args[i] == "--cwd" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage(format!("{command} --cwd expects a Wanix path")))?;
+            cwd = NormalizedPath::new(os_arg_to_string(value, &format!("{command} --cwd"))?)?;
+            i += 1;
+        } else if args[i] == "--mount" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage(format!("{command} --mount expects HOST=GUEST")))?;
+            mounts.push(parse_host_mount(
+                &os_arg_to_string(value, &format!("{command} --mount"))?,
+                &format!("{command} --mount"),
+            )?);
+            i += 1;
+        } else if args[i] == "--snapshot" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage(format!("{command} --snapshot expects FILE")))?;
+            if snapshot_path.is_some() {
+                return Err(CliError::usage(format!(
+                    "{command} accepts only one --snapshot"
+                )));
+            }
+            snapshot_path = Some(PathBuf::from(value));
+            i += 1;
+        } else if args[i] == "--" {
+            i += 1;
+            break;
+        } else {
+            break;
+        }
+    }
+
+    let snapshot_path = snapshot_path
+        .ok_or_else(|| CliError::usage(format!("{command} requires --snapshot FILE")))?;
+    let script = args
+        .get(i)
+        .ok_or_else(|| CliError::usage(format!("{command} expects a script path")))?;
+    let script_path = PathBuf::from(script);
+    i += 1;
+
+    if args.get(i).is_some_and(|arg| arg == "--") {
+        i += 1;
+    }
+
+    let js_args = args[i..]
+        .iter()
+        .map(|arg| os_arg_to_string(arg, &format!("{command} script arg")))
+        .collect::<Result<Vec<_>, CliError>>()?;
+
+    Ok(QjsSnapshotFileCommand {
+        script_path,
+        snapshot_path,
+        args: js_args,
+        env,
+        cwd,
+        mounts,
+    })
+}
+
 fn parse_qjs_restore_command(args: &[OsString]) -> Result<QjsRestoreCommand, CliError> {
     let mut cwd = NormalizedPath::new(".")?;
     let mut mounts = Vec::new();
@@ -640,6 +832,45 @@ fn bind_child_output_to_parent(child: &Task, parent: &Task) -> Result<(), CliErr
     child.bind_fd_from_namespace(format!("#task/{parent_id}/fd/1"), Fd::STDOUT)?;
     child.bind_fd_from_namespace(format!("#task/{parent_id}/fd/2"), Fd::STDERR)?;
     Ok(())
+}
+
+fn attach_task_stdio(task: &Task) -> Result<(Arc<MemFs>, Arc<MemFs>), CliError> {
+    let stdout = Arc::new(MemFs::new());
+    stdout.write_file("stdout", b"")?;
+    task.insert_fd(
+        Fd::STDOUT,
+        stdout.open(&NormalizedPath::new("stdout")?, OpenOptions::read_write())?,
+        NormalizedPath::new("stdout")?,
+    )?;
+    let stderr = Arc::new(MemFs::new());
+    stderr.write_file("stderr", b"")?;
+    task.insert_fd(
+        Fd::STDERR,
+        stderr.open(&NormalizedPath::new("stderr")?, OpenOptions::read_write())?,
+        NormalizedPath::new("stderr")?,
+    )?;
+    Ok((stdout, stderr))
+}
+
+fn finish_cli_task_output(
+    command: &str,
+    result: Result<(), CliError>,
+    task: &Task,
+    stdout: &Arc<MemFs>,
+    stderr: &Arc<MemFs>,
+) -> Result<CliOutput, CliError> {
+    let stdout = read_file(stdout.as_ref(), "stdout")?;
+    let mut stderr = read_file(stderr.as_ref(), "stderr")?;
+    match result {
+        Ok(()) => Ok(CliOutput::new(stdout, stderr, parse_exit(&task.exit()))),
+        Err(error) => {
+            if !stderr.is_empty() && !stderr.ends_with(b"\n") {
+                stderr.push(b'\n');
+            }
+            stderr.extend_from_slice(format!("wanix-rust {command}: {error}\n").as_bytes());
+            Ok(CliOutput::new(stdout, stderr, 1))
+        }
+    }
 }
 
 fn bind_host_mounts(task: &Task, mounts: &[HostMount]) -> Result<(), CliError> {
@@ -885,6 +1116,8 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--mount HOST=GUEST"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--stdin-file PATH|-"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-snapshot"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-resume"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-restore"));
         assert!(output.stderr().is_empty());
     }
@@ -1653,6 +1886,57 @@ std.exit(6);
         assert_eq!(
             fs::read(host.join("restored-output.txt")).unwrap(),
             b"restored task 2 saw preserved from task 1"
+        );
+        fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn qjs_snapshot_and_resume_persist_vm_image_between_cli_invocations() {
+        let host = temp_dir("wanix-cli-persist-snapshot");
+        let snapshot = host.join("quickjs.snapshot");
+
+        let before = run([
+            "qjs-snapshot".into(),
+            "--env".into(),
+            "MODE=before".into(),
+            "--mount".into(),
+            format!("{}=host", host.display()).into(),
+            "--snapshot".into(),
+            snapshot.clone().into_os_string(),
+            example_script("qjs-persist-before.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(before.exit_code(), 0);
+        assert_eq!(before.stdout(), b"snapshot task: 1\n");
+        assert!(before.stderr().is_empty());
+        assert!(fs::read(&snapshot).unwrap().len() > 1024);
+        assert_eq!(
+            fs::read(host.join("persist-before.txt")).unwrap(),
+            b"host before task 1"
+        );
+
+        let after = run([
+            "qjs-resume".into(),
+            "--env".into(),
+            "MODE=after".into(),
+            "--mount".into(),
+            format!("{}=host", host.display()).into(),
+            "--snapshot".into(),
+            snapshot.into_os_string(),
+            example_script("qjs-persist-after.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(after.exit_code(), 6);
+        assert_eq!(
+            after.stdout(),
+            b"resume task: 1\nvm: vm from task 1 mode before\nreattached mode: after\nhost: host before task 1\n"
+        );
+        assert!(after.stderr().is_empty());
+        assert_eq!(
+            fs::read(host.join("persist-after.txt")).unwrap(),
+            b"host after task 1"
         );
         fs::remove_dir_all(host).unwrap();
     }

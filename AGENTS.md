@@ -136,6 +136,9 @@ cargo test --workspace --locked
 - [ADR 0023](docs/adrs/0023-wasi-file-unlink-through-wanix-namespaces.md):
   `qjs:os.remove(...)` reaches Wanix-owned `PATH_UNLINK_FILE` semantics through
   namespaces and live WASI providers.
+- [ADR 0024](docs/adrs/0024-persistent-qjs-snapshot-cli.md): `qjs-snapshot`
+  and `qjs-resume` persist QuickJS VM images while Wanix host resources are
+  reattached per invocation.
 
 ## Cycle Rules
 
