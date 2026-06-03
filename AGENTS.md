@@ -156,8 +156,8 @@ cargo test --workspace --locked
   `fd_fdstat_set_flags(APPEND)` mutates shared Wanix fd state so
   `qjs:std.fdopen(fd, "a")` appends through live and mirrored task fds.
 - [ADR 0030](docs/adrs/0030-wasi-path-timestamp-mutation.md):
-  `qjs:os.utimes(...)` reaches Wanix-owned path timestamp mutation and
-  stat-visible atime/mtime through live WASI providers.
+  `qjs:os.utimes(...)` and `fd_filestat_set_times` reach Wanix-owned timestamp
+  mutation and stat-visible atime/mtime through live WASI providers.
 - [ADR 0031](docs/adrs/0031-wasi-timer-poll-oneoff.md):
   `qjs:os.sleep(...)` reaches timer-only Preview 1 `poll_oneoff`, while fd
   readiness and async lifecycle polling remain Wanix task work.

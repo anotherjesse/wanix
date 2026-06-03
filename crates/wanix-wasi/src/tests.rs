@@ -493,6 +493,105 @@ fn path_filestat_set_times_validates_rights_and_flags() {
 }
 
 #[test]
+fn fd_filestat_set_times_updates_namespace_metadata() {
+    let root = fixture(&[("stamp.txt", b"stamp")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "stamp.txt",
+            0,
+            WasiRights::FD_READ | WasiRights::FD_FILESTAT_GET | WasiRights::FD_FILESTAT_SET_TIMES,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+
+    ctx.fd_filestat_set_times(
+        fd,
+        1_000_000_000,
+        2_000_000_000,
+        WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::MTIM,
+    )
+    .unwrap();
+
+    let stat = ctx.fd_filestat_get(fd).unwrap();
+    assert_eq!(stat.accessed_time_ns(), 1_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 2_000_000_000);
+    assert_eq!(stat.changed_time_ns(), 0);
+
+    ctx.fd_filestat_set_times(fd, 3_000_000_000, 99, WasiFilestatSetTimes::ATIM)
+        .unwrap();
+    let stat = ctx.fd_filestat_get(fd).unwrap();
+    assert_eq!(stat.accessed_time_ns(), 3_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 2_000_000_000);
+
+    ctx.fd_filestat_set_times(fd, 4, 5, 0).unwrap();
+    let stat = ctx.fd_filestat_get(fd).unwrap();
+    assert_eq!(stat.accessed_time_ns(), 3_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 2_000_000_000);
+    assert_eq!(
+        root.metadata(&path("stamp.txt"))
+            .unwrap()
+            .modified_time_ns(),
+        2_000_000_000
+    );
+}
+
+#[test]
+fn fd_filestat_set_times_validates_rights_and_flags() {
+    let root = fixture(&[("dir/file.txt", b"stamp")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let fd_without_set_times = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "dir/file.txt",
+            0,
+            WasiRights::FD_READ | WasiRights::FD_FILESTAT_GET,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+    let fd_with_set_times = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "dir/file.txt",
+            0,
+            WasiRights::FD_READ | WasiRights::FD_FILESTAT_GET | WasiRights::FD_FILESTAT_SET_TIMES,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(
+        ctx.fd_filestat_set_times(
+            fd_without_set_times,
+            1,
+            2,
+            WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::MTIM,
+        ),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.fd_filestat_set_times(
+            fd_with_set_times,
+            1,
+            2,
+            WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::ATIM_NOW,
+        ),
+        Err(Errno::Inval)
+    );
+    assert_eq!(
+        ctx.fd_filestat_set_times(fd_with_set_times, 1, 2, WasiFilestatSetTimes::MTIM_NOW),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.fd_filestat_set_times(WasiFd::new(99), 1, 2, WasiFilestatSetTimes::ATIM),
+        Err(Errno::Badf)
+    );
+}
+
+#[test]
 fn path_unlink_file_removes_namespace_files() {
     let root = fixture(&[("remove.txt", b"remove me"), ("dir/keep.txt", b"keep")]);
     let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
@@ -1765,6 +1864,7 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiRights::PATH_FILESTAT_SET_SIZE.bits(), 1 << 19);
     assert_eq!(WasiRights::PATH_FILESTAT_SET_TIMES.bits(), 1 << 20);
     assert_eq!(WasiRights::FD_FILESTAT_GET.bits(), 1 << 21);
+    assert_eq!(WasiRights::FD_FILESTAT_SET_TIMES.bits(), 1 << 23);
     assert_eq!(WasiRights::PATH_REMOVE_DIRECTORY.bits(), 1 << 25);
     assert_eq!(WasiRights::PATH_UNLINK_FILE.bits(), 1 << 26);
     assert!(

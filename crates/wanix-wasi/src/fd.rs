@@ -103,6 +103,8 @@ impl WasiRights {
     pub const PATH_FILESTAT_SET_TIMES: Self = Self(1 << 20);
     /// Stat this fd.
     pub const FD_FILESTAT_GET: Self = Self(1 << 21);
+    /// Set access or modification times on this fd.
+    pub const FD_FILESTAT_SET_TIMES: Self = Self(1 << 23);
     /// Remove a directory at a path relative to this fd.
     pub const PATH_REMOVE_DIRECTORY: Self = Self(1 << 25);
     /// Remove a non-directory file at a path relative to this fd.
@@ -114,7 +116,8 @@ impl WasiRights {
             | Self::FD_SEEK.0
             | Self::FD_TELL.0
             | Self::FD_WRITE.0
-            | Self::FD_FILESTAT_GET.0,
+            | Self::FD_FILESTAT_GET.0
+            | Self::FD_FILESTAT_SET_TIMES.0,
     );
 
     /// Rights for directory fds that can resolve namespace paths.
@@ -129,6 +132,7 @@ impl WasiRights {
             | Self::PATH_FILESTAT_SET_SIZE.0
             | Self::PATH_FILESTAT_SET_TIMES.0
             | Self::FD_FILESTAT_GET.0
+            | Self::FD_FILESTAT_SET_TIMES.0
             | Self::PATH_REMOVE_DIRECTORY.0
             | Self::PATH_UNLINK_FILE.0,
     );

@@ -400,6 +400,38 @@ impl WasiCtx {
         }
     }
 
+    /// Sets access and modification times for an open fd.
+    pub fn fd_filestat_set_times(
+        &self,
+        fd: WasiFd,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+        fstflags: u16,
+    ) -> Result<(), Errno> {
+        match self.fds.get(&fd).ok_or(Errno::Badf)? {
+            Handle::Stdio { .. } => Err(Errno::Notcapable),
+            Handle::Preopen { source_path, .. } => {
+                self.set_path_times(source_path, accessed_time_ns, modified_time_ns, fstflags)
+            }
+            Handle::Directory {
+                path, rights_base, ..
+            } => {
+                if !rights_base.contains(WasiRights::FD_FILESTAT_SET_TIMES) {
+                    return Err(Errno::Notcapable);
+                }
+                self.set_path_times(path, accessed_time_ns, modified_time_ns, fstflags)
+            }
+            Handle::File {
+                path, rights_base, ..
+            } => {
+                if !rights_base.contains(WasiRights::FD_FILESTAT_SET_TIMES) {
+                    return Err(Errno::Notcapable);
+                }
+                self.set_path_times(path, accessed_time_ns, modified_time_ns, fstflags)
+            }
+        }
+    }
+
     /// Returns prestat data for a preopened directory fd.
     pub fn fd_prestat_get(&self, fd: WasiFd) -> Result<WasiPrestat, Errno> {
         match self.fds.get(&fd).ok_or(Errno::Badf)? {
@@ -558,23 +590,7 @@ impl WasiCtx {
         }
         let updates = WasiFilestatSetTimes::from_preview1(fstflags)?;
         let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_FILESTAT_SET_TIMES)?;
-        if updates.is_empty() {
-            return Ok(());
-        }
-        let current = self.stat_path(&path)?;
-        let accessed_time_ns = if updates.set_access_time() {
-            accessed_time_ns
-        } else {
-            current.accessed_time_ns()
-        };
-        let modified_time_ns = if updates.set_modified_time() {
-            modified_time_ns
-        } else {
-            current.modified_time_ns()
-        };
-        self.namespace
-            .set_times(&path, accessed_time_ns, modified_time_ns)
-            .map_err(Errno::from)
+        self.set_path_times_with_updates(&path, accessed_time_ns, modified_time_ns, updates)
     }
 
     /// Creates a namespace directory at a path relative to `dirfd`.
@@ -722,6 +738,43 @@ impl WasiCtx {
             .map(FileStat::new)
             .map_err(Errno::from)
     }
+
+    fn set_path_times(
+        &self,
+        path: &NormalizedPath,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+        fstflags: u16,
+    ) -> Result<(), Errno> {
+        let updates = WasiFilestatSetTimes::from_preview1(fstflags)?;
+        self.set_path_times_with_updates(path, accessed_time_ns, modified_time_ns, updates)
+    }
+
+    fn set_path_times_with_updates(
+        &self,
+        path: &NormalizedPath,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+        updates: WasiFilestatSetTimes,
+    ) -> Result<(), Errno> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let current = self.stat_path(path)?;
+        let accessed_time_ns = if updates.set_access_time() {
+            accessed_time_ns
+        } else {
+            current.accessed_time_ns()
+        };
+        let modified_time_ns = if updates.set_modified_time() {
+            modified_time_ns
+        } else {
+            current.modified_time_ns()
+        };
+        self.namespace
+            .set_times(path, accessed_time_ns, modified_time_ns)
+            .map_err(Errno::from)
+    }
 }
 
 impl Drop for WasiCtx {
@@ -776,7 +829,7 @@ fn attached_file_rights(file: &WasiFile) -> Result<WasiRights, Errno> {
 }
 
 fn open_file_rights(read: bool, write: bool, seekable: bool) -> WasiRights {
-    let mut rights = WasiRights::FD_FILESTAT_GET;
+    let mut rights = WasiRights::FD_FILESTAT_GET | WasiRights::FD_FILESTAT_SET_TIMES;
     if read {
         rights |= WasiRights::FD_READ;
     }

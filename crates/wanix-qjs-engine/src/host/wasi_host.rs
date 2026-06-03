@@ -84,6 +84,17 @@ pub trait QuickJsWasiHost: Send {
     /// Returns filestat metadata for an open fd.
     fn fd_filestat_get(&mut self, fd: u32) -> Result<QuickJsWasiFileStat, QuickJsWasiErrno>;
 
+    /// Sets access and modification times for an open fd.
+    fn fd_filestat_set_times(
+        &mut self,
+        _fd: u32,
+        _atim: u64,
+        _mtim: u64,
+        _fstflags: u16,
+    ) -> Result<(), QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     /// Returns filestat metadata for `path` relative to `dirfd`.
     fn path_filestat_get(
         &mut self,

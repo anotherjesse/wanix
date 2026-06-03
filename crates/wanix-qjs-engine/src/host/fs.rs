@@ -120,6 +120,11 @@ pub(super) fn define_imports(linker: &mut Linker<HostState>) -> anyhow::Result<(
     linker.func_wrap("wasi_snapshot_preview1", "fd_filestat_get", fd_filestat_get)?;
     linker.func_wrap(
         "wasi_snapshot_preview1",
+        "fd_filestat_set_times",
+        fd_filestat_set_times,
+    )?;
+    linker.func_wrap(
+        "wasi_snapshot_preview1",
         "path_create_directory",
         path_create_directory,
     )?;
@@ -339,6 +344,35 @@ fn fd_filestat_get(
         FilestatFields::new(filetype, size),
     )?;
     Ok(ERRNO_SUCCESS)
+}
+
+fn fd_filestat_set_times(
+    caller: Caller<'_, HostState>,
+    fd: i32,
+    atim: i64,
+    mtim: i64,
+    fstflags: i32,
+) -> wasmtime::Result<i32> {
+    let fstflags = match preview1_u16_filestat_flags(fstflags) {
+        Ok(flags) => flags,
+        Err(errno) => return Ok(errno),
+    };
+    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| {
+        host.fd_filestat_set_times(fd, atim.cast_unsigned(), mtim.cast_unsigned(), fstflags)
+    })? {
+        return Ok(match result {
+            Ok(()) => ERRNO_SUCCESS,
+            Err(errno) => errno.preview1_result(),
+        });
+    }
+    if wasi_stdio_fd(fd).is_some()
+        || caller.data().is_virtual_preopen_fd(fd)
+        || caller.data().virtual_file(fd).is_some()
+    {
+        Ok(ERRNO_NOSYS)
+    } else {
+        Ok(ERRNO_BADF)
+    }
 }
 
 fn path_filestat_get(

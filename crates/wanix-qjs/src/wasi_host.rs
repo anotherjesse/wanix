@@ -163,6 +163,18 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
             .map_err(convert_errno)
     }
 
+    fn fd_filestat_set_times(
+        &mut self,
+        fd: u32,
+        atim: u64,
+        mtim: u64,
+        fstflags: u16,
+    ) -> Result<(), QuickJsWasiErrno> {
+        self.ctx
+            .fd_filestat_set_times(WasiFd::new(fd), atim, mtim, fstflags)
+            .map_err(convert_errno)
+    }
+
     fn path_filestat_get(
         &mut self,
         dirfd: u32,
@@ -408,6 +420,50 @@ mod tests {
 
         assert_eq!(
             host.path_filestat_get(3, 0, b"input.txt").unwrap(),
+            QuickJsWasiFileStat::new_with_times(
+                QuickJsWasiFileType::RegularFile,
+                14,
+                1_000_000_000,
+                2_000_000_000,
+                0,
+            )
+        );
+    }
+
+    #[test]
+    fn adapter_fd_filestat_set_times_reaches_wanix_namespace() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        root.write_file("input.txt", b"from namespace").unwrap();
+        namespace
+            .bind(root, ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+        let fd = host
+            .path_open(
+                3,
+                0,
+                b"input.txt",
+                0,
+                (WasiRights::FD_READ
+                    | WasiRights::FD_FILESTAT_GET
+                    | WasiRights::FD_FILESTAT_SET_TIMES)
+                    .bits(),
+                0,
+                0,
+            )
+            .unwrap();
+
+        host.fd_filestat_set_times(
+            fd,
+            1_000_000_000,
+            2_000_000_000,
+            WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::MTIM,
+        )
+        .unwrap();
+
+        assert_eq!(
+            host.fd_filestat_get(fd).unwrap(),
             QuickJsWasiFileStat::new_with_times(
                 QuickJsWasiFileType::RegularFile,
                 14,
