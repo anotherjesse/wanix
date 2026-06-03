@@ -3,7 +3,7 @@ use std::fmt;
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 
-use wanix_fs::{File, FileSystem, FsError, FsResult, Metadata, NormalizedPath};
+use wanix_fs::{File, FileSystem, FsError, FsResult, Metadata, NormalizedPath, OpenOptions};
 use wanix_vfs::{BindOptions, Namespace};
 
 use crate::{Fd, FdTable};
@@ -300,6 +300,18 @@ impl Task {
         })
     }
 
+    /// Opens a namespace path and installs it at a specific fd.
+    ///
+    /// This is the Rust task-service counterpart of wiring stdio through
+    /// `ctl bind <src> fd/<n>`. The file is opened outside the task lock so
+    /// service files can safely reenter task state.
+    pub fn bind_fd_from_namespace(&self, source: impl AsRef<str>, fd: Fd) -> FsResult<()> {
+        let source = NormalizedPath::new(source)?;
+        let namespace = self.namespace();
+        let file = namespace.open(&source, fd_bind_open_options(fd))?;
+        self.insert_fd(fd, file, source)
+    }
+
     /// Closes an fd.
     pub fn close_fd(&self, fd: Fd) -> FsResult<()> {
         self.write_state(|state| state.fds.close(fd))
@@ -350,5 +362,13 @@ impl Task {
             .lock()
             .map_err(|_| FsError::Other("task state lock poisoned".to_owned()))?;
         f(&mut state)
+    }
+}
+
+fn fd_bind_open_options(fd: Fd) -> OpenOptions {
+    if fd == Fd::STDIN {
+        OpenOptions::read()
+    } else {
+        OpenOptions::read_write()
     }
 }

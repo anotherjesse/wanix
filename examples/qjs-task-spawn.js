@@ -37,12 +37,17 @@ function writeServiceText(path, text) {
 }
 
 const child = readServiceText("#task/new/qjs").trim();
+Wanix.writeText("child-stdout.txt", "");
+Wanix.writeText("child-stderr.txt", "");
 writeServiceText("#task/" + child + "/cmd", "qjs-task-spawn-child.js alpha beta\n");
 writeServiceText("#task/" + child + "/env", "MODE=spawned\n");
 writeServiceText("#task/" + child + "/dir", ".\n");
+writeServiceText("#task/" + child + "/ctl", "bind child-stdout.txt fd/1\n");
+writeServiceText("#task/" + child + "/ctl", "bind child-stderr.txt fd/2\n");
 writeServiceText("#task/" + child + "/ctl", "start\n");
 
-std.out.puts("parent task: " + readServiceText("#task/self/id").trim() + "\n");
-std.out.puts("child task: " + child + "\n");
-std.out.puts("child exit: " + readServiceText("#task/" + child + "/exit").trim() + "\n");
-std.out.puts(std.loadFile("child-result.txt") + "\n");
+print("parent task: " + readServiceText("#task/self/id").trim());
+print("child task: " + child);
+print("child exit: " + readServiceText("#task/" + child + "/exit").trim());
+print("child stdout: " + std.loadFile("child-stdout.txt").trimEnd());
+print("child stderr: " + std.loadFile("child-stderr.txt").trimEnd());

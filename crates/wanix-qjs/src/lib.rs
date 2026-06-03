@@ -1713,13 +1713,18 @@ function writeServiceText(path, text) {
 }
 
 const child = readServiceText("#task/new/qjs").trim();
+Wanix.writeText("child-stdout.txt", "");
+Wanix.writeText("child-stderr.txt", "");
 writeServiceText("#task/" + child + "/cmd", "child.js alpha beta\n");
 writeServiceText("#task/" + child + "/env", "MODE=child\n");
 writeServiceText("#task/" + child + "/dir", ".\n");
+writeServiceText("#task/" + child + "/ctl", "bind child-stdout.txt fd/1\n");
+writeServiceText("#task/" + child + "/ctl", "bind child-stderr.txt #task/" + child + "/fd/2\n");
 writeServiceText("#task/" + child + "/ctl", "start\n");
 
-std.out.puts("child " + child + " exit " + readServiceText("#task/" + child + "/exit").trim() + "\n");
-std.out.puts("result " + std.loadFile("child-result.txt") + "\n");
+print("child " + child + " exit " + readServiceText("#task/" + child + "/exit").trim());
+print("stdout " + std.loadFile("child-stdout.txt").trimEnd());
+print("stderr " + std.loadFile("child-stderr.txt").trimEnd());
 "##,
         )
         .unwrap();
@@ -1728,12 +1733,15 @@ std.out.puts("result " + std.loadFile("child-result.txt") + "\n");
             br##"
 import * as std from "qjs:std";
 
-std.writeFile(
-  "child-result.txt",
+std.out.puts(
   "id " + std.loadFile("#task/self/id").trim()
     + " args " + scriptArgs.join("|")
     + " mode " + std.getenv("MODE")
+    + "\n"
 );
+std.out.flush();
+std.err.puts("stderr mode " + std.getenv("MODE") + "\n");
+std.err.flush();
 std.exit(5);
 "##,
         )
@@ -1759,11 +1767,15 @@ std.exit(5);
 
         assert_eq!(
             read_file(&*stdout, "out"),
-            b"child 2 exit 5\nresult id 2 args child.js|alpha|beta mode child\n"
+            b"child 2 exit 5\nstdout id 2 args child.js|alpha|beta mode child\nstderr stderr mode child\n"
         );
         assert_eq!(
-            root.read_file("child-result.txt").unwrap(),
-            b"id 2 args child.js|alpha|beta mode child"
+            root.read_file("child-stdout.txt").unwrap(),
+            b"id 2 args child.js|alpha|beta mode child\n"
+        );
+        assert_eq!(
+            root.read_file("child-stderr.txt").unwrap(),
+            b"stderr mode child\n"
         );
         assert_eq!(task.exit(), "0");
         assert_eq!(table.get(TaskId::new(2)).unwrap().exit(), "5");

@@ -369,11 +369,89 @@ fn ctl_start_invokes_registered_driver() {
 }
 
 #[test]
+fn ctl_bind_installs_fd_from_task_namespace() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let root = Arc::new(MemFs::new());
+    root.write_file("stdout", b"").unwrap();
+    task.bind(root.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    write_file(&taskfs, "self/ctl", b"bind stdout fd/1\n");
+
+    assert_eq!(entry_names(&taskfs, "self/fd"), ["1"]);
+    write_file(&taskfs, "self/fd/1", b"from fd bind");
+    assert_eq!(root.read_file("stdout").unwrap(), b"from fd bind");
+    assert_eq!(task.fd_path(Fd::STDOUT).unwrap().as_str(), "stdout");
+}
+
+#[test]
+fn ctl_bind_accepts_self_addressed_fd_destinations() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let root = Arc::new(MemFs::new());
+    root.write_file("stderr", b"").unwrap();
+    task.bind(root.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    write_file(
+        &taskfs,
+        "self/ctl",
+        format!("bind stderr #task/{}/fd/2\n", task.id().get()).as_bytes(),
+    );
+
+    write_file(&taskfs, "self/fd/2", b"self addressed");
+    assert_eq!(root.read_file("stderr").unwrap(), b"self addressed");
+}
+
+#[test]
+fn ctl_bind_can_wire_child_fd_to_explicit_parent_fd() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let parent = table.allocate_root("qjs").unwrap();
+    let backing = Arc::new(MemFs::new());
+    backing.write_file("stdout", b"").unwrap();
+    parent
+        .insert_fd(
+            Fd::STDOUT,
+            backing
+                .open(
+                    &NormalizedPath::new("stdout").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("stdout").unwrap(),
+        )
+        .unwrap();
+    let taskfs = table.filesystem_for(parent.id());
+
+    assert_eq!(read_file(&taskfs, "new/qjs"), "2\n");
+    let child = table.get(TaskId::new(2)).unwrap();
+    write_file(
+        &taskfs,
+        "2/ctl",
+        format!("bind #task/{}/fd/1 fd/1\n", parent.id().get()).as_bytes(),
+    );
+    write_file(&taskfs, "2/fd/1", b"via parent fd");
+
+    assert_eq!(child.fd_numbers(), [Fd::STDOUT]);
+    assert_eq!(backing.read_file("stdout").unwrap(), b"via parent fd");
+}
+
+#[test]
 fn split_writes_accumulate_for_fields_and_ctl() {
     let table = TaskTable::new();
     let driver = Arc::new(CountingDriver::new());
     table.register_driver("qjs", driver.clone()).unwrap();
     let task = table.allocate_root("qjs").unwrap();
+    let root = Arc::new(MemFs::new());
+    root.write_file("stdout", b"").unwrap();
+    task.bind(root.clone(), ".", ".", BindOptions::default())
+        .unwrap();
     let taskfs = table.filesystem_for(task.id());
 
     let mut cmd = open_write(&taskfs, "self/cmd");
@@ -386,6 +464,14 @@ fn split_writes_accumulate_for_fields_and_ctl() {
     assert_eq!(driver.starts(), 0);
     ctl.write(b"rt").unwrap();
     assert_eq!(driver.starts(), 1);
+
+    let mut ctl = open_write(&taskfs, "self/ctl");
+    ctl.write(b"bind stdout ").unwrap();
+    assert!(task.fd_numbers().is_empty());
+    ctl.write(b"fd/1\n").unwrap();
+    assert_eq!(task.fd_numbers(), [Fd::STDOUT]);
+    write_file(&taskfs, "self/fd/1", b"split bind");
+    assert_eq!(root.read_file("stdout").unwrap(), b"split bind");
 }
 
 #[derive(Debug)]

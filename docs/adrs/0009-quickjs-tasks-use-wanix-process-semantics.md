@@ -57,9 +57,12 @@ driver into a task table.
   Wanix-backed WASI calls against `#task/new/qjs` and `#task/<id>/cmd`,
   `env`, `dir`, `ctl`, and `exit`. The child still gets Wanix task identity,
   namespace, argv/env/cwd, and exit state from `wanix-task`; QuickJS only
-  executes the task driver. Child tasks do not inherit parent stdio fds yet, so
-  the current synchronous proof observes child output through ordinary namespace
-  files and child status through `#task/<id>/exit`.
+  executes the task driver. Child tasks do not implicitly inherit parent stdio
+  fds. A parent wires child stdio explicitly before `start` by writing
+  `bind <src> fd/<n>` to the child's `ctl` file. Rust resolves `<src>` in the
+  target task namespace and installs it in the target task fd table; use an
+  explicit source such as `#task/1/fd/1` when the child should write through a
+  parent fd, because `#task/self` is target-task-relative.
 - The synchronous process demo comes before richer lifecycle work such as async
   event loops, signals, cancellation, and snapshot/restore.
 - A useful demo should show JavaScript reading `#task/self/id`, using stdio,

@@ -150,22 +150,76 @@ impl File for ControlFile {
     fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
         self.access.can_write()?;
         self.data.extend_from_slice(buf);
-        let text = String::from_utf8_lossy(&self.data);
-        let command = text.trim();
-        if "start".starts_with(command) {
-            if command == "start" {
+        let command = String::from_utf8_lossy(&self.data).trim().to_owned();
+        match parse_control_command(&self.task, &command)? {
+            ControlCommand::Pending => {}
+            ControlCommand::Start => {
                 self.table.start(self.task.id())?;
                 self.data.clear();
             }
-            Ok(buf.len())
-        } else {
-            Err(FsError::NotSupported)
+            ControlCommand::Bind { source, fd } => {
+                self.task.bind_fd_from_namespace(source, fd)?;
+                self.data.clear();
+            }
         }
+        Ok(buf.len())
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
         Ok(file_metadata(0, 0o755))
     }
+}
+
+enum ControlCommand<'a> {
+    Pending,
+    Start,
+    Bind { source: &'a str, fd: Fd },
+}
+
+fn parse_control_command<'a>(task: &Task, command: &'a str) -> FsResult<ControlCommand<'a>> {
+    if command.is_empty() {
+        return Ok(ControlCommand::Pending);
+    }
+    if "start".starts_with(command) {
+        return Ok(if command == "start" {
+            ControlCommand::Start
+        } else {
+            ControlCommand::Pending
+        });
+    }
+
+    let parts = command.split_whitespace().collect::<Vec<_>>();
+    if parts.is_empty() || ("bind".starts_with(parts[0]) && parts.len() < 3) {
+        return Ok(ControlCommand::Pending);
+    }
+    if parts.len() == 3 && parts[0] == "bind" {
+        return Ok(ControlCommand::Bind {
+            source: parts[1],
+            fd: control_fd_destination(task, parts[2])?,
+        });
+    }
+    Err(FsError::NotSupported)
+}
+
+fn control_fd_destination(task: &Task, destination: &str) -> FsResult<Fd> {
+    let parts = destination.split('/').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["fd", fd] => parse_control_fd(fd),
+        ["#task", "self", "fd", fd] => parse_control_fd(fd),
+        ["#task", task_id, "fd", fd] => {
+            let task_id = task_id.parse::<u64>().map_err(|_| FsError::NotSupported)?;
+            if task_id == task.id().get() {
+                parse_control_fd(fd)
+            } else {
+                Err(FsError::NotSupported)
+            }
+        }
+        _ => Err(FsError::NotSupported),
+    }
+}
+
+fn parse_control_fd(fd: &str) -> FsResult<Fd> {
+    Ok(Fd::new(fd.parse().map_err(|_| FsError::InvalidFd)?))
 }
 
 #[derive(Debug)]
