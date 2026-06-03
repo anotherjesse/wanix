@@ -190,6 +190,9 @@ cargo test --workspace --locked
 - [ADR 0041](docs/adrs/0041-quickjs-ready-fd-handler-turn.md):
   QuickJS `setReadHandler`/`setWriteHandler` callbacks get one nonblocking
   ready-fd turn after Wanix `qjs` task evaluation.
+- [ADR 0042](docs/adrs/0042-bounded-quickjs-future-timer-pump.md):
+  QuickJS future timers can run after qjs task evaluation when the composition
+  layer grants an explicit bounded wait budget.
 
 ## Cycle Rules
 

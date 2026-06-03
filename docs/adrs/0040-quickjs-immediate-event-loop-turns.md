@@ -38,9 +38,10 @@ driver, and a native CLI example. QuickJS clamps `setTimeout(..., 0)` to a
 future timer, so ordinary timeout wakeups remain part of scheduler and clock
 policy rather than this immediate pump.
 
-Future timers are reported as a wait status rather than slept in the bounded
-task pump. Long-lived timers, intervals, fd handler scheduling, signals,
-cancellation, and a Wanix task scheduler remain future lifecycle work.
+Future timers are initially reported as a wait status rather than slept in the
+immediate task pump. ADR 0042 later adds an explicit bounded wait budget for
+future timer demos. Long-lived timers, intervals, fd handler scheduling,
+signals, cancellation, and a Wanix task scheduler remain future lifecycle work.
 
 The event-loop state remains QuickJS VM state. Snapshot bytes continue to be VM
 images only; callers still need to reject or deliberately define policy for

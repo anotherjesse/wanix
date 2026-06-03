@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::time::Duration;
 use wasmtime::Memory;
 
 pub(crate) struct HostState {
@@ -84,6 +85,18 @@ impl HostState {
 
     pub(super) fn config(&self) -> &QuickJsHostConfig {
         &self.config
+    }
+
+    pub(crate) fn advance_clock_time_by(&mut self, duration: Duration) -> Result<()> {
+        let delta_ns = u64::try_from(duration.as_nanos())
+            .map_err(|_| anyhow::anyhow!("clock advance duration does not fit in u64 ns"))?;
+        let next = self
+            .config
+            .clock_time_ns()
+            .checked_add(delta_ns)
+            .ok_or_else(|| anyhow::anyhow!("clock advance overflowed"))?;
+        self.config.set_clock_time_ns(next);
+        Ok(())
     }
 
     pub(super) fn wasi_host(&self) -> Option<QuickJsWasiHostHandle> {

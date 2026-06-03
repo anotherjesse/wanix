@@ -88,6 +88,7 @@ assert_eq!(jobs, 1);
 let turns = runtime.execute_immediate_event_loop_with_limit(8)?;
 assert_eq!(turns, 0);
 runtime.execute_ready_io_event_loop_once()?;
+let _status = runtime.execute_event_loop_with_wait_budget(8, std::time::Duration::from_millis(10))?;
 
 let bytes = runtime.snapshot()?.try_to_bytes()?;
 let restore_config = QuickJsHostConfig::new().with_clock_time_ns(1_800_000_000_000_000_000);
@@ -583,7 +584,8 @@ Not implemented yet:
 - Native WASM extension dynamic linking and extension metadata restore.
 - Engine-owned mutable virtual files, symlinks, or host path mounts. Use a live
   `QuickJsWasiHost` provider and higher-level Wanix crates for those semantics.
-- General async event-loop policy beyond bounded pending-job drains, timer-only
-  sleeps, and immediately-ready live fd poll events.
+- General async event-loop policy beyond bounded pending-job drains, bounded
+  future timer waits, timer-only sleeps, and immediately-ready live fd poll
+  events.
 
 See `docs/investigation.md` for the investigation notes and implementation plan.

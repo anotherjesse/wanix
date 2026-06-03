@@ -149,6 +149,10 @@ impl QuickJsHostConfig {
         self
     }
 
+    pub(crate) fn set_clock_time_ns(&mut self, clock_time_ns: u64) {
+        self.clock_time_ns = clock_time_ns;
+    }
+
     /// Sets the repeated byte used by WASI `random_get`.
     #[must_use]
     pub fn with_random_byte(mut self, random_byte: u8) -> Self {

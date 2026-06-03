@@ -1,6 +1,7 @@
 use super::*;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 type WasiHostResult<T> = std::result::Result<T, QuickJsWasiErrno>;
 type RecordedWrites = Arc<Mutex<Vec<(u32, Vec<u8>)>>>;
@@ -357,6 +358,31 @@ fn quickjs_os_future_timer_reports_wait_without_blocking() -> Result<()> {
         status => bail!("expected future timer wait status, got {status:?}"),
     }
     assert_eq!(vm.eval_string("String(futureTimerFired)")?, "false");
+    Ok(())
+}
+
+#[test]
+fn quickjs_os_future_timer_runs_with_wait_budget() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+        globalThis.futureTimerEvents = [];
+        os.setTimeout(() => {
+          globalThis.futureTimerEvents.push("timeout");
+        }, 1);
+        "#,
+        "stdlib-future-timer-budget.mjs",
+    )?;
+
+    assert_eq!(vm.eval_string("futureTimerEvents.join(',')")?, "");
+    assert_eq!(
+        vm.execute_event_loop_with_wait_budget(8, Duration::from_millis(10))?,
+        QuickJsEventLoopStatus::Idle
+    );
+    assert_eq!(vm.eval_string("futureTimerEvents.join(',')")?, "timeout");
     Ok(())
 }
 

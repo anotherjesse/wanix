@@ -8,6 +8,7 @@
 use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -103,6 +104,13 @@ pub struct QuickJsRunner {
 struct RunFailure {
     error: FsError,
     output: RunOutput,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RunControl {
+    exit_state: Option<WanixExitState>,
+    output_task: Option<Task>,
+    event_loop_wait_budget: Duration,
 }
 
 impl fmt::Debug for QuickJsRunner {
@@ -265,15 +273,14 @@ impl QuickJsRunner {
         setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
         eval: impl FnOnce(&mut QuickJsRuntime, &str) -> FsResult<()>,
     ) -> Result<RunOutput, RunFailure> {
-        self.run_with_setup_control(source, create_options, None, None, setup, eval)
+        self.run_with_setup_control(source, create_options, RunControl::default(), setup, eval)
     }
 
     fn run_with_setup_control(
         &self,
         source: &str,
         create_options: QuickJsCreateOptions,
-        exit_state: Option<WanixExitState>,
-        output_task: Option<Task>,
+        control: RunControl,
         setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
         eval: impl FnOnce(&mut QuickJsRuntime, &str) -> FsResult<()>,
     ) -> Result<RunOutput, RunFailure> {
@@ -292,17 +299,17 @@ impl QuickJsRunner {
                 &mut runtime,
                 "__wanix_stdout",
                 Arc::clone(&stdout),
-                exit_state.clone(),
-                output_task.clone().map(|task| (task, Fd::STDOUT)),
+                control.exit_state.clone(),
+                control.output_task.clone().map(|task| (task, Fd::STDOUT)),
             )?;
             define_task_output_callback(
                 &mut runtime,
                 "__wanix_stderr",
                 Arc::clone(&stderr),
-                exit_state.clone(),
-                output_task.clone().map(|task| (task, Fd::STDERR)),
+                control.exit_state.clone(),
+                control.output_task.clone().map(|task| (task, Fd::STDERR)),
             )?;
-            if let Some(exit_state) = exit_state.clone() {
+            if let Some(exit_state) = control.exit_state.clone() {
                 runtime
                     .set_interrupt_handler(move || {
                         exit_state.code().map(|code| code.is_some()).unwrap_or(true)
@@ -312,7 +319,11 @@ impl QuickJsRunner {
             setup(&mut runtime)?;
             runtime.eval_discard(CONSOLE_PRELUDE).map_err(qjs_error)?;
             eval(&mut runtime, source)?;
-            drain_immediate_runtime_work(&mut runtime, &exit_state)?;
+            drain_runtime_work(
+                &mut runtime,
+                &control.exit_state,
+                control.event_loop_wait_budget,
+            )?;
             Ok(())
         })();
 
@@ -340,6 +351,26 @@ impl QuickJsRunner {
     /// Returns a filesystem error when the command is missing, the script cannot
     /// be read, QuickJS fails, or task fd writes fail.
     pub fn run_task(&self, task: &Task) -> FsResult<RunOutput> {
+        self.run_task_with_event_loop_wait_budget(task, Duration::ZERO)
+    }
+
+    /// Runs the script named in `task.cmd()` and waits for future timers.
+    ///
+    /// The wait budget is a bounded task-driver policy for QuickJS
+    /// standard-library timers such as `qjs:os.setTimeout`. A zero budget
+    /// preserves the default nonblocking behavior and only drains already-due
+    /// work.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the command is missing, the script cannot
+    /// be read, QuickJS fails, task fd writes fail, or the bounded event pump
+    /// encounters a callback error.
+    pub fn run_task_with_event_loop_wait_budget(
+        &self,
+        task: &Task,
+        event_loop_wait_budget: Duration,
+    ) -> FsResult<RunOutput> {
         let command = task_command(task)?;
         let script_path = command.program.clone();
         let script_filename = script_path.to_string();
@@ -361,8 +392,11 @@ impl QuickJsRunner {
         match self.run_with_setup_control(
             &source,
             create_options,
-            Some(exit_state.clone()),
-            Some(task.clone()),
+            RunControl {
+                exit_state: Some(exit_state.clone()),
+                output_task: Some(task.clone()),
+                event_loop_wait_budget,
+            },
             move |runtime| {
                 define_wanix_module_loader(runtime, namespace.clone())?;
                 define_wanix_task_globals(runtime, context)
@@ -485,12 +519,18 @@ fn drain_immediate_runtime_work(
     runtime: &mut QuickJsRuntime,
     exit_state: &Option<WanixExitState>,
 ) -> FsResult<()> {
+    drain_runtime_work(runtime, exit_state, Duration::ZERO)
+}
+
+fn drain_runtime_work(
+    runtime: &mut QuickJsRuntime,
+    exit_state: &Option<WanixExitState>,
+    event_loop_wait_budget: Duration,
+) -> FsResult<()> {
     if exit_requested(exit_state)? {
         return Ok(());
     }
-    runtime
-        .execute_immediate_event_loop_with_limit(1024)
-        .map_err(qjs_error)?;
+    drain_timer_work(runtime, event_loop_wait_budget)?;
     if exit_requested(exit_state)? {
         return Ok(());
     }
@@ -500,10 +540,24 @@ fn drain_immediate_runtime_work(
     if exit_requested(exit_state)? {
         return Ok(());
     }
+    drain_timer_work(runtime, event_loop_wait_budget)
+}
+
+fn drain_timer_work(
+    runtime: &mut QuickJsRuntime,
+    event_loop_wait_budget: Duration,
+) -> FsResult<()> {
+    if event_loop_wait_budget.is_zero() {
+        runtime
+            .execute_immediate_event_loop_with_limit(1024)
+            .map_err(qjs_error)?;
+        return Ok(());
+    }
+
     runtime
-        .execute_immediate_event_loop_with_limit(1024)
-        .map_err(qjs_error)?;
-    Ok(())
+        .execute_event_loop_with_wait_budget(1024, event_loop_wait_budget)
+        .map(|_status| ())
+        .map_err(qjs_error)
 }
 
 fn uses_module_syntax(source: &str) -> bool {
@@ -639,6 +693,7 @@ fn write_task_output(task: &Task, output: &RunOutput) -> FsResult<()> {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, OnceLock};
+    use std::time::Duration;
 
     use super::{
         CRATE_PURPOSE, FIRST_DEMO_TARGET, QuickJsHostConfig, QuickJsRunner, QuickJsTaskDriver,
@@ -1754,6 +1809,54 @@ std.out.flush();
         let output = String::from_utf8(read_file(&*stdout, "out")).unwrap();
         assert!(output.starts_with("sync\n"), "{output}");
         assert!(output.contains("sleepAsync\n"), "{output}");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_runs_future_quickjs_timers_with_wait_budget() {
+        let table = TaskTable::new();
+        let runner = runner();
+        let driver =
+            QuickJsTaskDriver::new(runner).with_event_loop_wait_budget(Duration::from_millis(10));
+        table
+            .register_driver("qjs", std::sync::Arc::new(driver))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.out.puts("sync\n");
+os.setTimeout(() => {
+  std.out.puts("timeout\n");
+  std.out.flush();
+}, 1);
+std.out.flush();
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(read_file(&*stdout, "out"), b"sync\ntimeout\n");
         assert_eq!(task.exit(), "0");
     }
 

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use wanix_fs::{FileSystem, FsError, LocalFs, MemFs, NormalizedPath, OpenOptions};
 use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
@@ -16,7 +17,7 @@ use wanix_vfs::BindOptions;
 
 const USAGE: &str = concat!(
     "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--stdin TEXT | --stdin-file PATH|-] ",
+    "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--mount HOST=GUEST ...] ",
@@ -177,6 +178,7 @@ struct QjsCommand {
     env: Vec<String>,
     cwd: NormalizedPath,
     stdin: Option<QjsStdin>,
+    event_loop_wait_budget: Duration,
     mounts: Vec<HostMount>,
 }
 
@@ -223,7 +225,13 @@ fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutpu
 
     let table = TaskTable::new();
     let runner = quickjs_runner()?;
-    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(runner)))?;
+    table.register_driver(
+        "qjs",
+        Arc::new(
+            QuickJsTaskDriver::new(runner)
+                .with_event_loop_wait_budget(command.event_loop_wait_budget),
+        ),
+    )?;
     let task = table.allocate_root("qjs")?;
     let task_spec = qjs_task_spec(QJS_GUEST_SCRIPT, &command.args, &command.env, &command.cwd)?;
     let task_cmd = task_cmd(QJS_GUEST_SCRIPT, &command.args);
@@ -453,6 +461,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
     let mut env = Vec::new();
     let mut cwd = NormalizedPath::new(".")?;
     let mut stdin = None;
+    let mut event_loop_wait_budget = Duration::ZERO;
     let mut mounts = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -495,6 +504,13 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
             };
             set_qjs_stdin(&mut stdin, source, "qjs")?;
             i += 1;
+        } else if args[i] == "--event-loop-ms" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs --event-loop-ms expects milliseconds"))?;
+            event_loop_wait_budget = parse_duration_millis(value, "qjs --event-loop-ms")?;
+            i += 1;
         } else if args[i] == "--mount" {
             i += 1;
             let value = args
@@ -534,6 +550,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
         env,
         cwd,
         stdin,
+        event_loop_wait_budget,
         mounts,
     })
 }
@@ -805,6 +822,14 @@ fn os_arg_to_string(arg: &OsString, label: &str) -> Result<String, CliError> {
     arg.clone()
         .into_string()
         .map_err(|_| CliError::usage(format!("{label} must be valid UTF-8")))
+}
+
+fn parse_duration_millis(arg: &OsString, label: &str) -> Result<Duration, CliError> {
+    let value = os_arg_to_string(arg, label)?;
+    let millis = value
+        .parse::<u64>()
+        .map_err(|_| CliError::usage(format!("{label} expects a non-negative integer")))?;
+    Ok(Duration::from_millis(millis))
 }
 
 fn validate_env_line(line: &str, label: &str) -> Result<(), CliError> {
@@ -2357,6 +2382,21 @@ std.out.flush();
         let stdout = std::str::from_utf8(output.stdout()).unwrap();
         assert!(stdout.starts_with("sync\n"), "{stdout}");
         assert!(stdout.contains("sleepAsync\n"), "{stdout}");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_example_future_timer_demo_runs_with_wait_budget() {
+        let output = run([
+            "qjs".into(),
+            "--event-loop-ms".into(),
+            "10".into(),
+            example_script("qjs-future-timer-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"sync\ntimeout\n");
         assert!(output.stderr().is_empty());
     }
 

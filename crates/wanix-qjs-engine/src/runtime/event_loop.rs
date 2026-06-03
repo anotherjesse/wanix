@@ -1,3 +1,4 @@
+use std::thread;
 use std::time::Duration;
 
 use super::QuickJsRuntime;
@@ -117,6 +118,71 @@ impl QuickJsRuntime {
                     turns = turns
                         .checked_add(1)
                         .ok_or_else(|| anyhow!("QuickJS event loop turn count overflowed"))?;
+                }
+            }
+        }
+    }
+
+    /// Runs QuickJS event-loop turns, waiting for future timers within a budget.
+    ///
+    /// This method sleeps the current host thread for each future timer delay
+    /// that fits inside `max_wait`, advances the runtime's deterministic WASI
+    /// clock by the same duration, then continues pumping pending jobs and
+    /// expired timers. It returns [`QuickJsEventLoopStatus::Idle`] when the
+    /// runtime has no more standard-library timer/job work, or
+    /// [`QuickJsEventLoopStatus::Wait`] when a future timer remains beyond the
+    /// supplied wait budget.
+    ///
+    /// This is a bounded runtime pump, not a Wanix scheduler. It does not drive
+    /// fd readiness handlers; call [`Self::execute_ready_io_event_loop_once`]
+    /// separately for nonblocking `qjs:os` fd handler work.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an event-loop turn fails, if the runtime clock cannot
+    /// be advanced, or if immediate work remains after `max_turns` turns.
+    pub fn execute_event_loop_with_wait_budget(
+        &mut self,
+        max_turns: usize,
+        max_wait: Duration,
+    ) -> Result<QuickJsEventLoopStatus> {
+        let mut turns = 0usize;
+        let mut waited = Duration::ZERO;
+        loop {
+            let remaining = max_turns.saturating_sub(turns);
+            let jobs = self.execute_pending_jobs_with_limit(remaining)?;
+            turns = turns
+                .checked_add(jobs)
+                .ok_or_else(|| anyhow!("QuickJS event loop turn count overflowed"))?;
+            if turns >= max_turns {
+                bail!("QuickJS event loop limit reached after {turns} turns");
+            }
+
+            match self.execute_event_loop_once()? {
+                QuickJsEventLoopStatus::Idle => return Ok(QuickJsEventLoopStatus::Idle),
+                QuickJsEventLoopStatus::Pending => {
+                    turns = turns
+                        .checked_add(1)
+                        .ok_or_else(|| anyhow!("QuickJS event loop turn count overflowed"))?;
+                }
+                QuickJsEventLoopStatus::Wait(delay) => {
+                    turns = turns
+                        .checked_add(1)
+                        .ok_or_else(|| anyhow!("QuickJS event loop turn count overflowed"))?;
+                    if turns >= max_turns {
+                        bail!("QuickJS event loop limit reached after {turns} turns");
+                    }
+                    let Some(next_waited) = waited.checked_add(delay) else {
+                        return Ok(QuickJsEventLoopStatus::Wait(delay));
+                    };
+                    if next_waited > max_wait {
+                        return Ok(QuickJsEventLoopStatus::Wait(delay));
+                    }
+                    if !delay.is_zero() {
+                        thread::sleep(delay);
+                        self.store.data_mut().advance_clock_time_by(delay)?;
+                    }
+                    waited = next_waited;
                 }
             }
         }
