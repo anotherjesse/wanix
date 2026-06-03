@@ -91,8 +91,9 @@ The next 9P-facing demo target is wiring the native and browser listeners into
 serve/v86 experiments so external clients can browse a Wanix namespace. The
 server core already negotiates 9P2000.L, attaches, walks, opens regular files
 and read-only directories, reads/writes regular files, lists directories with
-`Treaddir`, clunks fids, reports metadata with `Tgetattr`, and handles core
-mount and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, `Trenameat`, and
+`Treaddir`, clunks fids, reports no-follow metadata with `Tgetattr`, creates
+and reads symbolic links with `Tsymlink` and `Treadlink`, and handles core mount
+and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, `Trenameat`, and
 `Tunlinkat`; it also serves encoded request/response frames through a
 synchronous stream loop.
 `wanix-rust p9-stdio --root DIR` exposes that server over process
@@ -344,6 +345,9 @@ cargo test --workspace --locked
 - [ADR 0072](docs/adrs/0072-9p-statfs-mount-probe.md):
   `wanix-9p` answers `Tstatfs` with conservative synthetic filesystem stats so
   Linux/v86 clients can complete mount probes.
+- [ADR 0073](docs/adrs/0073-9p-symlink-readlink.md):
+  `wanix-9p` exposes Wanix-owned symlink creation and readlink semantics through
+  9P2000.L `Tsymlink` and `Treadlink`.
 
 ## Cycle Rules
 

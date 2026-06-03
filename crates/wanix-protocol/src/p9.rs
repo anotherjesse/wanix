@@ -39,6 +39,18 @@ pub const P9_TLCREATE: u8 = 14;
 /// 9P2000.L `Rlcreate` message type.
 pub const P9_RLCREATE: u8 = 15;
 
+/// 9P2000.L `Tsymlink` message type.
+pub const P9_TSYMLINK: u8 = 16;
+
+/// 9P2000.L `Rsymlink` message type.
+pub const P9_RSYMLINK: u8 = 17;
+
+/// 9P2000.L `Treadlink` message type.
+pub const P9_TREADLINK: u8 = 22;
+
+/// 9P2000.L `Rreadlink` message type.
+pub const P9_RREADLINK: u8 = 23;
+
 /// 9P2000.L `Tgetattr` message type.
 pub const P9_TGETATTR: u8 = 24;
 
@@ -116,6 +128,10 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RLOPEN => Some("Rlopen"),
         P9_TLCREATE => Some("Tlcreate"),
         P9_RLCREATE => Some("Rlcreate"),
+        P9_TSYMLINK => Some("Tsymlink"),
+        P9_RSYMLINK => Some("Rsymlink"),
+        P9_TREADLINK => Some("Treadlink"),
+        P9_RREADLINK => Some("Rreadlink"),
         P9_TGETATTR => Some("Tgetattr"),
         P9_RGETATTR => Some("Rgetattr"),
         P9_TREADDIR => Some("Treaddir"),
@@ -548,6 +564,26 @@ pub struct P9Create {
     pub gid: u32,
 }
 
+/// Decoded payload for `Tsymlink`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9Symlink {
+    /// Directory fid to create the symlink within.
+    pub dir_fid: u32,
+    /// New symlink basename below `dir_fid`.
+    pub name: String,
+    /// Uninterpreted symlink target string.
+    pub target: String,
+    /// Numeric group id requested for the new link.
+    pub gid: u32,
+}
+
+/// Decoded payload for `Treadlink`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct P9ReadLink {
+    /// Fid naming the symlink to read.
+    pub fid: u32,
+}
+
 /// Decoded payload for `Tgetattr`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct P9GetAttr {
@@ -828,6 +864,53 @@ pub fn p9_rlcreate(tag: u16, qid: P9Qid, iounit: u32) -> P9Frame {
     push_qid(&mut payload, qid);
     push_u32(&mut payload, iounit);
     P9Frame::new(P9_RLCREATE, tag, payload)
+}
+
+/// Builds a `Tsymlink` frame.
+///
+/// # Errors
+///
+/// Returns an error when either string cannot fit in a 9P string field.
+pub fn p9_tsymlink(
+    tag: u16,
+    dir_fid: u32,
+    name: &str,
+    target: &str,
+    gid: u32,
+) -> Result<P9Frame, P9Error> {
+    let mut payload = Vec::new();
+    push_u32(&mut payload, dir_fid);
+    push_string(&mut payload, name)?;
+    push_string(&mut payload, target)?;
+    push_u32(&mut payload, gid);
+    Ok(P9Frame::new(P9_TSYMLINK, tag, payload))
+}
+
+/// Builds an `Rsymlink` frame.
+#[must_use]
+pub fn p9_rsymlink(tag: u16, qid: P9Qid) -> P9Frame {
+    let mut payload = Vec::with_capacity(13);
+    push_qid(&mut payload, qid);
+    P9Frame::new(P9_RSYMLINK, tag, payload)
+}
+
+/// Builds a `Treadlink` frame.
+#[must_use]
+pub fn p9_treadlink(tag: u16, fid: u32) -> P9Frame {
+    let mut payload = Vec::with_capacity(4);
+    push_u32(&mut payload, fid);
+    P9Frame::new(P9_TREADLINK, tag, payload)
+}
+
+/// Builds an `Rreadlink` frame.
+///
+/// # Errors
+///
+/// Returns an error when the target cannot fit in a 9P string field.
+pub fn p9_rreadlink(tag: u16, target: &str) -> Result<P9Frame, P9Error> {
+    let mut payload = Vec::new();
+    push_string(&mut payload, target)?;
+    Ok(P9Frame::new(P9_RREADLINK, tag, payload))
 }
 
 /// Builds a `Tgetattr` frame.
@@ -1195,6 +1278,66 @@ pub fn p9_decode_rlcreate(frame: &P9Frame) -> Result<(P9Qid, u32), P9Error> {
     let iounit = cursor.read_u32()?;
     cursor.finish()?;
     Ok((qid, iounit))
+}
+
+/// Decodes a `Tsymlink` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tsymlink` or the payload is
+/// malformed.
+pub fn p9_decode_tsymlink(frame: &P9Frame) -> Result<P9Symlink, P9Error> {
+    expect_message_type(frame, P9_TSYMLINK)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let dir_fid = cursor.read_u32()?;
+    let name = cursor.read_string()?;
+    let target = cursor.read_string()?;
+    let gid = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok(P9Symlink {
+        dir_fid,
+        name,
+        target,
+        gid,
+    })
+}
+
+/// Decodes an `Rsymlink` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rsymlink` or the payload is
+/// malformed.
+pub fn p9_decode_rsymlink(frame: &P9Frame) -> Result<P9Qid, P9Error> {
+    decode_qid_frame(frame, P9_RSYMLINK)
+}
+
+/// Decodes a `Treadlink` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Treadlink` or the payload is
+/// malformed.
+pub fn p9_decode_treadlink(frame: &P9Frame) -> Result<P9ReadLink, P9Error> {
+    expect_message_type(frame, P9_TREADLINK)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok(P9ReadLink { fid })
+}
+
+/// Decodes an `Rreadlink` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rreadlink` or the payload is
+/// malformed.
+pub fn p9_decode_rreadlink(frame: &P9Frame) -> Result<String, P9Error> {
+    expect_message_type(frame, P9_RREADLINK)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let target = cursor.read_string()?;
+    cursor.finish()?;
+    Ok(target)
 }
 
 /// Decodes a `Tgetattr` frame payload.
@@ -1885,6 +2028,10 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RLOPEN), Some("Rlopen"));
         assert_eq!(p9_message_type_name(P9_TLCREATE), Some("Tlcreate"));
         assert_eq!(p9_message_type_name(P9_RLCREATE), Some("Rlcreate"));
+        assert_eq!(p9_message_type_name(P9_TSYMLINK), Some("Tsymlink"));
+        assert_eq!(p9_message_type_name(P9_RSYMLINK), Some("Rsymlink"));
+        assert_eq!(p9_message_type_name(P9_TREADLINK), Some("Treadlink"));
+        assert_eq!(p9_message_type_name(P9_RREADLINK), Some("Rreadlink"));
         assert_eq!(p9_message_type_name(P9_TGETATTR), Some("Tgetattr"));
         assert_eq!(p9_message_type_name(P9_RGETATTR), Some("Rgetattr"));
         assert_eq!(p9_message_type_name(P9_TREADDIR), Some("Treaddir"));
@@ -2041,6 +2188,47 @@ mod tests {
         assert_eq!(
             p9_decode_rlcreate(&P9Frame::decode(&response).unwrap()).unwrap(),
             (qid, 8192)
+        );
+    }
+
+    #[test]
+    fn symlink_and_readlink_round_trip() {
+        let symlink = p9_tsymlink(16, 1, "link.txt", "target.txt", 1000)
+            .unwrap()
+            .encode()
+            .unwrap();
+        assert_eq!(&symlink[..4], &37_u32.to_le_bytes());
+        assert_eq!(symlink[4], P9_TSYMLINK);
+        assert_eq!(
+            p9_decode_tsymlink(&P9Frame::decode(&symlink).unwrap()).unwrap(),
+            P9Symlink {
+                dir_fid: 1,
+                name: "link.txt".to_owned(),
+                target: "target.txt".to_owned(),
+                gid: 1000
+            }
+        );
+
+        let qid = qid(0x02, 0, 44);
+        let symlink_response = p9_rsymlink(16, qid).encode().unwrap();
+        assert_eq!(&symlink_response[..4], &20_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_rsymlink(&P9Frame::decode(&symlink_response).unwrap()).unwrap(),
+            qid
+        );
+
+        let readlink = p9_treadlink(17, 2).encode().unwrap();
+        assert_eq!(&readlink[..4], &11_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_treadlink(&P9Frame::decode(&readlink).unwrap()).unwrap(),
+            P9ReadLink { fid: 2 }
+        );
+
+        let readlink_response = p9_rreadlink(17, "target.txt").unwrap().encode().unwrap();
+        assert_eq!(&readlink_response[..4], &19_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_rreadlink(&P9Frame::decode(&readlink_response).unwrap()).unwrap(),
+            "target.txt"
         );
     }
 
