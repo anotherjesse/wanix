@@ -58,6 +58,38 @@ fn remove_file_removes_only_files() {
 }
 
 #[test]
+fn remove_dir_removes_only_empty_non_root_directories() {
+    let fs = MemFs::new();
+    fs.create_dir_all("empty").unwrap();
+    fs.write_file("nonempty/file.txt", b"file").unwrap();
+    fs.write_file("file.txt", b"file").unwrap();
+
+    fs.remove_dir(&NormalizedPath::new("empty").unwrap())
+        .unwrap();
+
+    assert_eq!(
+        fs.metadata(&NormalizedPath::new("empty").unwrap()),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        fs.remove_dir(&NormalizedPath::new("nonempty").unwrap()),
+        Err(FsError::NotEmpty)
+    );
+    assert_eq!(
+        fs.remove_dir(&NormalizedPath::new("file.txt").unwrap()),
+        Err(FsError::NotDirectory)
+    );
+    assert_eq!(
+        fs.remove_dir(&NormalizedPath::new("missing").unwrap()),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        fs.remove_dir(&NormalizedPath::new(".").unwrap()),
+        Err(FsError::PermissionDenied)
+    );
+}
+
+#[test]
 fn create_dir_creates_one_directory_with_existing_directory_parent() {
     let fs = MemFs::new();
     fs.create_dir_all("parent").unwrap();

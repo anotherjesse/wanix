@@ -418,6 +418,27 @@ fn path_remove_directory(
     path_ptr: i32,
     path_len: i32,
 ) -> wasmtime::Result<i32> {
+    if caller.data().wasi_host().is_some() {
+        let dirfd = match preview1_fd(dirfd) {
+            Ok(fd) => fd,
+            Err(errno) => return Ok(errno),
+        };
+        let path_len = match checked_wasi_path_len(path_len)? {
+            Ok(path_len) => path_len,
+            Err(errno) => return Ok(errno),
+        };
+        let memory = caller_memory(&caller)?;
+        let path = read_guest_path(&memory, &caller, path_ptr, path_len)?;
+        let Some(result) =
+            with_wasi_host_u32(&caller, |host| host.path_remove_directory(dirfd, &path))?
+        else {
+            return Ok(ERRNO_BADF);
+        };
+        return match result {
+            Ok(()) => Ok(ERRNO_SUCCESS),
+            Err(errno) => Ok(errno.preview1_result()),
+        };
+    }
     unsupported_path_mutation(&caller, dirfd, path_ptr, path_len)
 }
 

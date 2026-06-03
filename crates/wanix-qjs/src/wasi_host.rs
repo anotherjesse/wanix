@@ -177,6 +177,13 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
             .map_err(convert_errno)
     }
 
+    fn path_remove_directory(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
+        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
+        self.ctx
+            .path_remove_directory(WasiFd::new(dirfd), path)
+            .map_err(convert_errno)
+    }
+
     fn path_unlink_file(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
         let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
         self.ctx
@@ -195,6 +202,7 @@ fn convert_errno(errno: Errno) -> QuickJsWasiErrno {
         Errno::Exist => QuickJsWasiErrno::Exist,
         Errno::Notdir => QuickJsWasiErrno::Notdir,
         Errno::Isdir => QuickJsWasiErrno::Isdir,
+        Errno::Notempty => QuickJsWasiErrno::Notempty,
         Errno::Nosys => QuickJsWasiErrno::Nosys,
         Errno::Notcapable => QuickJsWasiErrno::Notcapable,
         Errno::Io => QuickJsWasiErrno::Io,
@@ -413,6 +421,29 @@ mod tests {
         assert_eq!(
             host.path_create_directory(3, b"parent/newdir"),
             Err(QuickJsWasiErrno::Exist)
+        );
+    }
+
+    #[test]
+    fn adapter_path_remove_directory_reaches_wanix_namespace() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        root.create_dir_all("empty").unwrap();
+        root.write_file("nonempty/file.txt", b"file").unwrap();
+        namespace
+            .bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        host.path_remove_directory(3, b"empty").unwrap();
+
+        assert_eq!(
+            root.metadata(&NormalizedPath::new("empty").unwrap()),
+            Err(wanix_fs::FsError::NotFound)
+        );
+        assert_eq!(
+            host.path_remove_directory(3, b"nonempty"),
+            Err(QuickJsWasiErrno::Notempty)
         );
     }
 

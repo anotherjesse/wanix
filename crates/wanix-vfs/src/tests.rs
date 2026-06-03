@@ -272,6 +272,55 @@ fn create_dir_reports_synthetic_namespace_directories_as_existing() {
 }
 
 #[test]
+fn remove_dir_routes_to_resolved_backing_filesystem() {
+    let root = fixture(&[
+        ("mnt/nonempty/file.txt", b"file"),
+        ("mnt/file.txt", b"file"),
+    ]);
+    root.create_dir_all("mnt/empty").unwrap();
+    let mut ns = Namespace::new();
+    ns.bind(root.clone(), "mnt", "app", BindOptions::default())
+        .unwrap();
+
+    ns.remove_dir(&NormalizedPath::new("app/empty").unwrap())
+        .unwrap();
+
+    assert_eq!(
+        root.metadata(&NormalizedPath::new("mnt/empty").unwrap()),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        ns.remove_dir(&NormalizedPath::new("app/nonempty").unwrap()),
+        Err(FsError::NotEmpty)
+    );
+    assert_eq!(
+        ns.remove_dir(&NormalizedPath::new("app/file.txt").unwrap()),
+        Err(FsError::NotDirectory)
+    );
+    assert_eq!(
+        ns.remove_dir(&NormalizedPath::new("app/missing").unwrap()),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        ns.remove_dir(&NormalizedPath::new(".").unwrap()),
+        Err(FsError::PermissionDenied)
+    );
+}
+
+#[test]
+fn remove_dir_reports_synthetic_namespace_directories_as_not_empty() {
+    let fs = fixture(&[("file.txt", b"content")]);
+    let mut ns = Namespace::new();
+    ns.bind(fs, "file.txt", "a/b/file.txt", BindOptions::default())
+        .unwrap();
+
+    assert_eq!(
+        ns.remove_dir(&NormalizedPath::new("a").unwrap()),
+        Err(FsError::NotEmpty)
+    );
+}
+
+#[test]
 fn read_dir_unions_direct_and_subpath_bindings() {
     let fs1 = fixture(&[
         ("file1.txt", b"content1"),

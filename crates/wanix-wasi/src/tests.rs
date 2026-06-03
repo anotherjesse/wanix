@@ -462,6 +462,81 @@ fn path_create_directory_requires_directory_right() {
 }
 
 #[test]
+fn path_remove_directory_removes_empty_namespace_directories() {
+    let root = fixture(&[("nonempty/file.txt", b"file"), ("file.txt", b"file")]);
+    root.create_dir_all("empty").unwrap();
+    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+
+    ctx.path_remove_directory(WasiFd::ROOT, "empty").unwrap();
+
+    assert_eq!(
+        root.metadata(&NormalizedPath::new("empty").unwrap()),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        ctx.path_remove_directory(WasiFd::ROOT, "nonempty"),
+        Err(Errno::Notempty)
+    );
+    assert_eq!(
+        ctx.path_remove_directory(WasiFd::ROOT, "file.txt"),
+        Err(Errno::Notdir)
+    );
+    assert_eq!(
+        ctx.path_remove_directory(WasiFd::ROOT, "missing"),
+        Err(Errno::Noent)
+    );
+    assert_eq!(
+        ctx.path_remove_directory(WasiFd::ROOT, "."),
+        Err(Errno::Notcapable)
+    );
+}
+
+#[test]
+fn path_remove_directory_respects_root_preopen_source() {
+    let root = fixture(&[("app/file.txt", b"file")]);
+    root.create_dir_all("app/empty").unwrap();
+    root.create_dir_all("empty").unwrap();
+    let ctx = WasiCtx::new(
+        WasiConfig::new(namespace_with_root(root.clone()))
+            .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
+    );
+
+    ctx.path_remove_directory(WasiFd::ROOT, "empty").unwrap();
+
+    assert_eq!(
+        root.metadata(&NormalizedPath::new("app/empty").unwrap()),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        root.metadata(&NormalizedPath::new("empty").unwrap())
+            .unwrap()
+            .file_type(),
+        FileType::Directory
+    );
+}
+
+#[test]
+fn path_remove_directory_requires_directory_right() {
+    let root = fixture(&[("dir/empty/file.txt", b"file")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let dir_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "dir",
+            0,
+            WasiRights::PATH_OPEN,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(
+        ctx.path_remove_directory(dir_fd, "empty"),
+        Err(Errno::Notcapable)
+    );
+}
+
+#[test]
 fn rights_are_enforced_on_open_fds() {
     let root = fixture(&[("read.txt", b"read"), ("write.txt", b"")]);
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
@@ -652,6 +727,11 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
         root_stat
             .rights_base()
             .contains(WasiRights::PATH_FILESTAT_SET_SIZE)
+    );
+    assert!(
+        root_stat
+            .rights_base()
+            .contains(WasiRights::PATH_REMOVE_DIRECTORY)
     );
     assert!(
         root_stat
@@ -1238,7 +1318,7 @@ fn errno_mapping_is_pinned_for_filesystem_errors() {
     assert_eq!(Errno::from(FsError::IsDirectory), Errno::Isdir);
     assert_eq!(Errno::from(FsError::InvalidFd), Errno::Badf);
     assert_eq!(Errno::from(FsError::InvalidOffset), Errno::Inval);
-    assert_eq!(Errno::from(FsError::NotEmpty), Errno::Io);
+    assert_eq!(Errno::from(FsError::NotEmpty), Errno::Notempty);
     assert_eq!(Errno::from(FsError::Other("opaque".into())), Errno::Io);
 }
 
@@ -1255,6 +1335,7 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(Errno::Noent.preview1_code(), 44);
     assert_eq!(Errno::Nosys.preview1_code(), 52);
     assert_eq!(Errno::Notdir.preview1_code(), 54);
+    assert_eq!(Errno::Notempty.preview1_code(), 55);
     assert_eq!(Errno::Notcapable.preview1_code(), 76);
 
     assert_eq!(WasiFileType::Unknown.preview1_code(), 0);
@@ -1268,6 +1349,7 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiRights::FD_READDIR.bits(), 1 << 14);
     assert_eq!(WasiRights::PATH_FILESTAT_SET_SIZE.bits(), 1 << 19);
     assert_eq!(WasiRights::FD_FILESTAT_GET.bits(), 1 << 21);
+    assert_eq!(WasiRights::PATH_REMOVE_DIRECTORY.bits(), 1 << 25);
     assert_eq!(WasiRights::PATH_UNLINK_FILE.bits(), 1 << 26);
     assert_eq!(WasiOpenOptions::OFLAGS_CREATE, 1 << 0);
     assert_eq!(WasiOpenOptions::OFLAGS_DIRECTORY, 1 << 1);

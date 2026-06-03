@@ -292,6 +292,30 @@ impl FileSystem for Namespace {
         }
         Err(FsError::NotFound)
     }
+
+    fn remove_dir(&self, path: &NormalizedPath) -> FsResult<()> {
+        if path.as_str() == "." {
+            return Err(FsError::PermissionDenied);
+        }
+        let mut saw_not_directory = false;
+        let mut saw_not_empty = false;
+        for target in self.resolve_candidates(path) {
+            match target.filesystem.remove_dir(&target.path) {
+                Ok(()) => return Ok(()),
+                Err(FsError::NotDirectory) => saw_not_directory = true,
+                Err(FsError::NotEmpty) => saw_not_empty = true,
+                Err(FsError::NotFound) => {}
+                Err(err) => return Err(err),
+            }
+        }
+        if saw_not_empty || self.has_synthetic_children(path) {
+            return Err(FsError::NotEmpty);
+        }
+        if saw_not_directory {
+            return Err(FsError::NotDirectory);
+        }
+        Err(FsError::NotFound)
+    }
 }
 
 struct ResolvedTarget {

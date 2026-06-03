@@ -2322,6 +2322,48 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_command_removes_directories_through_quickjs_os() {
+        let script = write_temp_script(
+            "rmdir-demo.js",
+            r#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+os.mkdir("gone", 0o777);
+std.out.puts("remove dir " + os.remove("gone") + "\n");
+const probe = os.open("gone", os.O_RDONLY);
+if (probe >= 0) {
+  os.close(probe);
+}
+std.out.puts("gone " + (probe < 0) + "\n");
+std.out.flush();
+"#,
+        );
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"remove dir 0\ngone true\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_example_rmdir_demo_removes_directories_through_quickjs_os() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-rmdir-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"remove dir: 0\ngone: true\nkept: still here\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_attaches_stdin_as_wanix_task_fd_zero() {
         let script = write_temp_script(
             "stdin-demo.js",

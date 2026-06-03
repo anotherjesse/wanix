@@ -92,6 +92,11 @@ pub trait QuickJsWasiHost: Send {
         Err(QuickJsWasiErrno::Nosys)
     }
 
+    /// Removes a directory at `path` relative to `dirfd`.
+    fn path_remove_directory(&mut self, _dirfd: u32, _path: &[u8]) -> Result<(), QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     /// Removes a non-directory file at `path` relative to `dirfd`.
     fn path_unlink_file(&mut self, _dirfd: u32, _path: &[u8]) -> Result<(), QuickJsWasiErrno> {
         Err(QuickJsWasiErrno::Nosys)
@@ -123,6 +128,8 @@ pub enum QuickJsWasiErrno {
     Isdir,
     /// Path component was not a directory.
     Notdir,
+    /// Directory is not empty.
+    Notempty,
     /// Operation not supported.
     Nosys,
     /// Capability rights are insufficient.
@@ -141,6 +148,7 @@ impl QuickJsWasiErrno {
             Self::Noent => 44,
             Self::Nosys => 52,
             Self::Notdir => 54,
+            Self::Notempty => 55,
             Self::Notcapable => 76,
         }
     }

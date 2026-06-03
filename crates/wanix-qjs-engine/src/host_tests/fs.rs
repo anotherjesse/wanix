@@ -12,6 +12,7 @@ const ERRNO_INVAL: i32 = 28;
 const ERRNO_NAMETOOLONG: i32 = 37;
 const ERRNO_NOENT: i32 = 44;
 const ERRNO_NOSYS: i32 = 52;
+const ERRNO_NOTEMPTY: i32 = 55;
 const ERRNO_NOTCAPABLE: i32 = 76;
 
 const RIGHT_FD_READ: i64 = 1 << 1;
@@ -22,6 +23,7 @@ const RIGHT_PATH_CREATE_DIRECTORY: i64 = 1 << 9;
 const RIGHT_PATH_OPEN: i64 = 1 << 13;
 const RIGHT_PATH_FILESTAT_GET: i64 = 1 << 18;
 const RIGHT_FD_FILESTAT_GET: i64 = 1 << 21;
+const RIGHT_PATH_REMOVE_DIRECTORY: i64 = 1 << 25;
 const READ_SEEK_STAT_RIGHTS: i64 =
     RIGHT_FD_READ | RIGHT_FD_SEEK | RIGHT_FD_TELL | RIGHT_FD_FILESTAT_GET;
 
@@ -55,6 +57,7 @@ const VIRTUAL_FS_WAT: &str = r#"
   (import "wasi_snapshot_preview1" "fd_filestat_get" (func $fd_filestat_get (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_filestat_get" (func $path_filestat_get (param i32 i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_create_directory" (func $path_create_directory (param i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "path_remove_directory" (func $path_remove_directory (param i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_unlink_file" (func $path_unlink_file (param i32 i32 i32) (result i32)))
   (memory (export "memory") 1)
   (func (export "fd_prestat_get") (param i32 i32) (result i32)
@@ -87,6 +90,8 @@ const VIRTUAL_FS_WAT: &str = r#"
     call $path_filestat_get)
   (func (export "path_create_directory") (param i32 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 call $path_create_directory)
+  (func (export "path_remove_directory") (param i32 i32 i32) (result i32)
+    local.get 0 local.get 1 local.get 2 call $path_remove_directory)
   (func (export "path_unlink_file") (param i32 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 call $path_unlink_file)
 )
@@ -108,6 +113,7 @@ struct VirtualFsHarness {
     fd_filestat_get: TypedFunc<(i32, i32), i32>,
     path_filestat_get: TypedFunc<(i32, i32, i32, i32, i32), i32>,
     path_create_directory: TypedFunc<(i32, i32, i32), i32>,
+    path_remove_directory: TypedFunc<(i32, i32, i32), i32>,
     path_unlink_file: TypedFunc<(i32, i32, i32), i32>,
 }
 
@@ -146,6 +152,7 @@ impl VirtualFsHarness {
             fd_filestat_get: instance.get_typed_func(&mut store, "fd_filestat_get")?,
             path_filestat_get: instance.get_typed_func(&mut store, "path_filestat_get")?,
             path_create_directory: instance.get_typed_func(&mut store, "path_create_directory")?,
+            path_remove_directory: instance.get_typed_func(&mut store, "path_remove_directory")?,
             path_unlink_file: instance.get_typed_func(&mut store, "path_unlink_file")?,
             memory,
             store,
@@ -311,7 +318,8 @@ impl QuickJsWasiHost for MetadataWasiHost {
         self.record(format!("fdstat:{fd}"));
         Ok(QuickJsWasiFdStat::new(
             QuickJsWasiFileType::Directory,
-            (RIGHT_PATH_CREATE_DIRECTORY | RIGHT_PATH_OPEN).cast_unsigned(),
+            (RIGHT_PATH_CREATE_DIRECTORY | RIGHT_PATH_OPEN | RIGHT_PATH_REMOVE_DIRECTORY)
+                .cast_unsigned(),
             READ_SEEK_STAT_RIGHTS.cast_unsigned(),
         ))
     }
@@ -331,6 +339,14 @@ impl QuickJsWasiHost for MetadataWasiHost {
 
     fn path_create_directory(&mut self, dirfd: u32, path: &[u8]) -> WasiHostResult<()> {
         self.record(format!("mkdir:{dirfd}:{}", String::from_utf8_lossy(path)));
+        Ok(())
+    }
+
+    fn path_remove_directory(&mut self, dirfd: u32, path: &[u8]) -> WasiHostResult<()> {
+        self.record(format!("rmdir:{dirfd}:{}", String::from_utf8_lossy(path)));
+        if path == b"nonempty" {
+            return Err(QuickJsWasiErrno::Notempty);
+        }
         Ok(())
     }
 
@@ -429,6 +445,35 @@ fn live_wasi_host_supplies_path_create_directory() -> Result<()> {
 }
 
 #[test]
+fn live_wasi_host_supplies_path_remove_directory() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+    harness.write_bytes(PATH_PTR, b"empty")?;
+    harness.write_bytes(PATH_PTR + 16, b"nonempty")?;
+
+    assert_eq!(
+        harness
+            .path_remove_directory
+            .call(&mut harness.store, (9, 128, 5))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(
+        harness
+            .path_remove_directory
+            .call(&mut harness.store, (9, 144, 8))?,
+        ERRNO_NOTEMPTY
+    );
+
+    assert_eq!(
+        calls.lock().expect("test call lock").as_slice(),
+        &["rmdir:9:empty".to_owned(), "rmdir:9:nonempty".to_owned()]
+    );
+    Ok(())
+}
+
+#[test]
 fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
     let host = MetadataWasiHost::default();
     let calls = Arc::clone(&host.calls);
@@ -456,7 +501,8 @@ fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
     assert_eq!(harness.read_u8(96)?, FILETYPE_DIRECTORY);
     assert_eq!(
         harness.read_u64(104)?,
-        (RIGHT_PATH_CREATE_DIRECTORY | RIGHT_PATH_OPEN).cast_unsigned()
+        (RIGHT_PATH_CREATE_DIRECTORY | RIGHT_PATH_OPEN | RIGHT_PATH_REMOVE_DIRECTORY)
+            .cast_unsigned()
     );
     assert_eq!(
         harness.read_u64(112)?,

@@ -142,6 +142,9 @@ cargo test --workspace --locked
 - [ADR 0025](docs/adrs/0025-wasi-directory-create-through-wanix-namespaces.md):
   `qjs:os.mkdir(...)` reaches Wanix-owned `PATH_CREATE_DIRECTORY` semantics
   through namespaces and live WASI providers.
+- [ADR 0026](docs/adrs/0026-wasi-directory-remove-through-wanix-namespaces.md):
+  `qjs:os.remove(...)` removes empty directories through Wanix-owned
+  `PATH_REMOVE_DIRECTORY` semantics and live WASI providers.
 
 ## Cycle Rules
 

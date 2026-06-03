@@ -171,6 +171,22 @@ impl FileSystem for LocalFs {
         }
         fs::remove_file(host_path).map_err(map_io_error)
     }
+
+    fn remove_dir(&self, path: &NormalizedPath) -> FsResult<()> {
+        if path.as_str() == "." {
+            return Err(FsError::PermissionDenied);
+        }
+        let host_path = self.raw_host_path(path);
+        let metadata = fs::symlink_metadata(&host_path).map_err(map_io_error)?;
+        if !metadata.is_dir() {
+            return Err(FsError::NotDirectory);
+        }
+        let resolved = fs::canonicalize(&host_path).map_err(map_io_error)?;
+        if !resolved.starts_with(&*self.root) {
+            return Err(FsError::PermissionDenied);
+        }
+        fs::remove_dir(host_path).map_err(map_io_error)
+    }
 }
 
 #[derive(Debug)]
@@ -359,6 +375,38 @@ mod tests {
         assert_eq!(
             fs.remove_file(&NormalizedPath::new("dir").unwrap()),
             Err(FsError::IsDirectory)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn localfs_remove_dir_deletes_empty_directories_inside_root() {
+        let root = temp_root();
+        fs::write(root.join("file.txt"), "hello host").unwrap();
+        fs::create_dir(root.join("empty")).unwrap();
+        fs::create_dir(root.join("nonempty")).unwrap();
+        fs::write(root.join("nonempty/file.txt"), "nested").unwrap();
+        let fs = LocalFs::new(&root).unwrap();
+
+        fs.remove_dir(&NormalizedPath::new("empty").unwrap())
+            .unwrap();
+
+        assert!(!root.join("empty").exists());
+        assert_eq!(
+            fs.remove_dir(&NormalizedPath::new("nonempty").unwrap()),
+            Err(FsError::NotEmpty)
+        );
+        assert_eq!(
+            fs.remove_dir(&NormalizedPath::new("file.txt").unwrap()),
+            Err(FsError::NotDirectory)
+        );
+        assert_eq!(
+            fs.remove_dir(&NormalizedPath::new("missing").unwrap()),
+            Err(FsError::NotFound)
+        );
+        assert_eq!(
+            fs.remove_dir(&NormalizedPath::new(".").unwrap()),
+            Err(FsError::PermissionDenied)
         );
         fs::remove_dir_all(root).unwrap();
     }

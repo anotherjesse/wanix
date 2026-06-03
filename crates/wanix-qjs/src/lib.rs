@@ -2442,6 +2442,65 @@ print("made file", std.loadFile("made/file.txt"));
     }
 
     #[test]
+    fn task_driver_quickjs_os_removes_wanix_namespace_directories() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+os.mkdir("empty", 0o777);
+os.mkdir("keep", 0o777);
+std.writeFile("keep/file.txt", "kept");
+print("remove dir result", JSON.stringify(os.remove("empty")));
+const probe = os.open("empty", os.O_RDONLY);
+if (probe >= 0) {
+  os.close(probe);
+}
+print("removed", probe < 0);
+print("keep", std.loadFile("keep/file.txt"));
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"remove dir result 0\nremoved true\nkeep kept\n"
+        );
+        assert_eq!(
+            root.metadata(&NormalizedPath::new("empty").unwrap()),
+            Err(FsError::NotFound)
+        );
+        assert_eq!(root.read_file("keep/file.txt").unwrap(), b"kept");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
     fn task_driver_fd_api_preserves_stdio_order_and_close() {
         let table = TaskTable::new();
         let runner = runner();

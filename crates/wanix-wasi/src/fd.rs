@@ -97,6 +97,8 @@ impl WasiRights {
     pub const PATH_FILESTAT_SET_SIZE: Self = Self(1 << 19);
     /// Stat this fd.
     pub const FD_FILESTAT_GET: Self = Self(1 << 21);
+    /// Remove a directory at a path relative to this fd.
+    pub const PATH_REMOVE_DIRECTORY: Self = Self(1 << 25);
     /// Remove a non-directory file at a path relative to this fd.
     pub const PATH_UNLINK_FILE: Self = Self(1 << 26);
 
@@ -118,6 +120,7 @@ impl WasiRights {
             | Self::PATH_FILESTAT_GET.0
             | Self::PATH_FILESTAT_SET_SIZE.0
             | Self::FD_FILESTAT_GET.0
+            | Self::PATH_REMOVE_DIRECTORY.0
             | Self::PATH_UNLINK_FILE.0,
     );
 

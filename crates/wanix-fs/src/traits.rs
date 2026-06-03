@@ -136,4 +136,13 @@ pub trait FileSystem: Send + Sync {
     fn remove_file(&self, _path: &NormalizedPath) -> FsResult<()> {
         Err(FsError::NotSupported)
     }
+
+    /// Removes one empty directory at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the directory cannot be removed.
+    fn remove_dir(&self, _path: &NormalizedPath) -> FsResult<()> {
+        Err(FsError::NotSupported)
+    }
 }

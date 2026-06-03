@@ -19,6 +19,8 @@ pub enum Errno {
     Notdir,
     /// Path names a directory where a file was expected.
     Isdir,
+    /// Directory is not empty.
+    Notempty,
     /// Operation not supported.
     Nosys,
     /// Capability rights are insufficient.
@@ -41,6 +43,7 @@ impl Errno {
             Self::Noent => 44,
             Self::Nosys => 52,
             Self::Notdir => 54,
+            Self::Notempty => 55,
             Self::Exist => 20,
             Self::Notcapable => 76,
         }
@@ -65,7 +68,8 @@ impl From<&FsError> for Errno {
             FsError::IsDirectory => Self::Isdir,
             FsError::InvalidFd => Self::Badf,
             FsError::InvalidOffset => Self::Inval,
-            FsError::NotEmpty | FsError::Other(_) => Self::Io,
+            FsError::NotEmpty => Self::Notempty,
+            FsError::Other(_) => Self::Io,
         }
     }
 }
