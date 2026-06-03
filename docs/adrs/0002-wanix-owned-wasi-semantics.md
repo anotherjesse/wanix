@@ -25,5 +25,6 @@ owns syscall semantics for filesystem and fd behavior.
   local filesystem adapter.
 - Early WASI support can start narrow and read-only, but the API boundary should
   be designed for full Wanix filesystem behavior.
-- `wanix-wasi` depends on `wanix-task` and `wanix-fs`; `wanix-fs` must not
-  depend on Wasmtime.
+- `wanix-wasi` depends on `wanix-fs` and `wanix-vfs`; task-fd attachment is
+  wired by `wanix-cli`, `wanix-qjs`, or another composition layer so the core
+  crate graph stays acyclic.

@@ -44,5 +44,6 @@ name = "wanix-wasi"
 version = "0.1.0"
 dependencies = [
  "wanix-fs",
+ "wanix-task",
  "wanix-vfs",
 ]
