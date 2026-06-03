@@ -412,7 +412,9 @@ mod tests {
         namespace
             .bind(root, ".", ".", BindOptions::default())
             .unwrap();
-        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+        let mut host =
+            WanixQuickJsWasiHost::new(WasiConfig::new(namespace).with_clock_time_ns(9_000_000_000))
+                .unwrap();
 
         host.path_filestat_set_times(
             3,
@@ -434,6 +436,26 @@ mod tests {
                 0,
             )
         );
+
+        host.path_filestat_set_times(
+            3,
+            0,
+            b"input.txt",
+            3_000_000_000,
+            99,
+            WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::MTIM_NOW,
+        )
+        .unwrap();
+        assert_eq!(
+            host.path_filestat_get(3, 0, b"input.txt").unwrap(),
+            QuickJsWasiFileStat::new_with_times(
+                QuickJsWasiFileType::RegularFile,
+                14,
+                3_000_000_000,
+                9_000_000_000,
+                0,
+            )
+        );
     }
 
     #[test]
@@ -444,7 +466,9 @@ mod tests {
         namespace
             .bind(root, ".", ".", BindOptions::default())
             .unwrap();
-        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+        let mut host =
+            WanixQuickJsWasiHost::new(WasiConfig::new(namespace).with_clock_time_ns(9_000_000_000))
+                .unwrap();
         let fd = host
             .path_open(
                 3,
@@ -475,6 +499,24 @@ mod tests {
                 14,
                 1_000_000_000,
                 2_000_000_000,
+                0,
+            )
+        );
+
+        host.fd_filestat_set_times(
+            fd,
+            99,
+            3_000_000_000,
+            WasiFilestatSetTimes::ATIM_NOW | WasiFilestatSetTimes::MTIM,
+        )
+        .unwrap();
+        assert_eq!(
+            host.fd_filestat_get(fd).unwrap(),
+            QuickJsWasiFileStat::new_with_times(
+                QuickJsWasiFileType::RegularFile,
+                14,
+                9_000_000_000,
+                3_000_000_000,
                 0,
             )
         );

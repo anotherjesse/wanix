@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use super::{
-    CRATE_PURPOSE, Errno, FileStat, Preopen, WasiConfig, WasiCtx, WasiFd, WasiFdObserver, WasiFile,
-    WasiFileType, WasiFilestatSetTimes, WasiOpenOptions, WasiPathOpen, WasiRights, WasiWhence,
+    CRATE_PURPOSE, DEFAULT_CLOCK_TIME_NS, Errno, FileStat, Preopen, WasiConfig, WasiCtx, WasiFd,
+    WasiFdObserver, WasiFile, WasiFileType, WasiFilestatSetTimes, WasiOpenOptions, WasiPathOpen,
+    WasiRights, WasiWhence,
 };
 use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
 use wanix_task::TaskTable;
@@ -43,6 +44,7 @@ fn config_exposes_namespace_and_root_preopen() {
     assert!(config.stdio_fds().is_empty());
     assert!(config.args().is_empty());
     assert!(config.env().is_empty());
+    assert_eq!(config.clock_time_ns(), DEFAULT_CLOCK_TIME_NS);
     assert_eq!(Errno::Success, Errno::Success);
 }
 
@@ -50,13 +52,16 @@ fn config_exposes_namespace_and_root_preopen() {
 fn config_and_ctx_expose_process_args_and_env() {
     let config = WasiConfig::new(Namespace::new())
         .with_args(["main.js", "--flag"])
-        .with_env(["MODE=test", "EMPTY="]);
+        .with_env(["MODE=test", "EMPTY="])
+        .with_clock_time_ns(9_000_000_000);
 
     assert_eq!(config.args(), ["main.js", "--flag"]);
     assert_eq!(config.env(), ["MODE=test", "EMPTY="]);
+    assert_eq!(config.clock_time_ns(), 9_000_000_000);
     let debug = format!("{config:?}");
     assert!(debug.contains("arg_count"));
     assert!(debug.contains("env_count"));
+    assert!(debug.contains("clock_time_ns"));
     assert!(!debug.contains("main.js"));
     assert!(!debug.contains("MODE=test"));
 
@@ -375,7 +380,9 @@ fn writes_and_creates_flow_back_to_namespace() {
 #[test]
 fn path_filestat_set_times_updates_namespace_metadata() {
     let root = fixture(&[("stamp.txt", b"stamp")]);
-    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let ctx = WasiCtx::new(
+        WasiConfig::new(namespace_with_root(root.clone())).with_clock_time_ns(9_000_000_000),
+    );
 
     ctx.path_filestat_set_times(
         WasiFd::ROOT,
@@ -414,16 +421,42 @@ fn path_filestat_set_times_updates_namespace_metadata() {
     assert_eq!(stat.accessed_time_ns(), 3_000_000_000);
     assert_eq!(stat.modified_time_ns(), 2_000_000_000);
 
+    ctx.path_filestat_set_times(
+        WasiFd::ROOT,
+        0,
+        "stamp.txt",
+        123,
+        4_000_000_000,
+        WasiFilestatSetTimes::ATIM_NOW | WasiFilestatSetTimes::MTIM,
+    )
+    .unwrap();
+    let stat = ctx.path_filestat_get(WasiFd::ROOT, "stamp.txt").unwrap();
+    assert_eq!(stat.accessed_time_ns(), 9_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 4_000_000_000);
+
+    ctx.path_filestat_set_times(
+        WasiFd::ROOT,
+        0,
+        "stamp.txt",
+        5_000_000_000,
+        456,
+        WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::MTIM_NOW,
+    )
+    .unwrap();
+    let stat = ctx.path_filestat_get(WasiFd::ROOT, "stamp.txt").unwrap();
+    assert_eq!(stat.accessed_time_ns(), 5_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 9_000_000_000);
+
     ctx.path_filestat_set_times(WasiFd::ROOT, 0, "stamp.txt", 4, 5, 0)
         .unwrap();
     let stat = ctx.path_filestat_get(WasiFd::ROOT, "stamp.txt").unwrap();
-    assert_eq!(stat.accessed_time_ns(), 3_000_000_000);
-    assert_eq!(stat.modified_time_ns(), 2_000_000_000);
+    assert_eq!(stat.accessed_time_ns(), 5_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 9_000_000_000);
     assert_eq!(
         root.metadata(&path("stamp.txt"))
             .unwrap()
             .modified_time_ns(),
-        2_000_000_000
+        9_000_000_000
     );
 }
 
@@ -454,6 +487,10 @@ fn path_filestat_set_times_validates_rights_and_flags() {
         Err(Errno::Notcapable)
     );
     assert_eq!(
+        ctx.path_filestat_set_times(dir_fd, 0, "file.txt", 1, 2, WasiFilestatSetTimes::MTIM_NOW),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
         ctx.path_filestat_set_times(
             WasiFd::ROOT,
             2,
@@ -479,23 +516,14 @@ fn path_filestat_set_times_validates_rights_and_flags() {
         ),
         Err(Errno::Inval)
     );
-    assert_eq!(
-        ctx.path_filestat_set_times(
-            WasiFd::ROOT,
-            0,
-            "dir/file.txt",
-            1,
-            2,
-            WasiFilestatSetTimes::MTIM_NOW,
-        ),
-        Err(Errno::Notcapable)
-    );
 }
 
 #[test]
 fn fd_filestat_set_times_updates_namespace_metadata() {
     let root = fixture(&[("stamp.txt", b"stamp")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let mut ctx = WasiCtx::new(
+        WasiConfig::new(namespace_with_root(root.clone())).with_clock_time_ns(9_000_000_000),
+    );
     let fd = ctx
         .path_open_preview1(
             WasiFd::ROOT,
@@ -526,15 +554,37 @@ fn fd_filestat_set_times_updates_namespace_metadata() {
     assert_eq!(stat.accessed_time_ns(), 3_000_000_000);
     assert_eq!(stat.modified_time_ns(), 2_000_000_000);
 
+    ctx.fd_filestat_set_times(
+        fd,
+        99,
+        4_000_000_000,
+        WasiFilestatSetTimes::ATIM_NOW | WasiFilestatSetTimes::MTIM,
+    )
+    .unwrap();
+    let stat = ctx.fd_filestat_get(fd).unwrap();
+    assert_eq!(stat.accessed_time_ns(), 9_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 4_000_000_000);
+
+    ctx.fd_filestat_set_times(
+        fd,
+        5_000_000_000,
+        99,
+        WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::MTIM_NOW,
+    )
+    .unwrap();
+    let stat = ctx.fd_filestat_get(fd).unwrap();
+    assert_eq!(stat.accessed_time_ns(), 5_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 9_000_000_000);
+
     ctx.fd_filestat_set_times(fd, 4, 5, 0).unwrap();
     let stat = ctx.fd_filestat_get(fd).unwrap();
-    assert_eq!(stat.accessed_time_ns(), 3_000_000_000);
-    assert_eq!(stat.modified_time_ns(), 2_000_000_000);
+    assert_eq!(stat.accessed_time_ns(), 5_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 9_000_000_000);
     assert_eq!(
         root.metadata(&path("stamp.txt"))
             .unwrap()
             .modified_time_ns(),
-        2_000_000_000
+        9_000_000_000
     );
 }
 
@@ -573,6 +623,10 @@ fn fd_filestat_set_times_validates_rights_and_flags() {
         Err(Errno::Notcapable)
     );
     assert_eq!(
+        ctx.fd_filestat_set_times(fd_without_set_times, 1, 2, WasiFilestatSetTimes::ATIM_NOW),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
         ctx.fd_filestat_set_times(
             fd_with_set_times,
             1,
@@ -580,10 +634,6 @@ fn fd_filestat_set_times_validates_rights_and_flags() {
             WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::ATIM_NOW,
         ),
         Err(Errno::Inval)
-    );
-    assert_eq!(
-        ctx.fd_filestat_set_times(fd_with_set_times, 1, 2, WasiFilestatSetTimes::MTIM_NOW),
-        Err(Errno::Notcapable)
     );
     assert_eq!(
         ctx.fd_filestat_set_times(WasiFd::new(99), 1, 2, WasiFilestatSetTimes::ATIM),

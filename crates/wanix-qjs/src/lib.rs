@@ -430,15 +430,20 @@ fn create_options_with_config(config: QuickJsHostConfig) -> QuickJsCreateOptions
 fn captured_stdio_options_with_wanix_wasi(
     config: QuickJsWanixConfig,
 ) -> FsResult<QuickJsCreateOptions> {
-    Ok(captured_stdio_options().with_wasi_host(wanix_wasi_host(config)?))
+    let host_config = captured_stdio_config().with_clock_time_ns(config.wasi().clock_time_ns());
+    Ok(create_options_with_config(host_config).with_wasi_host(wanix_wasi_host(config)?))
 }
 
 fn create_options_with_wanix_wasi(config: QuickJsWanixConfig) -> FsResult<QuickJsCreateOptions> {
-    Ok(QuickJsCreateOptions::new().with_wasi_host(wanix_wasi_host(config)?))
+    let host_config = QuickJsHostConfig::new().with_clock_time_ns(config.wasi().clock_time_ns());
+    Ok(create_options_with_config(host_config).with_wasi_host(wanix_wasi_host(config)?))
 }
 
 fn restore_options_with_wanix_wasi(config: QuickJsWanixConfig) -> FsResult<QuickJsRestoreOptions> {
-    Ok(QuickJsRestoreOptions::new().with_wasi_host(wanix_wasi_host(config)?))
+    let host_config = QuickJsHostConfig::new().with_clock_time_ns(config.wasi().clock_time_ns());
+    Ok(QuickJsRestoreOptions::new()
+        .with_host_config(host_config)
+        .with_wasi_host(wanix_wasi_host(config)?))
 }
 
 fn wanix_wasi_host(config: QuickJsWanixConfig) -> FsResult<WanixQuickJsWasiHost> {
@@ -611,8 +616,8 @@ mod tests {
     use std::sync::{Arc, OnceLock};
 
     use super::{
-        CRATE_PURPOSE, FIRST_DEMO_TARGET, QuickJsRunner, QuickJsTaskDriver, QuickJsWanixConfig,
-        wasi_contract_purpose,
+        CRATE_PURPOSE, FIRST_DEMO_TARGET, QuickJsHostConfig, QuickJsRunner, QuickJsTaskDriver,
+        QuickJsWanixConfig, wasi_contract_purpose,
     };
     use crate::task_stdio::task_wasi_config;
     use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
@@ -662,6 +667,14 @@ mod tests {
     }
 
     #[test]
+    fn qjs_and_wanix_wasi_default_clocks_match() {
+        assert_eq!(
+            QuickJsHostConfig::new().clock_time_ns(),
+            wanix_wasi::DEFAULT_CLOCK_TIME_NS
+        );
+    }
+
+    #[test]
     fn runner_executes_source_and_captures_console_output() {
         let output = runner()
             .run_source(r#"print("hello", 42); console.error("oops");"#)
@@ -695,6 +708,27 @@ std.writeFile("output.txt", text + " / qjs");
 
         assert!(output.stdout().is_empty());
         assert_eq!(read_file(&*root, "output.txt"), b"from config / qjs");
+    }
+
+    #[test]
+    fn runner_wanix_config_mirrors_wasi_clock_into_quickjs_host_config() {
+        let mut namespace = wanix_vfs::Namespace::new();
+        namespace
+            .bind(
+                std::sync::Arc::new(MemFs::new()),
+                ".",
+                ".",
+                BindOptions::default(),
+            )
+            .unwrap();
+        let config =
+            QuickJsWanixConfig::new(WasiConfig::new(namespace).with_clock_time_ns(12_345_000_000));
+
+        let output = runner()
+            .run_source_with_wanix_config(r#"print("date", Date.now());"#, config)
+            .unwrap();
+
+        assert_eq!(output.stdout(), b"date 12345\n");
     }
 
     #[test]

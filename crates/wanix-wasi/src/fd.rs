@@ -217,9 +217,6 @@ impl WasiFilestatSetTimes {
         if flags & (Self::MTIM | Self::MTIM_NOW) == Self::MTIM | Self::MTIM_NOW {
             return Err(Errno::Inval);
         }
-        if flags & (Self::ATIM_NOW | Self::MTIM_NOW) != 0 {
-            return Err(Errno::Notcapable);
-        }
         Ok(Self { flags })
     }
 
@@ -229,10 +226,22 @@ impl WasiFilestatSetTimes {
         self.flags & Self::ATIM != 0
     }
 
+    /// Returns whether the access time should be set to the configured clock time.
+    #[must_use]
+    pub const fn set_access_time_to_now(self) -> bool {
+        self.flags & Self::ATIM_NOW != 0
+    }
+
     /// Returns whether the modification time should be set from the timestamp argument.
     #[must_use]
     pub const fn set_modified_time(self) -> bool {
         self.flags & Self::MTIM != 0
+    }
+
+    /// Returns whether the modification time should be set to the configured clock time.
+    #[must_use]
+    pub const fn set_modified_time_to_now(self) -> bool {
+        self.flags & Self::MTIM_NOW != 0
     }
 
     /// Returns whether no explicit timestamp updates were requested.

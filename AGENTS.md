@@ -167,6 +167,9 @@ cargo test --workspace --locked
 - [ADR 0033](docs/adrs/0033-wasi-fd-filestat-set-size.md):
   `fd_filestat_set_size` resizes open Wanix-backed regular files through live
   WASI providers while QuickJS truncate/ftruncate demos remain future work.
+- [ADR 0034](docs/adrs/0034-wasi-timestamp-now-clock-policy.md):
+  WASI `ATIM_NOW`/`MTIM_NOW` timestamp updates use the deterministic clock value
+  carried by `WasiConfig`.
 
 ## Cycle Rules
 

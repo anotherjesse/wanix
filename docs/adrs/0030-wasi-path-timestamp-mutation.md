@@ -34,8 +34,8 @@ root-preserving canonicalization used by other `LocalFs` operations.
 Add `WasiRights::PATH_FILESTAT_SET_TIMES` and include it in directory base and
 inheriting rights. `WasiCtx::path_filestat_set_times` resolves paths through the
 task namespace, preserves timestamps whose Preview 1 flags are absent, rejects
-unknown or contradictory flags as `INVAL`, and rejects `*_NOW` flags for now
-because Wanix has not yet accepted a clock policy for this syscall.
+unknown or contradictory flags as `INVAL`, and initially rejected `*_NOW` flags
+until Wanix accepted the deterministic clock policy in ADR 0034.
 
 Add `WasiRights::FD_FILESTAT_SET_TIMES` for open descriptors and include it in
 regular file and directory fd rights. `WasiCtx::fd_filestat_set_times` mutates
@@ -59,7 +59,6 @@ updated `atime`/`mtime` values through `qjs:os.stat(...)`. WASI guests with
 `FD_FILESTAT_SET_TIMES` can also mutate timestamps through an open namespace fd
 without delegating process or filesystem policy to QuickJS.
 
-`*_NOW` clock semantics, symlink-specific timestamp behavior, and richer ctime
-policy remain follow-up work. Snapshot bytes still contain only QuickJS/Wasm
-memory; Wanix reattaches live timestamp-capable host resources through restore
-options.
+Symlink-specific timestamp behavior and richer ctime policy remain follow-up
+work. Snapshot bytes still contain only QuickJS/Wasm memory; Wanix reattaches
+live timestamp-capable host resources through restore options.

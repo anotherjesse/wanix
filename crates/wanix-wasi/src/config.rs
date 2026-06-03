@@ -7,6 +7,12 @@ use wanix_vfs::Namespace;
 
 use crate::{Errno, WasiFd, WasiFileAccess};
 
+/// Default deterministic timestamp used for WASI clock-derived operations.
+///
+/// This matches the engine crate's default `clock_time_get` value so standalone
+/// Wanix WASI contexts and QuickJS-hosted contexts start from the same policy.
+pub const DEFAULT_CLOCK_TIME_NS: u64 = 1_700_000_000_000_000_000;
+
 /// Configured preopen directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Preopen {
@@ -250,6 +256,7 @@ pub struct WasiConfig {
     preopens: Vec<Preopen>,
     args: Vec<String>,
     env: Vec<String>,
+    clock_time_ns: u64,
     fd_observer: Option<Arc<dyn WasiFdObserver>>,
 }
 
@@ -261,6 +268,7 @@ impl fmt::Debug for WasiConfig {
             .field("preopens", &self.preopens)
             .field("arg_count", &self.args.len())
             .field("env_count", &self.env.len())
+            .field("clock_time_ns", &self.clock_time_ns)
             .field("has_fd_observer", &self.fd_observer.is_some())
             .finish()
     }
@@ -276,6 +284,7 @@ impl WasiConfig {
             preopens: vec![Preopen::new(".").expect("root path is valid")],
             args: Vec::new(),
             env: Vec::new(),
+            clock_time_ns: DEFAULT_CLOCK_TIME_NS,
             fd_observer: None,
         }
     }
@@ -308,6 +317,12 @@ impl WasiConfig {
     #[must_use]
     pub fn env(&self) -> &[String] {
         &self.env
+    }
+
+    /// Returns the nanosecond timestamp used for WASI `*_NOW` timestamp flags.
+    #[must_use]
+    pub fn clock_time_ns(&self) -> u64 {
+        self.clock_time_ns
     }
 
     pub(crate) fn stdio(&self) -> &BTreeMap<WasiFd, WasiFile> {
@@ -367,6 +382,13 @@ impl WasiConfig {
         S: Into<String>,
     {
         self.env = env.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sets the nanosecond timestamp used for WASI `*_NOW` timestamp flags.
+    #[must_use]
+    pub fn with_clock_time_ns(mut self, clock_time_ns: u64) -> Self {
+        self.clock_time_ns = clock_time_ns;
         self
     }
 

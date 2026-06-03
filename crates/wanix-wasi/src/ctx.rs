@@ -24,6 +24,7 @@ pub struct WasiCtx {
     next_fd: u32,
     args: Vec<String>,
     env: Vec<String>,
+    clock_time_ns: u64,
     fd_observer: Option<Arc<dyn WasiFdObserver>>,
 }
 
@@ -140,6 +141,7 @@ impl WasiCtx {
             next_fd,
             args: config.args().to_vec(),
             env: config.env().to_vec(),
+            clock_time_ns: config.clock_time_ns(),
             fd_observer: config.fd_observer(),
         })
     }
@@ -783,11 +785,15 @@ impl WasiCtx {
         let current = self.stat_path(path)?;
         let accessed_time_ns = if updates.set_access_time() {
             accessed_time_ns
+        } else if updates.set_access_time_to_now() {
+            self.clock_time_ns
         } else {
             current.accessed_time_ns()
         };
         let modified_time_ns = if updates.set_modified_time() {
             modified_time_ns
+        } else if updates.set_modified_time_to_now() {
+            self.clock_time_ns
         } else {
             current.modified_time_ns()
         };
