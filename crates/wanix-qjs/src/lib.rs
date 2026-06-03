@@ -529,6 +529,14 @@ pub(crate) fn task_wasi_env(task: &Task) -> Vec<String> {
     task.env()
 }
 
+pub(crate) fn task_wasi_cwd(task: &Task) -> NormalizedPath {
+    let spec = task.spec();
+    if task_spec_is_set(&spec) {
+        return spec.cwd;
+    }
+    task.dir()
+}
+
 pub(crate) fn task_program_for_check(task: &Task) -> Option<String> {
     let spec = task.spec();
     if task_spec_is_set(&spec) {
@@ -829,6 +837,9 @@ print(Wanix.readText("input.txt"));
         let table = TaskTable::new();
         table.register_noop_driver("qjs").unwrap();
         let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("app/main.js", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
         task.set_cmd("main.js two words").unwrap();
         task.set_dir("app").unwrap();
         let mut spec = TaskSpec::new("main.js").unwrap();
@@ -850,6 +861,30 @@ print(Wanix.readText("input.txt"));
         assert_eq!(ctx.env(), ["EMPTY=", "MODE=test"]);
         assert_eq!(super::task_env_map(&task)["MODE"], "test");
         assert!(!super::task_env_map(&task).contains_key("RAW"));
+    }
+
+    #[test]
+    fn task_wasi_config_maps_root_preopen_to_task_spec_cwd() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("data.txt", b"from root").unwrap();
+        root.write_file("app/data.txt", b"from app").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        let mut spec = TaskSpec::new("main.js").unwrap();
+        spec.cwd = NormalizedPath::new("app").unwrap();
+        task.set_spec(spec).unwrap();
+
+        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let fd = ctx
+            .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
+            .unwrap();
+        let mut buf = [0; 16];
+        let count = ctx.fd_read(fd, &mut buf).unwrap();
+
+        assert_eq!(ctx.fd_prestat_get(WasiFd::ROOT).unwrap().dir_name(), "/");
+        assert_eq!(&buf[..count], b"from app");
     }
 
     #[test]

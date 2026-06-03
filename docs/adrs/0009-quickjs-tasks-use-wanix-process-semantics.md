@@ -43,6 +43,9 @@ driver into a task table.
 - `wanix-qjs` attaches open task stdio fds to `QuickJsWanixConfig` through
   private `wanix_fs::File` proxy handles. That keeps `wanix-wasi` generic while
   preserving Wanix task fd ownership for the future live WASI import path.
+- `wanix-qjs` maps the task cwd to WASI fd 3 as the guest root preopen. The
+  preopen still reports `/`, but bare WASI path calls resolve from the Wanix
+  task cwd so `path_open("main.js")` matches `Wanix.readText("main.js")`.
 - The qjs stdio proxies are live views by Wanix task fd number. Closing a task
   stdio fd affects the WASI attachment, while WASI `fd_close` still rejects
   stdio fds so lifecycle remains owned by Wanix task/fd APIs.

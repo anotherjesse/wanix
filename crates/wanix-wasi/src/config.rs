@@ -10,22 +10,43 @@ use crate::{WasiFd, WasiFileAccess};
 /// Configured preopen directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Preopen {
+    source_path: NormalizedPath,
     guest_path: NormalizedPath,
 }
 
 impl Preopen {
-    /// Creates a preopen rooted at a Wanix namespace path.
+    /// Creates a preopen rooted at a Wanix namespace path and reported at the same guest path.
     ///
     /// # Errors
     ///
-    /// Returns a filesystem error when `guest_path` is invalid.
-    pub fn new(guest_path: impl AsRef<str>) -> FsResult<Self> {
+    /// Returns a filesystem error when `path` is invalid.
+    pub fn new(path: impl AsRef<str>) -> FsResult<Self> {
+        let path = NormalizedPath::new(path)?;
         Ok(Self {
+            source_path: path.clone(),
+            guest_path: path,
+        })
+    }
+
+    /// Creates a preopen resolved at `source_path` and reported as `guest_path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when either path is invalid.
+    pub fn mapped(source_path: impl AsRef<str>, guest_path: impl AsRef<str>) -> FsResult<Self> {
+        Ok(Self {
+            source_path: NormalizedPath::new(source_path)?,
             guest_path: NormalizedPath::new(guest_path)?,
         })
     }
 
-    /// Returns the guest path exposed as a preopen.
+    /// Returns the Wanix namespace path backing this preopen.
+    #[must_use]
+    pub fn source_path(&self) -> &NormalizedPath {
+        &self.source_path
+    }
+
+    /// Returns the guest path reported as a preopen.
     #[must_use]
     pub fn guest_path(&self) -> &NormalizedPath {
         &self.guest_path
@@ -157,9 +178,7 @@ impl WasiConfig {
         Self {
             namespace,
             stdio: BTreeMap::new(),
-            preopens: vec![Preopen {
-                guest_path: NormalizedPath::new(".").expect("root path is valid"),
-            }],
+            preopens: vec![Preopen::new(".").expect("root path is valid")],
             args: Vec::new(),
             env: Vec::new(),
         }
@@ -241,6 +260,16 @@ impl WasiConfig {
         S: Into<String>,
     {
         self.env = env.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Replaces the fd 3 root preopen source while keeping its guest name as `/`.
+    #[must_use]
+    pub fn with_root_preopen_source(mut self, source_path: NormalizedPath) -> Self {
+        self.preopens[0] = Preopen {
+            source_path,
+            guest_path: NormalizedPath::new(".").expect("root path is valid"),
+        };
         self
     }
 

@@ -2,10 +2,11 @@ use wanix_fs::{File, FsResult, Metadata};
 use wanix_task::{Fd, Task};
 use wanix_wasi::WasiConfig;
 
-use crate::{task_wasi_argv, task_wasi_env};
+use crate::{task_wasi_argv, task_wasi_cwd, task_wasi_env};
 
 pub(crate) fn task_wasi_config(task: &Task) -> WasiConfig {
     let mut config = WasiConfig::new(task.namespace())
+        .with_root_preopen_source(task_wasi_cwd(task))
         .with_args(task_wasi_argv(task))
         .with_env(task_wasi_env(task));
     let fds = task.fd_numbers();

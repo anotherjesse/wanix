@@ -33,6 +33,7 @@ fn purpose_is_declared() {
 fn config_exposes_namespace_and_root_preopen() {
     let config = WasiConfig::new(Namespace::new());
 
+    assert_eq!(config.preopens()[0].source_path().as_str(), ".");
     assert_eq!(config.preopens()[0].guest_path().as_str(), ".");
     assert!(config.namespace().bindings().is_empty());
     assert!(config.stdio_fds().is_empty());
@@ -64,7 +65,13 @@ fn config_and_ctx_expose_process_args_and_env() {
 #[test]
 fn preopen_validates_guest_paths() {
     assert!(Preopen::new("root").is_ok());
+    assert_eq!(
+        Preopen::mapped("app", ".").unwrap().source_path().as_str(),
+        "app"
+    );
     assert!(Preopen::new("/host").is_err());
+    assert!(Preopen::mapped("/host", ".").is_err());
+    assert!(Preopen::mapped("app", "/guest").is_err());
 }
 
 #[test]
@@ -101,6 +108,40 @@ fn root_preopen_stats_and_lists_namespace() {
             .map(|entry| entry.name().to_owned())
             .collect::<Vec<_>>(),
         ["nested.txt"]
+    );
+}
+
+#[test]
+fn root_preopen_can_map_guest_root_to_namespace_subdirectory() {
+    let root = fixture(&[
+        ("root.txt", b"from root"),
+        ("app/main.js", b"from app"),
+        ("app/nested.txt", b"nested"),
+    ]);
+    let mut ctx = WasiCtx::new(
+        WasiConfig::new(namespace_with_root(root))
+            .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
+    );
+
+    assert_eq!(ctx.fd_prestat_get(WasiFd::ROOT).unwrap().dir_name(), "/");
+    assert_eq!(
+        ctx.fd_read_dir(WasiFd::ROOT)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name().to_owned())
+            .collect::<Vec<_>>(),
+        ["main.js", "nested.txt"]
+    );
+    let fd = ctx
+        .path_open(WasiFd::ROOT, "main.js", WasiOpenOptions::read())
+        .unwrap();
+    let mut buf = [0; 16];
+    let count = ctx.fd_read(fd, &mut buf).unwrap();
+
+    assert_eq!(&buf[..count], b"from app");
+    assert_eq!(
+        ctx.path_open(WasiFd::ROOT, "root.txt", WasiOpenOptions::read()),
+        Err(Errno::Noent)
     );
 }
 

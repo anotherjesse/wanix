@@ -29,7 +29,8 @@ enum Handle {
         file: WasiFile,
     },
     Preopen {
-        path: NormalizedPath,
+        source_path: NormalizedPath,
+        guest_path: NormalizedPath,
     },
     Directory {
         path: NormalizedPath,
@@ -49,7 +50,14 @@ impl fmt::Debug for Handle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Stdio { file } => f.debug_struct("Stdio").field("file", file).finish(),
-            Self::Preopen { path } => f.debug_struct("Preopen").field("path", path).finish(),
+            Self::Preopen {
+                source_path,
+                guest_path,
+            } => f
+                .debug_struct("Preopen")
+                .field("source_path", source_path)
+                .field("guest_path", guest_path)
+                .finish(),
             Self::Directory {
                 path,
                 rights_base,
@@ -91,14 +99,23 @@ impl WasiCtx {
             fds.insert(*fd, Handle::Stdio { file: file.clone() });
         }
         for (index, preopen) in config.preopens().iter().enumerate() {
-            let path = preopen.guest_path().clone();
-            let metadata = config.namespace().metadata(&path).map_err(Errno::from)?;
+            let source_path = preopen.source_path().clone();
+            let metadata = config
+                .namespace()
+                .metadata(&source_path)
+                .map_err(Errno::from)?;
             if metadata.file_type() != FileType::Directory {
                 return Err(Errno::Notdir);
             }
             let fd =
                 WasiFd::new(FIRST_PREOPEN_FD + u32::try_from(index).map_err(|_| Errno::Inval)?);
-            fds.insert(fd, Handle::Preopen { path });
+            fds.insert(
+                fd,
+                Handle::Preopen {
+                    source_path,
+                    guest_path: preopen.guest_path().clone(),
+                },
+            );
         }
         let next_fd =
             FIRST_PREOPEN_FD + u32::try_from(config.preopens().len()).map_err(|_| Errno::Inval)?;
@@ -297,7 +314,7 @@ impl WasiCtx {
     pub fn fd_filestat_get(&self, fd: WasiFd) -> Result<FileStat, Errno> {
         match self.fds.get(&fd).ok_or(Errno::Badf)? {
             Handle::Stdio { file } => file.metadata().map(FileStat::new).map_err(Errno::from),
-            Handle::Preopen { path } => self.stat_path(path),
+            Handle::Preopen { source_path, .. } => self.stat_path(source_path),
             Handle::Directory {
                 path, rights_base, ..
             } => {
@@ -320,7 +337,7 @@ impl WasiCtx {
     /// Returns prestat data for a preopened directory fd.
     pub fn fd_prestat_get(&self, fd: WasiFd) -> Result<WasiPrestat, Errno> {
         match self.fds.get(&fd).ok_or(Errno::Badf)? {
-            Handle::Preopen { path } => Ok(WasiPrestat::from_path(path)),
+            Handle::Preopen { guest_path, .. } => Ok(WasiPrestat::from_path(guest_path)),
             Handle::Stdio { .. } | Handle::Directory { .. } | Handle::File { .. } => {
                 Err(Errno::Badf)
             }
@@ -435,7 +452,9 @@ impl WasiCtx {
     /// Reads a directory from an open preopen or directory fd.
     pub fn fd_read_dir(&self, fd: WasiFd) -> Result<Vec<DirEntry>, Errno> {
         match self.fds.get(&fd).ok_or(Errno::Badf)? {
-            Handle::Preopen { path } => self.namespace.read_dir(path).map_err(Errno::from),
+            Handle::Preopen { source_path, .. } => {
+                self.namespace.read_dir(source_path).map_err(Errno::from)
+            }
             Handle::Directory {
                 path, rights_base, ..
             } => {
@@ -474,8 +493,8 @@ impl WasiCtx {
         fd: WasiFd,
     ) -> Result<(&NormalizedPath, WasiRights, WasiRights), Errno> {
         match self.fds.get(&fd).ok_or(Errno::Badf)? {
-            Handle::Preopen { path } => Ok((
-                path,
+            Handle::Preopen { source_path, .. } => Ok((
+                source_path,
                 WasiRights::DIRECTORY_BASE,
                 WasiRights::DIRECTORY_INHERITING,
             )),
