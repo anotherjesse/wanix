@@ -949,6 +949,7 @@ dependencies = [
 name = "wanix-cli"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "wanix-fs",
  "wanix-qjs",
  "wanix-task",

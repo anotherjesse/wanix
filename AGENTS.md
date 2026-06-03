@@ -72,6 +72,8 @@ Wanix process exit, which lets the shell demo's `exit` command return without
 waiting for native stdin EOF. The user-facing shell demo is now
 `wanix-rust qjs-shell`, which runs the bundled QuickJS shell source through the
 same terminal-backed Wanix task runtime with line-oriented native input.
+`qjs-shell --raw` adds native raw-mode setup plus host-side local echo and simple
+line editing while still delivering complete lines to the guest task.
 
 ## Code Quality Guardrails
 
@@ -253,6 +255,9 @@ cargo test --workspace --locked
 - [ADR 0055](docs/adrs/0055-native-qjs-shell-command.md):
   `wanix-rust qjs-shell` runs the bundled QuickJS shell through the
   terminal-backed qjs task runtime as the direct native shell demo.
+- [ADR 0056](docs/adrs/0056-qjs-shell-native-raw-mode.md):
+  `qjs-shell --raw` disables host canonical input/echo when stdin is a TTY and
+  uses a small host line discipline before feeding Wanix terminal lines.
 
 ## Cycle Rules
 
@@ -268,6 +273,6 @@ cycle before starting the next one.
   intentional runtime decision.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
-- Make `qjs-shell` genuinely interactive beyond line-oriented input by adding
-  raw TTY mode, signal handling, resize propagation, and a host loop that can
-  wait on native input and guest output concurrently.
+- Make `qjs-shell` genuinely interactive beyond line-oriented input by adding a
+  host loop that can wait on native input and guest output concurrently, signal
+  handling, and resize propagation.

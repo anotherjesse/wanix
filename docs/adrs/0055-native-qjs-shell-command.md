@@ -40,7 +40,7 @@ like an interactive shell outside Chrome:
 wanix-rust qjs-shell
 ```
 
-The shell is still intentionally small, and native input is line-oriented rather
-than raw TTY input. The next shell-facing work is raw terminal mode, signal
-handling, resize propagation, and a host loop that can wait on native input and
-guest output without relying on line-feed sessions.
+The shell is still intentionally small. ADR 0056 adds native raw-mode setup and
+host-side line editing, but guest input remains line-oriented. The next
+shell-facing work is concurrent host input and guest-output waiting, signal
+handling, resize propagation, and byte-oriented guest delivery where needed.
