@@ -6,7 +6,10 @@ use super::{
     WasiFdObserver, WasiFile, WasiFileType, WasiFilestatSetTimes, WasiLookupFlags, WasiOpenOptions,
     WasiPathOpen, WasiRights, WasiWhence,
 };
-use wanix_fs::{FileSystem, FileType, FsError, LocalFs, MemFs, NormalizedPath, OpenOptions};
+use wanix_fs::{
+    File, FileSystem, FileType, FsError, FsResult, LocalFs, MemFs, Metadata, NormalizedPath,
+    OpenOptions,
+};
 use wanix_task::TaskTable;
 use wanix_vfs::{BindOptions, Namespace};
 
@@ -38,6 +41,34 @@ fn temp_host_dir(label: &str) -> std::path::PathBuf {
     path.push(format!("wanix-wasi-{label}-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+#[derive(Debug)]
+struct ReadinessFile {
+    read_ready: bool,
+    write_ready: bool,
+}
+
+impl File for ReadinessFile {
+    fn read(&mut self, _buf: &mut [u8]) -> FsResult<usize> {
+        Ok(0)
+    }
+
+    fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
+        Ok(buf.len())
+    }
+
+    fn read_ready(&self) -> FsResult<bool> {
+        Ok(self.read_ready)
+    }
+
+    fn write_ready(&self) -> FsResult<bool> {
+        Ok(self.write_ready)
+    }
+
+    fn metadata(&self) -> FsResult<Metadata> {
+        Ok(Metadata::new(FileType::File, 0, 0o666))
+    }
 }
 
 #[test]
@@ -234,6 +265,8 @@ fn unconfigured_standard_fds_are_closed() {
 
     assert_eq!(ctx.fd_read(WasiFd::STDIN, &mut [0; 1]), Err(Errno::Badf));
     assert_eq!(ctx.fd_write(WasiFd::STDOUT, b"out"), Err(Errno::Badf));
+    assert_eq!(ctx.fd_read_ready(WasiFd::STDIN), Err(Errno::Badf));
+    assert_eq!(ctx.fd_write_ready(WasiFd::STDOUT), Err(Errno::Badf));
     assert_eq!(ctx.fd_write(WasiFd::STDERR, b"err"), Err(Errno::Badf));
     assert_eq!(ctx.fd_filestat_get(WasiFd::STDOUT), Err(Errno::Badf));
 }
@@ -305,12 +338,41 @@ fn configured_standard_fds_read_write_and_remain_non_closeable() {
     assert_eq!(stdout.read_file("stdout").unwrap(), b"out");
     assert_eq!(stderr.read_file("stderr").unwrap(), b"err");
     assert_eq!(ctx.fd_write(WasiFd::STDIN, b"nope"), Err(Errno::Notcapable));
+    assert!(ctx.fd_read_ready(WasiFd::STDIN).unwrap());
+    assert_eq!(ctx.fd_write_ready(WasiFd::STDIN), Err(Errno::Notcapable));
     assert_eq!(
         ctx.fd_read(WasiFd::STDOUT, &mut buf),
         Err(Errno::Notcapable)
     );
+    assert!(ctx.fd_write_ready(WasiFd::STDOUT).unwrap());
+    assert_eq!(ctx.fd_read_ready(WasiFd::STDOUT), Err(Errno::Notcapable));
     assert_eq!(ctx.fd_close(WasiFd::STDOUT), Err(Errno::Badf));
     assert_eq!(ctx.fd_read_dir(WasiFd::STDIN), Err(Errno::Notdir));
+}
+
+#[test]
+fn standard_fd_readiness_comes_from_attached_files() {
+    let root = fixture(&[]);
+    let ctx = WasiCtx::new(
+        WasiConfig::new(namespace_with_root(root))
+            .with_stdin(
+                Box::new(ReadinessFile {
+                    read_ready: false,
+                    write_ready: true,
+                }),
+                "pending stdin",
+            )
+            .with_stdout(
+                Box::new(ReadinessFile {
+                    read_ready: true,
+                    write_ready: false,
+                }),
+                "blocked stdout",
+            ),
+    );
+
+    assert!(!ctx.fd_read_ready(WasiFd::STDIN).unwrap());
+    assert!(!ctx.fd_write_ready(WasiFd::STDOUT).unwrap());
 }
 
 #[test]

@@ -101,6 +101,12 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
             .map_err(convert_errno)
     }
 
+    fn fd_read_ready(&mut self, fd: u32) -> Result<bool, QuickJsWasiErrno> {
+        self.ctx
+            .fd_read_ready(WasiFd::new(fd))
+            .map_err(convert_errno)
+    }
+
     fn fd_readdir(&mut self, fd: u32) -> Result<Vec<QuickJsWasiDirEntry>, QuickJsWasiErrno> {
         self.ctx
             .fd_read_dir(WasiFd::new(fd))
@@ -121,6 +127,12 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
     fn fd_write(&mut self, fd: u32, buf: &[u8]) -> Result<usize, QuickJsWasiErrno> {
         self.ctx
             .fd_write(WasiFd::new(fd), buf)
+            .map_err(convert_errno)
+    }
+
+    fn fd_write_ready(&mut self, fd: u32) -> Result<bool, QuickJsWasiErrno> {
+        self.ctx
+            .fd_write_ready(WasiFd::new(fd))
             .map_err(convert_errno)
     }
 

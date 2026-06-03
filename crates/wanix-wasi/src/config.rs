@@ -126,6 +126,13 @@ impl WasiFile {
             .read(buf)
     }
 
+    pub(crate) fn read_ready_file(&self) -> FsResult<bool> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
+            .read_ready()
+    }
+
     pub(crate) fn write_bytes(&self, buf: &[u8]) -> FsResult<usize> {
         let append = self.access()?.append();
         let mut file = self
@@ -136,6 +143,13 @@ impl WasiFile {
             file.seek(FileSeekFrom::End(0))?;
         }
         file.write(buf)
+    }
+
+    pub(crate) fn write_ready_file(&self) -> FsResult<bool> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
+            .write_ready()
     }
 
     pub(crate) fn seek_file(&self, from: FileSeekFrom) -> FsResult<u64> {
@@ -210,6 +224,20 @@ impl File for WasiFile {
 
     fn is_seekable(&self) -> bool {
         self.is_seekable_file().unwrap_or(false)
+    }
+
+    fn read_ready(&self) -> FsResult<bool> {
+        if !self.can_read() {
+            return Err(FsError::PermissionDenied);
+        }
+        self.read_ready_file()
+    }
+
+    fn write_ready(&self) -> FsResult<bool> {
+        if !self.can_write() {
+            return Err(FsError::PermissionDenied);
+        }
+        self.write_ready_file()
     }
 
     fn set_len(&mut self, len: u64) -> FsResult<()> {

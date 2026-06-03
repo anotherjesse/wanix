@@ -365,6 +365,54 @@ impl WasiCtx {
         }
     }
 
+    /// Returns whether a nonblocking read on an open fd would produce data now.
+    pub fn fd_read_ready(&self, fd: WasiFd) -> Result<bool, Errno> {
+        match self.fds.get(&fd).ok_or(Errno::Badf)? {
+            Handle::Stdio { file } => {
+                if !file.can_read() {
+                    return Err(Errno::Notcapable);
+                }
+                file.read_ready_file().map_err(Errno::from)
+            }
+            Handle::File {
+                file,
+                read,
+                rights_base,
+                ..
+            } => {
+                if !*read || !rights_base.contains(WasiRights::FD_READ) {
+                    return Err(Errno::Notcapable);
+                }
+                file.read_ready_file().map_err(Errno::from)
+            }
+            Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Isdir),
+        }
+    }
+
+    /// Returns whether a nonblocking write on an open fd can be attempted now.
+    pub fn fd_write_ready(&self, fd: WasiFd) -> Result<bool, Errno> {
+        match self.fds.get(&fd).ok_or(Errno::Badf)? {
+            Handle::Stdio { file } => {
+                if !file.can_write() {
+                    return Err(Errno::Notcapable);
+                }
+                file.write_ready_file().map_err(Errno::from)
+            }
+            Handle::File {
+                file,
+                write,
+                rights_base,
+                ..
+            } => {
+                if !*write || !rights_base.contains(WasiRights::FD_WRITE) {
+                    return Err(Errno::Notcapable);
+                }
+                file.write_ready_file().map_err(Errno::from)
+            }
+            Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Isdir),
+        }
+    }
+
     /// Closes a dynamic fd.
     pub fn fd_close(&mut self, fd: WasiFd) -> Result<(), Errno> {
         if fd.get() < self.next_dynamic_floor() {

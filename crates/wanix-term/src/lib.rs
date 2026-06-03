@@ -372,6 +372,19 @@ impl File for TermFile {
     fn metadata(&self) -> FsResult<Metadata> {
         Ok(file_metadata(0, 0o666))
     }
+
+    fn read_ready(&self) -> FsResult<bool> {
+        let io = self
+            .resource
+            .io
+            .lock()
+            .map_err(|_| FsError::Other("term resource lock poisoned".to_owned()))?;
+        let queue = match self.side {
+            TermSide::Data => &io.program_to_data,
+            TermSide::Program => &io.data_to_program,
+        };
+        Ok(!queue.is_empty())
+    }
 }
 
 fn program_output_bytes(buf: &[u8], prev_written: &mut Option<u8>) -> Vec<u8> {

@@ -94,6 +94,22 @@ impl OpenFile {
             .map(|file| file.is_seekable())
     }
 
+    /// Returns whether a nonblocking read would produce data now.
+    pub fn read_ready(&self) -> FsResult<bool> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("fd file lock poisoned".to_owned()))?
+            .read_ready()
+    }
+
+    /// Returns whether a nonblocking write can be attempted now.
+    pub fn write_ready(&self) -> FsResult<bool> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("fd file lock poisoned".to_owned()))?
+            .write_ready()
+    }
+
     /// Returns file metadata.
     pub fn metadata(&self) -> FsResult<Metadata> {
         self.file

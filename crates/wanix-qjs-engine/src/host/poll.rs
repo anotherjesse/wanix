@@ -81,6 +81,7 @@ fn poll_oneoff(
     }
 
     let mut ready_events = Vec::new();
+    let mut pending_fd = false;
     for subscription in &subscriptions {
         match subscription[SUBSCRIPTION_TAG_OFFSET] {
             EVENTTYPE_FD_READ | EVENTTYPE_FD_WRITE => {
@@ -88,7 +89,11 @@ fn poll_oneoff(
                     Ok(event) => event,
                     Err(errno) => return Ok(errno),
                 };
-                ready_events.push(event);
+                if let Some(event) = event {
+                    ready_events.push(event);
+                } else {
+                    pending_fd = true;
+                }
             }
             EVENTTYPE_CLOCK => {
                 let event = match immediate_clock_event(&caller, subscription) {
@@ -105,6 +110,11 @@ fn poll_oneoff(
     if !ready_events.is_empty() {
         write_events(&memory, &mut caller, out_ptr, &ready_events)?;
         write_nevents(&memory, &mut caller, nevents_ptr, ready_events.len())?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
+    if pending_fd {
+        write_nevents(&memory, &mut caller, nevents_ptr, 0)?;
         return Ok(ERRNO_SUCCESS);
     }
 
@@ -138,7 +148,7 @@ fn poll_oneoff(
 fn fd_event(
     caller: &Caller<'_, HostState>,
     subscription: &[u8; SUBSCRIPTION_SIZE],
-) -> wasmtime::Result<Result<[u8; EVENT_SIZE], i32>> {
+) -> wasmtime::Result<Result<Option<[u8; EVENT_SIZE]>, i32>> {
     let event_type = subscription[SUBSCRIPTION_TAG_OFFSET];
     let required_right = match event_type {
         EVENTTYPE_FD_READ => RIGHT_FD_READ,
@@ -156,7 +166,27 @@ fn fd_event(
         Ok(stat) => readiness_errno(stat, required_right),
         Err(errno) => Some(errno),
     };
-    Ok(Ok(event_with_errno(subscription, event_type, errno)))
+    if let Some(errno) = errno {
+        return Ok(Ok(Some(event_with_errno(
+            subscription,
+            event_type,
+            Some(errno),
+        ))));
+    }
+    let ready = match event_type {
+        EVENTTYPE_FD_READ => host.fd_read_ready(fd),
+        EVENTTYPE_FD_WRITE => host.fd_write_ready(fd),
+        _ => unreachable!("fd event type checked above"),
+    };
+    match ready {
+        Ok(true) => Ok(Ok(Some(event_with_errno(subscription, event_type, None)))),
+        Ok(false) => Ok(Ok(None)),
+        Err(errno) => Ok(Ok(Some(event_with_errno(
+            subscription,
+            event_type,
+            Some(errno),
+        )))),
+    }
 }
 
 fn readiness_errno(stat: QuickJsWasiFdStat, required_right: u64) -> Option<QuickJsWasiErrno> {

@@ -137,6 +137,13 @@ impl QuickJsWasiHost for ReadyFdWasiHost {
         Ok(count)
     }
 
+    fn fd_read_ready(&mut self, fd: u32) -> WasiHostResult<bool> {
+        if fd != 0 {
+            return Err(QuickJsWasiErrno::Badf);
+        }
+        Ok(!self.stdin.lock().expect("test stdin lock").is_empty())
+    }
+
     fn fd_readdir(&mut self, _fd: u32) -> WasiHostResult<Vec<QuickJsWasiDirEntry>> {
         Err(QuickJsWasiErrno::Nosys)
     }
@@ -462,6 +469,32 @@ fn quickjs_os_fd_handlers_run_on_ready_io_event_loop_turns() -> Result<()> {
             .iter()
             .any(|write| write == &(1, b"write handler\n".to_vec()))
     );
+    Ok(())
+}
+
+#[test]
+fn quickjs_os_read_handler_waits_until_live_fd_is_ready() -> Result<()> {
+    let (_engine, module) = quickjs_fixture()?;
+    let host = ReadyFdWasiHost::with_stdin(Vec::new());
+    let mut vm =
+        module.create_runtime_with_options(QuickJsCreateOptions::new().with_wasi_host(host))?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+
+        globalThis.fdHandlerEvents = [];
+        os.setReadHandler(0, () => {
+          globalThis.fdHandlerEvents.push("read");
+          os.setReadHandler(0, null);
+        });
+        "#,
+        "stdlib-fd-handler-pending.mjs",
+    )?;
+
+    vm.execute_ready_io_event_loop_once()?;
+
+    assert_eq!(vm.eval_string("fdHandlerEvents.join('|')")?, "");
     Ok(())
 }
 

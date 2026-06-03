@@ -105,6 +105,30 @@ pub trait File: Send {
         false
     }
 
+    /// Returns whether a nonblocking read would produce data now.
+    ///
+    /// Regular byte files are ready by default, including at EOF. Devices with
+    /// queued input can override this to avoid reporting readiness while empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when readiness cannot be determined.
+    fn read_ready(&self) -> FsResult<bool> {
+        Ok(true)
+    }
+
+    /// Returns whether a nonblocking write can be attempted now.
+    ///
+    /// Most Wanix files and devices currently accept writes synchronously, so
+    /// the default is ready.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when readiness cannot be determined.
+    fn write_ready(&self) -> FsResult<bool> {
+        Ok(true)
+    }
+
     /// Sets the file length in bytes.
     ///
     /// Implementations should preserve the current file offset when possible,

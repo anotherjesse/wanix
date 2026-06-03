@@ -84,6 +84,14 @@ impl File for TaskFdFile {
         self.task.write_fd(self.fd, buf)
     }
 
+    fn read_ready(&self) -> FsResult<bool> {
+        self.task.fd_read_ready(self.fd)
+    }
+
+    fn write_ready(&self) -> FsResult<bool> {
+        self.task.fd_write_ready(self.fd)
+    }
+
     fn metadata(&self) -> FsResult<Metadata> {
         self.task.fd_metadata(self.fd)
     }

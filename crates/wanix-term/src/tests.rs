@@ -48,10 +48,14 @@ fn data_and_program_are_cross_connected() {
         .unwrap();
 
     data.write(b"input").unwrap();
+    assert!(program.read_ready().unwrap());
     assert_eq!(read_exact(&mut *program, 5), b"input");
+    assert!(!program.read_ready().unwrap());
 
     program.write(b"line\nnext").unwrap();
+    assert!(data.read_ready().unwrap());
     assert_eq!(read_exact(&mut *data, 10), b"line\r\nnext");
+    assert!(!data.read_ready().unwrap());
 
     program.write(b"\r").unwrap();
     program.write(b"\n").unwrap();

@@ -144,7 +144,26 @@ fn unsupported_wasi_harness_with_wasi_host(
     })
 }
 
-struct PollFdHost;
+struct PollFdHost {
+    read_ready: bool,
+    write_ready: bool,
+}
+
+impl PollFdHost {
+    fn ready() -> Self {
+        Self {
+            read_ready: true,
+            write_ready: true,
+        }
+    }
+
+    fn pending_read() -> Self {
+        Self {
+            read_ready: false,
+            write_ready: true,
+        }
+    }
+}
 
 impl QuickJsWasiHost for PollFdHost {
     fn fd_prestat_get(
@@ -223,6 +242,20 @@ impl QuickJsWasiHost for PollFdHost {
                 0,
                 0,
             )),
+            _ => Err(crate::QuickJsWasiErrno::Badf),
+        }
+    }
+
+    fn fd_read_ready(&mut self, fd: u32) -> std::result::Result<bool, crate::QuickJsWasiErrno> {
+        match fd {
+            4 => Ok(self.read_ready),
+            _ => Err(crate::QuickJsWasiErrno::Badf),
+        }
+    }
+
+    fn fd_write_ready(&mut self, fd: u32) -> std::result::Result<bool, crate::QuickJsWasiErrno> {
+        match fd {
+            5 => Ok(self.write_ready),
             _ => Err(crate::QuickJsWasiErrno::Badf),
         }
     }
@@ -482,7 +515,7 @@ fn poll_oneoff_fd_subscriptions_remain_unsupported() -> Result<()> {
 fn poll_oneoff_live_fd_read_subscription_reports_ready_event() -> Result<()> {
     let mut harness = unsupported_wasi_harness_with_wasi_host(
         QuickJsHostConfig::new(),
-        Some(Box::new(PollFdHost)),
+        Some(Box::new(PollFdHost::ready())),
     )?;
     write_fd_subscription_with(
         &harness.memory,
@@ -515,10 +548,38 @@ fn poll_oneoff_live_fd_read_subscription_reports_ready_event() -> Result<()> {
 }
 
 #[test]
+fn poll_oneoff_live_fd_read_subscription_reports_no_events_when_not_ready() -> Result<()> {
+    let mut harness = unsupported_wasi_harness_with_wasi_host(
+        QuickJsHostConfig::new(),
+        Some(Box::new(PollFdHost::pending_read())),
+    )?;
+    write_fd_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        FdSubscription {
+            userdata: 0x1122_3344_5566_7788,
+            event_type: EVENTTYPE_FD_READ,
+            fd: 4,
+        },
+    )?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_SUCCESS
+    );
+
+    assert_eq!(read_nevents(&harness)?, 0);
+    Ok(())
+}
+
+#[test]
 fn poll_oneoff_live_fd_write_subscription_reports_ready_event() -> Result<()> {
     let mut harness = unsupported_wasi_harness_with_wasi_host(
         QuickJsHostConfig::new(),
-        Some(Box::new(PollFdHost)),
+        Some(Box::new(PollFdHost::ready())),
     )?;
     write_fd_subscription_with(
         &harness.memory,
@@ -554,7 +615,7 @@ fn poll_oneoff_live_fd_write_subscription_reports_ready_event() -> Result<()> {
 fn poll_oneoff_live_fd_subscription_reports_notcapable_event() -> Result<()> {
     let mut harness = unsupported_wasi_harness_with_wasi_host(
         QuickJsHostConfig::new(),
-        Some(Box::new(PollFdHost)),
+        Some(Box::new(PollFdHost::ready())),
     )?;
     write_fd_subscription_with(
         &harness.memory,
@@ -590,7 +651,7 @@ fn poll_oneoff_live_fd_subscription_reports_notcapable_event() -> Result<()> {
 fn poll_oneoff_live_fd_multi_subscription_reports_ready_events() -> Result<()> {
     let mut harness = unsupported_wasi_harness_with_wasi_host(
         QuickJsHostConfig::new(),
-        Some(Box::new(PollFdHost)),
+        Some(Box::new(PollFdHost::ready())),
     )?;
     write_fd_subscription_with(
         &harness.memory,
@@ -640,7 +701,7 @@ fn poll_oneoff_live_fd_multi_subscription_reports_ready_events() -> Result<()> {
 fn poll_oneoff_live_fd_multi_subscription_reports_due_clock_event() -> Result<()> {
     let mut harness = unsupported_wasi_harness_with_wasi_host(
         QuickJsHostConfig::new().with_clock_time_ns(100),
-        Some(Box::new(PollFdHost)),
+        Some(Box::new(PollFdHost::ready())),
     )?;
     write_fd_subscription_with(
         &harness.memory,
@@ -691,7 +752,7 @@ fn poll_oneoff_live_fd_multi_subscription_reports_due_clock_event() -> Result<()
 fn poll_oneoff_live_fd_multi_subscription_validates_clock_fields() -> Result<()> {
     let mut harness = unsupported_wasi_harness_with_wasi_host(
         QuickJsHostConfig::new(),
-        Some(Box::new(PollFdHost)),
+        Some(Box::new(PollFdHost::ready())),
     )?;
     write_fd_subscription_with(
         &harness.memory,

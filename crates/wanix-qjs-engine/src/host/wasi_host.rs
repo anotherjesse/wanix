@@ -2,6 +2,8 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 pub(crate) type QuickJsWasiHostHandle = Arc<Mutex<Box<dyn QuickJsWasiHost>>>;
+const RIGHT_FD_READ: u64 = 1 << 1;
+const RIGHT_FD_WRITE: u64 = 1 << 6;
 
 /// Host-owned WASI Preview 1 hooks for QuickJS runtimes.
 ///
@@ -51,11 +53,38 @@ pub trait QuickJsWasiHost: Send {
     /// Reads from an open fd into `buf`.
     fn fd_read(&mut self, fd: u32, buf: &mut [u8]) -> Result<usize, QuickJsWasiErrno>;
 
+    /// Returns whether a read subscription should report this fd as ready now.
+    ///
+    /// The default preserves the earlier live-host behavior: if the fd exists
+    /// and has read rights, it is considered ready. Hosts with device queues can
+    /// override this to avoid firing read handlers while no input is available.
+    fn fd_read_ready(&mut self, fd: u32) -> Result<bool, QuickJsWasiErrno> {
+        let stat = self.fd_fdstat_get(fd)?;
+        if stat.rights_base() & RIGHT_FD_READ == 0 {
+            Err(QuickJsWasiErrno::Notcapable)
+        } else {
+            Ok(true)
+        }
+    }
+
     /// Returns directory entries for an open directory fd.
     fn fd_readdir(&mut self, fd: u32) -> Result<Vec<QuickJsWasiDirEntry>, QuickJsWasiErrno>;
 
     /// Writes bytes from `buf` to an open fd.
     fn fd_write(&mut self, fd: u32, buf: &[u8]) -> Result<usize, QuickJsWasiErrno>;
+
+    /// Returns whether a write subscription should report this fd as ready now.
+    ///
+    /// The default preserves the earlier live-host behavior: writable fds are
+    /// ready immediately.
+    fn fd_write_ready(&mut self, fd: u32) -> Result<bool, QuickJsWasiErrno> {
+        let stat = self.fd_fdstat_get(fd)?;
+        if stat.rights_base() & RIGHT_FD_WRITE == 0 {
+            Err(QuickJsWasiErrno::Notcapable)
+        } else {
+            Ok(true)
+        }
+    }
 
     /// Seeks an open fd and returns the resulting offset.
     fn fd_seek(

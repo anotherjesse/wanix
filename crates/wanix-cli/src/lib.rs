@@ -1500,6 +1500,39 @@ std.err.flush();
     }
 
     #[test]
+    fn qjs_term_ready_io_does_not_fire_empty_terminal_stdin() {
+        let script = write_temp_script(
+            "term-idle-stdin.js",
+            r##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.out.puts("armed\n");
+os.setReadHandler(0, () => {
+  const bytes = new Uint8Array(8);
+  const count = os.read(0, bytes.buffer, 0, bytes.length);
+  std.out.puts("unexpected read " + count + "\n");
+  os.setReadHandler(0, null);
+  std.out.flush();
+});
+std.out.flush();
+"##,
+        );
+
+        let output = run([
+            "qjs-term".into(),
+            "--ready-io-turns".into(),
+            "1".into(),
+            script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"armed\r\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_term_example_feeds_terminal_input_after_eval() {
         let output = run([
             "qjs-term".into(),

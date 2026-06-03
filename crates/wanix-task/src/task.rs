@@ -354,6 +354,18 @@ impl Task {
         file.write(buf)
     }
 
+    /// Returns whether reading from an fd would produce data now.
+    pub fn fd_read_ready(&self, fd: Fd) -> FsResult<bool> {
+        let file = self.read_state(|state| state.fds.file(fd))??;
+        file.read_ready()
+    }
+
+    /// Returns whether writing to an fd can be attempted now.
+    pub fn fd_write_ready(&self, fd: Fd) -> FsResult<bool> {
+        let file = self.read_state(|state| state.fds.file(fd))??;
+        file.write_ready()
+    }
+
     /// Returns metadata for an open fd.
     pub fn fd_metadata(&self, fd: Fd) -> FsResult<Metadata> {
         let file = self.read_state(|state| state.fds.file(fd))??;
