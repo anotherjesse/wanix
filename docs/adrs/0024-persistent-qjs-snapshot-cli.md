@@ -20,17 +20,22 @@ reattached explicitly each time the VM image is restored.
 
 Add two native CLI commands:
 
-- `wanix-rust qjs-snapshot --snapshot FILE <script.js>` runs JavaScript as a
-  qjs Wanix task, writes the captured QuickJS VM image to `FILE`, and reports
-  task output through ordinary Wanix stdio fds.
-- `wanix-rust qjs-resume --snapshot FILE <script.js>` reads the VM image from
-  `FILE`, restores it into a fresh qjs Wanix task, reattaches cwd, argv, env,
-  stdio, namespace, and explicit host mounts from the new CLI invocation, then
-  evaluates the supplied resume script.
+- `wanix-rust qjs-snapshot [--stdin TEXT | --stdin-file PATH|-] --snapshot
+  FILE <script.js>` runs JavaScript as a qjs Wanix task, writes the captured
+  QuickJS VM image to `FILE`, and reports task output through ordinary Wanix
+  stdio fds.
+- `wanix-rust qjs-resume [--stdin TEXT | --stdin-file PATH|-] --snapshot FILE
+  <script.js>` reads the VM image from `FILE`, restores it into a fresh qjs
+  Wanix task, reattaches cwd, argv, env, stdio, namespace, and explicit host
+  mounts from the new CLI invocation, then evaluates the supplied resume script.
 
-Both commands accept the same `--env`, `--cwd`, `--mount`, script path, and
-script argument shape used by the ordinary qjs demo. Open dynamic Wanix task
-fds and live WASI fds continue to block snapshot creation.
+Both commands accept the same `--env`, `--cwd`, `--stdin`, `--stdin-file`,
+`--mount`, script path, and script argument shape used by the ordinary qjs
+demo. Open dynamic Wanix task fds and live WASI fds continue to block snapshot
+creation.
+
+When a stdin source is supplied, its bytes are captured before the qjs task
+starts and installed as fresh Wanix fd 0 for that invocation.
 
 ## Consequences
 
@@ -40,7 +45,7 @@ state outside Chrome and outside a single native process invocation.
 Snapshot files remain VM images, not Wanix process checkpoints. Resume creates
 or selects new Wanix host resources and attaches them to the restored runtime,
 so demos can intentionally show preserved JavaScript globals alongside fresh
-Wanix env, namespace, stdio, and host mount state.
+Wanix env, namespace, stdin fd, output fds, and host mount state.
 
 Future richer snapshot policies can serialize selected virtual fd state or task
 metadata, but the default boundary stays explicit: QuickJS VM memory is stored

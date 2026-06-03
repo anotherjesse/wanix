@@ -19,9 +19,11 @@ const USAGE: &str = concat!(
     "[--stdin TEXT | --stdin-file PATH|-] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--mount HOST=GUEST ...] --snapshot FILE <script.js> [-- arg ...]\n",
+    "[--stdin TEXT | --stdin-file PATH|-] [--mount HOST=GUEST ...] ",
+    "--snapshot FILE <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-resume [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--mount HOST=GUEST ...] --snapshot FILE <script.js> [-- arg ...]\n",
+    "[--stdin TEXT | --stdin-file PATH|-] [--mount HOST=GUEST ...] ",
+    "--snapshot FILE <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
     "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
     "[--mount HOST=GUEST ...] <before.js> <after.js>\n",
@@ -142,12 +144,14 @@ where
         [command, rest @ ..] if command == "qjs" => {
             run_qjs(parse_qjs_command(rest)?, &mut process_stdin)
         }
-        [command, rest @ ..] if command == "qjs-snapshot" => {
-            run_qjs_snapshot(parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?)
-        }
-        [command, rest @ ..] if command == "qjs-resume" => {
-            run_qjs_resume(parse_qjs_snapshot_file_command(rest, "qjs-resume")?)
-        }
+        [command, rest @ ..] if command == "qjs-snapshot" => run_qjs_snapshot(
+            parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?,
+            &mut process_stdin,
+        ),
+        [command, rest @ ..] if command == "qjs-resume" => run_qjs_resume(
+            parse_qjs_snapshot_file_command(rest, "qjs-resume")?,
+            &mut process_stdin,
+        ),
         [command, rest @ ..] if command == "qjs-restore" => {
             run_qjs_restore(parse_qjs_restore_command(rest)?)
         }
@@ -208,6 +212,7 @@ struct QjsSnapshotFileCommand {
     args: Vec<String>,
     env: Vec<String>,
     cwd: NormalizedPath,
+    stdin: Option<QjsStdin>,
     mounts: Vec<HostMount>,
 }
 
@@ -231,31 +236,7 @@ fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutpu
     root.write_file(guest_script.as_str(), script.as_bytes())?;
     task.bind(root, ".", ".", BindOptions::default())?;
     bind_host_mounts(&task, &command.mounts)?;
-
-    if let Some(stdin_bytes) = stdin_bytes {
-        let stdin = Arc::new(MemFs::new());
-        stdin.write_file("stdin", stdin_bytes)?;
-        task.insert_fd(
-            Fd::STDIN,
-            stdin.open(&NormalizedPath::new("stdin")?, OpenOptions::read())?,
-            NormalizedPath::new("stdin")?,
-        )?;
-    }
-
-    let stdout = Arc::new(MemFs::new());
-    stdout.write_file("stdout", b"")?;
-    task.insert_fd(
-        Fd::STDOUT,
-        stdout.open(&NormalizedPath::new("stdout")?, OpenOptions::read_write())?,
-        NormalizedPath::new("stdout")?,
-    )?;
-    let stderr = Arc::new(MemFs::new());
-    stderr.write_file("stderr", b"")?;
-    task.insert_fd(
-        Fd::STDERR,
-        stderr.open(&NormalizedPath::new("stderr")?, OpenOptions::read_write())?,
-        NormalizedPath::new("stderr")?,
-    )?;
+    let (stdout, stderr) = attach_task_stdio(&task, stdin_bytes)?;
     task.set_spec(task_spec)?;
     task.set_cmd(task_cmd)?;
     task.set_env_lines(task_env)?;
@@ -276,9 +257,13 @@ fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutpu
     }
 }
 
-fn run_qjs_snapshot(command: QjsSnapshotFileCommand) -> Result<CliOutput, CliError> {
+fn run_qjs_snapshot(
+    command: QjsSnapshotFileCommand,
+    process_stdin: &mut dyn Read,
+) -> Result<CliOutput, CliError> {
     let script_path = command.script_path.as_path();
     let script = read_utf8_script(script_path)?;
+    let stdin_bytes = read_qjs_stdin(command.stdin, process_stdin)?;
 
     let runner = quickjs_runner()?;
     let table = TaskTable::new();
@@ -290,7 +275,7 @@ fn run_qjs_snapshot(command: QjsSnapshotFileCommand) -> Result<CliOutput, CliErr
     root.write_file(guest_script.as_str(), script.as_bytes())?;
     task.bind(root, ".", ".", BindOptions::default())?;
     bind_host_mounts(&task, &command.mounts)?;
-    let (stdout, stderr) = attach_task_stdio(&task)?;
+    let (stdout, stderr) = attach_task_stdio(&task, stdin_bytes)?;
     configure_qjs_task(
         &task,
         QJS_GUEST_SCRIPT,
@@ -320,7 +305,10 @@ fn run_qjs_snapshot(command: QjsSnapshotFileCommand) -> Result<CliOutput, CliErr
     finish_cli_task_output("qjs-snapshot", snapshot_result, &task, &stdout, &stderr)
 }
 
-fn run_qjs_resume(command: QjsSnapshotFileCommand) -> Result<CliOutput, CliError> {
+fn run_qjs_resume(
+    command: QjsSnapshotFileCommand,
+    process_stdin: &mut dyn Read,
+) -> Result<CliOutput, CliError> {
     let script_path = command.script_path.as_path();
     let script = read_utf8_script(script_path)?;
     let snapshot = std::fs::read(&command.snapshot_path).map_err(|error| {
@@ -332,6 +320,7 @@ fn run_qjs_resume(command: QjsSnapshotFileCommand) -> Result<CliOutput, CliError
             1,
         )
     })?;
+    let stdin_bytes = read_qjs_stdin(command.stdin, process_stdin)?;
 
     let runner = quickjs_runner()?;
     let table = TaskTable::new();
@@ -343,7 +332,7 @@ fn run_qjs_resume(command: QjsSnapshotFileCommand) -> Result<CliOutput, CliError
     root.write_file(guest_script.as_str(), script.as_bytes())?;
     task.bind(root, ".", ".", BindOptions::default())?;
     bind_host_mounts(&task, &command.mounts)?;
-    let (stdout, stderr) = attach_task_stdio(&task)?;
+    let (stdout, stderr) = attach_task_stdio(&task, stdin_bytes)?;
     configure_qjs_task(
         &task,
         QJS_GUEST_SCRIPT,
@@ -491,6 +480,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
             set_qjs_stdin(
                 &mut stdin,
                 QjsStdin::Bytes(os_arg_to_string(value, "qjs --stdin")?.into_bytes()),
+                "qjs",
             )?;
             i += 1;
         } else if args[i] == "--stdin-file" {
@@ -503,7 +493,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
             } else {
                 QjsStdin::File(PathBuf::from(value))
             };
-            set_qjs_stdin(&mut stdin, source)?;
+            set_qjs_stdin(&mut stdin, source, "qjs")?;
             i += 1;
         } else if args[i] == "--mount" {
             i += 1;
@@ -548,11 +538,15 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
     })
 }
 
-fn set_qjs_stdin(stdin: &mut Option<QjsStdin>, source: QjsStdin) -> Result<(), CliError> {
+fn set_qjs_stdin(
+    stdin: &mut Option<QjsStdin>,
+    source: QjsStdin,
+    command: &str,
+) -> Result<(), CliError> {
     if stdin.is_some() {
-        return Err(CliError::usage(
-            "qjs accepts only one of --stdin or --stdin-file",
-        ));
+        return Err(CliError::usage(format!(
+            "{command} accepts only one of --stdin or --stdin-file"
+        )));
     }
     *stdin = Some(source);
     Ok(())
@@ -607,6 +601,7 @@ fn parse_qjs_snapshot_file_command(
     let mut env = Vec::new();
     let mut cwd = NormalizedPath::new(".")?;
     let mut mounts = Vec::new();
+    let mut stdin = None;
     let mut snapshot_path = None;
     let mut i = 0;
     while i < args.len() {
@@ -625,6 +620,31 @@ fn parse_qjs_snapshot_file_command(
                 .get(i)
                 .ok_or_else(|| CliError::usage(format!("{command} --cwd expects a Wanix path")))?;
             cwd = NormalizedPath::new(os_arg_to_string(value, &format!("{command} --cwd"))?)?;
+            i += 1;
+        } else if args[i] == "--stdin" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage(format!("{command} --stdin expects text")))?;
+            set_qjs_stdin(
+                &mut stdin,
+                QjsStdin::Bytes(
+                    os_arg_to_string(value, &format!("{command} --stdin"))?.into_bytes(),
+                ),
+                command,
+            )?;
+            i += 1;
+        } else if args[i] == "--stdin-file" {
+            i += 1;
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage(format!("{command} --stdin-file expects PATH or -"))
+            })?;
+            let source = if value == "-" {
+                QjsStdin::Process
+            } else {
+                QjsStdin::File(PathBuf::from(value))
+            };
+            set_qjs_stdin(&mut stdin, source, command)?;
             i += 1;
         } else if args[i] == "--mount" {
             i += 1;
@@ -679,6 +699,7 @@ fn parse_qjs_snapshot_file_command(
         args: js_args,
         env,
         cwd,
+        stdin,
         mounts,
     })
 }
@@ -834,7 +855,11 @@ fn bind_child_output_to_parent(child: &Task, parent: &Task) -> Result<(), CliErr
     Ok(())
 }
 
-fn attach_task_stdio(task: &Task) -> Result<(Arc<MemFs>, Arc<MemFs>), CliError> {
+fn attach_task_stdio(
+    task: &Task,
+    stdin_bytes: Option<Vec<u8>>,
+) -> Result<(Arc<MemFs>, Arc<MemFs>), CliError> {
+    attach_task_stdin(task, stdin_bytes)?;
     let stdout = Arc::new(MemFs::new());
     stdout.write_file("stdout", b"")?;
     task.insert_fd(
@@ -850,6 +875,19 @@ fn attach_task_stdio(task: &Task) -> Result<(Arc<MemFs>, Arc<MemFs>), CliError> 
         NormalizedPath::new("stderr")?,
     )?;
     Ok((stdout, stderr))
+}
+
+fn attach_task_stdin(task: &Task, stdin_bytes: Option<Vec<u8>>) -> Result<(), CliError> {
+    if let Some(stdin_bytes) = stdin_bytes {
+        let stdin = Arc::new(MemFs::new());
+        stdin.write_file("stdin", stdin_bytes)?;
+        task.insert_fd(
+            Fd::STDIN,
+            stdin.open(&NormalizedPath::new("stdin")?, OpenOptions::read())?,
+            NormalizedPath::new("stdin")?,
+        )?;
+    }
+    Ok(())
 }
 
 fn finish_cli_task_output(
@@ -1939,6 +1977,139 @@ std.exit(6);
             b"host after task 1"
         );
         fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn qjs_snapshot_and_resume_reattach_stdin_between_cli_invocations() {
+        let snapshot_dir = temp_dir("wanix-cli-persist-stdin");
+        let snapshot = snapshot_dir.join("quickjs.snapshot");
+        let before_script = write_temp_script(
+            "qjs-persist-stdin-before.js",
+            r#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+function readStdin() {
+  const bytes = new Uint8Array(64);
+  const n = os.read(0, bytes.buffer, 0, bytes.length);
+  return Array.from(bytes.slice(0, n)).map((byte) => String.fromCharCode(byte)).join("");
+}
+
+globalThis.beforeStdin = readStdin().trimEnd();
+std.out.puts("before stdin: " + globalThis.beforeStdin + "\n");
+std.out.flush();
+"#,
+        );
+        let after_script = write_temp_script(
+            "qjs-persist-stdin-after.js",
+            r#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+function readStdin() {
+  const bytes = new Uint8Array(64);
+  const n = os.read(0, bytes.buffer, 0, bytes.length);
+  return Array.from(bytes.slice(0, n)).map((byte) => String.fromCharCode(byte)).join("");
+}
+
+std.out.puts("snapshot stdin: " + globalThis.beforeStdin + "\n");
+std.out.puts("resume stdin: " + readStdin().trimEnd() + "\n");
+std.out.flush();
+"#,
+        );
+
+        let before = run([
+            "qjs-snapshot".into(),
+            "--stdin".into(),
+            "before fd0\n".into(),
+            "--snapshot".into(),
+            snapshot.clone().into_os_string(),
+            before_script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(before.exit_code(), 0);
+        assert_eq!(before.stdout(), b"before stdin: before fd0\n");
+        assert!(before.stderr().is_empty());
+
+        let after = run_with_process_stdin(
+            [
+                "qjs-resume".into(),
+                "--stdin-file".into(),
+                "-".into(),
+                "--snapshot".into(),
+                snapshot.into_os_string(),
+                after_script.into_os_string(),
+            ],
+            b"after fd0\n".as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(after.exit_code(), 0);
+        assert_eq!(
+            after.stdout(),
+            b"snapshot stdin: before fd0\nresume stdin: after fd0\n"
+        );
+        assert!(after.stderr().is_empty());
+        fs::remove_dir_all(snapshot_dir).unwrap();
+    }
+
+    #[test]
+    fn qjs_snapshot_and_resume_reject_invalid_stdin_options() {
+        let missing_snapshot_stdin = run(["qjs-snapshot", "--stdin"]).unwrap_err();
+        assert_eq!(missing_snapshot_stdin.exit_code(), 2);
+        assert!(
+            missing_snapshot_stdin
+                .to_string()
+                .contains("qjs-snapshot --stdin expects text")
+        );
+
+        let missing_resume_stdin_file = run(["qjs-resume", "--stdin-file"]).unwrap_err();
+        assert_eq!(missing_resume_stdin_file.exit_code(), 2);
+        assert!(
+            missing_resume_stdin_file
+                .to_string()
+                .contains("qjs-resume --stdin-file expects PATH or -")
+        );
+
+        let duplicate = run(["qjs-resume", "--stdin", "text", "--stdin-file", "-"]).unwrap_err();
+        assert_eq!(duplicate.exit_code(), 2);
+        assert!(
+            duplicate
+                .to_string()
+                .contains("qjs-resume accepts only one of --stdin or --stdin-file")
+        );
+    }
+
+    #[test]
+    fn qjs_resume_reports_missing_snapshot_before_reading_process_stdin() {
+        struct PanicOnRead;
+
+        impl std::io::Read for PanicOnRead {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                panic!("resume should report the missing snapshot before reading stdin")
+            }
+        }
+
+        let dir = temp_dir("wanix-cli-missing-resume-snapshot");
+        let script = write_temp_script("resume-missing-snapshot.js", "print('unused');");
+
+        let error = run_with_process_stdin(
+            [
+                "qjs-resume".into(),
+                "--stdin-file".into(),
+                "-".into(),
+                "--snapshot".into(),
+                dir.join("missing.snapshot").into_os_string(),
+                script.into_os_string(),
+            ],
+            PanicOnRead,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("failed to read snapshot"));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

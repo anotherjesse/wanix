@@ -16,6 +16,8 @@ process: `printf ... | wanix-rust qjs ...` could not reach QuickJS/WASI fd 0.
 ## Decision
 
 Keep `--stdin TEXT` and add `--stdin-file PATH|-` to `wanix-rust qjs`.
+The same source options are also accepted by persistent `qjs-snapshot` and
+`qjs-resume` invocations.
 
 `--stdin-file PATH` reads binary bytes from the host file before starting the qjs
 task. `--stdin-file -` reads the native process stdin stream. Both forms install
@@ -27,7 +29,8 @@ Only one stdin source is accepted per qjs command.
 ## Consequences
 
 The CLI can now demonstrate host pipe input flowing through Wanix task fd 0 into
-QuickJS outside Chrome.
+QuickJS outside Chrome, including fresh fd 0 reattachment when a persisted qjs
+VM image is resumed.
 
 The current implementation captures stdin bytes before task start. Streaming,
 interactive terminals, and async lifecycle behavior remain future work.
