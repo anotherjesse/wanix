@@ -665,7 +665,7 @@ function writeServiceText(path, text) {
 
 const parent = readServiceText("#task/self/id").trim();
 const child = readServiceText("#task/new/qjs").trim();
-Wanix.writeText("child-stdin.txt", "stdin from parent\n");
+std.writeFile("child-stdin.txt", "stdin from parent\n");
 writeServiceText("#task/" + child + "/cmd", "spawn-child.js alpha 'two words' '' beta\n");
 writeServiceText("#task/" + child + "/env", "MODE=child\n");
 writeServiceText("#task/" + child + "/dir", ".\n");
@@ -716,6 +716,22 @@ std.exit(5);
             b"parent 1\nchild 2\nid 2 args spawn-child.js|alpha|two words||beta mode child stdin stdin from parent\nchild exit 5\n"
         );
         assert_eq!(output.stderr(), b"stderr mode child\n");
+    }
+
+    #[test]
+    fn qjs_example_task_spawn_runs_through_quickjs_os_service_files() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-task-spawn.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"parent task: 1\nchild task: 2\nchild task 2 args qjs-task-spawn-child.js|alpha|two words||beta mode spawned stdin stdin from parent\nchild exit: 5\n"
+        );
+        assert_eq!(output.stderr(), b"child stderr mode spawned\n");
     }
 
     #[test]
@@ -777,20 +793,36 @@ std.err.puts("stderr after std exit\n");
     }
 
     #[test]
-    fn qjs_command_runs_fd_demo_through_wanix_task_fds() {
+    fn qjs_command_runs_fd_demo_through_quickjs_os_fds() {
         let script = write_temp_script(
             "fd-demo.js",
             r#"
-const input = Wanix.open("main.js", "r");
-print("read fd", input);
-print("saw api", Wanix.readFd(input, 80).includes("Wanix.open"));
-Wanix.closeFd(input);
+import * as std from "qjs:std";
+import * as os from "qjs:os";
 
-const output = Wanix.open("fd-output.txt", "w+");
-print("write fd", output);
-print("bytes", Wanix.writeFd(output, "via cli fd"));
-Wanix.closeFd(output);
-print(Wanix.readText("fd-output.txt"));
+function stringFromBytes(bytes, count) {
+  return Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+}
+
+function bytesFromString(text) {
+  return new Uint8Array(Array.from(text).map((char) => char.charCodeAt(0)));
+}
+
+const input = os.open("main.js", os.O_RDONLY);
+const inputBytes = new Uint8Array(1024);
+const inputCount = os.read(input, inputBytes.buffer, 0, inputBytes.length);
+os.close(input);
+std.out.puts("read fd " + input + "\n");
+std.out.puts("saw api " + stringFromBytes(inputBytes, inputCount).includes("os.open") + "\n");
+
+const output = os.open("fd-output.txt", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666);
+const outputBytes = bytesFromString("via cli fd");
+const outputCount = os.write(output, outputBytes.buffer, 0, outputBytes.length);
+os.close(output);
+std.out.puts("write fd " + output + "\n");
+std.out.puts("bytes " + outputCount + "\n");
+std.out.puts(std.loadFile("fd-output.txt") + "\n");
+std.out.flush();
 "#,
         );
 
@@ -799,7 +831,23 @@ print(Wanix.readText("fd-output.txt"));
         assert_eq!(output.exit_code(), 0);
         assert_eq!(
             output.stdout(),
-            b"read fd 3\nsaw api true\nwrite fd 4\nbytes 10\nvia cli fd\n"
+            b"read fd 4\nsaw api true\nwrite fd 5\nbytes 10\nvia cli fd\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_example_fd_demo_runs_through_quickjs_os_fds() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-fd-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"read fd: 4\nsaw fd API: true\nwrite fd: 5\nbytes: 21\nhello from a Wanix fd\n"
         );
         assert!(output.stderr().is_empty());
     }
@@ -897,5 +945,11 @@ print("id", Wanix.readText("#task/self/id").trim());
         path.push(name);
         fs::write(&path, source).unwrap();
         path
+    }
+
+    fn example_script(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples")
+            .join(name)
     }
 }
