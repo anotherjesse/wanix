@@ -665,9 +665,11 @@ function writeServiceText(path, text) {
 
 const parent = readServiceText("#task/self/id").trim();
 const child = readServiceText("#task/new/qjs").trim();
+Wanix.writeText("child-stdin.txt", "stdin from parent\n");
 writeServiceText("#task/" + child + "/cmd", "spawn-child.js alpha beta\n");
 writeServiceText("#task/" + child + "/env", "MODE=child\n");
 writeServiceText("#task/" + child + "/dir", ".\n");
+writeServiceText("#task/" + child + "/ctl", "bind child-stdin.txt fd/0\n");
 writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/1 fd/1\n");
 writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/2 fd/2\n");
 print("parent " + parent);
@@ -680,11 +682,22 @@ print("child exit " + readServiceText("#task/" + child + "/exit").trim());
             script.parent().unwrap().join("spawn-child.js"),
             r##"
 import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+function readStdin() {
+  const bytes = new Uint8Array(64);
+  const count = os.read(0, bytes.buffer, 0, bytes.length);
+  if (count < 0) {
+    throw new Error("stdin read failed: " + count);
+  }
+  return Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+}
 
 std.out.puts(
   "id " + std.loadFile("#task/self/id").trim()
     + " args " + scriptArgs.join("|")
     + " mode " + std.getenv("MODE")
+    + " stdin " + readStdin().trimEnd()
     + "\n"
 );
 std.out.flush();
@@ -700,7 +713,7 @@ std.exit(5);
         assert_eq!(output.exit_code(), 0);
         assert_eq!(
             output.stdout(),
-            b"parent 1\nchild 2\nid 2 args spawn-child.js|alpha|beta mode child\nchild exit 5\n"
+            b"parent 1\nchild 2\nid 2 args spawn-child.js|alpha|beta mode child stdin stdin from parent\nchild exit 5\n"
         );
         assert_eq!(output.stderr(), b"stderr mode child\n");
     }
