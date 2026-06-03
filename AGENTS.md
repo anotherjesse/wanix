@@ -91,7 +91,8 @@ The next 9P-facing demo target is wiring a native listener into serve/v86
 experiments so external clients can browse a Wanix namespace. The server core
 already negotiates 9P2000.L, attaches, walks, opens regular files and read-only
 directories, reads/writes regular files, lists directories with `Treaddir`,
-clunks fids, and reports metadata with `Tgetattr`; it also serves encoded
+clunks fids, reports metadata with `Tgetattr`, and handles core mutation ops
+with `Tlcreate`, `Tmkdir`, `Trenameat`, and `Tunlinkat`; it also serves encoded
 request/response frames through a synchronous stream loop.
 `wanix-rust p9-stdio --root DIR` exposes that server over process
 stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
@@ -309,6 +310,9 @@ cargo test --workspace --locked
 - [ADR 0065](docs/adrs/0065-native-tcp-9p-listener.md):
   `wanix-rust p9-listen --root DIR --addr HOST:PORT` exposes the Rust 9P
   server over native TCP, with `--once` for deterministic smoke tests.
+- [ADR 0066](docs/adrs/0066-9p-mutation-operations.md):
+  `wanix-9p` maps `Tlcreate`, `Tmkdir`, `Trenameat`, and `Tunlinkat` onto the
+  existing Wanix filesystem mutation traits.
 
 ## Cycle Rules
 
@@ -327,5 +331,5 @@ cycle before starting the next one.
 - Make `qjs-shell` genuinely interactive beyond line-oriented input by adding a
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
-- Extend `wanix-9p` with create/remove/rename and decide the auth/WebSocket
-  policy needed for browser v86 and VS Code integration.
+- Decide the auth/WebSocket policy needed for browser v86 and VS Code
+  integration, then wire the native 9P listener into the serve/v86 path.

@@ -27,6 +27,12 @@ pub const P9_TLOPEN: u8 = 12;
 /// 9P2000.L `Rlopen` message type.
 pub const P9_RLOPEN: u8 = 13;
 
+/// 9P2000.L `Tlcreate` message type.
+pub const P9_TLCREATE: u8 = 14;
+
+/// 9P2000.L `Rlcreate` message type.
+pub const P9_RLCREATE: u8 = 15;
+
 /// 9P2000.L `Tgetattr` message type.
 pub const P9_TGETATTR: u8 = 24;
 
@@ -38,6 +44,24 @@ pub const P9_TREADDIR: u8 = 40;
 
 /// 9P2000.L `Rreaddir` message type.
 pub const P9_RREADDIR: u8 = 41;
+
+/// 9P2000.L `Tmkdir` message type.
+pub const P9_TMKDIR: u8 = 72;
+
+/// 9P2000.L `Rmkdir` message type.
+pub const P9_RMKDIR: u8 = 73;
+
+/// 9P2000.L `Trenameat` message type.
+pub const P9_TRENAMEAT: u8 = 74;
+
+/// 9P2000.L `Rrenameat` message type.
+pub const P9_RRENAMEAT: u8 = 75;
+
+/// 9P2000.L `Tunlinkat` message type.
+pub const P9_TUNLINKAT: u8 = 76;
+
+/// 9P2000.L `Runlinkat` message type.
+pub const P9_RUNLINKAT: u8 = 77;
 
 /// 9P `Tversion` message type.
 pub const P9_TVERSION: u8 = 100;
@@ -82,10 +106,18 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RLERROR => Some("Rlerror"),
         P9_TLOPEN => Some("Tlopen"),
         P9_RLOPEN => Some("Rlopen"),
+        P9_TLCREATE => Some("Tlcreate"),
+        P9_RLCREATE => Some("Rlcreate"),
         P9_TGETATTR => Some("Tgetattr"),
         P9_RGETATTR => Some("Rgetattr"),
         P9_TREADDIR => Some("Treaddir"),
         P9_RREADDIR => Some("Rreaddir"),
+        P9_TMKDIR => Some("Tmkdir"),
+        P9_RMKDIR => Some("Rmkdir"),
+        P9_TRENAMEAT => Some("Trenameat"),
+        P9_RRENAMEAT => Some("Rrenameat"),
+        P9_TUNLINKAT => Some("Tunlinkat"),
+        P9_RUNLINKAT => Some("Runlinkat"),
         P9_TVERSION => Some("Tversion"),
         P9_RVERSION => Some("Rversion"),
         P9_TATTACH => Some("Tattach"),
@@ -463,6 +495,21 @@ pub struct P9Open {
     pub flags: u32,
 }
 
+/// Decoded payload for `Tlcreate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9Create {
+    /// Directory fid to create within. The fid becomes the opened file on success.
+    pub fid: u32,
+    /// Basename to create below the directory fid.
+    pub name: String,
+    /// Linux open flags carried by 9P2000.L.
+    pub flags: u32,
+    /// POSIX mode requested for the new file.
+    pub mode: u32,
+    /// Numeric group id requested for the new file.
+    pub gid: u32,
+}
+
 /// Decoded payload for `Tgetattr`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct P9GetAttr {
@@ -550,6 +597,43 @@ pub struct P9DirEntry {
     pub dirent_type: u8,
     /// Child basename.
     pub name: String,
+}
+
+/// Decoded payload for `Tmkdir`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9Mkdir {
+    /// Directory fid to create within.
+    pub dir_fid: u32,
+    /// Basename to create below the directory fid.
+    pub name: String,
+    /// POSIX mode requested for the new directory.
+    pub mode: u32,
+    /// Numeric group id requested for the new directory.
+    pub gid: u32,
+}
+
+/// Decoded payload for `Trenameat`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9RenameAt {
+    /// Source parent directory fid.
+    pub old_dir_fid: u32,
+    /// Source basename below `old_dir_fid`.
+    pub old_name: String,
+    /// Destination parent directory fid.
+    pub new_dir_fid: u32,
+    /// Destination basename below `new_dir_fid`.
+    pub new_name: String,
+}
+
+/// Decoded payload for `Tunlinkat`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9UnlinkAt {
+    /// Parent directory fid.
+    pub dir_fid: u32,
+    /// Basename to remove below `dir_fid`.
+    pub name: String,
+    /// Linux `unlinkat` flags, including `AT_REMOVEDIR`.
+    pub flags: u32,
 }
 
 /// Decoded payload for `Twrite`.
@@ -661,6 +745,37 @@ pub fn p9_rlopen(tag: u16, qid: P9Qid, iounit: u32) -> P9Frame {
     P9Frame::new(P9_RLOPEN, tag, payload)
 }
 
+/// Builds a `Tlcreate` frame.
+///
+/// # Errors
+///
+/// Returns an error when the name cannot fit in a 9P string field.
+pub fn p9_tlcreate(
+    tag: u16,
+    fid: u32,
+    name: &str,
+    flags: u32,
+    mode: u32,
+    gid: u32,
+) -> Result<P9Frame, P9Error> {
+    let mut payload = Vec::new();
+    push_u32(&mut payload, fid);
+    push_string(&mut payload, name)?;
+    push_u32(&mut payload, flags);
+    push_u32(&mut payload, mode);
+    push_u32(&mut payload, gid);
+    Ok(P9Frame::new(P9_TLCREATE, tag, payload))
+}
+
+/// Builds an `Rlcreate` frame.
+#[must_use]
+pub fn p9_rlcreate(tag: u16, qid: P9Qid, iounit: u32) -> P9Frame {
+    let mut payload = Vec::with_capacity(17);
+    push_qid(&mut payload, qid);
+    push_u32(&mut payload, iounit);
+    P9Frame::new(P9_RLCREATE, tag, payload)
+}
+
 /// Builds a `Tgetattr` frame.
 #[must_use]
 pub fn p9_tgetattr(tag: u16, fid: u32, request_mask: u64) -> P9Frame {
@@ -714,6 +829,79 @@ pub fn p9_dir_entry_encoded_len(entry: &P9DirEntry) -> Result<usize, P9Error> {
         len: entry.name.len(),
     })? as usize;
     Ok(13 + 8 + 1 + 2 + name_len)
+}
+
+/// Builds a `Tmkdir` frame.
+///
+/// # Errors
+///
+/// Returns an error when the name cannot fit in a 9P string field.
+pub fn p9_tmkdir(
+    tag: u16,
+    dir_fid: u32,
+    name: &str,
+    mode: u32,
+    gid: u32,
+) -> Result<P9Frame, P9Error> {
+    let mut payload = Vec::new();
+    push_u32(&mut payload, dir_fid);
+    push_string(&mut payload, name)?;
+    push_u32(&mut payload, mode);
+    push_u32(&mut payload, gid);
+    Ok(P9Frame::new(P9_TMKDIR, tag, payload))
+}
+
+/// Builds an `Rmkdir` frame.
+#[must_use]
+pub fn p9_rmkdir(tag: u16, qid: P9Qid) -> P9Frame {
+    let mut payload = Vec::with_capacity(13);
+    push_qid(&mut payload, qid);
+    P9Frame::new(P9_RMKDIR, tag, payload)
+}
+
+/// Builds a `Trenameat` frame.
+///
+/// # Errors
+///
+/// Returns an error when either name cannot fit in a 9P string field.
+pub fn p9_trenameat(
+    tag: u16,
+    old_dir_fid: u32,
+    old_name: &str,
+    new_dir_fid: u32,
+    new_name: &str,
+) -> Result<P9Frame, P9Error> {
+    let mut payload = Vec::new();
+    push_u32(&mut payload, old_dir_fid);
+    push_string(&mut payload, old_name)?;
+    push_u32(&mut payload, new_dir_fid);
+    push_string(&mut payload, new_name)?;
+    Ok(P9Frame::new(P9_TRENAMEAT, tag, payload))
+}
+
+/// Builds an `Rrenameat` frame.
+#[must_use]
+pub fn p9_rrenameat(tag: u16) -> P9Frame {
+    P9Frame::new(P9_RRENAMEAT, tag, Vec::new())
+}
+
+/// Builds a `Tunlinkat` frame.
+///
+/// # Errors
+///
+/// Returns an error when the name cannot fit in a 9P string field.
+pub fn p9_tunlinkat(tag: u16, dir_fid: u32, name: &str, flags: u32) -> Result<P9Frame, P9Error> {
+    let mut payload = Vec::new();
+    push_u32(&mut payload, dir_fid);
+    push_string(&mut payload, name)?;
+    push_u32(&mut payload, flags);
+    Ok(P9Frame::new(P9_TUNLINKAT, tag, payload))
+}
+
+/// Builds an `Runlinkat` frame.
+#[must_use]
+pub fn p9_runlinkat(tag: u16) -> P9Frame {
+    P9Frame::new(P9_RUNLINKAT, tag, Vec::new())
 }
 
 /// Builds a `Tread` frame.
@@ -888,6 +1076,45 @@ pub fn p9_decode_rlopen(frame: &P9Frame) -> Result<(P9Qid, u32), P9Error> {
     Ok((qid, iounit))
 }
 
+/// Decodes a `Tlcreate` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tlcreate` or the payload is
+/// malformed.
+pub fn p9_decode_tlcreate(frame: &P9Frame) -> Result<P9Create, P9Error> {
+    expect_message_type(frame, P9_TLCREATE)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    let name = cursor.read_string()?;
+    let flags = cursor.read_u32()?;
+    let mode = cursor.read_u32()?;
+    let gid = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok(P9Create {
+        fid,
+        name,
+        flags,
+        mode,
+        gid,
+    })
+}
+
+/// Decodes an `Rlcreate` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rlcreate` or the payload is
+/// malformed.
+pub fn p9_decode_rlcreate(frame: &P9Frame) -> Result<(P9Qid, u32), P9Error> {
+    expect_message_type(frame, P9_RLCREATE)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let qid = cursor.read_qid()?;
+    let iounit = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok((qid, iounit))
+}
+
 /// Decodes a `Tgetattr` frame payload.
 ///
 /// # Errors
@@ -948,6 +1175,102 @@ pub fn p9_decode_rreaddir(frame: &P9Frame) -> Result<Vec<P9DirEntry>, P9Error> {
         entries.push(cursor.read_dir_entry()?);
     }
     Ok(entries)
+}
+
+/// Decodes a `Tmkdir` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tmkdir` or the payload is
+/// malformed.
+pub fn p9_decode_tmkdir(frame: &P9Frame) -> Result<P9Mkdir, P9Error> {
+    expect_message_type(frame, P9_TMKDIR)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let dir_fid = cursor.read_u32()?;
+    let name = cursor.read_string()?;
+    let mode = cursor.read_u32()?;
+    let gid = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok(P9Mkdir {
+        dir_fid,
+        name,
+        mode,
+        gid,
+    })
+}
+
+/// Decodes an `Rmkdir` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rmkdir` or the payload is
+/// malformed.
+pub fn p9_decode_rmkdir(frame: &P9Frame) -> Result<P9Qid, P9Error> {
+    decode_qid_frame(frame, P9_RMKDIR)
+}
+
+/// Decodes a `Trenameat` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Trenameat` or the payload is
+/// malformed.
+pub fn p9_decode_trenameat(frame: &P9Frame) -> Result<P9RenameAt, P9Error> {
+    expect_message_type(frame, P9_TRENAMEAT)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let old_dir_fid = cursor.read_u32()?;
+    let old_name = cursor.read_string()?;
+    let new_dir_fid = cursor.read_u32()?;
+    let new_name = cursor.read_string()?;
+    cursor.finish()?;
+    Ok(P9RenameAt {
+        old_dir_fid,
+        old_name,
+        new_dir_fid,
+        new_name,
+    })
+}
+
+/// Decodes an `Rrenameat` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rrenameat` or the payload is
+/// not empty.
+pub fn p9_decode_rrenameat(frame: &P9Frame) -> Result<(), P9Error> {
+    expect_message_type(frame, P9_RRENAMEAT)?;
+    PayloadCursor::new(frame.payload()).finish()
+}
+
+/// Decodes a `Tunlinkat` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tunlinkat` or the payload is
+/// malformed.
+pub fn p9_decode_tunlinkat(frame: &P9Frame) -> Result<P9UnlinkAt, P9Error> {
+    expect_message_type(frame, P9_TUNLINKAT)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let dir_fid = cursor.read_u32()?;
+    let name = cursor.read_string()?;
+    let flags = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok(P9UnlinkAt {
+        dir_fid,
+        name,
+        flags,
+    })
+}
+
+/// Decodes an `Runlinkat` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Runlinkat` or the payload is
+/// not empty.
+pub fn p9_decode_runlinkat(frame: &P9Frame) -> Result<(), P9Error> {
+    expect_message_type(frame, P9_RUNLINKAT)?;
+    PayloadCursor::new(frame.payload()).finish()
 }
 
 /// Decodes a `Tread` frame payload.
@@ -1441,10 +1764,18 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RLERROR), Some("Rlerror"));
         assert_eq!(p9_message_type_name(P9_TLOPEN), Some("Tlopen"));
         assert_eq!(p9_message_type_name(P9_RLOPEN), Some("Rlopen"));
+        assert_eq!(p9_message_type_name(P9_TLCREATE), Some("Tlcreate"));
+        assert_eq!(p9_message_type_name(P9_RLCREATE), Some("Rlcreate"));
         assert_eq!(p9_message_type_name(P9_TGETATTR), Some("Tgetattr"));
         assert_eq!(p9_message_type_name(P9_RGETATTR), Some("Rgetattr"));
         assert_eq!(p9_message_type_name(P9_TREADDIR), Some("Treaddir"));
         assert_eq!(p9_message_type_name(P9_RREADDIR), Some("Rreaddir"));
+        assert_eq!(p9_message_type_name(P9_TMKDIR), Some("Tmkdir"));
+        assert_eq!(p9_message_type_name(P9_RMKDIR), Some("Rmkdir"));
+        assert_eq!(p9_message_type_name(P9_TRENAMEAT), Some("Trenameat"));
+        assert_eq!(p9_message_type_name(P9_RRENAMEAT), Some("Rrenameat"));
+        assert_eq!(p9_message_type_name(P9_TUNLINKAT), Some("Tunlinkat"));
+        assert_eq!(p9_message_type_name(P9_RUNLINKAT), Some("Runlinkat"));
         assert_eq!(p9_message_type_name(P9_TATTACH), Some("Tattach"));
         assert_eq!(p9_message_type_name(P9_RATTACH), Some("Rattach"));
         assert_eq!(p9_message_type_name(P9_TWALK), Some("Twalk"));
@@ -1538,6 +1869,33 @@ mod tests {
     }
 
     #[test]
+    fn lcreate_round_trips_name_flags_mode_gid_and_iounit() {
+        let frame = p9_tlcreate(12, 22, "new.txt", 0x241, 0o100664, 1000)
+            .unwrap()
+            .encode()
+            .unwrap();
+        assert_eq!(&frame[..4], &32_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_tlcreate(&P9Frame::decode(&frame).unwrap()).unwrap(),
+            P9Create {
+                fid: 22,
+                name: "new.txt".to_owned(),
+                flags: 0x241,
+                mode: 0o100664,
+                gid: 1000
+            }
+        );
+
+        let qid = qid(0, 7, 9);
+        let response = p9_rlcreate(12, qid, 8192).encode().unwrap();
+        assert_eq!(&response[..4], &24_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_rlcreate(&P9Frame::decode(&response).unwrap()).unwrap(),
+            (qid, 8192)
+        );
+    }
+
+    #[test]
     fn getattr_round_trips_fixed_9p2000_l_payload() {
         let frame = p9_tgetattr(11, 77, 0x1234_5678_90ab_cdef).encode().unwrap();
         assert_eq!(&frame[..4], &19_u32.to_le_bytes());
@@ -1615,6 +1973,66 @@ mod tests {
             p9_decode_rreaddir(&P9Frame::decode(&encoded).unwrap()).unwrap(),
             entries
         );
+    }
+
+    #[test]
+    fn mkdir_renameat_and_unlinkat_round_trip() {
+        let mkdir = p9_tmkdir(13, 1, "new-dir", 0o040755, 1000)
+            .unwrap()
+            .encode()
+            .unwrap();
+        assert_eq!(&mkdir[..4], &28_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_tmkdir(&P9Frame::decode(&mkdir).unwrap()).unwrap(),
+            P9Mkdir {
+                dir_fid: 1,
+                name: "new-dir".to_owned(),
+                mode: 0o040755,
+                gid: 1000
+            }
+        );
+        let dir_qid = qid(0x80, 0, 44);
+        let mkdir_response = p9_rmkdir(13, dir_qid).encode().unwrap();
+        assert_eq!(&mkdir_response[..4], &20_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_rmkdir(&P9Frame::decode(&mkdir_response).unwrap()).unwrap(),
+            dir_qid
+        );
+
+        let rename = p9_trenameat(14, 1, "old.txt", 2, "new.txt")
+            .unwrap()
+            .encode()
+            .unwrap();
+        assert_eq!(&rename[..4], &33_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_trenameat(&P9Frame::decode(&rename).unwrap()).unwrap(),
+            P9RenameAt {
+                old_dir_fid: 1,
+                old_name: "old.txt".to_owned(),
+                new_dir_fid: 2,
+                new_name: "new.txt".to_owned()
+            }
+        );
+        let rename_response = p9_rrenameat(14).encode().unwrap();
+        assert_eq!(&rename_response[..4], &7_u32.to_le_bytes());
+        p9_decode_rrenameat(&P9Frame::decode(&rename_response).unwrap()).unwrap();
+
+        let unlink = p9_tunlinkat(15, 2, "gone", 0x200)
+            .unwrap()
+            .encode()
+            .unwrap();
+        assert_eq!(&unlink[..4], &21_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_tunlinkat(&P9Frame::decode(&unlink).unwrap()).unwrap(),
+            P9UnlinkAt {
+                dir_fid: 2,
+                name: "gone".to_owned(),
+                flags: 0x200
+            }
+        );
+        let unlink_response = p9_runlinkat(15).encode().unwrap();
+        assert_eq!(&unlink_response[..4], &7_u32.to_le_bytes());
+        p9_decode_runlinkat(&P9Frame::decode(&unlink_response).unwrap()).unwrap();
     }
 
     #[test]

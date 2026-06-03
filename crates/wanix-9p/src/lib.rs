@@ -15,12 +15,14 @@ use wanix_fs::{
     File, FileSeekFrom, FileSystem, FileType, FsError, Metadata, NormalizedPath, OpenOptions,
 };
 use wanix_protocol::{
-    P9_TATTACH, P9_TCLUNK, P9_TGETATTR, P9_TLOPEN, P9_TREAD, P9_TREADDIR, P9_TVERSION, P9_TWALK,
-    P9_TWRITE, P9_VERSION_9P2000_L, P9Attr, P9DirEntry, P9Error, P9Frame, P9Qid, P9Version,
-    p9_decode_tattach, p9_decode_tclunk, p9_decode_tgetattr, p9_decode_tlopen, p9_decode_tread,
-    p9_decode_treaddir, p9_decode_tversion, p9_decode_twalk, p9_decode_twrite,
-    p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rgetattr, p9_rlerror, p9_rlopen, p9_rread,
-    p9_rreaddir, p9_rversion, p9_rwalk, p9_rwrite,
+    P9_TATTACH, P9_TCLUNK, P9_TGETATTR, P9_TLCREATE, P9_TLOPEN, P9_TMKDIR, P9_TREAD, P9_TREADDIR,
+    P9_TRENAMEAT, P9_TUNLINKAT, P9_TVERSION, P9_TWALK, P9_TWRITE, P9_VERSION_9P2000_L, P9Attr,
+    P9DirEntry, P9Error, P9Frame, P9Qid, P9Version, p9_decode_tattach, p9_decode_tclunk,
+    p9_decode_tgetattr, p9_decode_tlcreate, p9_decode_tlopen, p9_decode_tmkdir, p9_decode_tread,
+    p9_decode_treaddir, p9_decode_trenameat, p9_decode_tunlinkat, p9_decode_tversion,
+    p9_decode_twalk, p9_decode_twrite, p9_dir_entry_encoded_len, p9_rattach, p9_rclunk,
+    p9_rgetattr, p9_rlcreate, p9_rlerror, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir,
+    p9_rrenameat, p9_runlinkat, p9_rversion, p9_rwalk, p9_rwrite,
 };
 
 pub use transport::{P9TransportError, P9TransportStats};
@@ -49,6 +51,7 @@ const O_WRONLY: u32 = 0o1;
 const O_RDWR: u32 = 0o2;
 const O_CREAT: u32 = 0o100;
 const O_TRUNC: u32 = 0o1000;
+const AT_REMOVEDIR: u32 = 0x200;
 
 const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
@@ -126,10 +129,14 @@ impl P9Server {
             P9_TATTACH => self.handle_attach(frame),
             P9_TWALK => self.handle_walk(frame),
             P9_TLOPEN => self.handle_open(frame),
+            P9_TLCREATE => self.handle_create(frame),
             P9_TGETATTR => self.handle_getattr(frame),
             P9_TREADDIR => self.handle_readdir(frame),
             P9_TREAD => self.handle_read(frame),
             P9_TWRITE => self.handle_write(frame),
+            P9_TMKDIR => self.handle_mkdir(frame),
+            P9_TRENAMEAT => self.handle_renameat(frame),
+            P9_TUNLINKAT => self.handle_unlinkat(frame),
             P9_TCLUNK => self.handle_clunk(frame),
             _ => Ok(p9_rlerror(frame.tag(), EOPNOTSUPP)),
         }
@@ -202,6 +209,35 @@ impl P9Server {
         };
         entry.file = file;
         Ok(p9_rlopen(
+            frame.tag(),
+            qid,
+            self.msize.saturating_sub(RLOPEN_OVERHEAD),
+        ))
+    }
+
+    fn handle_create(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let create = p9_decode_tlcreate(frame)?;
+        let Some(dir_path) = self.fids.get(&create.fid).map(|entry| entry.path.clone()) else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        let path = join_walk_component(&dir_path, &create.name)?;
+        let mut options = open_options_from_flags(create.flags);
+        options.create = true;
+        let file = match self.root.open(&path, options) {
+            Ok(file) => file,
+            Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
+        };
+        let metadata = match self.root.metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
+        };
+        let qid = qid_for_metadata(&path, metadata);
+        let Some(entry) = self.fids.get_mut(&create.fid) else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        entry.path = path;
+        entry.file = Some(file);
+        Ok(p9_rlcreate(
             frame.tag(),
             qid,
             self.msize.saturating_sub(RLOPEN_OVERHEAD),
@@ -301,6 +337,71 @@ impl P9Server {
             Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         };
         Ok(p9_rwrite(frame.tag(), count as u32))
+    }
+
+    fn handle_mkdir(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let mkdir = p9_decode_tmkdir(frame)?;
+        let Some(dir_path) = self
+            .fids
+            .get(&mkdir.dir_fid)
+            .map(|entry| entry.path.clone())
+        else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        let path = join_walk_component(&dir_path, &mkdir.name)?;
+        if let Err(error) = self.root.create_dir(&path) {
+            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
+        }
+        let metadata = match self.root.metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
+        };
+        Ok(p9_rmkdir(frame.tag(), qid_for_metadata(&path, metadata)))
+    }
+
+    fn handle_renameat(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let rename = p9_decode_trenameat(frame)?;
+        let Some(old_dir_path) = self
+            .fids
+            .get(&rename.old_dir_fid)
+            .map(|entry| entry.path.clone())
+        else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        let Some(new_dir_path) = self
+            .fids
+            .get(&rename.new_dir_fid)
+            .map(|entry| entry.path.clone())
+        else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        let old_path = join_walk_component(&old_dir_path, &rename.old_name)?;
+        let new_path = join_walk_component(&new_dir_path, &rename.new_name)?;
+        match self.root.rename(&old_path, &new_path) {
+            Ok(()) => Ok(p9_rrenameat(frame.tag())),
+            Err(error) => Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
+        }
+    }
+
+    fn handle_unlinkat(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let unlink = p9_decode_tunlinkat(frame)?;
+        let Some(dir_path) = self
+            .fids
+            .get(&unlink.dir_fid)
+            .map(|entry| entry.path.clone())
+        else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        let path = join_walk_component(&dir_path, &unlink.name)?;
+        let result = if unlink.flags & AT_REMOVEDIR != 0 {
+            self.root.remove_dir(&path)
+        } else {
+            self.root.remove_file(&path)
+        };
+        match result {
+            Ok(()) => Ok(p9_runlinkat(frame.tag())),
+            Err(error) => Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
+        }
     }
 
     fn handle_clunk(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -434,11 +535,13 @@ mod tests {
 
     use wanix_fs::MemFs;
     use wanix_protocol::{
-        P9_RATTACH, P9_RGETATTR, P9_RLERROR, P9_RLOPEN, P9_RREAD, P9_RREADDIR, P9_RVERSION,
-        P9_RWALK, P9_RWRITE, P9DirEntry, p9_decode_rgetattr, p9_decode_rlerror, p9_decode_rlopen,
-        p9_decode_rread, p9_decode_rreaddir, p9_decode_rversion, p9_decode_rwalk, p9_decode_rwrite,
-        p9_dir_entry_encoded_len, p9_tattach, p9_tclunk, p9_tgetattr, p9_tlopen, p9_tread,
-        p9_treaddir, p9_tversion, p9_twalk, p9_twrite,
+        P9_RATTACH, P9_RGETATTR, P9_RLCREATE, P9_RLERROR, P9_RLOPEN, P9_RMKDIR, P9_RREAD,
+        P9_RREADDIR, P9_RRENAMEAT, P9_RUNLINKAT, P9_RVERSION, P9_RWALK, P9_RWRITE, P9DirEntry,
+        p9_decode_rgetattr, p9_decode_rlcreate, p9_decode_rlerror, p9_decode_rlopen,
+        p9_decode_rmkdir, p9_decode_rread, p9_decode_rreaddir, p9_decode_rversion, p9_decode_rwalk,
+        p9_decode_rwrite, p9_dir_entry_encoded_len, p9_tattach, p9_tclunk, p9_tgetattr,
+        p9_tlcreate, p9_tlopen, p9_tmkdir, p9_tread, p9_treaddir, p9_trenameat, p9_tunlinkat,
+        p9_tversion, p9_twalk, p9_twrite,
     };
 
     use super::*;
@@ -508,6 +611,103 @@ mod tests {
         assert_eq!(response.message_type(), P9_RWRITE);
         assert_eq!(p9_decode_rwrite(&response).unwrap(), 4);
         assert_eq!(fs.read_file("out.txt").unwrap(), b"made");
+    }
+
+    #[test]
+    fn lcreate_creates_file_and_opens_created_fid() {
+        let fs = Arc::new(MemFs::new());
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        let response = server
+            .handle_frame(&p9_tlcreate(2, 1, "new.txt", O_RDWR, 0o100664, 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLCREATE);
+        let (qid, iounit) = p9_decode_rlcreate(&response).unwrap();
+        assert_eq!(qid.qid_type, 0);
+        assert_eq!(iounit, DEFAULT_MAX_MSIZE - RLOPEN_OVERHEAD);
+
+        let response = server
+            .handle_frame(&p9_twrite(3, 1, 0, b"created over 9p").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+        assert_eq!(p9_decode_rwrite(&response).unwrap(), 15);
+        assert_eq!(fs.read_file("new.txt").unwrap(), b"created over 9p");
+    }
+
+    #[test]
+    fn mkdir_renameat_and_unlinkat_mutate_filesystem() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("old.txt", b"moved").unwrap();
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        let response = server
+            .handle_frame(&p9_tmkdir(2, 1, "made", 0o040755, 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RMKDIR);
+        assert_eq!(p9_decode_rmkdir(&response).unwrap().qid_type, 0x80);
+        assert_eq!(
+            fs.metadata(&NormalizedPath::new("made").unwrap())
+                .unwrap()
+                .file_type(),
+            FileType::Directory
+        );
+
+        let response = server
+            .handle_frame(&p9_tmkdir(3, 1, "dest", 0o040755, 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RMKDIR);
+        walk(&mut server, 1, 2, &["dest"]);
+
+        let response = server
+            .handle_frame(&p9_trenameat(4, 1, "old.txt", 2, "new.txt").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RRENAMEAT);
+        assert_eq!(fs.read_file("dest/new.txt").unwrap(), b"moved");
+        assert_eq!(
+            fs.metadata(&NormalizedPath::new("old.txt").unwrap()),
+            Err(FsError::NotFound)
+        );
+
+        let response = server
+            .handle_frame(&p9_tunlinkat(5, 2, "new.txt", 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RUNLINKAT);
+        assert_eq!(
+            fs.metadata(&NormalizedPath::new("dest/new.txt").unwrap()),
+            Err(FsError::NotFound)
+        );
+
+        let response = server
+            .handle_frame(&p9_tunlinkat(6, 1, "made", AT_REMOVEDIR).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RUNLINKAT);
+        assert_eq!(
+            fs.metadata(&NormalizedPath::new("made").unwrap()),
+            Err(FsError::NotFound)
+        );
+    }
+
+    #[test]
+    fn unlinkat_directory_flag_controls_remove_kind() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("file.txt", b"file").unwrap();
+        fs.create_dir_all("dir").unwrap();
+        let mut server = server(fs);
+
+        attach_root(&mut server);
+        let response = server
+            .handle_frame(&p9_tunlinkat(2, 1, "dir", 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EISDIR);
+
+        let response = server
+            .handle_frame(&p9_tunlinkat(3, 1, "file.txt", AT_REMOVEDIR).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, ENOTDIR);
     }
 
     #[test]

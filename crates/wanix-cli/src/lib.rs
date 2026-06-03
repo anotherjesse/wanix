@@ -1532,10 +1532,11 @@ mod tests {
 
     use super::{run, run_with_process_io, run_with_process_stdin};
     use wanix_protocol::{
-        P9_NOFID, P9_RATTACH, P9_RGETATTR, P9_RLOPEN, P9_RREAD, P9_RREADDIR, P9_RVERSION, P9_RWALK,
-        P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer, p9_decode_rgetattr, p9_decode_rread,
-        p9_decode_rreaddir, p9_tattach, p9_tgetattr, p9_tlopen, p9_tread, p9_treaddir, p9_tversion,
-        p9_twalk,
+        P9_NOFID, P9_RATTACH, P9_RGETATTR, P9_RLCREATE, P9_RLOPEN, P9_RREAD, P9_RREADDIR,
+        P9_RVERSION, P9_RWALK, P9_RWRITE, P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer,
+        p9_decode_rgetattr, p9_decode_rread, p9_decode_rreaddir, p9_decode_rwrite, p9_tattach,
+        p9_tgetattr, p9_tlcreate, p9_tlopen, p9_tread, p9_treaddir, p9_tversion, p9_twalk,
+        p9_twrite,
     };
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -1664,6 +1665,7 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-resume"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-restore"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-stdio"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-listen"));
         assert!(output.stderr().is_empty());
     }
 
@@ -1704,6 +1706,47 @@ mod tests {
         assert_eq!(attr.size, 8);
         assert_eq!(attr.mode & 0o170000, 0o100000);
         assert_eq!(p9_decode_rread(&frames[5]).unwrap(), b"hello p9");
+    }
+
+    #[test]
+    fn p9_stdio_creates_writes_and_reads_host_file_over_binary_stdio() {
+        let root = temp_dir("wanix-cli-p9-stdio-create");
+        let input = request_stream([
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, P9_NOFID, "root", "", 0).unwrap(),
+            p9_twalk(3, 1, 2, &[]).unwrap(),
+            p9_tlcreate(4, 2, "created.txt", 0o2, 0o100664, 0).unwrap(),
+            p9_twrite(5, 2, 0, b"stdio create").unwrap(),
+            p9_tread(6, 2, 0, 12),
+        ]);
+
+        let output = run_with_process_stdin(
+            [
+                "p9-stdio".into(),
+                "--root".into(),
+                root.clone().into_os_string(),
+            ],
+            input.as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.stderr().is_empty());
+        let frames = decode_response_stream(output.stdout());
+        assert_eq!(
+            frame_types(&frames),
+            [
+                P9_RVERSION,
+                P9_RATTACH,
+                P9_RWALK,
+                P9_RLCREATE,
+                P9_RWRITE,
+                P9_RREAD
+            ]
+        );
+        assert_eq!(p9_decode_rwrite(&frames[4]).unwrap(), 12);
+        assert_eq!(p9_decode_rread(&frames[5]).unwrap(), b"stdio create");
+        assert_eq!(fs::read(root.join("created.txt")).unwrap(), b"stdio create");
     }
 
     #[test]
