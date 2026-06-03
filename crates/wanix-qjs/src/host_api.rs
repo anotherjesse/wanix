@@ -12,6 +12,7 @@ use crate::{
 
 const WANIX_HOST_API_PRELUDE: &str = r#"
 (() => {
+  globalThis.scriptArgs = Object.freeze(JSON.parse(__wanix_script_args_json()));
   const api = {
     readText: (path) => __wanix_read_text(String(path)),
     writeText: (path, text) => __wanix_write_text(String(path), String(text)),
@@ -135,6 +136,15 @@ pub(crate) fn define_wanix_host_api(
         .define_global_host_function("__wanix_args_json", move |args| {
             no_args(args, "Wanix.args")?;
             Ok(QuickJsHostValue::String(args_json.clone()))
+        })
+        .map_err(qjs_error)?;
+
+    let script_args_json = serde_json::to_string(context.script_args())
+        .map_err(|err| FsError::Other(format!("failed to encode scriptArgs: {err}")))?;
+    runtime
+        .define_global_host_function("__wanix_script_args_json", move |args| {
+            no_args(args, "scriptArgs")?;
+            Ok(QuickJsHostValue::String(script_args_json.clone()))
         })
         .map_err(qjs_error)?;
 

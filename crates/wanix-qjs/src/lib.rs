@@ -357,8 +357,10 @@ impl QuickJsRunner {
         let run_as_module = uses_module_syntax(&source);
         let api_exit_state = exit_state.clone();
         let api_task = task.clone();
+        let script_args = task_wasi_argv(task);
         let context = WanixTaskContext::new(
             command.raw,
+            script_args,
             command.args,
             task_env_map(task),
             command.cwd.clone(),
@@ -1479,6 +1481,81 @@ std.err.flush();
 
         assert_eq!(read_file(&*stdout, "out"), b"std stdout\n");
         assert_eq!(read_file(&*stderr, "err"), b"std stderr\n");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_quickjs_std_and_os_use_wanix_process_context() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "app/main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+const readStdin = () => {
+  const bytes = new Uint8Array(64);
+  const n = os.read(0, bytes.buffer, 0, bytes.length);
+  return Array.from(bytes.slice(0, n)).map((byte) => String.fromCharCode(byte)).join("");
+};
+
+const env = std.getenviron();
+std.out.puts("argv " + scriptArgs.join("|") + "\n");
+std.out.puts("mode " + std.getenv("MODE") + "\n");
+std.out.puts("env " + env.MODE + " " + (env.EMPTY === "") + " " + String(env.MISSING) + "\n");
+std.out.puts("stdin " + readStdin() + "\n");
+std.out.puts("source " + std.loadFile("main.js").includes("std.getenv") + "\n");
+std.writeFile("created.txt", "made via std cwd");
+std.out.puts("created " + std.loadFile("created.txt") + "\n");
+std.out.flush();
+"#,
+        )
+        .unwrap();
+        let stdin = std::sync::Arc::new(MemFs::new());
+        stdin.write_file("in", b"hello from fd0").unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDIN,
+            stdin
+                .open(&NormalizedPath::new("in").unwrap(), OpenOptions::read())
+                .unwrap(),
+            NormalizedPath::new("in").unwrap(),
+        )
+        .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js alpha beta").unwrap();
+        task.set_env_lines("MODE=test\nEMPTY=").unwrap();
+        task.set_dir("app").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"argv main.js|alpha|beta\nmode test\nenv test true undefined\nstdin hello from fd0\nsource true\ncreated made via std cwd\n"
+        );
+        assert_eq!(
+            root.read_file("app/created.txt").unwrap(),
+            b"made via std cwd"
+        );
         assert_eq!(task.exit(), "0");
     }
 

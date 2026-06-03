@@ -1,10 +1,12 @@
+import * as std from "qjs:std";
 import { runtime } from "./qjs-demo-lib.js";
 
-const source = Wanix.readText("main.js");
+const source = std.loadFile("main.js");
 
-Wanix.writeText("hello.txt", "hello from a Wanix namespace");
+std.writeFile("hello.txt", "hello from a Wanix namespace");
 
-print("outside Chrome:", source.includes("Wanix.readText"));
-print("task id:", Wanix.readText("#task/self/id").trim());
-print(runtime);
-print(Wanix.readText("hello.txt"));
+std.out.puts("outside Chrome: " + source.includes("std.loadFile") + "\n");
+std.out.puts("task id: " + std.loadFile("#task/self/id").trim() + "\n");
+std.out.puts(runtime + "\n");
+std.out.puts(std.loadFile("hello.txt") + "\n");
+std.out.flush();

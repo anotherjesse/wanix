@@ -459,13 +459,15 @@ mod tests {
         let script = write_temp_script(
             "demo script.js",
             r##"
+import * as std from "qjs:std";
 import { runtime } from "./lib.js";
 
-const text = Wanix.readText("main.js");
-Wanix.writeText("created.txt", "made inside Wanix");
-print("task", Wanix.readText("#task/self/id").trim());
-print(runtime);
-print(text.includes("made inside Wanix"), Wanix.readText("created.txt"));
+const text = std.loadFile("main.js");
+std.writeFile("created.txt", "made inside Wanix");
+std.out.puts("task " + std.loadFile("#task/self/id").trim() + "\n");
+std.out.puts(runtime + "\n");
+std.out.puts(text.includes("made inside Wanix") + " " + std.loadFile("created.txt") + "\n");
+std.out.flush();
 "##,
         );
         fs::write(
@@ -563,6 +565,58 @@ print(std.loadFile("created.txt"));
 
         assert_eq!(output.exit_code(), 0);
         assert_eq!(output.stdout(), b"hello from std write\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_command_uses_quickjs_std_and_os_for_process_context() {
+        let script = write_temp_script(
+            "std-process-demo.js",
+            r#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+const readStdin = () => {
+  const bytes = new Uint8Array(64);
+  const n = os.read(0, bytes.buffer, 0, bytes.length);
+  return Array.from(bytes.slice(0, n)).map((byte) => String.fromCharCode(byte)).join("");
+};
+
+const env = std.getenviron();
+std.out.puts("argv " + scriptArgs.join("/") + "\n");
+std.out.puts("mode " + std.getenv("MODE") + "\n");
+std.out.puts("env " + env.MODE + " " + (env.EMPTY === "") + " " + String(env.MISSING) + "\n");
+std.out.puts("stdin " + readStdin() + "\n");
+std.out.puts("source " + std.loadFile("main.js").includes("std.getenv") + "\n");
+std.writeFile("created.txt", "made via std cwd");
+std.out.puts("created " + std.loadFile("created.txt") + "\n");
+std.out.flush();
+"#,
+        );
+
+        let output = run([
+            "qjs".into(),
+            "--env".into(),
+            "MODE=test".into(),
+            "--env".into(),
+            "EMPTY=".into(),
+            "--cwd".into(),
+            "app".into(),
+            "--stdin".into(),
+            "hello from fd0".into(),
+            script.into_os_string(),
+            "--".into(),
+            "alpha".into(),
+            "two words".into(),
+            "beta".into(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"argv main.js/alpha/two words/beta\nmode test\nenv test true undefined\nstdin hello from fd0\nsource true\ncreated made via std cwd\n"
+        );
         assert!(output.stderr().is_empty());
     }
 

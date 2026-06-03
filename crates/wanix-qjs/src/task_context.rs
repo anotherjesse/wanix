@@ -7,6 +7,7 @@ use wanix_fs::{FsError, FsResult, NormalizedPath};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WanixTaskContext {
     cmd: String,
+    script_args: Vec<String>,
     args: Vec<String>,
     env: BTreeMap<String, String>,
     cwd: NormalizedPath,
@@ -15,12 +16,14 @@ pub(crate) struct WanixTaskContext {
 impl WanixTaskContext {
     pub(crate) fn new(
         cmd: impl Into<String>,
+        script_args: Vec<String>,
         args: Vec<String>,
         env: BTreeMap<String, String>,
         cwd: NormalizedPath,
     ) -> Self {
         Self {
             cmd: cmd.into(),
+            script_args,
             args,
             env,
             cwd,
@@ -29,6 +32,10 @@ impl WanixTaskContext {
 
     pub(crate) fn cmd(&self) -> &str {
         &self.cmd
+    }
+
+    pub(crate) fn script_args(&self) -> &[String] {
+        &self.script_args
     }
 
     pub(crate) fn args(&self) -> &[String] {
@@ -48,6 +55,7 @@ impl Default for WanixTaskContext {
     fn default() -> Self {
         Self {
             cmd: String::new(),
+            script_args: Vec::new(),
             args: Vec::new(),
             env: BTreeMap::new(),
             cwd: NormalizedPath::new(".").expect("root path is valid"),

@@ -7,11 +7,16 @@ type RecordedWrites = Arc<Mutex<Vec<(u32, Vec<u8>)>>>;
 
 #[derive(Default)]
 struct ExitWasiHost {
+    env: Vec<String>,
     exits: Arc<Mutex<Vec<u32>>>,
     writes: RecordedWrites,
 }
 
 impl QuickJsWasiHost for ExitWasiHost {
+    fn env(&mut self) -> WasiHostResult<Vec<String>> {
+        Ok(self.env.clone())
+    }
+
     fn proc_exit(&mut self, code: u32) -> WasiHostResult<()> {
         self.exits.lock().expect("test exit lock").push(code);
         Ok(())
@@ -79,6 +84,33 @@ impl QuickJsWasiHost for ExitWasiHost {
     ) -> WasiHostResult<QuickJsWasiFileStat> {
         Err(QuickJsWasiErrno::Nosys)
     }
+}
+
+#[test]
+fn quickjs_std_env_uses_live_wasi_host_environ() -> Result<()> {
+    let (_engine, module) = quickjs_fixture()?;
+    let host = ExitWasiHost {
+        env: vec!["MODE=test".to_owned(), "EMPTY=".to_owned()],
+        ..ExitWasiHost::default()
+    };
+    let mut vm =
+        module.create_runtime_with_options(QuickJsCreateOptions::new().with_wasi_host(host))?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as std from "qjs:std";
+        const env = std.getenviron();
+        globalThis.mode = std.getenv("MODE");
+        globalThis.empty = env.EMPTY === "";
+        globalThis.missing = String(std.getenv("MISSING"));
+        "#,
+        "stdlib-env.mjs",
+    )?;
+
+    assert_eq!(vm.eval_string("mode")?, "test");
+    assert_eq!(vm.eval_string("String(empty)")?, "true");
+    assert_eq!(vm.eval_string("missing")?, "undefined");
+    Ok(())
 }
 
 #[test]

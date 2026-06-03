@@ -49,6 +49,10 @@ driver into a task table.
 - The qjs stdio proxies are live views by Wanix task fd number. Closing a task
   stdio fd affects the WASI attachment, while WASI `fd_close` still rejects
   stdio fds so lifecycle remains owned by Wanix task/fd APIs.
+- `wanix-qjs` installs a qjs-compatible `scriptArgs` global from Wanix task
+  argv. `scriptArgs[0]` is the program name and later entries are script
+  arguments; the interim `Wanix.args()` helper remains args-only for
+  compatibility until that API can be retired.
 - The synchronous process demo comes before richer lifecycle work such as async
   event loops, signals, cancellation, and snapshot/restore.
 - A useful demo should show JavaScript reading `#task/self/id`, using stdio,
