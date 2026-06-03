@@ -16,14 +16,15 @@ use wanix_fs::{
     OpenOptions,
 };
 use wanix_protocol::{
-    P9_TATTACH, P9_TCLUNK, P9_TGETATTR, P9_TLCREATE, P9_TLOPEN, P9_TMKDIR, P9_TREAD, P9_TREADDIR,
-    P9_TREADLINK, P9_TRENAMEAT, P9_TSTATFS, P9_TSYMLINK, P9_TUNLINKAT, P9_TVERSION, P9_TWALK,
-    P9_TWRITE, P9_VERSION_9P2000_L, P9Attr, P9DirEntry, P9Error, P9Frame, P9FsStat, P9Qid,
-    P9Version, p9_decode_tattach, p9_decode_tclunk, p9_decode_tgetattr, p9_decode_tlcreate,
-    p9_decode_tlopen, p9_decode_tmkdir, p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink,
-    p9_decode_trenameat, p9_decode_tstatfs, p9_decode_tsymlink, p9_decode_tunlinkat,
-    p9_decode_tversion, p9_decode_twalk, p9_decode_twrite, p9_dir_entry_encoded_len, p9_rattach,
-    p9_rclunk, p9_rgetattr, p9_rlcreate, p9_rlerror, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir,
+    P9_TATTACH, P9_TCLUNK, P9_TFLUSH, P9_TFSYNC, P9_TGETATTR, P9_TLCREATE, P9_TLOPEN, P9_TMKDIR,
+    P9_TREAD, P9_TREADDIR, P9_TREADLINK, P9_TRENAMEAT, P9_TSTATFS, P9_TSYMLINK, P9_TUNLINKAT,
+    P9_TVERSION, P9_TWALK, P9_TWRITE, P9_VERSION_9P2000_L, P9Attr, P9DirEntry, P9Error, P9Frame,
+    P9FsStat, P9Qid, P9Version, p9_decode_tattach, p9_decode_tclunk, p9_decode_tflush,
+    p9_decode_tfsync, p9_decode_tgetattr, p9_decode_tlcreate, p9_decode_tlopen, p9_decode_tmkdir,
+    p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink, p9_decode_trenameat,
+    p9_decode_tstatfs, p9_decode_tsymlink, p9_decode_tunlinkat, p9_decode_tversion,
+    p9_decode_twalk, p9_decode_twrite, p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rflush,
+    p9_rfsync, p9_rgetattr, p9_rlcreate, p9_rlerror, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir,
     p9_rreadlink, p9_rrenameat, p9_rstatfs, p9_rsymlink, p9_runlinkat, p9_rversion, p9_rwalk,
     p9_rwrite,
 };
@@ -133,6 +134,7 @@ impl P9Server {
             P9_TVERSION => self.handle_version(frame),
             P9_TSTATFS => self.handle_statfs(frame),
             P9_TATTACH => self.handle_attach(frame),
+            P9_TFLUSH => self.handle_flush(frame),
             P9_TWALK => self.handle_walk(frame),
             P9_TLOPEN => self.handle_open(frame),
             P9_TLCREATE => self.handle_create(frame),
@@ -140,6 +142,7 @@ impl P9Server {
             P9_TREADLINK => self.handle_readlink(frame),
             P9_TGETATTR => self.handle_getattr(frame),
             P9_TREADDIR => self.handle_readdir(frame),
+            P9_TFSYNC => self.handle_fsync(frame),
             P9_TREAD => self.handle_read(frame),
             P9_TWRITE => self.handle_write(frame),
             P9_TMKDIR => self.handle_mkdir(frame),
@@ -171,6 +174,11 @@ impl P9Server {
         };
         self.fids.insert(attach.fid, FidEntry { path, file: None });
         Ok(p9_rattach(frame.tag(), qid))
+    }
+
+    fn handle_flush(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        p9_decode_tflush(frame)?;
+        Ok(p9_rflush(frame.tag()))
     }
 
     fn handle_statfs(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -352,6 +360,15 @@ impl P9Server {
             p9_entries.push(p9_entry);
         }
         Ok(p9_rreaddir(frame.tag(), &p9_entries)?)
+    }
+
+    fn handle_fsync(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let fsync = p9_decode_tfsync(frame)?;
+        if self.fids.contains_key(&fsync.fid) {
+            Ok(p9_rfsync(frame.tag()))
+        } else {
+            Ok(p9_rlerror(frame.tag(), EBADF))
+        }
     }
 
     fn handle_read(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -610,14 +627,16 @@ mod tests {
 
     use wanix_fs::{LocalFs, MemFs};
     use wanix_protocol::{
-        P9_RATTACH, P9_RGETATTR, P9_RLCREATE, P9_RLERROR, P9_RLOPEN, P9_RMKDIR, P9_RREAD,
-        P9_RREADDIR, P9_RREADLINK, P9_RRENAMEAT, P9_RSTATFS, P9_RSYMLINK, P9_RUNLINKAT,
-        P9_RVERSION, P9_RWALK, P9_RWRITE, P9DirEntry, p9_decode_rgetattr, p9_decode_rlcreate,
-        p9_decode_rlerror, p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread, p9_decode_rreaddir,
+        P9_RATTACH, P9_RFLUSH, P9_RFSYNC, P9_RGETATTR, P9_RLCREATE, P9_RLERROR, P9_RLOPEN,
+        P9_RMKDIR, P9_RREAD, P9_RREADDIR, P9_RREADLINK, P9_RRENAMEAT, P9_RSTATFS, P9_RSYMLINK,
+        P9_RUNLINKAT, P9_RVERSION, P9_RWALK, P9_RWRITE, P9DirEntry, p9_decode_rflush,
+        p9_decode_rfsync, p9_decode_rgetattr, p9_decode_rlcreate, p9_decode_rlerror,
+        p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread, p9_decode_rreaddir,
         p9_decode_rreadlink, p9_decode_rstatfs, p9_decode_rsymlink, p9_decode_rversion,
         p9_decode_rwalk, p9_decode_rwrite, p9_dir_entry_encoded_len, p9_tattach, p9_tclunk,
-        p9_tgetattr, p9_tlcreate, p9_tlopen, p9_tmkdir, p9_tread, p9_treaddir, p9_treadlink,
-        p9_trenameat, p9_tstatfs, p9_tsymlink, p9_tunlinkat, p9_tversion, p9_twalk, p9_twrite,
+        p9_tflush, p9_tfsync, p9_tgetattr, p9_tlcreate, p9_tlopen, p9_tmkdir, p9_tread,
+        p9_treaddir, p9_treadlink, p9_trenameat, p9_tstatfs, p9_tsymlink, p9_tunlinkat,
+        p9_tversion, p9_twalk, p9_twrite,
     };
 
     use super::*;
@@ -694,6 +713,37 @@ mod tests {
         let mut server = server(Arc::new(MemFs::new()));
 
         let response = server.handle_frame(&p9_tstatfs(3, 99)).unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+    }
+
+    #[test]
+    fn flush_acknowledges_without_fid_lookup() {
+        let mut server = server(Arc::new(MemFs::new()));
+
+        let response = server.handle_frame(&p9_tflush(8, 7)).unwrap();
+
+        assert_eq!(response.message_type(), P9_RFLUSH);
+        p9_decode_rflush(&response).unwrap();
+    }
+
+    #[test]
+    fn fsync_existing_fid_returns_success() {
+        let mut server = server(Arc::new(MemFs::new()));
+
+        attach_root(&mut server);
+        let response = server.handle_frame(&p9_tfsync(2, 1)).unwrap();
+
+        assert_eq!(response.message_type(), P9_RFSYNC);
+        p9_decode_rfsync(&response).unwrap();
+    }
+
+    #[test]
+    fn fsync_unknown_fid_returns_bad_fd() {
+        let mut server = server(Arc::new(MemFs::new()));
+
+        let response = server.handle_frame(&p9_tfsync(3, 99)).unwrap();
+
         assert_eq!(response.message_type(), P9_RLERROR);
         assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
     }

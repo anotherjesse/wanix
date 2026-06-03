@@ -94,8 +94,9 @@ and read-only directories, reads/writes regular files, lists directories with
 `Treaddir`, clunks fids, reports no-follow metadata with `Tgetattr`, creates
 and reads symbolic links with `Tsymlink` and `Treadlink`, and handles core mount
 and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, `Trenameat`, and
-`Tunlinkat`; it also serves encoded request/response frames through a
-synchronous stream loop.
+`Tunlinkat`, plus synchronous compatibility probes with `Tflush` and
+`Tfsync`; it also serves encoded request/response frames through a synchronous
+stream loop.
 `wanix-rust p9-stdio --root DIR` exposes that server over process
 stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
 for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
@@ -348,6 +349,9 @@ cargo test --workspace --locked
 - [ADR 0073](docs/adrs/0073-9p-symlink-readlink.md):
   `wanix-9p` exposes Wanix-owned symlink creation and readlink semantics through
   9P2000.L `Tsymlink` and `Treadlink`.
+- [ADR 0074](docs/adrs/0074-9p-flush-fsync.md):
+  `wanix-9p` acknowledges `Tflush` and validates `Tfsync` fids so external
+  clients can pass common sync and cancelation probes.
 
 ## Cycle Rules
 

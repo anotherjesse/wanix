@@ -63,6 +63,12 @@ pub const P9_TREADDIR: u8 = 40;
 /// 9P2000.L `Rreaddir` message type.
 pub const P9_RREADDIR: u8 = 41;
 
+/// 9P2000.L `Tfsync` message type.
+pub const P9_TFSYNC: u8 = 50;
+
+/// 9P2000.L `Rfsync` message type.
+pub const P9_RFSYNC: u8 = 51;
+
 /// 9P2000.L `Tmkdir` message type.
 pub const P9_TMKDIR: u8 = 72;
 
@@ -92,6 +98,12 @@ pub const P9_TATTACH: u8 = 104;
 
 /// 9P `Rattach` message type.
 pub const P9_RATTACH: u8 = 105;
+
+/// 9P `Tflush` message type.
+pub const P9_TFLUSH: u8 = 108;
+
+/// 9P `Rflush` message type.
+pub const P9_RFLUSH: u8 = 109;
 
 /// 9P `Twalk` message type.
 pub const P9_TWALK: u8 = 110;
@@ -136,6 +148,8 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RGETATTR => Some("Rgetattr"),
         P9_TREADDIR => Some("Treaddir"),
         P9_RREADDIR => Some("Rreaddir"),
+        P9_TFSYNC => Some("Tfsync"),
+        P9_RFSYNC => Some("Rfsync"),
         P9_TMKDIR => Some("Tmkdir"),
         P9_RMKDIR => Some("Rmkdir"),
         P9_TRENAMEAT => Some("Trenameat"),
@@ -146,6 +160,8 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RVERSION => Some("Rversion"),
         P9_TATTACH => Some("Tattach"),
         P9_RATTACH => Some("Rattach"),
+        P9_TFLUSH => Some("Tflush"),
+        P9_RFLUSH => Some("Rflush"),
         P9_TWALK => Some("Twalk"),
         P9_RWALK => Some("Rwalk"),
         P9_TREAD => Some("Tread"),
@@ -491,6 +507,20 @@ pub struct P9StatFs {
     pub fid: u32,
 }
 
+/// Decoded payload for `Tfsync`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct P9Fsync {
+    /// Fid to synchronize.
+    pub fid: u32,
+}
+
+/// Decoded payload for `Tflush`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct P9Flush {
+    /// Tag of the request being flushed.
+    pub oldtag: u16,
+}
+
 /// 9P2000.L filesystem stats returned by `Rstatfs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct P9FsStat {
@@ -752,6 +782,20 @@ pub fn p9_rstatfs(tag: u16, stat: P9FsStat) -> P9Frame {
     P9Frame::new(P9_RSTATFS, tag, payload)
 }
 
+/// Builds a `Tfsync` frame.
+#[must_use]
+pub fn p9_tfsync(tag: u16, fid: u32) -> P9Frame {
+    let mut payload = Vec::with_capacity(4);
+    push_u32(&mut payload, fid);
+    P9Frame::new(P9_TFSYNC, tag, payload)
+}
+
+/// Builds an `Rfsync` frame.
+#[must_use]
+pub fn p9_rfsync(tag: u16) -> P9Frame {
+    P9Frame::new(P9_RFSYNC, tag, Vec::new())
+}
+
 /// Builds a `Tattach` frame.
 ///
 /// # Errors
@@ -780,6 +824,20 @@ pub fn p9_rattach(tag: u16, qid: P9Qid) -> P9Frame {
     let mut payload = Vec::with_capacity(13);
     push_qid(&mut payload, qid);
     P9Frame::new(P9_RATTACH, tag, payload)
+}
+
+/// Builds a `Tflush` frame.
+#[must_use]
+pub fn p9_tflush(tag: u16, oldtag: u16) -> P9Frame {
+    let mut payload = Vec::with_capacity(2);
+    push_u16(&mut payload, oldtag);
+    P9Frame::new(P9_TFLUSH, tag, payload)
+}
+
+/// Builds an `Rflush` frame.
+#[must_use]
+pub fn p9_rflush(tag: u16) -> P9Frame {
+    P9Frame::new(P9_RFLUSH, tag, Vec::new())
 }
 
 /// Builds a `Twalk` frame.
@@ -1139,6 +1197,31 @@ pub fn p9_decode_rstatfs(frame: &P9Frame) -> Result<P9FsStat, P9Error> {
     Ok(stat)
 }
 
+/// Decodes a `Tfsync` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tfsync` or the payload is
+/// malformed.
+pub fn p9_decode_tfsync(frame: &P9Frame) -> Result<P9Fsync, P9Error> {
+    expect_message_type(frame, P9_TFSYNC)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok(P9Fsync { fid })
+}
+
+/// Decodes an `Rfsync` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rfsync` or the payload is not
+/// empty.
+pub fn p9_decode_rfsync(frame: &P9Frame) -> Result<(), P9Error> {
+    expect_message_type(frame, P9_RFSYNC)?;
+    PayloadCursor::new(frame.payload()).finish()
+}
+
 /// Decodes a `Tattach` frame payload.
 ///
 /// # Errors
@@ -1171,6 +1254,31 @@ pub fn p9_decode_tattach(frame: &P9Frame) -> Result<P9Attach, P9Error> {
 /// malformed.
 pub fn p9_decode_rattach(frame: &P9Frame) -> Result<P9Qid, P9Error> {
     decode_qid_frame(frame, P9_RATTACH)
+}
+
+/// Decodes a `Tflush` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tflush` or the payload is
+/// malformed.
+pub fn p9_decode_tflush(frame: &P9Frame) -> Result<P9Flush, P9Error> {
+    expect_message_type(frame, P9_TFLUSH)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let oldtag = cursor.read_u16()?;
+    cursor.finish()?;
+    Ok(P9Flush { oldtag })
+}
+
+/// Decodes an `Rflush` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rflush` or the payload is not
+/// empty.
+pub fn p9_decode_rflush(frame: &P9Frame) -> Result<(), P9Error> {
+    expect_message_type(frame, P9_RFLUSH)?;
+    PayloadCursor::new(frame.payload()).finish()
 }
 
 /// Decodes a `Twalk` frame payload.
@@ -2036,6 +2144,8 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RGETATTR), Some("Rgetattr"));
         assert_eq!(p9_message_type_name(P9_TREADDIR), Some("Treaddir"));
         assert_eq!(p9_message_type_name(P9_RREADDIR), Some("Rreaddir"));
+        assert_eq!(p9_message_type_name(P9_TFSYNC), Some("Tfsync"));
+        assert_eq!(p9_message_type_name(P9_RFSYNC), Some("Rfsync"));
         assert_eq!(p9_message_type_name(P9_TMKDIR), Some("Tmkdir"));
         assert_eq!(p9_message_type_name(P9_RMKDIR), Some("Rmkdir"));
         assert_eq!(p9_message_type_name(P9_TRENAMEAT), Some("Trenameat"));
@@ -2044,6 +2154,8 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RUNLINKAT), Some("Runlinkat"));
         assert_eq!(p9_message_type_name(P9_TATTACH), Some("Tattach"));
         assert_eq!(p9_message_type_name(P9_RATTACH), Some("Rattach"));
+        assert_eq!(p9_message_type_name(P9_TFLUSH), Some("Tflush"));
+        assert_eq!(p9_message_type_name(P9_RFLUSH), Some("Rflush"));
         assert_eq!(p9_message_type_name(P9_TWALK), Some("Twalk"));
         assert_eq!(p9_message_type_name(P9_RWALK), Some("Rwalk"));
         assert_eq!(p9_message_type_name(P9_TREAD), Some("Tread"));
@@ -2098,6 +2210,22 @@ mod tests {
     }
 
     #[test]
+    fn fsync_round_trips_empty_response() {
+        let frame = p9_tfsync(4, 10).encode().unwrap();
+        assert_eq!(&frame[..4], &11_u32.to_le_bytes());
+        assert_eq!(frame[4], P9_TFSYNC);
+        assert_eq!(
+            p9_decode_tfsync(&P9Frame::decode(&frame).unwrap()).unwrap(),
+            P9Fsync { fid: 10 }
+        );
+
+        let response = p9_rfsync(4).encode().unwrap();
+        assert_eq!(&response[..4], &7_u32.to_le_bytes());
+        assert_eq!(response[4], P9_RFSYNC);
+        p9_decode_rfsync(&P9Frame::decode(&response).unwrap()).unwrap();
+    }
+
+    #[test]
     fn attach_round_trips_9p2000_l_payload() {
         let frame = p9_tattach(4, 10, P9_NOFID, "root", "", 1000).unwrap();
         let bytes = frame.encode().unwrap();
@@ -2120,6 +2248,22 @@ mod tests {
             p9_decode_rattach(&P9Frame::decode(&response.encode().unwrap()).unwrap()).unwrap(),
             qid
         );
+    }
+
+    #[test]
+    fn flush_round_trips_oldtag_and_empty_response() {
+        let frame = p9_tflush(6, 42).encode().unwrap();
+        assert_eq!(&frame[..4], &9_u32.to_le_bytes());
+        assert_eq!(frame[4], P9_TFLUSH);
+        assert_eq!(
+            p9_decode_tflush(&P9Frame::decode(&frame).unwrap()).unwrap(),
+            P9Flush { oldtag: 42 }
+        );
+
+        let response = p9_rflush(6).encode().unwrap();
+        assert_eq!(&response[..4], &7_u32.to_le_bytes());
+        assert_eq!(response[4], P9_RFLUSH);
+        p9_decode_rflush(&P9Frame::decode(&response).unwrap()).unwrap();
     }
 
     #[test]
