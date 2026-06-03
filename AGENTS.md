@@ -94,11 +94,11 @@ and read-only directories, reads/writes regular files, lists directories with
 `Treaddir`, clunks fids, reports no-follow metadata with `Tgetattr`, creates
 and reads symbolic links with `Tsymlink` and `Treadlink`, and handles core mount
 and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, `Trenameat`, and
-`Tunlinkat`, file size and timestamp mutation with `Tsetattr`, advisory-lock
-compatibility probes with `Tlock`/`Tgetlock`, synchronous compatibility probes
-with `Tflush` and `Tfsync`, and append-open write semantics for `O_APPEND`
-fids; it also serves encoded request/response frames through a synchronous
-stream loop.
+`Tunlinkat`, file size, permission, and timestamp mutation with `Tsetattr`,
+advisory-lock compatibility probes with `Tlock`/`Tgetlock`, synchronous
+compatibility probes with `Tflush` and `Tfsync`, and append-open write
+semantics for `O_APPEND` fids; it also serves encoded request/response frames
+through a synchronous stream loop.
 `wanix-rust p9-stdio --root DIR` exposes that server over process
 stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
 for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
@@ -356,13 +356,16 @@ cargo test --workspace --locked
   clients can pass common sync and cancelation probes.
 - [ADR 0075](docs/adrs/0075-9p-setattr-size-times.md):
   `wanix-9p` supports the `Tsetattr` size and access/modification time subset
-  while returning explicit unsupported errors for chmod/chown/ctime.
+  while returning explicit unsupported errors for ownership and ctime changes.
 - [ADR 0076](docs/adrs/0076-9p-lock-probe-compatibility.md):
   `wanix-9p` answers `Tlock` and `Tgetlock` as compatibility probes without a
   persistent advisory-lock manager.
 - [ADR 0077](docs/adrs/0077-9p-open-append-semantics.md):
   `wanix-9p` stores `O_APPEND` as opened fid state so writes append at EOF
   regardless of 9P write offsets.
+- [ADR 0078](docs/adrs/0078-9p-setattr-permissions.md):
+  `wanix-9p` routes `Tsetattr(PERMISSIONS)` through Wanix filesystem permission
+  mutation for chmod-compatible mounted workflows.
 
 ## Cycle Rules
 

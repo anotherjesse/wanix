@@ -73,8 +73,7 @@ const P9_SETATTR_KNOWN_MASK: u32 = P9_SETATTR_PERMISSIONS
     | P9_SETATTR_CTIME
     | P9_SETATTR_ATIME_NOT_SYSTEM_TIME
     | P9_SETATTR_MTIME_NOT_SYSTEM_TIME;
-const P9_SETATTR_UNSUPPORTED_MASK: u32 =
-    P9_SETATTR_PERMISSIONS | P9_SETATTR_UID | P9_SETATTR_GID | P9_SETATTR_CTIME;
+const P9_SETATTR_UNSUPPORTED_MASK: u32 = P9_SETATTR_UID | P9_SETATTR_GID | P9_SETATTR_CTIME;
 
 const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
@@ -384,6 +383,11 @@ impl P9Server {
         }
         if setattr.valid & (P9_SETATTR_ATIME | P9_SETATTR_MTIME) != 0
             && let Err(error) = self.set_file_times(&path, setattr.valid, &setattr.attr)
+        {
+            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
+        }
+        if setattr.valid & P9_SETATTR_PERMISSIONS != 0
+            && let Err(error) = self.root.set_permissions(&path, setattr.attr.permissions)
         {
             return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
         }
@@ -1502,7 +1506,7 @@ mod tests {
     }
 
     #[test]
-    fn setattr_unsupported_permissions_do_not_partially_resize() {
+    fn setattr_permissions_update_reported_mode() {
         let fs = Arc::new(MemFs::new());
         fs.write_file("mode.txt", b"abcdef").unwrap();
         let mut server = server(Arc::clone(&fs));
@@ -1523,9 +1527,75 @@ mod tests {
             ))
             .unwrap();
 
+        assert_eq!(response.message_type(), P9_RSETATTR);
+        assert_eq!(fs.read_file("mode.txt").unwrap(), b"abc");
+        assert_eq!(
+            fs.metadata(&NormalizedPath::new("mode.txt").unwrap())
+                .unwrap()
+                .mode(),
+            0o600
+        );
+
+        let response = server.handle_frame(&p9_tgetattr(4, 2, u64::MAX)).unwrap();
+        assert_eq!(response.message_type(), P9_RGETATTR);
+        assert_eq!(
+            p9_decode_rgetattr(&response).unwrap().mode,
+            P9_MODE_REG | 0o600
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn setattr_permissions_mutate_host_backed_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_dir("wanix-9p-setattr-permissions");
+        fs::write(root.join("host.txt"), b"abcdef").unwrap();
+        let local = Arc::new(LocalFs::new(&root).unwrap());
+        let root_fs: Arc<dyn FileSystem> = local;
+        let mut server = P9Server::new(root_fs);
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["host.txt"]);
+        let attr = P9SetAttr {
+            permissions: 0o600,
+            ..P9SetAttr::default()
+        };
+        let response = server
+            .handle_frame(&p9_tsetattr(3, 2, P9_SETATTR_PERMISSIONS, &attr))
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RSETATTR);
+        assert_eq!(
+            fs::metadata(root.join("host.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn setattr_unsupported_uid_does_not_partially_resize() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("owner.txt", b"abcdef").unwrap();
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["owner.txt"]);
+        let attr = P9SetAttr {
+            uid: 1000,
+            size: 3,
+            ..P9SetAttr::default()
+        };
+        let response = server
+            .handle_frame(&p9_tsetattr(3, 2, P9_SETATTR_UID | P9_SETATTR_SIZE, &attr))
+            .unwrap();
+
         assert_eq!(response.message_type(), P9_RLERROR);
         assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EOPNOTSUPP);
-        assert_eq!(fs.read_file("mode.txt").unwrap(), b"abcdef");
+        assert_eq!(fs.read_file("owner.txt").unwrap(), b"abcdef");
     }
 
     #[test]

@@ -442,6 +442,70 @@ fn set_times_routes_to_highest_priority_backing_filesystem() {
 }
 
 #[test]
+fn set_permissions_routes_to_highest_priority_backing_filesystem() {
+    let lower = fixture(&[("same.txt", b"lower"), ("synthetic.txt", b"synthetic")]);
+    let upper = fixture(&[("same.txt", b"upper")]);
+    let mut ns = Namespace::new();
+    ns.bind(lower.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    ns.bind(upper.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    ns.bind(
+        lower.clone(),
+        "synthetic.txt",
+        "a/b/synthetic.txt",
+        BindOptions::default(),
+    )
+    .unwrap();
+
+    ns.set_permissions(&path("same.txt"), 0o600).unwrap();
+
+    assert_eq!(upper.metadata(&path("same.txt")).unwrap().mode(), 0o600);
+    assert_eq!(lower.metadata(&path("same.txt")).unwrap().mode(), 0o644);
+    assert_eq!(
+        ns.set_permissions(&path("a"), 0o700),
+        Err(FsError::NotSupported)
+    );
+    assert_eq!(
+        ns.set_permissions(&path("missing.txt"), 0o600),
+        Err(FsError::NotFound)
+    );
+}
+
+#[test]
+fn set_permissions_continues_past_unsupported_missing_candidates() {
+    struct NoChmodFs;
+
+    impl FileSystem for NoChmodFs {
+        fn open(&self, _path: &NormalizedPath, _options: OpenOptions) -> FsResult<Box<dyn File>> {
+            Err(FsError::NotSupported)
+        }
+
+        fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
+            match path.as_str() {
+                "." => Ok(Metadata::new(FileType::Directory, 2, 0o755)),
+                _ => Err(FsError::NotFound),
+            }
+        }
+
+        fn read_dir(&self, _path: &NormalizedPath) -> FsResult<Vec<DirEntry>> {
+            Err(FsError::NotSupported)
+        }
+    }
+
+    let lower = fixture(&[("same.txt", b"lower")]);
+    let mut ns = Namespace::new();
+    ns.bind(lower.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    ns.bind(Arc::new(NoChmodFs), ".", ".", BindOptions::default())
+        .unwrap();
+
+    ns.set_permissions(&path("same.txt"), 0o600).unwrap();
+
+    assert_eq!(lower.metadata(&path("same.txt")).unwrap().mode(), 0o600);
+}
+
+#[test]
 fn read_dir_unions_direct_and_subpath_bindings() {
     let fs1 = fixture(&[
         ("file1.txt", b"content1"),

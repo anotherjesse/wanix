@@ -372,6 +372,16 @@ impl FileSystem for MemFs {
         node.modified_time_ns = modified_time_ns;
         Ok(())
     }
+
+    fn set_permissions(&self, path: &NormalizedPath, permissions: u32) -> FsResult<()> {
+        let mut nodes = self
+            .nodes
+            .write()
+            .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
+        let node = nodes.get_mut(path).ok_or(FsError::NotFound)?;
+        node.mode = permissions & 0o7777;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

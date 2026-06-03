@@ -298,6 +298,11 @@ impl FileSystem for LocalFs {
         fs::rename(old_host_path, new_host_path).map_err(map_io_error)
     }
 
+    fn set_permissions(&self, path: &NormalizedPath, permissions: u32) -> FsResult<()> {
+        let host_path = self.existing_host_path(path)?;
+        set_host_permissions(&host_path, permissions)
+    }
+
     fn set_times(
         &self,
         path: &NormalizedPath,
@@ -419,6 +424,21 @@ fn metadata_mode(metadata: &fs::Metadata) -> u32 {
     } else {
         0o644
     }
+}
+
+#[cfg(unix)]
+fn set_host_permissions(path: &Path, permissions: u32) -> FsResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(permissions & 0o7777))
+        .map_err(map_io_error)
+}
+
+#[cfg(not(unix))]
+fn set_host_permissions(path: &Path, permissions: u32) -> FsResult<()> {
+    let mut current = fs::metadata(path).map_err(map_io_error)?.permissions();
+    current.set_readonly(permissions & 0o222 == 0);
+    fs::set_permissions(path, current).map_err(map_io_error)
 }
 
 #[cfg(unix)]
@@ -742,6 +762,37 @@ mod tests {
         assert_eq!(metadata.modified_time_ns(), 2_000_000_000);
         assert_eq!(
             fs.set_times(&path("missing.txt"), 1_000_000_000, 2_000_000_000),
+            Err(FsError::NotFound)
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn localfs_set_permissions_updates_host_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_root();
+        fs::write(root.join("mode.txt"), "mode").unwrap();
+        let fs = LocalFs::new(&root).unwrap();
+
+        fs.set_permissions(&path("mode.txt"), 0o100600).unwrap();
+
+        assert_eq!(
+            fs::metadata(root.join("mode.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs.metadata(&path("mode.txt")).unwrap().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs.set_permissions(&path("missing.txt"), 0o600),
             Err(FsError::NotFound)
         );
 

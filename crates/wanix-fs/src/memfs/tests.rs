@@ -255,6 +255,35 @@ fn set_times_updates_file_metadata_deterministically() {
 }
 
 #[test]
+fn set_permissions_updates_file_and_directory_modes() {
+    let fs = MemFs::new();
+    fs.write_file("file.txt", b"hello").unwrap();
+    fs.create_dir(&NormalizedPath::new("dir").unwrap()).unwrap();
+
+    fs.set_permissions(&NormalizedPath::new("file.txt").unwrap(), 0o100600)
+        .unwrap();
+    fs.set_permissions(&NormalizedPath::new("dir").unwrap(), 0o40700)
+        .unwrap();
+
+    assert_eq!(
+        fs.metadata(&NormalizedPath::new("file.txt").unwrap())
+            .unwrap()
+            .mode(),
+        0o600
+    );
+    assert_eq!(
+        fs.metadata(&NormalizedPath::new("dir").unwrap())
+            .unwrap()
+            .mode(),
+        0o700
+    );
+    assert_eq!(
+        fs.set_permissions(&NormalizedPath::new("missing.txt").unwrap(), 0o600),
+        Err(FsError::NotFound)
+    );
+}
+
+#[test]
 fn create_succeeds_in_existing_parent_and_truncate_clears_file() {
     let fs = MemFs::new();
     fs.create_dir_all("dir").unwrap();

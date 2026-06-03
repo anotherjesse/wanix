@@ -239,6 +239,19 @@ pub trait FileSystem: Send + Sync {
         Err(FsError::NotSupported)
     }
 
+    /// Sets Unix-style permission bits for `path`.
+    ///
+    /// Implementations should preserve file-type bits and apply the lower
+    /// permission/special-mode bits that make sense for the backing filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the path cannot have its permissions updated.
+    fn set_permissions(&self, path: &NormalizedPath, _permissions: u32) -> FsResult<()> {
+        self.metadata(path)?;
+        Err(FsError::NotSupported)
+    }
+
     /// Sets explicit access and modification times for `path`.
     ///
     /// Timestamps are nanoseconds since the Unix epoch. Metadata-change time is

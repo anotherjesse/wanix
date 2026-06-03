@@ -1557,10 +1557,11 @@ mod tests {
     use wanix_protocol::{
         P9_LOCK_STATUS_OK, P9_LOCK_TYPE_READ, P9_LOCK_TYPE_UNLOCK, P9_LOCK_TYPE_WRITE, P9_NOFID,
         P9_RATTACH, P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLOCK, P9_RLOPEN, P9_RREAD,
-        P9_RREADDIR, P9_RVERSION, P9_RWALK, P9_RWRITE, P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer,
-        P9Lock, p9_decode_rgetattr, p9_decode_rgetlock, p9_decode_rlock, p9_decode_rread,
-        p9_decode_rreaddir, p9_decode_rwrite, p9_tattach, p9_tgetattr, p9_tgetlock, p9_tlcreate,
-        p9_tlock, p9_tlopen, p9_tread, p9_treaddir, p9_tversion, p9_twalk, p9_twrite,
+        P9_RREADDIR, P9_RSETATTR, P9_RVERSION, P9_RWALK, P9_RWRITE, P9_SETATTR_PERMISSIONS,
+        P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer, P9Lock, P9SetAttr, p9_decode_rgetattr,
+        p9_decode_rgetlock, p9_decode_rlock, p9_decode_rread, p9_decode_rreaddir, p9_decode_rwrite,
+        p9_tattach, p9_tgetattr, p9_tgetlock, p9_tlcreate, p9_tlock, p9_tlopen, p9_tread,
+        p9_treaddir, p9_tsetattr, p9_tversion, p9_twalk, p9_twrite,
     };
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -1817,6 +1818,53 @@ mod tests {
         assert_eq!(p9_decode_rwrite(&frames[4]).unwrap(), 2);
         assert_eq!(p9_decode_rwrite(&frames[5]).unwrap(), 2);
         assert_eq!(fs::read(root.join("log.txt")).unwrap(), b"start-a-b");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn p9_stdio_chmods_host_file_over_binary_stdio() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_dir("wanix-cli-p9-stdio-chmod");
+        fs::write(root.join("mode.txt"), b"mode").unwrap();
+        let attr = P9SetAttr {
+            permissions: 0o600,
+            ..P9SetAttr::default()
+        };
+        let input = request_stream([
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, P9_NOFID, "root", "", 0).unwrap(),
+            p9_twalk(3, 1, 2, &["mode.txt"]).unwrap(),
+            p9_tsetattr(4, 2, P9_SETATTR_PERMISSIONS, &attr),
+            p9_tgetattr(5, 2, u64::MAX),
+        ]);
+
+        let output = run_with_process_stdin(
+            [
+                "p9-stdio".into(),
+                "--root".into(),
+                root.clone().into_os_string(),
+            ],
+            input.as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.stderr().is_empty());
+        let frames = decode_response_stream(output.stdout());
+        assert_eq!(
+            frame_types(&frames),
+            [P9_RVERSION, P9_RATTACH, P9_RWALK, P9_RSETATTR, P9_RGETATTR]
+        );
+        assert_eq!(p9_decode_rgetattr(&frames[4]).unwrap().mode & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(root.join("mode.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
 
     #[test]
