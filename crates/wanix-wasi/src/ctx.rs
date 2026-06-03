@@ -4,7 +4,7 @@ use std::fmt;
 use wanix_fs::{DirEntry, File, FileSystem, FileType, FsError, NormalizedPath, OpenOptions};
 use wanix_vfs::Namespace;
 
-use crate::{Errno, FileStat, WasiConfig, WasiFd, WasiOpenOptions};
+use crate::{Errno, FileStat, WasiConfig, WasiFd, WasiFile, WasiOpenOptions};
 
 const FIRST_PREOPEN_FD: u32 = 3;
 const MAX_WASI_PATH_BYTES: usize = 4096;
@@ -18,6 +18,9 @@ pub struct WasiCtx {
 }
 
 enum Handle {
+    Stdio {
+        file: WasiFile,
+    },
     Preopen {
         path: NormalizedPath,
     },
@@ -35,6 +38,7 @@ enum Handle {
 impl fmt::Debug for Handle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Stdio { file } => f.debug_struct("Stdio").field("file", file).finish(),
             Self::Preopen { path } => f.debug_struct("Preopen").field("path", path).finish(),
             Self::Directory { path } => f.debug_struct("Directory").field("path", path).finish(),
             Self::File {
@@ -59,6 +63,9 @@ impl WasiCtx {
     /// Creates a WASI context and validates all configured preopens.
     pub fn try_new(config: WasiConfig) -> Result<Self, Errno> {
         let mut fds = BTreeMap::new();
+        for (fd, file) in config.stdio() {
+            fds.insert(*fd, Handle::Stdio { file: file.clone() });
+        }
         for (index, preopen) in config.preopens().iter().enumerate() {
             let path = preopen.guest_path().clone();
             let metadata = config.namespace().metadata(&path).map_err(Errno::from)?;
@@ -69,7 +76,8 @@ impl WasiCtx {
                 WasiFd::new(FIRST_PREOPEN_FD + u32::try_from(index).map_err(|_| Errno::Inval)?);
             fds.insert(fd, Handle::Preopen { path });
         }
-        let next_fd = FIRST_PREOPEN_FD + u32::try_from(fds.len()).map_err(|_| Errno::Inval)?;
+        let next_fd =
+            FIRST_PREOPEN_FD + u32::try_from(config.preopens().len()).map_err(|_| Errno::Inval)?;
         Ok(Self {
             namespace: config.namespace().clone(),
             fds,
@@ -115,6 +123,12 @@ impl WasiCtx {
     /// Reads bytes from an open fd.
     pub fn fd_read(&mut self, fd: WasiFd, buf: &mut [u8]) -> Result<usize, Errno> {
         match self.fds.get_mut(&fd).ok_or(Errno::Badf)? {
+            Handle::Stdio { file } => {
+                if !file.can_read() {
+                    return Err(Errno::Notcapable);
+                }
+                file.read(buf).map_err(Errno::from)
+            }
             Handle::File { file, read, .. } => {
                 if !*read {
                     return Err(Errno::Notcapable);
@@ -128,6 +142,12 @@ impl WasiCtx {
     /// Writes bytes to an open fd.
     pub fn fd_write(&mut self, fd: WasiFd, buf: &[u8]) -> Result<usize, Errno> {
         match self.fds.get_mut(&fd).ok_or(Errno::Badf)? {
+            Handle::Stdio { file } => {
+                if !file.can_write() {
+                    return Err(Errno::Notcapable);
+                }
+                file.write(buf).map_err(Errno::from)
+            }
             Handle::File { file, write, .. } => {
                 if !*write {
                     return Err(Errno::Notcapable);
@@ -149,6 +169,7 @@ impl WasiCtx {
     /// Returns stat data for an open fd.
     pub fn fd_filestat_get(&self, fd: WasiFd) -> Result<FileStat, Errno> {
         match self.fds.get(&fd).ok_or(Errno::Badf)? {
+            Handle::Stdio { file } => file.metadata().map(FileStat::new).map_err(Errno::from),
             Handle::Preopen { path } | Handle::Directory { path } => self.stat_path(path),
             Handle::File { file, .. } => file.metadata().map(FileStat::new).map_err(Errno::from),
         }
@@ -180,7 +201,7 @@ impl WasiCtx {
             Handle::Preopen { path } | Handle::Directory { path } => {
                 self.namespace.read_dir(path).map_err(Errno::from)
             }
-            Handle::File { .. } => Err(Errno::Notdir),
+            Handle::Stdio { .. } | Handle::File { .. } => Err(Errno::Notdir),
         }
     }
 
@@ -194,7 +215,7 @@ impl WasiCtx {
     fn resolve_path(&self, dirfd: WasiFd, path: &str) -> Result<NormalizedPath, Errno> {
         let base = match self.fds.get(&dirfd).ok_or(Errno::Badf)? {
             Handle::Preopen { path } | Handle::Directory { path } => path,
-            Handle::File { .. } => return Err(Errno::Notdir),
+            Handle::Stdio { .. } | Handle::File { .. } => return Err(Errno::Notdir),
         };
         let path = wasi_path(path)?;
         join_paths(base, &path).map_err(Errno::from)

@@ -86,6 +86,50 @@ impl From<WasiOpenOptions> for wanix_fs::OpenOptions {
     }
 }
 
+/// Read/write rights for files attached directly to WASI fds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WasiFileAccess {
+    read: bool,
+    write: bool,
+}
+
+impl WasiFileAccess {
+    /// Read-only attached fd access.
+    #[must_use]
+    pub fn read_only() -> Self {
+        Self {
+            read: true,
+            write: false,
+        }
+    }
+
+    /// Write-only attached fd access.
+    #[must_use]
+    pub fn write_only() -> Self {
+        Self {
+            read: false,
+            write: true,
+        }
+    }
+
+    /// Read-write attached fd access.
+    #[must_use]
+    pub fn read_write() -> Self {
+        Self {
+            read: true,
+            write: true,
+        }
+    }
+
+    pub(crate) fn can_read(self) -> bool {
+        self.read
+    }
+
+    pub(crate) fn can_write(self) -> bool {
+        self.write
+    }
+}
+
 /// Stat result returned by the initial WASI context API.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileStat {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::{CRATE_PURPOSE, Errno, Preopen, WasiConfig, WasiCtx, WasiFd, WasiOpenOptions};
-use wanix_fs::{FileSystem, FileType, FsError, MemFs};
+use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
 use wanix_task::TaskTable;
 use wanix_vfs::{BindOptions, Namespace};
 
@@ -32,6 +32,7 @@ fn config_exposes_namespace_and_root_preopen() {
 
     assert_eq!(config.preopens()[0].guest_path().as_str(), ".");
     assert!(config.namespace().bindings().is_empty());
+    assert!(config.stdio_fds().is_empty());
     assert_eq!(Errno::Success, Errno::Success);
 }
 
@@ -112,6 +113,79 @@ fn path_open_and_fd_read_use_wanix_namespace() {
     assert_eq!(fd.get(), 4);
     assert_eq!(&buf[..count], b"hello");
     assert_eq!(ctx.fd_filestat_get(fd).unwrap().file_type(), FileType::File);
+}
+
+#[test]
+fn unconfigured_standard_fds_are_closed() {
+    let root = fixture(&[]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+
+    assert_eq!(ctx.fd_read(WasiFd::STDIN, &mut [0; 1]), Err(Errno::Badf));
+    assert_eq!(ctx.fd_write(WasiFd::STDOUT, b"out"), Err(Errno::Badf));
+    assert_eq!(ctx.fd_write(WasiFd::STDERR, b"err"), Err(Errno::Badf));
+    assert_eq!(ctx.fd_filestat_get(WasiFd::STDOUT), Err(Errno::Badf));
+}
+
+#[test]
+fn configured_standard_fds_read_write_and_remain_non_closeable() {
+    let root = fixture(&[("hello.txt", b"hello")]);
+    let stdin = fixture(&[("stdin", b"input")]);
+    let stdout = fixture(&[("stdout", b"")]);
+    let stderr = fixture(&[("stderr", b"")]);
+    let config = WasiConfig::new(namespace_with_root(root))
+        .with_stdin(
+            stdin
+                .open(&NormalizedPath::new("stdin").unwrap(), OpenOptions::read())
+                .unwrap(),
+            "stdin",
+        )
+        .with_stdout(
+            stdout
+                .open(
+                    &NormalizedPath::new("stdout").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            "stdout",
+        )
+        .with_stderr(
+            stderr
+                .open(
+                    &NormalizedPath::new("stderr").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            "stderr",
+        );
+    assert_eq!(
+        config.stdio_fds(),
+        [WasiFd::STDIN, WasiFd::STDOUT, WasiFd::STDERR]
+    );
+    let mut ctx = WasiCtx::new(config);
+
+    let mut buf = [0; 8];
+    let count = ctx.fd_read(WasiFd::STDIN, &mut buf).unwrap();
+    assert_eq!(&buf[..count], b"input");
+    assert_eq!(ctx.fd_write(WasiFd::STDOUT, b"out").unwrap(), 3);
+    assert_eq!(ctx.fd_write(WasiFd::STDERR, b"err").unwrap(), 3);
+    assert_eq!(
+        ctx.fd_filestat_get(WasiFd::STDOUT).unwrap().file_type(),
+        FileType::File
+    );
+    let file_fd = ctx
+        .path_open(WasiFd::ROOT, "hello.txt", WasiOpenOptions::read())
+        .unwrap();
+
+    assert_eq!(file_fd.get(), 4);
+    assert_eq!(stdout.read_file("stdout").unwrap(), b"out");
+    assert_eq!(stderr.read_file("stderr").unwrap(), b"err");
+    assert_eq!(ctx.fd_write(WasiFd::STDIN, b"nope"), Err(Errno::Notcapable));
+    assert_eq!(
+        ctx.fd_read(WasiFd::STDOUT, &mut buf),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(ctx.fd_close(WasiFd::STDOUT), Err(Errno::Badf));
+    assert_eq!(ctx.fd_read_dir(WasiFd::STDIN), Err(Errno::Notdir));
 }
 
 #[test]
