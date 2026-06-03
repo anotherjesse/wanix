@@ -4,13 +4,14 @@ use std::sync::{Arc, Mutex};
 use rust_wasi_quickjs::{QuickJsCreateOptions, QuickJsRestoreOptions, QuickJsRuntime};
 use wanix_fs::{FsError, FsResult};
 use wanix_task::{Fd, Task};
+use wanix_wasi::WasiConfig;
 
 use crate::host_api::{define_wanix_module_loader, define_wanix_task_globals, qjs_error};
 use crate::task_context::{WanixExitState, WanixTaskContext};
 use crate::task_stdio::task_wasi_config;
 use crate::wasi_host::WanixQuickJsWasiHost;
 use crate::{
-    CONSOLE_PRELUDE, QuickJsRunner, captured_stdio_config, define_task_output_callback,
+    CONSOLE_PRELUDE, QuickJsRunner, captured_stdio_config_for_wasi, define_task_output_callback,
     exit_requested, task_command, task_wasi_argv, wanix_wasi_host_error,
 };
 
@@ -182,12 +183,7 @@ impl QuickJsRunner {
     pub fn create_task_runtime(&self, task: &Task) -> FsResult<QuickJsTaskRuntime> {
         task_command(task)?;
         let exit_state = WanixExitState::default();
-        let wasi_host =
-            WanixQuickJsWasiHost::new_with_exit_state(task_wasi_config(task), exit_state.clone())
-                .map_err(wanix_wasi_host_error)?;
-        let create_options = QuickJsCreateOptions::new()
-            .with_host_config(captured_stdio_config())
-            .with_wasi_host(wasi_host);
+        let create_options = task_create_options(task_wasi_config(task), exit_state.clone())?;
         let mut runtime = self
             .module
             .create_runtime_with_options(create_options)
@@ -214,12 +210,7 @@ impl QuickJsRunner {
     ) -> FsResult<QuickJsTaskRuntime> {
         task_command(task)?;
         let exit_state = WanixExitState::default();
-        let wasi_host =
-            WanixQuickJsWasiHost::new_with_exit_state(task_wasi_config(task), exit_state.clone())
-                .map_err(wanix_wasi_host_error)?;
-        let restore_options = QuickJsRestoreOptions::new()
-            .with_host_config(captured_stdio_config())
-            .with_wasi_host(wasi_host);
+        let restore_options = task_restore_options(task_wasi_config(task), exit_state.clone())?;
         let mut runtime = self
             .module
             .restore_runtime_from_bytes_with_options(bytes, restore_options)
@@ -227,6 +218,30 @@ impl QuickJsRunner {
         attach_task_host_state(&mut runtime, task, exit_state.clone())?;
         Ok(QuickJsTaskRuntime::new(runtime, task.clone(), exit_state))
     }
+}
+
+pub(crate) fn task_create_options(
+    wasi_config: WasiConfig,
+    exit_state: WanixExitState,
+) -> FsResult<QuickJsCreateOptions> {
+    let host_config = captured_stdio_config_for_wasi(&wasi_config);
+    let wasi_host = WanixQuickJsWasiHost::new_with_exit_state(wasi_config, exit_state)
+        .map_err(wanix_wasi_host_error)?;
+    Ok(QuickJsCreateOptions::new()
+        .with_host_config(host_config)
+        .with_wasi_host(wasi_host))
+}
+
+pub(crate) fn task_restore_options(
+    wasi_config: WasiConfig,
+    exit_state: WanixExitState,
+) -> FsResult<QuickJsRestoreOptions> {
+    let host_config = captured_stdio_config_for_wasi(&wasi_config);
+    let wasi_host = WanixQuickJsWasiHost::new_with_exit_state(wasi_config, exit_state)
+        .map_err(wanix_wasi_host_error)?;
+    Ok(QuickJsRestoreOptions::new()
+        .with_host_config(host_config)
+        .with_wasi_host(wasi_host))
 }
 
 fn attach_task_host_state(

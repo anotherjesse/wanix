@@ -419,6 +419,10 @@ fn captured_stdio_config() -> QuickJsHostConfig {
         .with_stderr_capture(true)
 }
 
+fn captured_stdio_config_for_wasi(config: &WasiConfig) -> QuickJsHostConfig {
+    captured_stdio_config().with_clock_time_ns(config.clock_time_ns())
+}
+
 fn captured_stdio_options() -> QuickJsCreateOptions {
     create_options_with_config(captured_stdio_config())
 }
@@ -430,7 +434,7 @@ fn create_options_with_config(config: QuickJsHostConfig) -> QuickJsCreateOptions
 fn captured_stdio_options_with_wanix_wasi(
     config: QuickJsWanixConfig,
 ) -> FsResult<QuickJsCreateOptions> {
-    let host_config = captured_stdio_config().with_clock_time_ns(config.wasi().clock_time_ns());
+    let host_config = captured_stdio_config_for_wasi(config.wasi());
     Ok(create_options_with_config(host_config).with_wasi_host(wanix_wasi_host(config)?))
 }
 
@@ -729,6 +733,46 @@ std.writeFile("output.txt", text + " / qjs");
             .unwrap();
 
         assert_eq!(output.stdout(), b"date 12345\n");
+    }
+
+    #[test]
+    fn task_runtime_options_mirror_wasi_clock_into_quickjs_host_config() {
+        let create_options = crate::task_runtime::task_create_options(
+            WasiConfig::default().with_clock_time_ns(12_345_000_000),
+            crate::task_context::WanixExitState::default(),
+        )
+        .unwrap();
+        assert_eq!(create_options.host_config().clock_time_ns(), 12_345_000_000);
+        let mut runtime = runner()
+            .module
+            .create_runtime_with_options(create_options)
+            .unwrap();
+
+        runtime
+            .eval_discard("globalThis.beforeClock = Date.now();")
+            .unwrap();
+        assert_eq!(runtime.eval_number("Date.now()").unwrap(), 12_345.0);
+        let snapshot_bytes = runtime.snapshot().unwrap().try_to_bytes().unwrap();
+
+        let restore_options = crate::task_runtime::task_restore_options(
+            WasiConfig::default().with_clock_time_ns(67_890_000_000),
+            crate::task_context::WanixExitState::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            restore_options.host_config().clock_time_ns(),
+            67_890_000_000
+        );
+        let mut restored = runner()
+            .module
+            .restore_runtime_from_bytes_with_options(&snapshot_bytes, restore_options)
+            .unwrap();
+
+        assert_eq!(
+            restored.eval_number("globalThis.beforeClock").unwrap(),
+            12_345.0
+        );
+        assert_eq!(restored.eval_number("Date.now()").unwrap(), 67_890.0);
     }
 
     #[test]
