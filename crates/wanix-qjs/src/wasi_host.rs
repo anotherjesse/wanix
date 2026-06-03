@@ -242,8 +242,9 @@ fn convert_wanix_file_type(file_type: FileType) -> QuickJsWasiFileType {
 }
 
 fn convert_fdstat(stat: WasiFdStat) -> QuickJsWasiFdStat {
-    QuickJsWasiFdStat::new(
+    QuickJsWasiFdStat::new_with_fdflags(
         convert_file_type(stat.file_type()),
+        stat.fdflags(),
         stat.rights_base().bits(),
         stat.rights_inheriting().bits(),
     )
@@ -267,7 +268,7 @@ mod tests {
 
     use rust_wasi_quickjs::{
         QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat,
-        QuickJsWasiFileType, QuickJsWasiHost, QuickJsWasiPrestat,
+        QuickJsWasiFileType, QuickJsWasiHost, QuickJsWasiPrestat, QuickJsWasiWhence,
     };
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
     use wanix_vfs::{BindOptions, Namespace};
@@ -390,6 +391,34 @@ mod tests {
         );
         host.fd_close(fd).unwrap();
         assert_eq!(root.read_file("out.txt").unwrap(), b"created");
+    }
+
+    #[test]
+    fn adapter_path_open_append_fdflag_reaches_wanix_namespace() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        root.write_file("log.txt", b"start").unwrap();
+        namespace
+            .bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        let fd = host
+            .path_open(
+                3,
+                0,
+                b"log.txt",
+                0,
+                (WasiRights::FD_WRITE | WasiRights::FD_SEEK).bits(),
+                0,
+                WasiOpenOptions::FDFLAGS_APPEND,
+            )
+            .unwrap();
+        host.fd_seek(fd, 0, QuickJsWasiWhence::Set).unwrap();
+        assert_eq!(host.fd_write(fd, b"-appended").unwrap(), 9);
+        host.fd_close(fd).unwrap();
+
+        assert_eq!(root.read_file("log.txt").unwrap(), b"start-appended");
     }
 
     #[test]

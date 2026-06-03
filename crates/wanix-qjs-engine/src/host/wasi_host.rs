@@ -277,6 +277,7 @@ impl QuickJsWasiDirEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuickJsWasiFdStat {
     file_type: QuickJsWasiFileType,
+    fdflags: u16,
     rights_base: u64,
     rights_inheriting: u64,
 }
@@ -289,8 +290,20 @@ impl QuickJsWasiFdStat {
         rights_base: u64,
         rights_inheriting: u64,
     ) -> Self {
+        Self::new_with_fdflags(file_type, 0, rights_base, rights_inheriting)
+    }
+
+    /// Creates fdstat metadata with Preview 1 fdflags.
+    #[must_use]
+    pub const fn new_with_fdflags(
+        file_type: QuickJsWasiFileType,
+        fdflags: u16,
+        rights_base: u64,
+        rights_inheriting: u64,
+    ) -> Self {
         Self {
             file_type,
+            fdflags,
             rights_base,
             rights_inheriting,
         }
@@ -298,6 +311,10 @@ impl QuickJsWasiFdStat {
 
     pub(crate) const fn file_type(self) -> QuickJsWasiFileType {
         self.file_type
+    }
+
+    pub(crate) const fn fdflags(self) -> u16 {
+        self.fdflags
     }
 
     pub(crate) const fn rights_base(self) -> u64 {

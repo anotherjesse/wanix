@@ -114,10 +114,14 @@ impl WasiFile {
     }
 
     pub(crate) fn write_bytes(&self, buf: &[u8]) -> FsResult<usize> {
-        self.file
+        let mut file = self
+            .file
             .lock()
-            .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
-            .write(buf)
+            .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?;
+        if self.access.append() {
+            file.seek(FileSeekFrom::End(0))?;
+        }
+        file.write(buf)
     }
 
     pub(crate) fn seek_file(&self, from: FileSeekFrom) -> FsResult<u64> {

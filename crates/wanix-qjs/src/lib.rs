@@ -2328,6 +2328,63 @@ print("bytes", count);
     }
 
     #[test]
+    fn task_driver_quickjs_append_mode_writes_at_end_of_wanix_files() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.writeFile("log.txt", "start");
+const fd = os.open("log.txt", os.O_WRONLY | os.O_APPEND);
+os.seek(fd, 0, std.SEEK_SET);
+const bytes = new Uint8Array([45, 111, 115]);
+print("os bytes", os.write(fd, bytes.buffer, 0, bytes.length));
+os.close(fd);
+
+const file = std.open("log.txt", "a");
+file.puts("-std");
+file.close();
+
+print("log", std.loadFile("log.txt"));
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"os bytes 3\nlog start-os-std\n"
+        );
+        assert_eq!(root.read_file("log.txt").unwrap(), b"start-os-std");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
     fn task_driver_quickjs_os_removes_wanix_namespace_files() {
         let table = TaskTable::new();
         let runner = runner();

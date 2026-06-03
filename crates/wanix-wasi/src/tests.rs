@@ -674,6 +674,7 @@ fn rights_are_enforced_on_open_fds() {
                 write: true,
                 create: false,
                 truncate: false,
+                append: false,
             },
         )
         .unwrap();
@@ -928,6 +929,7 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
                 write: true,
                 create: false,
                 truncate: false,
+                append: false,
             },
         )
         .unwrap();
@@ -980,6 +982,33 @@ fn fd_seek_and_tell_use_seekable_file_handles() {
 }
 
 #[test]
+fn preview1_append_fdflag_writes_at_end_of_file() {
+    let root = fixture(&[("log.txt", b"start")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "log.txt",
+            0,
+            WasiRights::FD_WRITE | WasiRights::FD_SEEK | WasiRights::FD_TELL,
+            WasiRights::NONE,
+            WasiOpenOptions::FDFLAGS_APPEND,
+        )
+        .unwrap();
+
+    assert_eq!(ctx.fd_tell(fd).unwrap(), 0);
+    assert_eq!(
+        ctx.fd_fdstat_get(fd).unwrap().fdflags(),
+        WasiOpenOptions::FDFLAGS_APPEND
+    );
+    assert_eq!(ctx.fd_write(fd, b"-one").unwrap(), 4);
+    assert_eq!(root.read_file("log.txt").unwrap(), b"start-one");
+    ctx.fd_seek(fd, 0, WasiWhence::Set).unwrap();
+    assert_eq!(ctx.fd_write(fd, b"-two").unwrap(), 4);
+    assert_eq!(root.read_file("log.txt").unwrap(), b"start-one-two");
+}
+
+#[test]
 fn preview1_path_open_flags_convert_to_wanix_open_options() {
     let read = WasiOpenOptions::from_preview1(
         0,
@@ -994,6 +1023,7 @@ fn preview1_path_open_flags_convert_to_wanix_open_options() {
             write: false,
             create: false,
             truncate: false,
+            append: false,
         }
     );
 
@@ -1010,6 +1040,7 @@ fn preview1_path_open_flags_convert_to_wanix_open_options() {
             write: true,
             create: true,
             truncate: true,
+            append: false,
         }
     );
 
@@ -1030,7 +1061,22 @@ fn preview1_path_open_flags_convert_to_wanix_open_options() {
         Err(Errno::Notcapable)
     );
     assert_eq!(
+        WasiOpenOptions::from_preview1(0, WasiRights::FD_WRITE, WasiOpenOptions::FDFLAGS_APPEND)
+            .unwrap(),
+        WasiOpenOptions {
+            read: false,
+            write: true,
+            create: false,
+            truncate: false,
+            append: true,
+        }
+    );
+    assert_eq!(
         WasiOpenOptions::from_preview1(0, WasiRights::FD_READ, WasiOpenOptions::FDFLAGS_APPEND),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiOpenOptions::from_preview1(0, WasiRights::FD_WRITE, WasiOpenOptions::FDFLAGS_DSYNC),
         Err(Errno::Notcapable)
     );
     assert_eq!(
@@ -1064,6 +1110,7 @@ fn preview1_path_open_flags_convert_to_wanix_open_options() {
             write: false,
             create: false,
             truncate: false,
+            append: false,
         }
     );
     assert_eq!(
@@ -1355,6 +1402,7 @@ fn preview1_path_open_enforces_parent_inheriting_rights() {
                 write: true,
                 create: false,
                 truncate: false,
+                append: false,
             },
         ),
         Err(Errno::Notcapable)

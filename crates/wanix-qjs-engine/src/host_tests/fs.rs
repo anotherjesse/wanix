@@ -29,6 +29,7 @@ const RIGHT_PATH_REMOVE_DIRECTORY: i64 = 1 << 25;
 const READ_SEEK_STAT_RIGHTS: i64 =
     RIGHT_FD_READ | RIGHT_FD_SEEK | RIGHT_FD_TELL | RIGHT_FD_FILESTAT_GET;
 
+const FDFLAGS_APPEND: u16 = 1 << 0;
 const OFLAGS_CREATE: i32 = 1 << 0;
 const PREOPEN_ROOT_FD: i32 = 3;
 const FIRST_FILE_FD: i32 = 4;
@@ -324,8 +325,9 @@ impl QuickJsWasiHost for MetadataWasiHost {
 
     fn fd_fdstat_get(&mut self, fd: u32) -> WasiHostResult<QuickJsWasiFdStat> {
         self.record(format!("fdstat:{fd}"));
-        Ok(QuickJsWasiFdStat::new(
+        Ok(QuickJsWasiFdStat::new_with_fdflags(
             QuickJsWasiFileType::Directory,
+            FDFLAGS_APPEND,
             (RIGHT_PATH_CREATE_DIRECTORY
                 | RIGHT_PATH_OPEN
                 | RIGHT_PATH_RENAME_SOURCE
@@ -549,6 +551,7 @@ fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
         ERRNO_SUCCESS
     );
     assert_eq!(harness.read_u8(96)?, FILETYPE_DIRECTORY);
+    assert_eq!(harness.read_bytes(98, 2)?, FDFLAGS_APPEND.to_le_bytes());
     assert_eq!(
         harness.read_u64(104)?,
         (RIGHT_PATH_CREATE_DIRECTORY

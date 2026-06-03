@@ -182,6 +182,7 @@ impl BitOrAssign for WasiRights {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WasiFdStat {
     file_type: WasiFileType,
+    fdflags: u16,
     rights_base: WasiRights,
     rights_inheriting: WasiRights,
 }
@@ -195,8 +196,18 @@ impl WasiFdStat {
         rights_base: WasiRights,
         rights_inheriting: WasiRights,
     ) -> Self {
+        Self::new_with_fdflags(file_type, 0, rights_base, rights_inheriting)
+    }
+
+    pub(crate) const fn new_with_fdflags(
+        file_type: WasiFileType,
+        fdflags: u16,
+        rights_base: WasiRights,
+        rights_inheriting: WasiRights,
+    ) -> Self {
         Self {
             file_type,
+            fdflags,
             rights_base,
             rights_inheriting,
         }
@@ -206,6 +217,12 @@ impl WasiFdStat {
     #[must_use]
     pub const fn file_type(&self) -> WasiFileType {
         self.file_type
+    }
+
+    /// Returns Preview 1 fdflags for this fd.
+    #[must_use]
+    pub const fn fdflags(&self) -> u16 {
+        self.fdflags
     }
 
     /// Returns rights that apply to this fd.
@@ -225,6 +242,7 @@ impl WasiFdStat {
     pub fn to_preview1_bytes(self) -> [u8; Self::PREVIEW1_SIZE] {
         let mut bytes = [0; Self::PREVIEW1_SIZE];
         bytes[0] = self.file_type.preview1_code();
+        bytes[2..4].copy_from_slice(&self.fdflags.to_le_bytes());
         bytes[8..16].copy_from_slice(&self.rights_base.bits().to_le_bytes());
         bytes[16..24].copy_from_slice(&self.rights_inheriting.bits().to_le_bytes());
         bytes
@@ -283,6 +301,8 @@ pub struct WasiOpenOptions {
     pub create: bool,
     /// Truncate existing file.
     pub truncate: bool,
+    /// Seek to the current end of file before every write.
+    pub append: bool,
 }
 
 impl WasiOpenOptions {
@@ -306,7 +326,7 @@ impl WasiOpenOptions {
     pub const FDFLAGS_SYNC: u16 = 1 << 4;
 
     const SUPPORTED_OFLAGS: u16 = Self::OFLAGS_CREATE | Self::OFLAGS_TRUNCATE;
-    const SUPPORTED_FDFLAGS: u16 = 0;
+    const SUPPORTED_FDFLAGS: u16 = Self::FDFLAGS_APPEND;
 
     /// Read-only file open.
     #[must_use]
@@ -316,6 +336,7 @@ impl WasiOpenOptions {
             write: false,
             create: false,
             truncate: false,
+            append: false,
         }
     }
 
@@ -327,6 +348,7 @@ impl WasiOpenOptions {
             write: true,
             create: false,
             truncate: false,
+            append: false,
         }
     }
 
@@ -338,13 +360,15 @@ impl WasiOpenOptions {
             write: true,
             create: true,
             truncate: false,
+            append: false,
         }
     }
 
     /// Converts Preview 1 `path_open` flags and base rights into open options.
     ///
-    /// Directory-only opens, exclusive creation, and fdflags are rejected until
-    /// `WasiCtx::path_open` has explicit semantics for those Preview 1 modes.
+    /// Directory-only opens, exclusive creation, and non-append fdflags are
+    /// rejected until `WasiCtx::path_open` has explicit semantics for those
+    /// Preview 1 modes.
     pub fn from_preview1(
         oflags: u16,
         rights_base: WasiRights,
@@ -360,7 +384,8 @@ impl WasiOpenOptions {
         let write = rights_base.contains(WasiRights::FD_WRITE);
         let create = oflags & Self::OFLAGS_CREATE != 0;
         let truncate = oflags & Self::OFLAGS_TRUNCATE != 0;
-        if (create || truncate) && !write {
+        let append = fdflags & Self::FDFLAGS_APPEND != 0;
+        if (create || truncate || append) && !write {
             return Err(Errno::Notcapable);
         }
         Ok(Self {
@@ -368,6 +393,7 @@ impl WasiOpenOptions {
             write,
             create,
             truncate,
+            append,
         })
     }
 }
@@ -383,8 +409,9 @@ pub struct WasiPathOpen {
 impl WasiPathOpen {
     /// Converts raw Preview 1 `path_open` flags and rights into a request.
     ///
-    /// Directory-only opens, exclusive creation, and fdflags are rejected until
-    /// `WasiCtx::path_open_preview1` has explicit semantics for those modes.
+    /// Directory-only opens, exclusive creation, and non-append fdflags are
+    /// rejected until `WasiCtx::path_open_preview1` has explicit semantics for
+    /// those modes.
     pub fn from_preview1(
         oflags: u16,
         rights_base: WasiRights,
@@ -403,7 +430,8 @@ impl WasiPathOpen {
         }
         let create = oflags & WasiOpenOptions::OFLAGS_CREATE != 0;
         let truncate = oflags & WasiOpenOptions::OFLAGS_TRUNCATE != 0;
-        if (create || truncate) && !rights_base.contains(WasiRights::FD_WRITE) {
+        let append = fdflags & WasiOpenOptions::FDFLAGS_APPEND != 0;
+        if (create || truncate || append) && !rights_base.contains(WasiRights::FD_WRITE) {
             return Err(Errno::Notcapable);
         }
         let options = WasiOpenOptions {
@@ -411,6 +439,7 @@ impl WasiPathOpen {
             write: rights_base.contains(WasiRights::FD_WRITE),
             create,
             truncate,
+            append,
         };
         Ok(Self {
             options,
@@ -458,13 +487,25 @@ impl From<WasiOpenOptions> for wanix_fs::OpenOptions {
 pub struct WasiFileAccess {
     read: bool,
     write: bool,
+    append: bool,
 }
 
 impl WasiFileAccess {
     /// Creates attached fd access from explicit read/write capabilities.
     #[must_use]
     pub const fn new(read: bool, write: bool) -> Self {
-        Self { read, write }
+        Self {
+            read,
+            write,
+            append: false,
+        }
+    }
+
+    /// Returns this access policy with append writes enabled or disabled.
+    #[must_use]
+    pub const fn with_append(mut self, append: bool) -> Self {
+        self.append = append;
+        self
     }
 
     /// Read-only attached fd access.
@@ -473,6 +514,7 @@ impl WasiFileAccess {
         Self {
             read: true,
             write: false,
+            append: false,
         }
     }
 
@@ -482,6 +524,7 @@ impl WasiFileAccess {
         Self {
             read: false,
             write: true,
+            append: false,
         }
     }
 
@@ -491,6 +534,7 @@ impl WasiFileAccess {
         Self {
             read: true,
             write: true,
+            append: false,
         }
     }
 
@@ -500,6 +544,10 @@ impl WasiFileAccess {
 
     pub(crate) fn can_write(self) -> bool {
         self.write
+    }
+
+    pub(crate) fn append(self) -> bool {
+        self.append
     }
 }
 

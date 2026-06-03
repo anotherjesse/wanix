@@ -962,6 +962,7 @@ fn write_wasi_fdstat(
 ) -> wasmtime::Result<()> {
     let mut bytes = [0u8; FDSTAT_SIZE];
     bytes[0] = stat.file_type().preview1_code();
+    bytes[2..4].copy_from_slice(&stat.fdflags().to_le_bytes());
     bytes[8..16].copy_from_slice(&stat.rights_base().to_le_bytes());
     bytes[16..24].copy_from_slice(&stat.rights_inheriting().to_le_bytes());
     Ok(memory.write(caller, guest_offset(stat_ptr), &bytes)?)

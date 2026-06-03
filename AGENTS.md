@@ -148,6 +148,9 @@ cargo test --workspace --locked
 - [ADR 0027](docs/adrs/0027-wasi-rename-through-wanix-namespaces.md):
   `qjs:os.rename(...)` reaches same-filesystem Wanix namespace rename through
   live WASI providers.
+- [ADR 0028](docs/adrs/0028-wasi-append-fdflag-through-wanix-files.md):
+  `qjs:os.open(..., O_APPEND)` and `qjs:std.open(..., "a")` append through
+  Wanix-owned WASI fdflags and shared file handles.
 
 ## Cycle Rules
 

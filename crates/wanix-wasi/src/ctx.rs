@@ -45,7 +45,17 @@ enum Handle {
         read: bool,
         write: bool,
         rights_base: WasiRights,
+        fdflags: u16,
     },
+}
+
+struct OpenFileHandle {
+    file: WasiFile,
+    path: NormalizedPath,
+    read: bool,
+    write: bool,
+    rights_base: WasiRights,
+    fdflags: u16,
 }
 
 impl fmt::Debug for Handle {
@@ -75,6 +85,7 @@ impl fmt::Debug for Handle {
                 read,
                 write,
                 rights_base,
+                fdflags,
                 ..
             } => f
                 .debug_struct("File")
@@ -82,6 +93,7 @@ impl fmt::Debug for Handle {
                 .field("read", read)
                 .field("write", write)
                 .field("rights_base", rights_base)
+                .field("fdflags", fdflags)
                 .finish(),
         }
     }
@@ -212,6 +224,9 @@ impl WasiCtx {
             if options.write || options.create || options.truncate {
                 return Err(Errno::Isdir);
             }
+            if options.append {
+                return Err(Errno::Notcapable);
+            }
             let (rights_base, rights_inheriting) = request.map_or_else(
                 || {
                     (
@@ -271,9 +286,24 @@ impl WasiCtx {
         let file = WasiFile::new(
             file,
             resolved.as_str(),
-            WasiFileAccess::new(options.read, options.write),
+            WasiFileAccess::new(options.read, options.write).with_append(options.append),
         );
-        self.insert_file_handle(fd, file, resolved, options.read, options.write, rights_base)
+        let fdflags = if options.append {
+            WasiOpenOptions::FDFLAGS_APPEND
+        } else {
+            0
+        };
+        self.insert_file_handle(
+            fd,
+            OpenFileHandle {
+                file,
+                path: resolved,
+                read: options.read,
+                write: options.write,
+                rights_base,
+                fdflags,
+            },
+        )
     }
 
     /// Reads bytes from an open fd.
@@ -404,8 +434,13 @@ impl WasiCtx {
                 *rights_base,
                 *rights_inheriting,
             )),
-            Handle::File { rights_base, .. } => Ok(WasiFdStat::new(
+            Handle::File {
+                rights_base,
+                fdflags,
+                ..
+            } => Ok(WasiFdStat::new_with_fdflags(
                 WasiFileType::RegularFile,
+                *fdflags,
                 *rights_base,
                 WasiRights::NONE,
             )),
@@ -540,27 +575,20 @@ impl WasiCtx {
         fd
     }
 
-    fn insert_file_handle(
-        &mut self,
-        fd: WasiFd,
-        file: WasiFile,
-        path: NormalizedPath,
-        read: bool,
-        write: bool,
-        rights_base: WasiRights,
-    ) -> Result<WasiFd, Errno> {
+    fn insert_file_handle(&mut self, fd: WasiFd, handle: OpenFileHandle) -> Result<WasiFd, Errno> {
         if let Some(observer) = &self.fd_observer {
-            observer.file_opened(fd, file.clone(), &path)?;
+            observer.file_opened(fd, handle.file.clone(), &handle.path)?;
         }
         self.next_fd = self.next_fd.max(fd.get().saturating_add(1));
         self.fds.insert(
             fd,
             Handle::File {
-                file,
-                path,
-                read,
-                write,
-                rights_base,
+                file: handle.file,
+                path: handle.path,
+                read: handle.read,
+                write: handle.write,
+                rights_base: handle.rights_base,
+                fdflags: handle.fdflags,
             },
         );
         Ok(fd)

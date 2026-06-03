@@ -2271,6 +2271,49 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_command_appends_through_quickjs_os_and_std() {
+        let script = write_temp_script(
+            "append-demo.js",
+            r#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.writeFile("log.txt", "start");
+const fd = os.open("log.txt", os.O_WRONLY | os.O_APPEND);
+os.seek(fd, 0, std.SEEK_SET);
+const bytes = new Uint8Array([45, 111, 115]);
+std.out.puts("os " + os.write(fd, bytes.buffer, 0, bytes.length) + "\n");
+os.close(fd);
+
+const file = std.open("log.txt", "a");
+file.puts("-std");
+file.close();
+std.out.puts("log " + std.loadFile("log.txt") + "\n");
+std.out.flush();
+"#,
+        );
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"os 3\nlog start-os-std\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_example_append_demo_appends_through_quickjs_os_and_std() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-append-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"os bytes: 3\nlog: start-os-std\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_example_unlink_demo_removes_files_through_quickjs_os() {
         let output = run([
             "qjs".into(),
