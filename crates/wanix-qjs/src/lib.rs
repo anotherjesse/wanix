@@ -11,15 +11,21 @@ use std::sync::{Arc, Mutex};
 
 use rust_wasi_quickjs::{QuickJsHostConfig, QuickJsModule, QuickJsRuntime};
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath};
-use wanix_task::{Fd, Task, TaskDriver};
+use wanix_task::{Fd, Task};
 use wanix_wasi::WasiConfig;
 use wasmtime::Engine;
 
+mod driver;
 mod host_api;
+mod virtual_wasi;
+
+pub use driver::QuickJsTaskDriver;
 
 use host_api::{
-    define_output_callback, define_wanix_namespace_api, qjs_error, read_namespace_file, take_buffer,
+    define_output_callback, define_wanix_module_loader, define_wanix_namespace_api, qjs_error,
+    read_namespace_file, take_buffer,
 };
+use virtual_wasi::with_namespace_read_only_files;
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "quickjs wasi task driver";
@@ -117,7 +123,7 @@ impl QuickJsRunner {
     /// Returns a filesystem error when QuickJS creation, host callback setup,
     /// or JavaScript evaluation fails.
     pub fn run_source(&self, source: &str) -> FsResult<RunOutput> {
-        self.run_source_with_setup(source, |_| Ok(()))
+        self.run_source_with_setup(source, None, |_| Ok(()))
             .map_err(|failure| failure.error)
     }
 
@@ -132,24 +138,68 @@ impl QuickJsRunner {
         source: &str,
         namespace: impl FileSystem + Clone + 'static,
     ) -> FsResult<RunOutput> {
-        self.run_source_with_setup(source, move |runtime| {
+        let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
+        self.run_source_with_setup(source, Some(config), move |runtime| {
+            define_wanix_module_loader(runtime, namespace.clone())?;
             define_wanix_namespace_api(runtime, namespace)
         })
+        .map_err(|failure| failure.error)
+    }
+
+    /// Runs JavaScript as an ES module with access to a Wanix namespace.
+    ///
+    /// The namespace is copied into QuickJS's read-only WASI virtual filesystem
+    /// before execution. The interim `Wanix` host API is also installed so this
+    /// can coexist with the first vertical slice while WASI write support lands.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when namespace projection, QuickJS setup, or
+    /// JavaScript module evaluation fails.
+    pub fn run_module_with_namespace(
+        &self,
+        source: &str,
+        filename: &str,
+        namespace: impl FileSystem + Clone + 'static,
+    ) -> FsResult<RunOutput> {
+        let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
+        self.run_with_setup(
+            source,
+            Some(config),
+            move |runtime| {
+                define_wanix_module_loader(runtime, namespace.clone())?;
+                define_wanix_namespace_api(runtime, namespace)
+            },
+            |runtime, source| {
+                runtime
+                    .eval_module_discard(source, filename)
+                    .map_err(qjs_error)
+            },
+        )
         .map_err(|failure| failure.error)
     }
 
     fn run_source_with_setup(
         &self,
         source: &str,
+        config: Option<QuickJsHostConfig>,
         setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
+    ) -> Result<RunOutput, RunFailure> {
+        self.run_with_setup(source, config, setup, |runtime, source| {
+            runtime.eval_discard(source).map_err(qjs_error)
+        })
+    }
+
+    fn run_with_setup(
+        &self,
+        source: &str,
+        config: Option<QuickJsHostConfig>,
+        setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
+        eval: impl FnOnce(&mut QuickJsRuntime, &str) -> FsResult<()>,
     ) -> Result<RunOutput, RunFailure> {
         let mut runtime = self
             .module
-            .create_runtime_with_host_config(
-                QuickJsHostConfig::new()
-                    .with_stdout_capture(true)
-                    .with_stderr_capture(true),
-            )
+            .create_runtime_with_host_config(config.unwrap_or_else(captured_stdio_config))
             .map_err(|err| RunFailure {
                 error: qjs_error(err),
                 output: RunOutput::empty(),
@@ -162,7 +212,7 @@ impl QuickJsRunner {
             define_output_callback(&mut runtime, "__wanix_stderr", Arc::clone(&stderr))?;
             setup(&mut runtime)?;
             runtime.eval_discard(CONSOLE_PRELUDE).map_err(qjs_error)?;
-            runtime.eval_discard(source).map_err(qjs_error)?;
+            eval(&mut runtime, source)?;
             runtime
                 .execute_pending_jobs_with_limit(1024)
                 .map_err(qjs_error)?;
@@ -196,9 +246,25 @@ impl QuickJsRunner {
         let script_path = task_script_path(task)?;
         let namespace = task.namespace();
         let source = read_namespace_file(&namespace, &script_path)?;
-        match self.run_source_with_setup(&source, move |runtime| {
-            define_wanix_namespace_api(runtime, namespace)
-        }) {
+        let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
+        let run_as_module = uses_module_syntax(&source);
+        match self.run_with_setup(
+            &source,
+            Some(config),
+            move |runtime| {
+                define_wanix_module_loader(runtime, namespace.clone())?;
+                define_wanix_namespace_api(runtime, namespace)
+            },
+            |runtime, source| {
+                if run_as_module {
+                    runtime
+                        .eval_module_discard(source, script_path.as_str())
+                        .map_err(qjs_error)
+                } else {
+                    runtime.eval_discard(source).map_err(qjs_error)
+                }
+            },
+        ) {
             Ok(output) => {
                 write_task_output(task, &output)?;
                 task.set_exit("0")?;
@@ -207,42 +273,6 @@ impl QuickJsRunner {
             Err(failure) => {
                 write_task_output(task, &failure.output)?;
                 Err(failure.error)
-            }
-        }
-    }
-}
-
-/// Wanix task driver for QuickJS tasks.
-#[derive(Debug, Clone)]
-pub struct QuickJsTaskDriver {
-    runner: Arc<QuickJsRunner>,
-}
-
-impl QuickJsTaskDriver {
-    /// Creates a task driver from a runner.
-    #[must_use]
-    pub fn new(runner: Arc<QuickJsRunner>) -> Self {
-        Self { runner }
-    }
-
-    /// Returns the shared runner.
-    #[must_use]
-    pub fn runner(&self) -> &Arc<QuickJsRunner> {
-        &self.runner
-    }
-}
-
-impl TaskDriver for QuickJsTaskDriver {
-    fn check(&self, task: &Task) -> bool {
-        task.cmd().ends_with(".js") || task.cmd().contains(".js ")
-    }
-
-    fn start(&self, task: &Task) -> FsResult<()> {
-        match self.runner.run_task(task) {
-            Ok(_) => Ok(()),
-            Err(err) => {
-                let _ = task.set_exit("1");
-                Err(err)
             }
         }
     }
@@ -261,6 +291,19 @@ globalThis.console = {
   error: (...args) => __wanix_stderr(args.map(String).join(" ") + "\n"),
 };
 "#;
+
+fn captured_stdio_config() -> QuickJsHostConfig {
+    QuickJsHostConfig::new()
+        .with_stdout_capture(true)
+        .with_stderr_capture(true)
+}
+
+fn uses_module_syntax(source: &str) -> bool {
+    source.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("import ") || line.starts_with("export ")
+    })
+}
 
 fn task_script_path(task: &Task) -> FsResult<NormalizedPath> {
     let cmd = task.cmd();
@@ -368,6 +411,36 @@ print(Wanix.readText("output.txt"));
     }
 
     #[test]
+    fn runner_loads_es_modules_from_wanix_namespace() {
+        let mut namespace = wanix_vfs::Namespace::new();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "lib.js",
+            b"import { suffix } from './nested/suffix.js'; export const message = `from namespace ${suffix}`;",
+        )
+        .unwrap();
+        root.write_file("nested/suffix.js", b"export const suffix = 'modules';")
+            .unwrap();
+        namespace
+            .bind(root, ".", ".", BindOptions::default())
+            .unwrap();
+
+        let output = runner()
+            .run_module_with_namespace(
+                r#"
+import { message } from "./lib.js";
+
+print(message);
+"#,
+                "main.js",
+                namespace,
+            )
+            .unwrap();
+
+        assert_eq!(output.stdout(), b"from namespace modules\n");
+    }
+
+    #[test]
     fn task_driver_loads_script_from_namespace_and_writes_task_fds() {
         let table = TaskTable::new();
         let runner = std::sync::Arc::new(runner());
@@ -422,6 +495,51 @@ console.error("stderr", "line");
         assert_eq!(read_file(&*stdout, "out"), b"task namespace via task\n");
         assert_eq!(read_file(&*stderr, "err"), b"stderr line\n");
         assert_eq!(read_file(&*root, "generated.txt"), b"namespace via task");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_loads_es_modules_from_namespace() {
+        let table = TaskTable::new();
+        let runner = std::sync::Arc::new(runner());
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import { message } from "./data/message.js";
+
+print(message);
+"#,
+        )
+        .unwrap();
+        root.write_file(
+            "data/message.js",
+            b"export const message = 'loaded as Wanix module';",
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(read_file(&*stdout, "out"), b"loaded as Wanix module\n");
         assert_eq!(task.exit(), "0");
     }
 

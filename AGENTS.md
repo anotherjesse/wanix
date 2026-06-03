@@ -84,6 +84,12 @@ cargo test --workspace --locked
 - [ADR 0007](docs/adrs/0007-workspace-local-rust-quality-gate.md): Formatting
   checks enumerate Wanix crates while sibling prototypes remain path
   dependencies.
+- [ADR 0008](docs/adrs/0008-quickjs-namespace-modules-and-virtual-wasi-projection.md):
+  QuickJS ES modules load from Wanix namespaces while read-only virtual WASI
+  projection waits on prototype `qjs:std` support.
+- [ADR 0009](docs/adrs/0009-quickjs-tasks-use-wanix-process-semantics.md):
+  QuickJS is the execution engine inside `qjs` Wanix tasks, not a separate
+  process model.
 
 ## Cycle Rules
 

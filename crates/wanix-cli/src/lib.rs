@@ -144,6 +144,7 @@ fn run_qjs(script_path: &Path) -> Result<CliOutput, CliError> {
     let task = table.allocate_root("qjs")?;
 
     let root = Arc::new(MemFs::new());
+    copy_script_directory(script_path, &root)?;
     root.write_file(QJS_GUEST_SCRIPT, script.as_bytes())?;
     task.bind(root, ".", ".", BindOptions::default())?;
 
@@ -187,6 +188,70 @@ fn quickjs_wasm_path() -> PathBuf {
         })
 }
 
+fn copy_script_directory(script_path: &Path, root: &MemFs) -> Result<(), CliError> {
+    let base = script_path.parent().unwrap_or_else(|| Path::new("."));
+    copy_directory_tree(base, base, root)
+}
+
+fn copy_directory_tree(base: &Path, dir: &Path, root: &MemFs) -> Result<(), CliError> {
+    for entry in std::fs::read_dir(dir).map_err(|error| {
+        CliError::new(
+            format!("failed to read directory {}: {error}", dir.display()),
+            1,
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            CliError::new(
+                format!(
+                    "failed to read directory entry in {}: {error}",
+                    dir.display()
+                ),
+                1,
+            )
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            CliError::new(format!("failed to stat {}: {error}", path.display()), 1)
+        })?;
+        if file_type.is_dir() {
+            copy_directory_tree(base, &path, root)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let Some(guest_path) = guest_path_for_host_file(base, &path)? else {
+            continue;
+        };
+        let bytes = std::fs::read(&path).map_err(|error| {
+            CliError::new(format!("failed to read {}: {error}", path.display()), 1)
+        })?;
+        root.write_file(guest_path, bytes)?;
+    }
+    Ok(())
+}
+
+fn guest_path_for_host_file(base: &Path, path: &Path) -> Result<Option<String>, CliError> {
+    let relative = path.strip_prefix(base).map_err(|error| {
+        CliError::new(
+            format!(
+                "failed to map {} under {}: {error}",
+                path.display(),
+                base.display()
+            ),
+            1,
+        )
+    })?;
+    let Some(path) = relative.to_str() else {
+        return Ok(None);
+    };
+    let path = path.replace(std::path::MAIN_SEPARATOR, "/");
+    if path.is_empty() || NormalizedPath::new(&path).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(path))
+}
+
 fn read_file(fs: &dyn FileSystem, path: &str) -> Result<Vec<u8>, CliError> {
     let mut file = fs.open(&NormalizedPath::new(path)?, OpenOptions::read())?;
     let mut out = Vec::new();
@@ -226,17 +291,28 @@ mod tests {
         let script = write_temp_script(
             "demo script.js",
             r##"
+import { runtime } from "./lib.js";
+
 const text = Wanix.readText("main.js");
 Wanix.writeText("created.txt", "made inside Wanix");
 print("task", Wanix.readText("#task/self/id").trim());
+print(runtime);
 print(text.includes("made inside Wanix"), Wanix.readText("created.txt"));
 "##,
         );
+        fs::write(
+            script.parent().unwrap().join("lib.js"),
+            "export const runtime = 'Wanix ES module loader';",
+        )
+        .unwrap();
 
         let output = run(["qjs".into(), script.into_os_string()]).unwrap();
 
         assert_eq!(output.exit_code(), 0);
-        assert_eq!(output.stdout(), b"task 1\ntrue made inside Wanix\n");
+        assert_eq!(
+            output.stdout(),
+            b"task 1\nWanix ES module loader\ntrue made inside Wanix\n"
+        );
         assert!(output.stderr().is_empty());
     }
 
