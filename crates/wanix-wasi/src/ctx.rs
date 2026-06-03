@@ -9,12 +9,12 @@ use wanix_vfs::Namespace;
 
 use crate::{
     Errno, FileStat, WasiConfig, WasiFd, WasiFdObserver, WasiFdStat, WasiFile, WasiFileAccess,
-    WasiFileType, WasiFilestatSetTimes, WasiOpenOptions, WasiPathOpen, WasiPrestat, WasiRights,
+    WasiFileType, WasiFilestatSetTimes, WasiLookupFlags, WasiOpenOptions, WasiPathOpen,
+    WasiPrestat, WasiRights,
 };
 
 const FIRST_PREOPEN_FD: u32 = 3;
 const MAX_WASI_PATH_BYTES: usize = 4096;
-const LOOKUPFLAGS_SYMLINK_FOLLOW: u32 = 1 << 0;
 
 /// Host context for Wanix-backed WASI filesystem operations.
 #[derive(Debug)]
@@ -593,8 +593,19 @@ impl WasiCtx {
         dirfd: WasiFd,
         path: impl AsRef<str>,
     ) -> Result<FileStat, Errno> {
+        self.path_filestat_get_with_flags(dirfd, WasiLookupFlags::SYMLINK_FOLLOW, path)
+    }
+
+    /// Returns stat data for a namespace path using raw Preview 1 lookup flags.
+    pub fn path_filestat_get_with_flags(
+        &self,
+        dirfd: WasiFd,
+        flags: u32,
+        path: impl AsRef<str>,
+    ) -> Result<FileStat, Errno> {
+        let lookup = WasiLookupFlags::from_preview1(flags)?;
         let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_FILESTAT_GET)?;
-        self.stat_path(&path)
+        self.stat_path_with_lookup(&path, lookup)
     }
 
     /// Sets access and modification times for a namespace path relative to `dirfd`.
@@ -607,9 +618,7 @@ impl WasiCtx {
         modified_time_ns: u64,
         fstflags: u16,
     ) -> Result<(), Errno> {
-        if flags & !LOOKUPFLAGS_SYMLINK_FOLLOW != 0 {
-            return Err(Errno::Notcapable);
-        }
+        WasiLookupFlags::from_preview1(flags)?;
         let updates = WasiFilestatSetTimes::from_preview1(fstflags)?;
         let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_FILESTAT_SET_TIMES)?;
         self.set_path_times_with_updates(&path, accessed_time_ns, modified_time_ns, updates)
@@ -755,8 +764,20 @@ impl WasiCtx {
     }
 
     fn stat_path(&self, path: &NormalizedPath) -> Result<FileStat, Errno> {
+        self.stat_path_with_lookup(
+            path,
+            WasiLookupFlags::from_preview1(WasiLookupFlags::SYMLINK_FOLLOW)
+                .expect("constant lookup flag is supported"),
+        )
+    }
+
+    fn stat_path_with_lookup(
+        &self,
+        path: &NormalizedPath,
+        lookup: WasiLookupFlags,
+    ) -> Result<FileStat, Errno> {
         self.namespace
-            .metadata(path)
+            .metadata_with_lookup(path, lookup.metadata_lookup())
             .map(FileStat::new)
             .map_err(Errno::from)
     }

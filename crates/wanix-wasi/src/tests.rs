@@ -1,13 +1,16 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::{
     CRATE_PURPOSE, DEFAULT_CLOCK_TIME_NS, Errno, FileStat, Preopen, WasiConfig, WasiCtx, WasiFd,
-    WasiFdObserver, WasiFile, WasiFileType, WasiFilestatSetTimes, WasiOpenOptions, WasiPathOpen,
-    WasiRights, WasiWhence,
+    WasiFdObserver, WasiFile, WasiFileType, WasiFilestatSetTimes, WasiLookupFlags, WasiOpenOptions,
+    WasiPathOpen, WasiRights, WasiWhence,
 };
-use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
+use wanix_fs::{FileSystem, FileType, FsError, LocalFs, MemFs, NormalizedPath, OpenOptions};
 use wanix_task::TaskTable;
 use wanix_vfs::{BindOptions, Namespace};
+
+static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 fn fixture(entries: &[(&str, &[u8])]) -> Arc<MemFs> {
     let fs = Arc::new(MemFs::new());
@@ -27,6 +30,14 @@ fn namespace_with_root(root: Arc<dyn FileSystem>) -> Namespace {
 
 fn path(value: &str) -> NormalizedPath {
     NormalizedPath::new(value).unwrap()
+}
+
+fn temp_host_dir(label: &str) -> std::path::PathBuf {
+    let mut path = std::env::temp_dir();
+    let nonce = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    path.push(format!("wanix-wasi-{label}-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&path).unwrap();
+    path
 }
 
 #[test]
@@ -375,6 +386,60 @@ fn writes_and_creates_flow_back_to_namespace() {
     assert!(fdstat.rights_base().contains(WasiRights::FD_WRITE));
     assert!(!fdstat.rights_base().contains(WasiRights::FD_READ));
     assert_eq!(fdstat.rights_inheriting(), WasiRights::NONE);
+}
+
+#[cfg(unix)]
+#[test]
+fn path_filestat_get_lookup_flags_control_final_symlink_following_on_host_mounts() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_host_dir("lookup-root");
+    let outside = temp_host_dir("lookup-outside");
+    std::fs::write(root.join("target.txt"), "inside").unwrap();
+    std::fs::write(outside.join("secret.txt"), "outside").unwrap();
+    symlink("target.txt", root.join("inside-link")).unwrap();
+    symlink(outside.join("secret.txt"), root.join("outside-link")).unwrap();
+    symlink(&outside, root.join("dir-link")).unwrap();
+
+    let local = Arc::new(LocalFs::new(&root).unwrap());
+    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(local)));
+
+    let link = ctx
+        .path_filestat_get_with_flags(WasiFd::ROOT, 0, "inside-link")
+        .unwrap();
+    assert_eq!(link.file_type(), FileType::Symlink);
+
+    let followed = ctx
+        .path_filestat_get_with_flags(WasiFd::ROOT, WasiLookupFlags::SYMLINK_FOLLOW, "inside-link")
+        .unwrap();
+    assert_eq!(followed.file_type(), FileType::File);
+    assert_eq!(followed.len(), 6);
+
+    assert_eq!(
+        ctx.path_filestat_get_with_flags(WasiFd::ROOT, 0, "outside-link")
+            .unwrap()
+            .file_type(),
+        FileType::Symlink
+    );
+    assert_eq!(
+        ctx.path_filestat_get_with_flags(
+            WasiFd::ROOT,
+            WasiLookupFlags::SYMLINK_FOLLOW,
+            "outside-link"
+        ),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.path_filestat_get_with_flags(WasiFd::ROOT, 0, "dir-link/secret.txt"),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.path_filestat_get_with_flags(WasiFd::ROOT, 1 << 1, "inside-link"),
+        Err(Errno::Notcapable)
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
 }
 
 #[test]

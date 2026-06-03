@@ -1,7 +1,10 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::{BindOptions, BindPosition, CRATE_PURPOSE, Namespace};
-use wanix_fs::{FileSystem, FileType, FsError, MemFs, Metadata, NormalizedPath, OpenOptions};
+use wanix_fs::{
+    DirEntry, File, FileSystem, FileType, FsError, FsResult, MemFs, Metadata, MetadataLookup,
+    NormalizedPath, OpenOptions,
+};
 
 fn fixture(entries: &[(&str, &[u8])]) -> Arc<MemFs> {
     let fs = Arc::new(MemFs::new());
@@ -607,5 +610,72 @@ fn remove_file_flows_to_highest_priority_bound_filesystem() {
     assert_eq!(
         ns.remove_file(&NormalizedPath::new("dir").unwrap()),
         Err(FsError::IsDirectory)
+    );
+}
+
+#[test]
+fn metadata_lookup_flows_through_namespace_bind_resolution() {
+    #[derive(Default)]
+    struct LookupFs {
+        calls: Mutex<Vec<MetadataLookup>>,
+    }
+
+    impl FileSystem for LookupFs {
+        fn open(&self, _path: &NormalizedPath, _options: OpenOptions) -> FsResult<Box<dyn File>> {
+            Err(FsError::NotSupported)
+        }
+
+        fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
+            match path.as_str() {
+                "target" => Ok(Metadata::new(FileType::File, 7, 0o644)),
+                _ => Err(FsError::NotFound),
+            }
+        }
+
+        fn metadata_with_lookup(
+            &self,
+            path: &NormalizedPath,
+            lookup: MetadataLookup,
+        ) -> FsResult<Metadata> {
+            self.calls.lock().expect("test calls lock").push(lookup);
+            self.metadata(path)
+        }
+
+        fn read_dir(&self, _path: &NormalizedPath) -> FsResult<Vec<DirEntry>> {
+            Err(FsError::NotSupported)
+        }
+    }
+
+    let backing = Arc::new(LookupFs::default());
+    let mut ns = Namespace::new();
+    ns.bind(
+        backing.clone(),
+        "target",
+        "mnt/link",
+        BindOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ns.metadata_with_lookup(&path("mnt/link"), MetadataLookup::NoFollow)
+            .unwrap()
+            .file_type(),
+        FileType::File
+    );
+    assert_eq!(
+        ns.metadata_with_lookup(&path("mnt/link"), MetadataLookup::FollowSymlink)
+            .unwrap()
+            .file_type(),
+        FileType::File
+    );
+    assert_eq!(
+        ns.metadata_with_lookup(&path("mnt"), MetadataLookup::NoFollow)
+            .unwrap()
+            .file_type(),
+        FileType::Directory
+    );
+    assert_eq!(
+        backing.calls.lock().expect("test calls lock").as_slice(),
+        &[MetadataLookup::NoFollow, MetadataLookup::FollowSymlink]
     );
 }

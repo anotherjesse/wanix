@@ -18,7 +18,7 @@ pub use ctx::{WasiCtx, WasiWhence};
 pub use error::Errno;
 pub use fd::{
     FileStat, WasiFd, WasiFdStat, WasiFileAccess, WasiFileType, WasiFilestatSetTimes,
-    WasiOpenOptions, WasiPathOpen, WasiPrestat, WasiRights,
+    WasiLookupFlags, WasiOpenOptions, WasiPathOpen, WasiPrestat, WasiRights,
 };
 
 /// Short human-readable crate responsibility used by workspace smoke tests.

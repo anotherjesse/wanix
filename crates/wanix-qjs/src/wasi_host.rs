@@ -184,12 +184,12 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
     fn path_filestat_get(
         &mut self,
         dirfd: u32,
-        _flags: u32,
+        flags: u32,
         path: &[u8],
     ) -> Result<QuickJsWasiFileStat, QuickJsWasiErrno> {
         let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
         self.ctx
-            .path_filestat_get(WasiFd::new(dirfd), path)
+            .path_filestat_get_with_flags(WasiFd::new(dirfd), flags, path)
             .map(convert_filestat)
             .map_err(convert_errno)
     }
@@ -315,9 +315,14 @@ mod tests {
         QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat,
         QuickJsWasiFileType, QuickJsWasiHost, QuickJsWasiPrestat, QuickJsWasiWhence,
     };
-    use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
+    use wanix_fs::{
+        DirEntry, File, FileSystem, FileType, FsError, FsResult, MemFs, Metadata, MetadataLookup,
+        NormalizedPath, OpenOptions,
+    };
     use wanix_vfs::{BindOptions, Namespace};
-    use wanix_wasi::{WasiConfig, WasiFilestatSetTimes, WasiOpenOptions, WasiRights};
+    use wanix_wasi::{
+        WasiConfig, WasiFilestatSetTimes, WasiLookupFlags, WasiOpenOptions, WasiRights,
+    };
 
     use crate::task_context::WanixExitState;
 
@@ -402,6 +407,73 @@ mod tests {
         assert_eq!(host.fd_tell(fd).unwrap(), 14);
         host.fd_close(fd).unwrap();
         assert!(host.snapshot_blockers().unwrap().is_empty());
+    }
+
+    #[test]
+    fn adapter_path_filestat_get_forwards_lookup_flags_to_wanix_wasi() {
+        struct LookupFs;
+
+        impl FileSystem for LookupFs {
+            fn open(
+                &self,
+                _path: &NormalizedPath,
+                _options: OpenOptions,
+            ) -> FsResult<Box<dyn File>> {
+                Err(FsError::NotSupported)
+            }
+
+            fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
+                match path.as_str() {
+                    "inside-link" => Ok(Metadata::new(FileType::File, 6, 0o644)),
+                    _ => Err(FsError::NotFound),
+                }
+            }
+
+            fn metadata_with_lookup(
+                &self,
+                path: &NormalizedPath,
+                lookup: MetadataLookup,
+            ) -> FsResult<Metadata> {
+                match (path.as_str(), lookup) {
+                    ("inside-link", MetadataLookup::NoFollow) => {
+                        Ok(Metadata::new(FileType::Symlink, 10, 0o777))
+                    }
+                    ("inside-link", MetadataLookup::FollowSymlink) => {
+                        Ok(Metadata::new(FileType::File, 6, 0o644))
+                    }
+                    _ => Err(FsError::NotFound),
+                }
+            }
+
+            fn read_dir(&self, _path: &NormalizedPath) -> FsResult<Vec<DirEntry>> {
+                Err(FsError::NotSupported)
+            }
+        }
+
+        let mut namespace = Namespace::new();
+        namespace
+            .bind(
+                Arc::new(LookupFs),
+                "inside-link",
+                "inside-link",
+                BindOptions::default(),
+            )
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        assert_eq!(
+            host.path_filestat_get(3, 0, b"inside-link").unwrap(),
+            QuickJsWasiFileStat::new(QuickJsWasiFileType::SymbolicLink, 10)
+        );
+        assert_eq!(
+            host.path_filestat_get(3, WasiLookupFlags::SYMLINK_FOLLOW, b"inside-link")
+                .unwrap(),
+            QuickJsWasiFileStat::new(QuickJsWasiFileType::RegularFile, 6)
+        );
+        assert_eq!(
+            host.path_filestat_get(3, 1 << 1, b"inside-link"),
+            Err(QuickJsWasiErrno::Notcapable)
+        );
     }
 
     #[test]

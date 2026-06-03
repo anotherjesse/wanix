@@ -6,7 +6,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use crate::{
     DirEntry, File, FileSeekFrom, FileSystem, FileType, FsError, FsResult, Metadata,
-    NormalizedPath, OpenOptions,
+    MetadataLookup, NormalizedPath, OpenOptions,
 };
 
 /// Host-directory-backed filesystem rooted at a single local directory.
@@ -77,6 +77,27 @@ impl LocalFs {
         }
         host_path
     }
+
+    fn host_path_for_metadata(
+        &self,
+        path: &NormalizedPath,
+        lookup: MetadataLookup,
+    ) -> FsResult<PathBuf> {
+        if lookup.follow_symlinks() {
+            return self.existing_host_path(path);
+        }
+        let host_path = self.raw_host_path(path);
+        if path.as_str() == "." {
+            return Ok(host_path);
+        }
+        let parent = host_path.parent().ok_or(FsError::PermissionDenied)?;
+        let parent = fs::canonicalize(parent).map_err(map_io_error)?;
+        if parent.starts_with(&*self.root) {
+            Ok(host_path)
+        } else {
+            Err(FsError::PermissionDenied)
+        }
+    }
 }
 
 impl FileSystem for LocalFs {
@@ -109,7 +130,15 @@ impl FileSystem for LocalFs {
     }
 
     fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
-        let host_path = self.existing_host_path(path)?;
+        self.metadata_with_lookup(path, MetadataLookup::FollowSymlink)
+    }
+
+    fn metadata_with_lookup(
+        &self,
+        path: &NormalizedPath,
+        lookup: MetadataLookup,
+    ) -> FsResult<Metadata> {
+        let host_path = self.host_path_for_metadata(path, lookup)?;
         let metadata = fs::symlink_metadata(host_path).map_err(map_io_error)?;
         Ok(metadata_from_host(&metadata))
     }
@@ -448,7 +477,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use crate::{
-        FileSeekFrom, FileSystem, FileType, FsError, LocalFs, NormalizedPath, OpenOptions,
+        FileSeekFrom, FileSystem, FileType, FsError, LocalFs, MetadataLookup, NormalizedPath,
+        OpenOptions,
     };
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -746,6 +776,61 @@ mod tests {
             .unwrap();
         assert_eq!(error, FsError::NotFound);
         assert!(!outside.join("missing.txt").exists());
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn localfs_metadata_lookup_controls_final_symlink_following() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root();
+        let outside = temp_root();
+        fs::write(root.join("target.txt"), "inside").unwrap();
+        fs::write(outside.join("secret.txt"), "outside").unwrap();
+        symlink("target.txt", root.join("inside-link")).unwrap();
+        symlink(outside.join("secret.txt"), root.join("outside-link")).unwrap();
+        symlink(outside.join("missing.txt"), root.join("broken-link")).unwrap();
+        symlink(&outside, root.join("dir-link")).unwrap();
+
+        let fs = LocalFs::new(&root).unwrap();
+
+        assert_eq!(
+            fs.metadata(&path("inside-link")).unwrap().file_type(),
+            FileType::File
+        );
+        assert_eq!(
+            fs.metadata_with_lookup(&path("inside-link"), MetadataLookup::NoFollow)
+                .unwrap()
+                .file_type(),
+            FileType::Symlink
+        );
+        assert_eq!(
+            fs.metadata_with_lookup(&path("outside-link"), MetadataLookup::NoFollow)
+                .unwrap()
+                .file_type(),
+            FileType::Symlink
+        );
+        assert_eq!(
+            fs.metadata_with_lookup(&path("outside-link"), MetadataLookup::FollowSymlink),
+            Err(FsError::PermissionDenied)
+        );
+        assert_eq!(
+            fs.metadata_with_lookup(&path("broken-link"), MetadataLookup::NoFollow)
+                .unwrap()
+                .file_type(),
+            FileType::Symlink
+        );
+        assert_eq!(
+            fs.metadata_with_lookup(&path("broken-link"), MetadataLookup::FollowSymlink),
+            Err(FsError::NotFound)
+        );
+        assert_eq!(
+            fs.metadata_with_lookup(&path("dir-link/secret.txt"), MetadataLookup::NoFollow),
+            Err(FsError::PermissionDenied)
+        );
 
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();

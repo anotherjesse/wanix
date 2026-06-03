@@ -172,6 +172,9 @@ cargo test --workspace --locked
 - [ADR 0035](docs/adrs/0035-wasi-poll-fd-readiness.md):
   `poll_oneoff` reports immediately-ready fd read/write events through live
   WASI providers while async scheduling remains future Wanix task work.
+- [ADR 0036](docs/adrs/0036-wasi-symlink-metadata-lookup.md):
+  WASI `path_filestat_get` lookup flags reach Wanix namespace metadata so live
+  providers can distinguish final symlink metadata from followed targets.
 
 ## Cycle Rules
 

@@ -10,7 +10,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use wanix_fs::{
-    DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
+    DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, MetadataLookup,
+    NormalizedPath, OpenOptions,
 };
 
 #[cfg(test)]
@@ -161,9 +162,19 @@ impl Namespace {
     }
 
     fn synthetic_child_metadata(targets: &[BindTarget]) -> Option<Metadata> {
-        targets
-            .iter()
-            .find_map(|target| target.filesystem.metadata(&target.source).ok())
+        Self::synthetic_child_metadata_with_lookup(targets, MetadataLookup::FollowSymlink)
+    }
+
+    fn synthetic_child_metadata_with_lookup(
+        targets: &[BindTarget],
+        lookup: MetadataLookup,
+    ) -> Option<Metadata> {
+        targets.iter().find_map(|target| {
+            target
+                .filesystem
+                .metadata_with_lookup(&target.source, lookup)
+                .ok()
+        })
     }
 }
 
@@ -185,8 +196,16 @@ impl FileSystem for Namespace {
     }
 
     fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
+        self.metadata_with_lookup(path, MetadataLookup::FollowSymlink)
+    }
+
+    fn metadata_with_lookup(
+        &self,
+        path: &NormalizedPath,
+        lookup: MetadataLookup,
+    ) -> FsResult<Metadata> {
         for target in self.resolve_candidates(path) {
-            match target.filesystem.metadata(&target.path) {
+            match target.filesystem.metadata_with_lookup(&target.path, lookup) {
                 Ok(metadata) => return Ok(metadata),
                 Err(FsError::NotFound | FsError::NotDirectory) => {}
                 Err(err) => return Err(err),

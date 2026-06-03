@@ -1,6 +1,6 @@
 use std::ops::{BitOr, BitOrAssign};
 
-use wanix_fs::{FileType, NormalizedPath};
+use wanix_fs::{FileType, MetadataLookup, NormalizedPath};
 
 use crate::Errno;
 
@@ -185,6 +185,38 @@ impl BitOr for WasiRights {
 impl BitOrAssign for WasiRights {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
+    }
+}
+
+/// WASI Preview 1 lookup flags for path metadata and mutation calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WasiLookupFlags(u32);
+
+impl WasiLookupFlags {
+    /// Follow the final symlink component while resolving a path.
+    pub const SYMLINK_FOLLOW: u32 = 1 << 0;
+    const SUPPORTED: u32 = Self::SYMLINK_FOLLOW;
+
+    /// Converts raw Preview 1 lookup flags into a validated set.
+    pub fn from_preview1(flags: u32) -> Result<Self, Errno> {
+        if flags & !Self::SUPPORTED != 0 {
+            return Err(Errno::Notcapable);
+        }
+        Ok(Self(flags))
+    }
+
+    /// Returns whether the final symlink component should be followed.
+    #[must_use]
+    pub const fn follow_symlinks(self) -> bool {
+        self.0 & Self::SYMLINK_FOLLOW != 0
+    }
+
+    pub(crate) const fn metadata_lookup(self) -> MetadataLookup {
+        if self.follow_symlinks() {
+            MetadataLookup::FollowSymlink
+        } else {
+            MetadataLookup::NoFollow
+        }
     }
 }
 

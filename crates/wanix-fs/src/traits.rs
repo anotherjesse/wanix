@@ -1,5 +1,22 @@
 use crate::{DirEntry, FsError, FsResult, Metadata, NormalizedPath};
 
+/// How path metadata should treat a final symbolic link component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataLookup {
+    /// Follow a final symbolic link and report metadata for its target.
+    FollowSymlink,
+    /// Report metadata for the final symbolic link itself.
+    NoFollow,
+}
+
+impl MetadataLookup {
+    /// Returns whether final symbolic links should be followed.
+    #[must_use]
+    pub const fn follow_symlinks(self) -> bool {
+        matches!(self, Self::FollowSymlink)
+    }
+}
+
 /// File seek origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileSeekFrom {
@@ -123,6 +140,19 @@ pub trait FileSystem: Send + Sync {
     ///
     /// Returns a filesystem error when metadata cannot be produced.
     fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata>;
+
+    /// Returns metadata for `path` using the requested symbolic-link lookup mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when metadata cannot be produced.
+    fn metadata_with_lookup(
+        &self,
+        path: &NormalizedPath,
+        _lookup: MetadataLookup,
+    ) -> FsResult<Metadata> {
+        self.metadata(path)
+    }
 
     /// Returns directory entries for `path`.
     ///

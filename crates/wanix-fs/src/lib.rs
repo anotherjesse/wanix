@@ -15,7 +15,7 @@ pub use localfs::LocalFs;
 pub use memfs::MemFs;
 pub use metadata::{DirEntry, FileType, Metadata};
 pub use path::NormalizedPath;
-pub use traits::{File, FileSeekFrom, FileSystem, OpenOptions};
+pub use traits::{File, FileSeekFrom, FileSystem, MetadataLookup, OpenOptions};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix filesystem contracts";
