@@ -24,7 +24,7 @@ const USAGE: &str = concat!(
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-term [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
-    "[--feed-after-eval TEXT ...] ",
+    "[--feed-after-eval TEXT ...] [--feed-after-eval-file PATH|- ...] ",
     "[--interrupt-after N] [--memory-limit-bytes N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
@@ -1360,6 +1360,7 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-term"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval TEXT"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval-file PATH|-"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--mount HOST=GUEST"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--stdin-file PATH|-"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-snapshot"));
@@ -1512,6 +1513,29 @@ std.err.flush();
         assert_eq!(
             output.stdout(),
             b"terminal task: 1\r\nterminal id: 1\r\nwaiting for terminal input\r\npost-eval chunk 1: abcd\r\npost-eval chunk 2: ef\r\npost-eval handler done\r\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_term_shell_example_feeds_native_stdin_after_eval() {
+        let output = run_with_process_stdin(
+            [
+                "qjs-term".into(),
+                "--ready-io-turns".into(),
+                "1".into(),
+                "--feed-after-eval-file".into(),
+                "-".into(),
+                example_script("qjs-term-shell-demo.js").into_os_string(),
+            ],
+            b"echo hello terminal\nid\nexit\n".as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"shell task: 1\r\n$ hello terminal\r\n$ 1\r\n$ bye\r\n"
         );
         assert!(output.stderr().is_empty());
     }

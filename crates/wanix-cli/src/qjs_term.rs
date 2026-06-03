@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
@@ -18,7 +19,14 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QjsTermCommand {
     qjs: QjsCommand,
-    feed_after_eval: Vec<Vec<u8>>,
+    feed_after_eval: Vec<PostEvalFeed>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PostEvalFeed {
+    Bytes(Vec<u8>),
+    File(PathBuf),
+    Process,
 }
 
 pub(super) fn parse_qjs_term_command(args: &[OsString]) -> Result<QjsTermCommand, CliError> {
@@ -31,8 +39,20 @@ pub(super) fn parse_qjs_term_command(args: &[OsString]) -> Result<QjsTermCommand
             let value = args
                 .get(i)
                 .ok_or_else(|| CliError::usage("qjs-term --feed-after-eval expects text"))?;
-            feed_after_eval
-                .push(os_arg_to_string(value, "qjs-term --feed-after-eval")?.into_bytes());
+            feed_after_eval.push(PostEvalFeed::Bytes(
+                os_arg_to_string(value, "qjs-term --feed-after-eval")?.into_bytes(),
+            ));
+            i += 1;
+        } else if args[i] == "--feed-after-eval-file" {
+            i += 1;
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage("qjs-term --feed-after-eval-file expects PATH or -")
+            })?;
+            if value == "-" {
+                feed_after_eval.push(PostEvalFeed::Process);
+            } else {
+                feed_after_eval.push(PostEvalFeed::File(PathBuf::from(value)));
+            }
             i += 1;
         } else if args[i] == "--" {
             qjs_args.extend_from_slice(&args[i..]);
@@ -132,7 +152,8 @@ pub(super) fn run_qjs_term(
             eval_ready_io_turns,
         )?;
         if !feed_after_eval.is_empty() {
-            feed_terminal_after_eval(&terminal, &terminal_id, &feed_after_eval)?;
+            let post_eval_chunks = read_post_eval_feeds(feed_after_eval, process_stdin)?;
+            feed_terminal_after_eval(&terminal, &terminal_id, &post_eval_chunks)?;
             runtime.run_ready_io_turns(qjs_command.ready_io_turns)?;
         }
         runtime.finish()?;
@@ -140,6 +161,41 @@ pub(super) fn run_qjs_term(
     })();
 
     finish_terminal_task_output(start_result, &task, &terminal, &terminal_id)
+}
+
+fn read_post_eval_feeds(
+    feeds: Vec<PostEvalFeed>,
+    process_stdin: &mut dyn Read,
+) -> Result<Vec<Vec<u8>>, CliError> {
+    let mut chunks = Vec::with_capacity(feeds.len());
+    for feed in feeds {
+        match feed {
+            PostEvalFeed::Bytes(bytes) => chunks.push(bytes),
+            PostEvalFeed::File(path) => {
+                let bytes = std::fs::read(&path).map_err(|error| {
+                    CliError::new(
+                        format!(
+                            "failed to read post-eval feed file {}: {error}",
+                            path.display()
+                        ),
+                        1,
+                    )
+                })?;
+                chunks.push(bytes);
+            }
+            PostEvalFeed::Process => {
+                let mut bytes = Vec::new();
+                process_stdin.read_to_end(&mut bytes).map_err(|error| {
+                    CliError::new(
+                        format!("failed to read process stdin after eval: {error}"),
+                        1,
+                    )
+                })?;
+                chunks.push(bytes);
+            }
+        }
+    }
+    Ok(chunks)
 }
 
 fn feed_terminal_after_eval(
@@ -211,7 +267,7 @@ fn finish_terminal_task_output(
 mod tests {
     use std::path::PathBuf;
 
-    use super::parse_qjs_term_command;
+    use super::{PostEvalFeed, parse_qjs_term_command};
 
     #[test]
     fn parse_qjs_term_collects_pre_script_post_eval_feeds() {
@@ -220,8 +276,8 @@ mod tests {
             "2".into(),
             "--feed-after-eval".into(),
             "first".into(),
-            "--feed-after-eval".into(),
-            "second".into(),
+            "--feed-after-eval-file".into(),
+            "second.txt".into(),
             "demo.js".into(),
             "--".into(),
             "arg".into(),
@@ -230,7 +286,10 @@ mod tests {
 
         assert_eq!(
             command.feed_after_eval,
-            [b"first".to_vec(), b"second".to_vec()]
+            [
+                PostEvalFeed::Bytes(b"first".to_vec()),
+                PostEvalFeed::File(PathBuf::from("second.txt"))
+            ]
         );
         assert_eq!(command.qjs.script_path, PathBuf::from("demo.js"));
         assert_eq!(command.qjs.args, vec!["arg".to_owned()]);
@@ -252,5 +311,18 @@ mod tests {
             command.qjs.args,
             vec!["--feed-after-eval".to_owned(), "script-arg".to_owned()]
         );
+    }
+
+    #[test]
+    fn parse_qjs_term_collects_process_post_eval_feed() {
+        let command = parse_qjs_term_command(&[
+            "--feed-after-eval-file".into(),
+            "-".into(),
+            "demo.js".into(),
+        ])
+        .unwrap();
+
+        assert_eq!(command.feed_after_eval, [PostEvalFeed::Process]);
+        assert_eq!(command.qjs.script_path, PathBuf::from("demo.js"));
     }
 }
