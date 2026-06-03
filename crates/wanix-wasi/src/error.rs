@@ -68,6 +68,7 @@ impl From<&FsError> for Errno {
             FsError::IsDirectory => Self::Isdir,
             FsError::InvalidFd => Self::Badf,
             FsError::InvalidOffset => Self::Inval,
+            FsError::InvalidTime => Self::Inval,
             FsError::NotEmpty => Self::Notempty,
             FsError::Other(_) => Self::Io,
         }

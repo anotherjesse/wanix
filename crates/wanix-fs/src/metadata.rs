@@ -15,16 +15,35 @@ pub struct Metadata {
     file_type: FileType,
     len: u64,
     mode: u32,
+    accessed_time_ns: u64,
+    modified_time_ns: u64,
+    changed_time_ns: u64,
 }
 
 impl Metadata {
     /// Creates metadata from a file type, byte length, and Unix-style mode.
     #[must_use]
     pub fn new(file_type: FileType, len: u64, mode: u32) -> Self {
+        Self::new_with_times(file_type, len, mode, 0, 0, 0)
+    }
+
+    /// Creates metadata with explicit nanosecond timestamps since the Unix epoch.
+    #[must_use]
+    pub fn new_with_times(
+        file_type: FileType,
+        len: u64,
+        mode: u32,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+        changed_time_ns: u64,
+    ) -> Self {
         Self {
             file_type,
             len,
             mode,
+            accessed_time_ns,
+            modified_time_ns,
+            changed_time_ns,
         }
     }
 
@@ -50,6 +69,24 @@ impl Metadata {
     #[must_use]
     pub fn mode(&self) -> u32 {
         self.mode
+    }
+
+    /// Returns the last-access timestamp as nanoseconds since the Unix epoch.
+    #[must_use]
+    pub fn accessed_time_ns(&self) -> u64 {
+        self.accessed_time_ns
+    }
+
+    /// Returns the last-modified timestamp as nanoseconds since the Unix epoch.
+    #[must_use]
+    pub fn modified_time_ns(&self) -> u64 {
+        self.modified_time_ns
+    }
+
+    /// Returns the metadata-changed timestamp as nanoseconds since the Unix epoch.
+    #[must_use]
+    pub fn changed_time_ns(&self) -> u64 {
+        self.changed_time_ns
     }
 }
 
@@ -97,6 +134,14 @@ mod tests {
         assert_eq!(metadata.file_type(), FileType::File);
         assert_eq!(metadata.len(), 4);
         assert_eq!(metadata.mode(), 0o644);
+        assert_eq!(metadata.accessed_time_ns(), 0);
+        assert_eq!(metadata.modified_time_ns(), 0);
+        assert_eq!(metadata.changed_time_ns(), 0);
         assert!(!metadata.is_empty());
+
+        let timed = Metadata::new_with_times(FileType::File, 4, 0o644, 1, 2, 3);
+        assert_eq!(timed.accessed_time_ns(), 1);
+        assert_eq!(timed.modified_time_ns(), 2);
+        assert_eq!(timed.changed_time_ns(), 3);
     }
 }

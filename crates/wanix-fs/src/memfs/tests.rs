@@ -213,6 +213,28 @@ fn open_read_and_write_round_trip() {
 }
 
 #[test]
+fn set_times_updates_file_metadata_deterministically() {
+    let fs = MemFs::new();
+    fs.write_file("file.txt", b"hello").unwrap();
+    let path = NormalizedPath::new("file.txt").unwrap();
+
+    fs.set_times(&path, 1_000_000_000, 2_000_000_000).unwrap();
+
+    let metadata = fs.metadata(&path).unwrap();
+    assert_eq!(metadata.accessed_time_ns(), 1_000_000_000);
+    assert_eq!(metadata.modified_time_ns(), 2_000_000_000);
+    assert_eq!(metadata.changed_time_ns(), 0);
+    assert_eq!(
+        fs.set_times(
+            &NormalizedPath::new("missing.txt").unwrap(),
+            1_000_000_000,
+            2_000_000_000,
+        ),
+        Err(FsError::NotFound)
+    );
+}
+
+#[test]
 fn create_succeeds_in_existing_parent_and_truncate_clears_file() {
     let fs = MemFs::new();
     fs.create_dir_all("dir").unwrap();

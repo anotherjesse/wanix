@@ -22,6 +22,9 @@ const FDSTAT_SIZE: usize = 24;
 const FILESTAT_SIZE: usize = 64;
 const FILESTAT_FILETYPE_OFFSET: usize = 16;
 const FILESTAT_SIZE_OFFSET: usize = 32;
+const FILESTAT_ATIM_OFFSET: usize = 40;
+const FILESTAT_MTIM_OFFSET: usize = 48;
+const FILESTAT_CTIM_OFFSET: usize = 56;
 const DIRENT_SIZE: usize = 24;
 const DIRENT_NEXT_OFFSET: usize = 0;
 const DIRENT_INO_OFFSET: usize = 8;
@@ -56,6 +59,43 @@ pub(super) struct VirtualFileHandle {
     pub(super) bytes: Arc<[u8]>,
     pub(super) offset: u64,
     pub(super) rights_base: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FilestatFields {
+    filetype: u8,
+    size: u64,
+    accessed_time_ns: u64,
+    modified_time_ns: u64,
+    changed_time_ns: u64,
+}
+
+impl FilestatFields {
+    const fn new(filetype: u8, size: u64) -> Self {
+        Self {
+            filetype,
+            size,
+            accessed_time_ns: 0,
+            modified_time_ns: 0,
+            changed_time_ns: 0,
+        }
+    }
+
+    const fn new_with_times(
+        filetype: u8,
+        size: u64,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+        changed_time_ns: u64,
+    ) -> Self {
+        Self {
+            filetype,
+            size,
+            accessed_time_ns,
+            modified_time_ns,
+            changed_time_ns,
+        }
+    }
 }
 
 pub(super) fn define_imports(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
@@ -292,7 +332,12 @@ fn fd_filestat_get(
     };
 
     let memory = caller_memory(&caller)?;
-    write_filestat(&memory, &mut caller, stat_ptr, filetype, size)?;
+    write_filestat(
+        &memory,
+        &mut caller,
+        stat_ptr,
+        FilestatFields::new(filetype, size),
+    )?;
     Ok(ERRNO_SUCCESS)
 }
 
@@ -361,7 +406,12 @@ fn path_filestat_get(
         return Ok(ERRNO_NOENT);
     };
 
-    write_filestat(&memory, &mut caller, stat_ptr, filetype, size)?;
+    write_filestat(
+        &memory,
+        &mut caller,
+        stat_ptr,
+        FilestatFields::new(filetype, size),
+    )?;
     Ok(ERRNO_SUCCESS)
 }
 
@@ -402,10 +452,46 @@ fn path_filestat_set_times(
     flags: i32,
     path_ptr: i32,
     path_len: i32,
-    _atim: i64,
-    _mtim: i64,
-    _fstflags: i32,
+    atim: i64,
+    mtim: i64,
+    fstflags: i32,
 ) -> wasmtime::Result<i32> {
+    if caller.data().wasi_host().is_some() {
+        if unsupported_lookupflags(flags) {
+            return Ok(ERRNO_NOTCAPABLE);
+        }
+        let dirfd = match preview1_fd(dirfd) {
+            Ok(fd) => fd,
+            Err(errno) => return Ok(errno),
+        };
+        let fstflags = match preview1_u16_filestat_flags(fstflags) {
+            Ok(flags) => flags,
+            Err(errno) => return Ok(errno),
+        };
+        let path_len = match checked_wasi_path_len(path_len)? {
+            Ok(path_len) => path_len,
+            Err(errno) => return Ok(errno),
+        };
+        let memory = caller_memory(&caller)?;
+        let path = read_guest_path(&memory, &caller, path_ptr, path_len)?;
+        let Some(result) = with_wasi_host_u32(&caller, |host| {
+            host.path_filestat_set_times(
+                dirfd,
+                flags.cast_unsigned(),
+                &path,
+                atim.cast_unsigned(),
+                mtim.cast_unsigned(),
+                fstflags,
+            )
+        })?
+        else {
+            return Ok(ERRNO_BADF);
+        };
+        return match result {
+            Ok(()) => Ok(ERRNO_SUCCESS),
+            Err(errno) => Ok(errno.preview1_result()),
+        };
+    }
     if unsupported_lookupflags(flags) {
         return Ok(ERRNO_NOTCAPABLE);
     }
@@ -934,13 +1020,18 @@ fn write_filestat(
     memory: &Memory,
     caller: &mut Caller<'_, HostState>,
     stat_ptr: i32,
-    filetype: u8,
-    size: u64,
+    fields: FilestatFields,
 ) -> wasmtime::Result<()> {
     let mut stat = [0u8; FILESTAT_SIZE];
-    stat[FILESTAT_FILETYPE_OFFSET] = filetype;
+    stat[FILESTAT_FILETYPE_OFFSET] = fields.filetype;
     stat[FILESTAT_SIZE_OFFSET..FILESTAT_SIZE_OFFSET + WASI_U32_SIZE * 2]
-        .copy_from_slice(&size.to_le_bytes());
+        .copy_from_slice(&fields.size.to_le_bytes());
+    stat[FILESTAT_ATIM_OFFSET..FILESTAT_ATIM_OFFSET + WASI_U32_SIZE * 2]
+        .copy_from_slice(&fields.accessed_time_ns.to_le_bytes());
+    stat[FILESTAT_MTIM_OFFSET..FILESTAT_MTIM_OFFSET + WASI_U32_SIZE * 2]
+        .copy_from_slice(&fields.modified_time_ns.to_le_bytes());
+    stat[FILESTAT_CTIM_OFFSET..FILESTAT_CTIM_OFFSET + WASI_U32_SIZE * 2]
+        .copy_from_slice(&fields.changed_time_ns.to_le_bytes());
     Ok(memory.write(caller, guest_offset(stat_ptr), &stat)?)
 }
 
@@ -981,8 +1072,13 @@ fn write_wasi_filestat(
         memory,
         caller,
         stat_ptr,
-        stat.file_type().preview1_code(),
-        stat.size(),
+        FilestatFields::new_with_times(
+            stat.file_type().preview1_code(),
+            stat.size(),
+            stat.accessed_time_ns(),
+            stat.modified_time_ns(),
+            stat.changed_time_ns(),
+        ),
     )
 }
 
@@ -1102,6 +1198,10 @@ fn preview1_fd(fd: i32) -> Result<u32, i32> {
 
 fn preview1_u16_flags(flags: i32) -> Result<u16, i32> {
     u16::try_from(flags).map_err(|_| ERRNO_NOTCAPABLE)
+}
+
+fn preview1_u16_filestat_flags(flags: i32) -> Result<u16, i32> {
+    u16::try_from(flags).map_err(|_| ERRNO_INVAL)
 }
 
 fn preview1_errno(errno: i32) -> QuickJsWasiErrno {

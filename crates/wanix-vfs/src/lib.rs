@@ -357,6 +357,33 @@ impl FileSystem for Namespace {
         }
         Err(FsError::NotFound)
     }
+
+    fn set_times(
+        &self,
+        path: &NormalizedPath,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+    ) -> FsResult<()> {
+        let mut saw_not_directory = false;
+        for target in self.resolve_candidates(path) {
+            match target
+                .filesystem
+                .set_times(&target.path, accessed_time_ns, modified_time_ns)
+            {
+                Ok(()) => return Ok(()),
+                Err(FsError::NotDirectory) => saw_not_directory = true,
+                Err(FsError::NotFound) => {}
+                Err(err) => return Err(err),
+            }
+        }
+        if self.has_synthetic_children(path) {
+            return Err(FsError::NotSupported);
+        }
+        if saw_not_directory {
+            return Err(FsError::NotDirectory);
+        }
+        Err(FsError::NotFound)
+    }
 }
 
 struct ResolvedTarget {

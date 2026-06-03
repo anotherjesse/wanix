@@ -2319,6 +2319,46 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_command_updates_times_through_quickjs_os_utimes() {
+        let script = write_temp_script(
+            "utimes-demo.js",
+            r#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.writeFile("stamp.txt", "timestamped");
+std.out.puts("utimes " + os.utimes("stamp.txt", new Date(1000), new Date(2000)) + "\n");
+const stat = os.stat("stamp.txt")[0];
+std.out.puts("atime " + stat.atime + "\n");
+std.out.puts("mtime " + stat.mtime + "\n");
+std.out.flush();
+"#,
+        );
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"utimes 0\natime 1000\nmtime 2000\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_example_utimes_demo_updates_times_through_quickjs_os() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-utimes-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"utimes: 0\natime: 1000\nmtime: 2000\nmessage: timestamped\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_example_unlink_demo_removes_files_through_quickjs_os() {
         let output = run([
             "qjs".into(),

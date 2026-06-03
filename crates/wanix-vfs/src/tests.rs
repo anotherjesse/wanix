@@ -398,6 +398,47 @@ fn rename_rejects_synthetic_targets_and_cross_filesystem_moves() {
 }
 
 #[test]
+fn set_times_routes_to_highest_priority_backing_filesystem() {
+    let lower = fixture(&[("same.txt", b"lower"), ("synthetic.txt", b"synthetic")]);
+    let upper = fixture(&[("same.txt", b"upper")]);
+    let mut ns = Namespace::new();
+    ns.bind(lower.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    ns.bind(upper.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    ns.bind(
+        lower.clone(),
+        "synthetic.txt",
+        "a/b/synthetic.txt",
+        BindOptions::default(),
+    )
+    .unwrap();
+
+    ns.set_times(&path("same.txt"), 1_000_000_000, 2_000_000_000)
+        .unwrap();
+
+    assert_eq!(
+        upper
+            .metadata(&path("same.txt"))
+            .unwrap()
+            .modified_time_ns(),
+        2_000_000_000
+    );
+    assert_eq!(
+        lower
+            .metadata(&path("same.txt"))
+            .unwrap()
+            .modified_time_ns(),
+        0
+    );
+    assert_eq!(ns.set_times(&path("a"), 1, 2), Err(FsError::NotSupported));
+    assert_eq!(
+        ns.set_times(&path("missing.txt"), 1, 2),
+        Err(FsError::NotFound)
+    );
+}
+
+#[test]
 fn read_dir_unions_direct_and_subpath_bindings() {
     let fs1 = fixture(&[
         ("file1.txt", b"content1"),

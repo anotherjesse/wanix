@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use super::{
     CRATE_PURPOSE, Errno, FileStat, Preopen, WasiConfig, WasiCtx, WasiFd, WasiFdObserver, WasiFile,
-    WasiFileType, WasiOpenOptions, WasiPathOpen, WasiRights, WasiWhence,
+    WasiFileType, WasiFilestatSetTimes, WasiOpenOptions, WasiPathOpen, WasiRights, WasiWhence,
 };
 use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
 use wanix_task::TaskTable;
@@ -370,6 +370,126 @@ fn writes_and_creates_flow_back_to_namespace() {
     assert!(fdstat.rights_base().contains(WasiRights::FD_WRITE));
     assert!(!fdstat.rights_base().contains(WasiRights::FD_READ));
     assert_eq!(fdstat.rights_inheriting(), WasiRights::NONE);
+}
+
+#[test]
+fn path_filestat_set_times_updates_namespace_metadata() {
+    let root = fixture(&[("stamp.txt", b"stamp")]);
+    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+
+    ctx.path_filestat_set_times(
+        WasiFd::ROOT,
+        0,
+        "stamp.txt",
+        1_000_000_000,
+        2_000_000_000,
+        WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::MTIM,
+    )
+    .unwrap();
+
+    let stat = ctx.path_filestat_get(WasiFd::ROOT, "stamp.txt").unwrap();
+    assert_eq!(stat.accessed_time_ns(), 1_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 2_000_000_000);
+    assert_eq!(stat.changed_time_ns(), 0);
+    let bytes = stat.to_preview1_bytes();
+    assert_eq!(
+        u64::from_le_bytes(bytes[40..48].try_into().unwrap()),
+        1_000_000_000
+    );
+    assert_eq!(
+        u64::from_le_bytes(bytes[48..56].try_into().unwrap()),
+        2_000_000_000
+    );
+
+    ctx.path_filestat_set_times(
+        WasiFd::ROOT,
+        0,
+        "stamp.txt",
+        3_000_000_000,
+        99,
+        WasiFilestatSetTimes::ATIM,
+    )
+    .unwrap();
+    let stat = ctx.path_filestat_get(WasiFd::ROOT, "stamp.txt").unwrap();
+    assert_eq!(stat.accessed_time_ns(), 3_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 2_000_000_000);
+
+    ctx.path_filestat_set_times(WasiFd::ROOT, 0, "stamp.txt", 4, 5, 0)
+        .unwrap();
+    let stat = ctx.path_filestat_get(WasiFd::ROOT, "stamp.txt").unwrap();
+    assert_eq!(stat.accessed_time_ns(), 3_000_000_000);
+    assert_eq!(stat.modified_time_ns(), 2_000_000_000);
+    assert_eq!(
+        root.metadata(&path("stamp.txt"))
+            .unwrap()
+            .modified_time_ns(),
+        2_000_000_000
+    );
+}
+
+#[test]
+fn path_filestat_set_times_validates_rights_and_flags() {
+    let root = fixture(&[("dir/file.txt", b"stamp")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let dir_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "dir",
+            0,
+            WasiRights::PATH_OPEN | WasiRights::PATH_FILESTAT_GET,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(
+        ctx.path_filestat_set_times(
+            dir_fd,
+            0,
+            "file.txt",
+            1,
+            2,
+            WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::MTIM,
+        ),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.path_filestat_set_times(
+            WasiFd::ROOT,
+            2,
+            "dir/file.txt",
+            1,
+            2,
+            WasiFilestatSetTimes::ATIM,
+        ),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.path_filestat_set_times(WasiFd::ROOT, 0, "dir/file.txt", 1, 2, 1 << 9),
+        Err(Errno::Inval)
+    );
+    assert_eq!(
+        ctx.path_filestat_set_times(
+            WasiFd::ROOT,
+            0,
+            "dir/file.txt",
+            1,
+            2,
+            WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::ATIM_NOW,
+        ),
+        Err(Errno::Inval)
+    );
+    assert_eq!(
+        ctx.path_filestat_set_times(
+            WasiFd::ROOT,
+            0,
+            "dir/file.txt",
+            1,
+            2,
+            WasiFilestatSetTimes::MTIM_NOW,
+        ),
+        Err(Errno::Notcapable)
+    );
 }
 
 #[test]
@@ -851,6 +971,11 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
     assert!(
         root_stat
             .rights_base()
+            .contains(WasiRights::PATH_FILESTAT_SET_TIMES)
+    );
+    assert!(
+        root_stat
+            .rights_base()
             .contains(WasiRights::PATH_REMOVE_DIRECTORY)
     );
     assert!(
@@ -1231,6 +1356,7 @@ fn preview1_path_open_projects_libc_regular_file_rights() {
         | WasiRights::FD_READDIR
         | WasiRights::PATH_FILESTAT_GET
         | WasiRights::PATH_FILESTAT_SET_SIZE
+        | WasiRights::PATH_FILESTAT_SET_TIMES
         | WasiRights::FD_FILESTAT_GET;
     let libc_inheriting_rights = libc_read_rights | WasiRights::FD_WRITE;
 
@@ -1280,6 +1406,7 @@ fn preview1_path_open_projects_libc_rights_for_rooted_service_paths() {
         | WasiRights::FD_READDIR
         | WasiRights::PATH_FILESTAT_GET
         | WasiRights::PATH_FILESTAT_SET_SIZE
+        | WasiRights::PATH_FILESTAT_SET_TIMES
         | WasiRights::FD_FILESTAT_GET;
     let libc_inheriting_rights = libc_read_rights | WasiRights::FD_WRITE;
 
@@ -1312,6 +1439,7 @@ fn preview1_path_open_projects_libc_write_rights_for_task_service_files() {
         | WasiRights::PATH_OPEN
         | WasiRights::PATH_FILESTAT_GET
         | WasiRights::PATH_FILESTAT_SET_SIZE
+        | WasiRights::PATH_FILESTAT_SET_TIMES
         | WasiRights::FD_FILESTAT_GET;
     let libc_inheriting_rights = libc_write_rights | WasiRights::FD_READ | WasiRights::FD_READDIR;
 
@@ -1348,6 +1476,7 @@ fn preview1_path_open_projects_libc_regular_file_write_rights() {
         | WasiRights::PATH_OPEN
         | WasiRights::PATH_FILESTAT_GET
         | WasiRights::PATH_FILESTAT_SET_SIZE
+        | WasiRights::PATH_FILESTAT_SET_TIMES
         | WasiRights::FD_FILESTAT_GET;
     let libc_inheriting_rights = libc_write_rights | WasiRights::FD_READ | WasiRights::FD_READDIR;
 
@@ -1546,6 +1675,7 @@ fn errno_mapping_is_pinned_for_filesystem_errors() {
     assert_eq!(Errno::from(FsError::IsDirectory), Errno::Isdir);
     assert_eq!(Errno::from(FsError::InvalidFd), Errno::Badf);
     assert_eq!(Errno::from(FsError::InvalidOffset), Errno::Inval);
+    assert_eq!(Errno::from(FsError::InvalidTime), Errno::Inval);
     assert_eq!(Errno::from(FsError::NotEmpty), Errno::Notempty);
     assert_eq!(Errno::from(FsError::Other("opaque".into())), Errno::Io);
 }
@@ -1577,7 +1707,9 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiRights::FD_READDIR.bits(), 1 << 14);
     assert_eq!(WasiRights::PATH_RENAME_SOURCE.bits(), 1 << 16);
     assert_eq!(WasiRights::PATH_RENAME_TARGET.bits(), 1 << 17);
+    assert_eq!(WasiRights::PATH_FILESTAT_GET.bits(), 1 << 18);
     assert_eq!(WasiRights::PATH_FILESTAT_SET_SIZE.bits(), 1 << 19);
+    assert_eq!(WasiRights::PATH_FILESTAT_SET_TIMES.bits(), 1 << 20);
     assert_eq!(WasiRights::FD_FILESTAT_GET.bits(), 1 << 21);
     assert_eq!(WasiRights::PATH_REMOVE_DIRECTORY.bits(), 1 << 25);
     assert_eq!(WasiRights::PATH_UNLINK_FILE.bits(), 1 << 26);
@@ -1594,5 +1726,9 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiOpenOptions::FDFLAGS_NONBLOCK, 1 << 2);
     assert_eq!(WasiOpenOptions::FDFLAGS_RSYNC, 1 << 3);
     assert_eq!(WasiOpenOptions::FDFLAGS_SYNC, 1 << 4);
+    assert_eq!(WasiFilestatSetTimes::ATIM, 1 << 0);
+    assert_eq!(WasiFilestatSetTimes::ATIM_NOW, 1 << 1);
+    assert_eq!(WasiFilestatSetTimes::MTIM, 1 << 2);
+    assert_eq!(WasiFilestatSetTimes::MTIM_NOW, 1 << 3);
     assert_eq!(FileStat::PREVIEW1_SIZE, 64);
 }

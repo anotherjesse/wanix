@@ -176,6 +176,21 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
             .map_err(convert_errno)
     }
 
+    fn path_filestat_set_times(
+        &mut self,
+        dirfd: u32,
+        flags: u32,
+        path: &[u8],
+        atim: u64,
+        mtim: u64,
+        fstflags: u16,
+    ) -> Result<(), QuickJsWasiErrno> {
+        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
+        self.ctx
+            .path_filestat_set_times(WasiFd::new(dirfd), flags, path, atim, mtim, fstflags)
+            .map_err(convert_errno)
+    }
+
     fn path_create_directory(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
         let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
         self.ctx
@@ -257,7 +272,13 @@ fn convert_fdstat(stat: WasiFdStat) -> QuickJsWasiFdStat {
 }
 
 fn convert_filestat(stat: FileStat) -> QuickJsWasiFileStat {
-    QuickJsWasiFileStat::new(convert_file_type(stat.wasi_file_type()), stat.len())
+    QuickJsWasiFileStat::new_with_times(
+        convert_file_type(stat.wasi_file_type()),
+        stat.len(),
+        stat.accessed_time_ns(),
+        stat.modified_time_ns(),
+        stat.changed_time_ns(),
+    )
 }
 
 fn convert_whence(whence: QuickJsWasiWhence) -> WasiWhence {
@@ -278,7 +299,7 @@ mod tests {
     };
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
     use wanix_vfs::{BindOptions, Namespace};
-    use wanix_wasi::{WasiConfig, WasiOpenOptions, WasiRights};
+    use wanix_wasi::{WasiConfig, WasiFilestatSetTimes, WasiOpenOptions, WasiRights};
 
     use crate::task_context::WanixExitState;
 
@@ -363,6 +384,38 @@ mod tests {
         assert_eq!(host.fd_tell(fd).unwrap(), 14);
         host.fd_close(fd).unwrap();
         assert!(host.snapshot_blockers().unwrap().is_empty());
+    }
+
+    #[test]
+    fn adapter_path_filestat_set_times_reaches_wanix_namespace() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        root.write_file("input.txt", b"from namespace").unwrap();
+        namespace
+            .bind(root, ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        host.path_filestat_set_times(
+            3,
+            0,
+            b"input.txt",
+            1_000_000_000,
+            2_000_000_000,
+            WasiFilestatSetTimes::ATIM | WasiFilestatSetTimes::MTIM,
+        )
+        .unwrap();
+
+        assert_eq!(
+            host.path_filestat_get(3, 0, b"input.txt").unwrap(),
+            QuickJsWasiFileStat::new_with_times(
+                QuickJsWasiFileType::RegularFile,
+                14,
+                1_000_000_000,
+                2_000_000_000,
+                0,
+            )
+        );
     }
 
     #[test]

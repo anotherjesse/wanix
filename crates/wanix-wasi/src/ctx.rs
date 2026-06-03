@@ -9,11 +9,12 @@ use wanix_vfs::Namespace;
 
 use crate::{
     Errno, FileStat, WasiConfig, WasiFd, WasiFdObserver, WasiFdStat, WasiFile, WasiFileAccess,
-    WasiFileType, WasiOpenOptions, WasiPathOpen, WasiPrestat, WasiRights,
+    WasiFileType, WasiFilestatSetTimes, WasiOpenOptions, WasiPathOpen, WasiPrestat, WasiRights,
 };
 
 const FIRST_PREOPEN_FD: u32 = 3;
 const MAX_WASI_PATH_BYTES: usize = 4096;
+const LOOKUPFLAGS_SYMLINK_FOLLOW: u32 = 1 << 0;
 
 /// Host context for Wanix-backed WASI filesystem operations.
 #[derive(Debug)]
@@ -532,6 +533,40 @@ impl WasiCtx {
     ) -> Result<FileStat, Errno> {
         let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_FILESTAT_GET)?;
         self.stat_path(&path)
+    }
+
+    /// Sets access and modification times for a namespace path relative to `dirfd`.
+    pub fn path_filestat_set_times(
+        &self,
+        dirfd: WasiFd,
+        flags: u32,
+        path: impl AsRef<str>,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+        fstflags: u16,
+    ) -> Result<(), Errno> {
+        if flags & !LOOKUPFLAGS_SYMLINK_FOLLOW != 0 {
+            return Err(Errno::Notcapable);
+        }
+        let updates = WasiFilestatSetTimes::from_preview1(fstflags)?;
+        let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_FILESTAT_SET_TIMES)?;
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let current = self.stat_path(&path)?;
+        let accessed_time_ns = if updates.set_access_time() {
+            accessed_time_ns
+        } else {
+            current.accessed_time_ns()
+        };
+        let modified_time_ns = if updates.set_modified_time() {
+            modified_time_ns
+        } else {
+            current.modified_time_ns()
+        };
+        self.namespace
+            .set_times(&path, accessed_time_ns, modified_time_ns)
+            .map_err(Errno::from)
     }
 
     /// Creates a namespace directory at a path relative to `dirfd`.

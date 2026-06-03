@@ -2572,6 +2572,61 @@ print("nested", std.loadFile("empty/file.txt"));
     }
 
     #[test]
+    fn task_driver_quickjs_os_utimes_updates_wanix_namespace_metadata() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.writeFile("stamp.txt", "timestamped");
+print("utimes result", JSON.stringify(os.utimes("stamp.txt", new Date(1000), new Date(2000))));
+const stat = os.stat("stamp.txt")[0];
+print("atime", stat.atime);
+print("mtime", stat.mtime);
+print("message", std.loadFile("stamp.txt"));
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"utimes result 0\natime 1000\nmtime 2000\nmessage timestamped\n"
+        );
+        let metadata = root
+            .metadata(&NormalizedPath::new("stamp.txt").unwrap())
+            .unwrap();
+        assert_eq!(metadata.accessed_time_ns(), 1_000_000_000);
+        assert_eq!(metadata.modified_time_ns(), 2_000_000_000);
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
     fn task_driver_quickjs_os_creates_wanix_namespace_directories() {
         let table = TaskTable::new();
         let runner = runner();

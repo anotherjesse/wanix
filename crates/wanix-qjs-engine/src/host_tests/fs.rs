@@ -24,6 +24,7 @@ const RIGHT_PATH_OPEN: i64 = 1 << 13;
 const RIGHT_PATH_RENAME_SOURCE: i64 = 1 << 16;
 const RIGHT_PATH_RENAME_TARGET: i64 = 1 << 17;
 const RIGHT_PATH_FILESTAT_GET: i64 = 1 << 18;
+const RIGHT_PATH_FILESTAT_SET_TIMES: i64 = 1 << 20;
 const RIGHT_FD_FILESTAT_GET: i64 = 1 << 21;
 const RIGHT_PATH_REMOVE_DIRECTORY: i64 = 1 << 25;
 const READ_SEEK_STAT_RIGHTS: i64 =
@@ -44,6 +45,7 @@ const PATH_PTR: usize = 128;
 const MAX_VIRTUAL_FILE_PATH_BYTES: usize = 4096;
 
 type PathOpenFunc = TypedFunc<(i32, i32, i32, i32, i32, i64, i64, i32, i32), i32>;
+type PathFilestatSetTimesFunc = TypedFunc<(i32, i32, i32, i32, i64, i64, i32), i32>;
 
 const VIRTUAL_FS_WAT: &str = r#"
 (module
@@ -60,6 +62,7 @@ const VIRTUAL_FS_WAT: &str = r#"
   (import "wasi_snapshot_preview1" "fd_fdstat_set_flags" (func $fd_fdstat_set_flags (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_filestat_get" (func $fd_filestat_get (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_filestat_get" (func $path_filestat_get (param i32 i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "path_filestat_set_times" (func $path_filestat_set_times (param i32 i32 i32 i32 i64 i64 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_create_directory" (func $path_create_directory (param i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_remove_directory" (func $path_remove_directory (param i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_rename" (func $path_rename (param i32 i32 i32 i32 i32 i32) (result i32)))
@@ -95,6 +98,10 @@ const VIRTUAL_FS_WAT: &str = r#"
   (func (export "path_filestat_get") (param i32 i32 i32 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 local.get 3 local.get 4
     call $path_filestat_get)
+  (func (export "path_filestat_set_times") (param i32 i32 i32 i32 i64 i64 i32) (result i32)
+    local.get 0 local.get 1 local.get 2 local.get 3
+    local.get 4 local.get 5 local.get 6
+    call $path_filestat_set_times)
   (func (export "path_create_directory") (param i32 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 call $path_create_directory)
   (func (export "path_remove_directory") (param i32 i32 i32) (result i32)
@@ -123,6 +130,7 @@ struct VirtualFsHarness {
     fd_fdstat_set_flags: TypedFunc<(i32, i32), i32>,
     fd_filestat_get: TypedFunc<(i32, i32), i32>,
     path_filestat_get: TypedFunc<(i32, i32, i32, i32, i32), i32>,
+    path_filestat_set_times: PathFilestatSetTimesFunc,
     path_create_directory: TypedFunc<(i32, i32, i32), i32>,
     path_remove_directory: TypedFunc<(i32, i32, i32), i32>,
     path_rename: TypedFunc<(i32, i32, i32, i32, i32, i32), i32>,
@@ -164,6 +172,8 @@ impl VirtualFsHarness {
             fd_fdstat_set_flags: instance.get_typed_func(&mut store, "fd_fdstat_set_flags")?,
             fd_filestat_get: instance.get_typed_func(&mut store, "fd_filestat_get")?,
             path_filestat_get: instance.get_typed_func(&mut store, "path_filestat_get")?,
+            path_filestat_set_times: instance
+                .get_typed_func(&mut store, "path_filestat_set_times")?,
             path_create_directory: instance.get_typed_func(&mut store, "path_create_directory")?,
             path_remove_directory: instance.get_typed_func(&mut store, "path_remove_directory")?,
             path_rename: instance.get_typed_func(&mut store, "path_rename")?,
@@ -337,6 +347,7 @@ impl QuickJsWasiHost for MetadataWasiHost {
                 | RIGHT_PATH_OPEN
                 | RIGHT_PATH_RENAME_SOURCE
                 | RIGHT_PATH_RENAME_TARGET
+                | RIGHT_PATH_FILESTAT_SET_TIMES
                 | RIGHT_PATH_REMOVE_DIRECTORY)
                 .cast_unsigned(),
             READ_SEEK_STAT_RIGHTS.cast_unsigned(),
@@ -348,17 +359,50 @@ impl QuickJsWasiHost for MetadataWasiHost {
         Ok(())
     }
 
-    fn fd_filestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFileStat> {
-        Err(QuickJsWasiErrno::Nosys)
+    fn fd_filestat_get(&mut self, fd: u32) -> WasiHostResult<QuickJsWasiFileStat> {
+        self.record(format!("filestat:{fd}"));
+        Ok(QuickJsWasiFileStat::new_with_times(
+            QuickJsWasiFileType::RegularFile,
+            42,
+            1_000,
+            2_000,
+            3_000,
+        ))
     }
 
     fn path_filestat_get(
         &mut self,
-        _dirfd: u32,
-        _flags: u32,
-        _path: &[u8],
+        dirfd: u32,
+        flags: u32,
+        path: &[u8],
     ) -> WasiHostResult<QuickJsWasiFileStat> {
-        Err(QuickJsWasiErrno::Nosys)
+        self.record(format!(
+            "pathstat:{dirfd}:{flags}:{}",
+            String::from_utf8_lossy(path)
+        ));
+        Ok(QuickJsWasiFileStat::new_with_times(
+            QuickJsWasiFileType::RegularFile,
+            44,
+            4_000,
+            5_000,
+            6_000,
+        ))
+    }
+
+    fn path_filestat_set_times(
+        &mut self,
+        dirfd: u32,
+        flags: u32,
+        path: &[u8],
+        atim: u64,
+        mtim: u64,
+        fstflags: u16,
+    ) -> WasiHostResult<()> {
+        self.record(format!(
+            "set-times:{dirfd}:{flags}:{}:{atim}:{mtim}:{fstflags}",
+            String::from_utf8_lossy(path)
+        ));
+        Ok(())
     }
 
     fn path_create_directory(&mut self, dirfd: u32, path: &[u8]) -> WasiHostResult<()> {
@@ -393,6 +437,65 @@ impl QuickJsWasiHost for MetadataWasiHost {
         self.record(format!("unlink:{dirfd}:{}", String::from_utf8_lossy(path)));
         Ok(())
     }
+}
+
+#[test]
+fn live_wasi_host_supplies_path_filestat_set_times() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+    harness.write_bytes(PATH_PTR, b"stamp.txt")?;
+
+    assert_eq!(
+        harness
+            .path_filestat_set_times
+            .call(&mut harness.store, (9, 1, 128, 9, 1_000, 2_000, 5))?,
+        ERRNO_SUCCESS
+    );
+
+    assert_eq!(
+        calls.lock().expect("test call lock").as_slice(),
+        &["set-times:9:1:stamp.txt:1000:2000:5".to_owned()]
+    );
+    Ok(())
+}
+
+#[test]
+fn live_wasi_host_supplies_filestat_timestamps() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+
+    assert_eq!(
+        harness.fd_filestat_get.call(&mut harness.store, (5, 64))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u8(64 + 16)?, FILETYPE_REGULAR_FILE);
+    assert_eq!(harness.read_u64(64 + 32)?, 42);
+    assert_eq!(harness.read_u64(64 + 40)?, 1_000);
+    assert_eq!(harness.read_u64(64 + 48)?, 2_000);
+    assert_eq!(harness.read_u64(64 + 56)?, 3_000);
+
+    harness.write_bytes(PATH_PTR, b"stamp.txt")?;
+    assert_eq!(
+        harness.path_filestat_get.call(
+            &mut harness.store,
+            (9, 1, test_guest_i32(PATH_PTR, "path pointer")?, 9, 128)
+        )?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u64(128 + 32)?, 44);
+    assert_eq!(harness.read_u64(128 + 40)?, 4_000);
+    assert_eq!(harness.read_u64(128 + 48)?, 5_000);
+    assert_eq!(harness.read_u64(128 + 56)?, 6_000);
+
+    assert_eq!(
+        calls.lock().expect("test call lock").as_slice(),
+        &["filestat:5".to_owned(), "pathstat:9:1:stamp.txt".to_owned(),]
+    );
+    Ok(())
 }
 
 #[test]
@@ -568,6 +671,7 @@ fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
             | RIGHT_PATH_OPEN
             | RIGHT_PATH_RENAME_SOURCE
             | RIGHT_PATH_RENAME_TARGET
+            | RIGHT_PATH_FILESTAT_SET_TIMES
             | RIGHT_PATH_REMOVE_DIRECTORY)
             .cast_unsigned()
     );

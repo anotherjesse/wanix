@@ -154,4 +154,21 @@ pub trait FileSystem: Send + Sync {
     fn rename(&self, _old_path: &NormalizedPath, _new_path: &NormalizedPath) -> FsResult<()> {
         Err(FsError::NotSupported)
     }
+
+    /// Sets explicit access and modification times for `path`.
+    ///
+    /// Timestamps are nanoseconds since the Unix epoch. Metadata-change time is
+    /// filesystem-specific and may remain deterministic for virtual filesystems.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the path cannot have its timestamps updated.
+    fn set_times(
+        &self,
+        _path: &NormalizedPath,
+        _accessed_time_ns: u64,
+        _modified_time_ns: u64,
+    ) -> FsResult<()> {
+        Err(FsError::NotSupported)
+    }
 }

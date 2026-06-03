@@ -154,6 +154,9 @@ cargo test --workspace --locked
 - [ADR 0029](docs/adrs/0029-wasi-runtime-append-fdflag-mutation.md):
   `fd_fdstat_set_flags(APPEND)` mutates shared Wanix fd state so
   `qjs:std.fdopen(fd, "a")` appends through live and mirrored task fds.
+- [ADR 0030](docs/adrs/0030-wasi-path-timestamp-mutation.md):
+  `qjs:os.utimes(...)` reaches Wanix-owned path timestamp mutation and
+  stat-visible atime/mtime through live WASI providers.
 
 ## Cycle Rules
 

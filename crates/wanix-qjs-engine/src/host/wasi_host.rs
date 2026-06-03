@@ -92,6 +92,19 @@ pub trait QuickJsWasiHost: Send {
         path: &[u8],
     ) -> Result<QuickJsWasiFileStat, QuickJsWasiErrno>;
 
+    /// Sets access and modification times for `path` relative to `dirfd`.
+    fn path_filestat_set_times(
+        &mut self,
+        _dirfd: u32,
+        _flags: u32,
+        _path: &[u8],
+        _atim: u64,
+        _mtim: u64,
+        _fstflags: u16,
+    ) -> Result<(), QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     /// Creates a directory at `path` relative to `dirfd`.
     fn path_create_directory(&mut self, _dirfd: u32, _path: &[u8]) -> Result<(), QuickJsWasiErrno> {
         Err(QuickJsWasiErrno::Nosys)
@@ -336,13 +349,34 @@ impl QuickJsWasiFdStat {
 pub struct QuickJsWasiFileStat {
     file_type: QuickJsWasiFileType,
     size: u64,
+    accessed_time_ns: u64,
+    modified_time_ns: u64,
+    changed_time_ns: u64,
 }
 
 impl QuickJsWasiFileStat {
     /// Creates filestat metadata.
     #[must_use]
     pub const fn new(file_type: QuickJsWasiFileType, size: u64) -> Self {
-        Self { file_type, size }
+        Self::new_with_times(file_type, size, 0, 0, 0)
+    }
+
+    /// Creates filestat metadata with explicit nanosecond timestamps.
+    #[must_use]
+    pub const fn new_with_times(
+        file_type: QuickJsWasiFileType,
+        size: u64,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+        changed_time_ns: u64,
+    ) -> Self {
+        Self {
+            file_type,
+            size,
+            accessed_time_ns,
+            modified_time_ns,
+            changed_time_ns,
+        }
     }
 
     pub(crate) const fn file_type(self) -> QuickJsWasiFileType {
@@ -351,5 +385,17 @@ impl QuickJsWasiFileStat {
 
     pub(crate) const fn size(self) -> u64 {
         self.size
+    }
+
+    pub(crate) const fn accessed_time_ns(self) -> u64 {
+        self.accessed_time_ns
+    }
+
+    pub(crate) const fn modified_time_ns(self) -> u64 {
+        self.modified_time_ns
+    }
+
+    pub(crate) const fn changed_time_ns(self) -> u64 {
+        self.changed_time_ns
     }
 }

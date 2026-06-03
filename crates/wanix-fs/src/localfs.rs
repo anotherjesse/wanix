@@ -1,7 +1,8 @@
-use std::fs::{self, File as StdFile};
+use std::fs::{self, File as StdFile, FileTimes};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
 use crate::{
     DirEntry, File, FileSeekFrom, FileSystem, FileType, FsError, FsResult, Metadata,
@@ -235,6 +236,20 @@ impl FileSystem for LocalFs {
 
         fs::rename(old_host_path, new_host_path).map_err(map_io_error)
     }
+
+    fn set_times(
+        &self,
+        path: &NormalizedPath,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+    ) -> FsResult<()> {
+        let host_path = self.existing_host_path(path)?;
+        let file = StdFile::open(&host_path).map_err(map_io_error)?;
+        let times = FileTimes::new()
+            .set_accessed(system_time_from_ns(accessed_time_ns)?)
+            .set_modified(system_time_from_ns(modified_time_ns)?);
+        file.set_times(times).map_err(map_timestamp_io_error)
+    }
 }
 
 #[derive(Debug)]
@@ -310,7 +325,14 @@ fn metadata_from_host(metadata: &fs::Metadata) -> Metadata {
     } else {
         FileType::File
     };
-    Metadata::new(file_type, metadata.len(), metadata_mode(metadata))
+    Metadata::new_with_times(
+        file_type,
+        metadata.len(),
+        metadata_mode(metadata),
+        metadata_accessed_time_ns(metadata),
+        metadata_modified_time_ns(metadata),
+        metadata_changed_time_ns(metadata),
+    )
 }
 
 #[cfg(unix)]
@@ -331,6 +353,68 @@ fn metadata_mode(metadata: &fs::Metadata) -> u32 {
     }
 }
 
+#[cfg(unix)]
+fn metadata_accessed_time_ns(metadata: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+
+    unix_time_ns(metadata.atime(), metadata.atime_nsec())
+}
+
+#[cfg(unix)]
+fn metadata_modified_time_ns(metadata: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+
+    unix_time_ns(metadata.mtime(), metadata.mtime_nsec())
+}
+
+#[cfg(unix)]
+fn metadata_changed_time_ns(metadata: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+
+    unix_time_ns(metadata.ctime(), metadata.ctime_nsec())
+}
+
+#[cfg(unix)]
+fn unix_time_ns(secs: i64, nanos: i64) -> u64 {
+    let Ok(secs) = u64::try_from(secs) else {
+        return 0;
+    };
+    let Ok(nanos) = u64::try_from(nanos) else {
+        return 0;
+    };
+    secs.checked_mul(1_000_000_000)
+        .and_then(|base| base.checked_add(nanos))
+        .unwrap_or(0)
+}
+
+#[cfg(not(unix))]
+fn metadata_accessed_time_ns(metadata: &fs::Metadata) -> u64 {
+    system_time_ns(metadata.accessed().ok())
+}
+
+#[cfg(not(unix))]
+fn metadata_modified_time_ns(metadata: &fs::Metadata) -> u64 {
+    system_time_ns(metadata.modified().ok())
+}
+
+#[cfg(not(unix))]
+fn metadata_changed_time_ns(metadata: &fs::Metadata) -> u64 {
+    system_time_ns(metadata.created().ok())
+}
+
+#[cfg(not(unix))]
+fn system_time_ns(time: Option<std::time::SystemTime>) -> u64 {
+    time.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
+        .unwrap_or(0)
+}
+
+fn system_time_from_ns(timestamp_ns: u64) -> FsResult<std::time::SystemTime> {
+    UNIX_EPOCH
+        .checked_add(Duration::from_nanos(timestamp_ns))
+        .ok_or(FsError::InvalidTime)
+}
+
 fn map_io_error(error: std::io::Error) -> FsError {
     match error.kind() {
         std::io::ErrorKind::NotFound => FsError::NotFound,
@@ -341,6 +425,13 @@ fn map_io_error(error: std::io::Error) -> FsError {
         std::io::ErrorKind::DirectoryNotEmpty => FsError::NotEmpty,
         std::io::ErrorKind::InvalidInput => FsError::InvalidOffset,
         _ => FsError::Other(error.to_string()),
+    }
+}
+
+fn map_timestamp_io_error(error: std::io::Error) -> FsError {
+    match map_io_error(error) {
+        FsError::InvalidOffset => FsError::InvalidTime,
+        error => error,
     }
 }
 
@@ -540,6 +631,26 @@ mod tests {
         assert_eq!(
             fs.rename(&path("."), &path("root")),
             Err(FsError::PermissionDenied)
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn localfs_set_times_updates_host_file_metadata() {
+        let root = temp_root();
+        fs::write(root.join("stamp.txt"), "stamp").unwrap();
+        let fs = LocalFs::new(&root).unwrap();
+
+        fs.set_times(&path("stamp.txt"), 1_000_000_000, 2_000_000_000)
+            .unwrap();
+
+        let metadata = fs.metadata(&path("stamp.txt")).unwrap();
+        assert_eq!(metadata.accessed_time_ns(), 1_000_000_000);
+        assert_eq!(metadata.modified_time_ns(), 2_000_000_000);
+        assert_eq!(
+            fs.set_times(&path("missing.txt"), 1_000_000_000, 2_000_000_000),
+            Err(FsError::NotFound)
         );
 
         fs::remove_dir_all(root).unwrap();

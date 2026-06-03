@@ -48,10 +48,11 @@ fixture. The first committed proof is `qjs:std` stdio: `std.out.puts(...)` and
 `std.err.puts(...)` write through WASI fd 1 and 2, and Wanix-backed qjs tasks
 route those bytes through task stdio fds.
 
-The libc-enabled fixture imports additional Preview 1 functions. Unsupported
-directory mutation, timestamp mutation, fd flag mutation, and non-empty polling
-are defined by the engine as explicit `NOSYS` surfaces until Wanix owns those
-semantics.
+The libc-enabled fixture imports additional Preview 1 functions. At the time
+of this ADR, unsupported directory mutation, timestamp mutation, fd flag
+mutation, and non-empty polling were defined by the engine as explicit `NOSYS`
+surfaces until Wanix owned those semantics. Later ADRs move individual calls
+from that fallback surface into live Wanix-backed providers.
 
 Changing the fixture changes the module SHA-256 used by snapshot identity
 validation. Snapshots produced by the older non-libc fixture are expected to be

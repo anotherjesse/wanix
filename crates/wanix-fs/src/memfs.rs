@@ -17,6 +17,9 @@ struct Node {
     kind: FileType,
     mode: u32,
     data: Vec<u8>,
+    accessed_time_ns: u64,
+    modified_time_ns: u64,
+    changed_time_ns: u64,
 }
 
 impl Node {
@@ -25,6 +28,9 @@ impl Node {
             kind: FileType::Directory,
             mode,
             data: Vec::new(),
+            accessed_time_ns: 0,
+            modified_time_ns: 0,
+            changed_time_ns: 0,
         }
     }
 
@@ -33,11 +39,21 @@ impl Node {
             kind: FileType::File,
             mode,
             data,
+            accessed_time_ns: 0,
+            modified_time_ns: 0,
+            changed_time_ns: 0,
         }
     }
 
     fn metadata(&self, len: u64) -> Metadata {
-        Metadata::new(self.kind, len, self.mode)
+        Metadata::new_with_times(
+            self.kind,
+            len,
+            self.mode,
+            self.accessed_time_ns,
+            self.modified_time_ns,
+            self.changed_time_ns,
+        )
     }
 }
 
@@ -338,6 +354,22 @@ impl FileSystem for MemFs {
             nodes.remove(old_path);
             nodes.insert(new_path.clone(), old_node);
         }
+        Ok(())
+    }
+
+    fn set_times(
+        &self,
+        path: &NormalizedPath,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+    ) -> FsResult<()> {
+        let mut nodes = self
+            .nodes
+            .write()
+            .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
+        let node = nodes.get_mut(path).ok_or(FsError::NotFound)?;
+        node.accessed_time_ns = accessed_time_ns;
+        node.modified_time_ns = modified_time_ns;
         Ok(())
     }
 }
