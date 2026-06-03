@@ -1,5 +1,6 @@
 //! Native CLI plumbing for Rust Wanix demos.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -7,7 +8,7 @@ use std::sync::Arc;
 
 use wanix_fs::{FileSystem, FsError, MemFs, NormalizedPath, OpenOptions};
 use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver};
-use wanix_task::{Fd, TaskTable};
+use wanix_task::{Fd, TaskSpec, TaskTable};
 use wanix_vfs::BindOptions;
 
 const USAGE: &str = "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] <script.js> [-- arg ...]\n       wanix-rust --help";
@@ -151,6 +152,10 @@ fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
     let runner = Arc::new(quickjs_runner()?);
     table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(runner)))?;
     let task = table.allocate_root("qjs")?;
+    let task_spec = qjs_task_spec(&command)?;
+    let task_cmd = qjs_task_cmd(&command.args);
+    let task_env = command.env.join("\n");
+    let task_dir = command.cwd.to_string();
 
     let root = Arc::new(MemFs::new());
     copy_script_directory(script_path, &root, &command.cwd)?;
@@ -182,9 +187,10 @@ fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
         stderr.open(&NormalizedPath::new("stderr")?, OpenOptions::read_write())?,
         NormalizedPath::new("stderr")?,
     )?;
-    task.set_cmd(qjs_task_cmd(&command.args))?;
-    task.set_env_lines(command.env.join("\n"))?;
-    task.set_dir(command.cwd.as_str())?;
+    task.set_spec(task_spec)?;
+    task.set_cmd(task_cmd)?;
+    task.set_env_lines(task_env)?;
+    task.set_dir(task_dir)?;
 
     let start_result = table.start(task.id());
     let stdout = read_file(&*stdout, "stdout")?;
@@ -250,11 +256,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
 
     let js_args = args[i..]
         .iter()
-        .map(|arg| {
-            let arg = os_arg_to_string(arg, "qjs script arg")?;
-            validate_raw_cmd_arg(&arg)?;
-            Ok(arg)
-        })
+        .map(|arg| os_arg_to_string(arg, "qjs script arg"))
         .collect::<Result<Vec<_>, CliError>>()?;
 
     Ok(QjsCommand {
@@ -282,20 +284,29 @@ fn validate_env_line(line: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-fn validate_raw_cmd_arg(arg: &str) -> Result<(), CliError> {
-    if arg.is_empty() || arg.split_whitespace().count() != 1 {
-        return Err(CliError::usage(
-            "qjs script args must be non-empty and contain no whitespace",
-        ));
-    }
-    Ok(())
-}
-
 fn qjs_task_cmd(args: &[String]) -> String {
     std::iter::once(QJS_GUEST_SCRIPT)
         .chain(args.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn qjs_task_spec(command: &QjsCommand) -> Result<TaskSpec, CliError> {
+    let mut spec = TaskSpec::new(QJS_GUEST_SCRIPT)?;
+    spec.args = command.args.clone();
+    spec.env = env_map(&command.env);
+    spec.cwd = command.cwd.clone();
+    Ok(spec)
+}
+
+fn env_map(lines: &[String]) -> BTreeMap<String, String> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect()
 }
 
 fn quickjs_runner() -> Result<QuickJsRunner, CliError> {
@@ -547,6 +558,7 @@ print("task", Wanix.readText("#task/self/id").trim());
         let script = write_temp_script(
             "context.js",
             r##"
+print("cmd", Wanix.cmd());
 print("cwd", Wanix.cwd());
 print("args", Wanix.args().join("/"));
 print("mode", Wanix.env("MODE"));
@@ -567,6 +579,7 @@ print("id", Wanix.readText("#task/self/id").trim());
             script.into_os_string(),
             "--".into(),
             "alpha".into(),
+            "two words".into(),
             "beta".into(),
         ])
         .unwrap();
@@ -574,13 +587,13 @@ print("id", Wanix.readText("#task/self/id").trim());
         assert_eq!(output.exit_code(), 0);
         assert_eq!(
             output.stdout(),
-            b"cwd app\nargs alpha/beta\nmode test\nall test\nsource true\ncreated made in cwd\nid 1\n"
+            b"cmd main.js alpha two words beta\ncwd app\nargs alpha/two words/beta\nmode test\nall test\nsource true\ncreated made in cwd\nid 1\n"
         );
         assert!(output.stderr().is_empty());
     }
 
     #[test]
-    fn qjs_command_rejects_invalid_env_keys_and_whitespace_args() {
+    fn qjs_command_rejects_invalid_env_keys_and_missing_stdin_text() {
         let script = write_temp_script("context.js", "print('unused');");
 
         let env_error = run([
@@ -596,11 +609,6 @@ print("id", Wanix.readText("#task/self/id").trim());
         let stdin_error = run(["qjs", "--stdin"]).unwrap_err();
         assert_eq!(stdin_error.exit_code(), 2);
         assert!(stdin_error.to_string().contains("--stdin expects text"));
-
-        let arg_error =
-            run(["qjs".into(), script.into_os_string(), "two words".into()]).unwrap_err();
-        assert_eq!(arg_error.exit_code(), 2);
-        assert!(arg_error.to_string().contains("contain no whitespace"));
     }
 
     fn write_temp_script(name: &str, source: &str) -> PathBuf {

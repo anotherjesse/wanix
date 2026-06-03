@@ -179,6 +179,18 @@ impl Task {
             .expect("task state lock should be readable")
     }
 
+    /// Replaces the explicit launch description.
+    ///
+    /// This does not mutate the raw `cmd`, `env`, or `dir` task fields. Those
+    /// remain separately visible through `#task` for compatibility with
+    /// file-oriented task control.
+    pub fn set_spec(&self, spec: TaskSpec) -> FsResult<()> {
+        self.write_state(|state| {
+            state.spec = spec;
+            Ok(())
+        })
+    }
+
     /// Returns a clone of the task namespace binding table.
     #[must_use]
     pub fn namespace(&self) -> Namespace {

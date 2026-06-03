@@ -3,7 +3,7 @@ use std::sync::Arc;
 use wanix_fs::FsResult;
 use wanix_task::{Task, TaskDriver};
 
-use crate::QuickJsRunner;
+use crate::{QuickJsRunner, task_program_for_check};
 
 /// Wanix task driver for QuickJS tasks.
 #[derive(Debug, Clone)]
@@ -27,10 +27,7 @@ impl QuickJsTaskDriver {
 
 impl TaskDriver for QuickJsTaskDriver {
     fn check(&self, task: &Task) -> bool {
-        task.cmd()
-            .split_whitespace()
-            .next()
-            .is_some_and(|program| program.ends_with(".js"))
+        task_program_for_check(task).is_some_and(|program| program.ends_with(".js"))
     }
 
     fn start(&self, task: &Task) -> FsResult<()> {

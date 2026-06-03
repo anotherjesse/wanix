@@ -94,6 +94,29 @@ fn task_carries_id_spec_and_namespace() {
 }
 
 #[test]
+fn task_spec_can_be_replaced_without_mutating_task_fields() {
+    let task = Task::new(
+        TaskId::new(1),
+        TaskSpec::new("bin/app").unwrap(),
+        wanix_vfs::Namespace::new(),
+    );
+    task.set_cmd("raw command").unwrap();
+    task.set_env_lines("RAW=1").unwrap();
+    task.set_dir("raw-cwd").unwrap();
+    let mut spec = TaskSpec::new("bin/other").unwrap();
+    spec.args = vec!["two words".to_owned()];
+    spec.env.insert("SPEC".to_owned(), "1".to_owned());
+    spec.cwd = NormalizedPath::new("spec-cwd").unwrap();
+
+    task.set_spec(spec.clone()).unwrap();
+
+    assert_eq!(task.spec(), spec);
+    assert_eq!(task.cmd(), "raw command");
+    assert_eq!(task.env(), ["RAW=1"]);
+    assert_eq!(task.dir().as_str(), "raw-cwd");
+}
+
+#[test]
 fn task_table_allocates_root_and_self_taskfs_view() {
     let table = TaskTable::new();
     table.register_noop_driver("qjs").unwrap();

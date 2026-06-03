@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use rust_wasi_quickjs::{QuickJsCreateOptions, QuickJsHostConfig, QuickJsModule, QuickJsRuntime};
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath};
-use wanix_task::{Fd, Task};
+use wanix_task::{Fd, Task, TaskSpec};
 use wanix_wasi::WasiConfig;
 use wasmtime::Engine;
 
@@ -357,8 +357,12 @@ impl QuickJsRunner {
         let run_as_module = uses_module_syntax(&source);
         let api_exit_state = exit_state.clone();
         let api_task = task.clone();
-        let context =
-            WanixTaskContext::new(command.raw, command.args, task_env_map(task), task.dir());
+        let context = WanixTaskContext::new(
+            command.raw,
+            command.args,
+            task_env_map(task),
+            command.cwd.clone(),
+        );
         match self.run_with_setup_control(
             &source,
             create_options,
@@ -467,17 +471,69 @@ struct TaskCommand {
     raw: String,
     program: NormalizedPath,
     args: Vec<String>,
+    cwd: NormalizedPath,
 }
 
 fn task_command(task: &Task) -> FsResult<TaskCommand> {
     let raw = task.cmd();
+    let spec = task.spec();
+    if task_spec_is_set(&spec) {
+        let program = resolve_from_cwd(&spec.cwd, &spec.program)?;
+        let raw = if raw.is_empty() {
+            raw_command(&spec.program, &spec.args)
+        } else {
+            raw
+        };
+        return Ok(TaskCommand {
+            raw,
+            program,
+            args: spec.args,
+            cwd: spec.cwd,
+        });
+    }
+
+    let cwd = task.dir();
     let mut parts = raw.split_whitespace();
     let script = parts
         .next()
         .ok_or_else(|| FsError::Other("qjs task cmd is empty".to_owned()))?;
-    let program = resolve_from_cwd(&task.dir(), &NormalizedPath::new(script)?)?;
+    let program = resolve_from_cwd(&cwd, &NormalizedPath::new(script)?)?;
     let args = parts.map(str::to_owned).collect();
-    Ok(TaskCommand { raw, program, args })
+    Ok(TaskCommand {
+        raw,
+        program,
+        args,
+        cwd,
+    })
+}
+
+pub(crate) fn task_wasi_argv(task: &Task) -> Vec<String> {
+    let spec = task.spec();
+    if task_spec_is_set(&spec) {
+        return std::iter::once(spec.program.to_string())
+            .chain(spec.args)
+            .collect();
+    }
+    task.cmd().split_whitespace().map(str::to_owned).collect()
+}
+
+pub(crate) fn task_program_for_check(task: &Task) -> Option<String> {
+    let spec = task.spec();
+    if task_spec_is_set(&spec) {
+        return Some(spec.program.to_string());
+    }
+    task.cmd().split_whitespace().next().map(str::to_owned)
+}
+
+fn task_spec_is_set(spec: &TaskSpec) -> bool {
+    spec.program.as_str() != "."
+}
+
+fn raw_command(program: &NormalizedPath, args: &[String]) -> String {
+    std::iter::once(program.as_str())
+        .chain(args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn resolve_from_cwd(cwd: &NormalizedPath, path: &NormalizedPath) -> FsResult<NormalizedPath> {
@@ -754,6 +810,28 @@ print(Wanix.readText("input.txt"));
 
         assert_eq!(ctx.args(), ["main.js", "--mode", "test"]);
         assert_eq!(ctx.env(), ["MODE=test", "EMPTY="]);
+    }
+
+    #[test]
+    fn task_spec_preserves_exact_qjs_program_args() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        task.set_cmd("main.js two words").unwrap();
+        task.set_dir("app").unwrap();
+        let mut spec = TaskSpec::new("main.js").unwrap();
+        spec.args = vec!["two words".to_owned(), "".to_owned(), "--flag".to_owned()];
+        spec.cwd = NormalizedPath::new("app").unwrap();
+        task.set_spec(spec).unwrap();
+
+        let command = super::task_command(&task).unwrap();
+        let ctx = WasiCtx::new(task_wasi_config(&task));
+
+        assert_eq!(command.raw, "main.js two words");
+        assert_eq!(command.program.as_str(), "app/main.js");
+        assert_eq!(command.args, ["two words", "", "--flag"]);
+        assert_eq!(command.cwd.as_str(), "app");
+        assert_eq!(ctx.args(), ["main.js", "two words", "", "--flag"]);
     }
 
     #[test]
@@ -1347,7 +1425,7 @@ Wanix.readFd(fd, 1);
         let driver = QuickJsTaskDriver::new(std::sync::Arc::new(runner()));
         let task = Task::new(
             TaskId::new(1),
-            TaskSpec::new("main.js").unwrap(),
+            TaskSpec::new(".").unwrap(),
             wanix_vfs::Namespace::new(),
         );
 
@@ -1356,6 +1434,24 @@ Wanix.readFd(fd, 1);
 
         task.set_cmd("notes.txt main.js").unwrap();
         assert!(!driver.check(&task));
+    }
+
+    #[test]
+    fn task_driver_check_uses_typed_task_spec_program_when_present() {
+        let driver = QuickJsTaskDriver::new(std::sync::Arc::new(runner()));
+        let task = Task::new(
+            TaskId::new(1),
+            TaskSpec::new("notes.txt").unwrap(),
+            wanix_vfs::Namespace::new(),
+        );
+
+        task.set_cmd("not-js.txt").unwrap();
+        assert!(!driver.check(&task));
+
+        let mut spec = TaskSpec::new("main.js").unwrap();
+        spec.args = vec!["two words".to_owned()];
+        task.set_spec(spec).unwrap();
+        assert!(driver.check(&task));
     }
 
     #[test]
