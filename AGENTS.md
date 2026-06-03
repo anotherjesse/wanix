@@ -103,10 +103,13 @@ server over binary WebSocket frames for browser/v86 experiments. `wanix-rust
 serve [DIR] [--listen HOST:PORT] [--bundle NAME]` serves static files with
 COOP/COEP/CORS headers and reuses the binary WebSocket 9P handler on the same
 listener, including the named `/.well-known/export9p` route, which is the first
-Rust-native serve shape for browser/v86/VS Code experiments. `/.well-known`
-routes are reserved for protocol endpoints; `/.well-known/ethernet` is
-explicitly unimplemented until the qemu/vnet bridge lands. Listener commands
-accept `--once` for tests and scripted demos.
+Rust-native serve shape for browser/v86/VS Code experiments.
+`/.well-known/wanix.json` describes the direct binary 9P WebSocket route, the
+optional bundle hint, and the explicitly unimplemented Ethernet route so
+browser/v86/VS Code clients can discover the current Rust serve contract.
+`/.well-known` routes are reserved for protocol endpoints;
+`/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
+lands. Listener commands accept `--once` for tests and scripted demos.
 
 ## Code Quality Guardrails
 
@@ -334,6 +337,9 @@ cargo test --workspace --locked
 - [ADR 0070](docs/adrs/0070-go-like-rust-serve-cli.md):
   Rust `serve` defaults to a demo-friendly current-directory root, supports
   positional directories, `--listen`, and bundle URL reporting.
+- [ADR 0071](docs/adrs/0071-rust-serve-discovery-document.md):
+  Rust `serve` exposes `/.well-known/wanix.json` so browser/v86/VS Code clients
+  can discover direct 9P and reserved Ethernet routes.
 
 ## Cycle Rules
 
@@ -353,5 +359,6 @@ cycle before starting the next one.
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
-  integration, then wire qemu/v86 bundles, `/.well-known/ethernet`, vnet, and
-  VS Code routes onto the Rust `serve` endpoint.
+  integration, then wire qemu/v86 bundles through the serve discovery document,
+  `/.well-known/ethernet`, vnet, and VS Code routes onto the Rust `serve`
+  endpoint.

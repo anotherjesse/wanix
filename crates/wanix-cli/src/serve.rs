@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -123,7 +123,7 @@ fn run_serve_with_listener(
     let local_addr = listener
         .local_addr()
         .map_err(|error| CliError::new(format!("failed to inspect serve address: {error}"), 1))?;
-    let roots = ServeRoots::new(&command.root_path)?;
+    let roots = ServeRoots::new(&command.root_path, local_addr, command.bundle.clone())?;
 
     write_process_output(
         process_stderr,
@@ -156,23 +156,13 @@ fn run_serve_with_listener(
     }
 }
 
-fn serve_url_status(local_addr: std::net::SocketAddr, bundle: Option<&str>) -> String {
-    let host = if local_addr.ip().is_unspecified() {
-        "localhost".to_owned()
-    } else {
-        local_addr.ip().to_string()
-    };
+fn serve_url_status(local_addr: SocketAddr, bundle: Option<&str>) -> String {
+    let host = display_host(local_addr);
     match bundle {
-        Some(bundle) => format!(
-            "wanix-rust serve: bundle available at http://{}:{}/?bundle={bundle}\n",
-            host,
-            local_addr.port()
-        ),
-        None => format!(
-            "wanix-rust serve: listening on http://{}:{}/\n",
-            host,
-            local_addr.port()
-        ),
+        Some(bundle) => {
+            format!("wanix-rust serve: bundle available at http://{host}/?bundle={bundle}\n")
+        }
+        None => format!("wanix-rust serve: listening on http://{host}/\n"),
     }
 }
 
@@ -180,10 +170,16 @@ fn serve_url_status(local_addr: std::net::SocketAddr, bundle: Option<&str>) -> S
 struct ServeRoots {
     static_root: PathBuf,
     p9_root: Arc<dyn FileSystem>,
+    local_addr: SocketAddr,
+    bundle: Option<String>,
 }
 
 impl ServeRoots {
-    fn new(root_path: &Path) -> Result<Self, CliError> {
+    fn new(
+        root_path: &Path,
+        local_addr: SocketAddr,
+        bundle: Option<String>,
+    ) -> Result<Self, CliError> {
         let static_root = fs::canonicalize(root_path).map_err(|error| {
             CliError::new(
                 format!("failed to open serve root {}: {error}", root_path.display()),
@@ -202,6 +198,8 @@ impl ServeRoots {
         Ok(Self {
             static_root,
             p9_root: Arc::new(p9_root),
+            local_addr,
+            bundle,
         })
     }
 }
@@ -240,7 +238,7 @@ fn serve_connection(roots: &ServeRoots, stream: TcpStream) -> Result<(), ServeCo
             .map_err(ServeConnectionError::WebSocket);
     }
 
-    serve_http_connection(&roots.static_root, stream)
+    serve_http_connection(roots, stream)
 }
 
 fn peek_request_target(header_bytes: &[u8]) -> Option<&str> {
@@ -283,14 +281,13 @@ fn is_websocket_upgrade(header_bytes: &[u8]) -> bool {
 }
 
 fn serve_http_connection(
-    static_root: &Path,
+    roots: &ServeRoots,
     mut stream: TcpStream,
 ) -> Result<(), ServeConnectionError> {
     let request = read_http_request(&mut stream)?;
     let response = match parse_http_request(&request) {
-        Ok(path) => {
-            well_known_response(&path).unwrap_or_else(|| read_static_response(static_root, &path))
-        }
+        Ok(path) => well_known_response(roots, &path, &request)
+            .unwrap_or_else(|| read_static_response(&roots.static_root, &path)),
         Err(status) => StaticResponse::plain(status, status.reason()),
     };
     write_static_response(stream, response)
@@ -439,17 +436,33 @@ fn websocket_rejection_response(raw_path: Option<&str>) -> Option<StaticResponse
     None
 }
 
-fn well_known_response(relative_path: &Path) -> Option<StaticResponse> {
+fn well_known_response(
+    roots: &ServeRoots,
+    relative_path: &Path,
+    request: &[u8],
+) -> Option<StaticResponse> {
     let mut components = relative_path.components();
     match components.next() {
         Some(Component::Normal(component)) if component == ".well-known" => {}
         _ => return None,
     }
-    match components.next() {
-        Some(Component::Normal(component)) if component == "export9p" => Some(
-            StaticResponse::plain(HttpStatus::BadRequest, "websocket upgrade required"),
-        ),
-        Some(Component::Normal(component)) if component == "ethernet" => {
+    let endpoint = components.next();
+    let has_extra_components = components.next().is_some();
+    match endpoint {
+        Some(Component::Normal(component)) if component == "wanix.json" => {
+            if has_extra_components {
+                Some(StaticResponse::plain(HttpStatus::NotFound, "not found"))
+            } else {
+                Some(serve_discovery_response(roots, request))
+            }
+        }
+        Some(Component::Normal(component)) if component == "export9p" && !has_extra_components => {
+            Some(StaticResponse::plain(
+                HttpStatus::BadRequest,
+                "websocket upgrade required",
+            ))
+        }
+        Some(Component::Normal(component)) if component == "ethernet" && !has_extra_components => {
             Some(StaticResponse::plain(
                 HttpStatus::NotImplemented,
                 "ethernet websocket bridge is not implemented in rust serve",
@@ -457,6 +470,97 @@ fn well_known_response(relative_path: &Path) -> Option<StaticResponse> {
         }
         _ => Some(StaticResponse::plain(HttpStatus::NotFound, "not found")),
     }
+}
+
+fn serve_discovery_response(roots: &ServeRoots, request: &[u8]) -> StaticResponse {
+    StaticResponse {
+        status: HttpStatus::Ok,
+        content_type: "application/json",
+        body: serve_discovery_json(roots.local_addr, roots.bundle.as_deref(), request).into_bytes(),
+    }
+}
+
+fn serve_discovery_json(local_addr: SocketAddr, bundle: Option<&str>, request: &[u8]) -> String {
+    let host = request_host(request).unwrap_or_else(|| display_host(local_addr));
+    let p9_url = format!("ws://{host}/.well-known/export9p");
+    let ethernet_url = format!("ws://{host}/.well-known/ethernet");
+    let bundle = bundle.map(json_string).unwrap_or_else(|| "null".to_owned());
+    format!(
+        "{{\"version\":1,\
+         \"runtime\":\"wanix-rust\",\
+         \"routes\":{{\
+         \"p9\":{{\"websocket\":{},\"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\"}},\
+         \"ethernet\":{{\"websocket\":{},\"status\":\"not-implemented\"}}\
+         }},\
+         \"bundle\":{}}}",
+        json_string(&p9_url),
+        json_string(&ethernet_url),
+        bundle
+    )
+}
+
+fn request_host(request: &[u8]) -> Option<String> {
+    let header_end = header_end(request)?;
+    let header = std::str::from_utf8(&request[..header_end]).ok()?;
+    for line in header.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("host") {
+            let host = value.trim();
+            if is_safe_host(host) {
+                return Some(host.to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn is_safe_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'a'..=b'z'
+                    | b'A'..=b'Z'
+                    | b'0'..=b'9'
+                    | b'.'
+                    | b'-'
+                    | b'_'
+                    | b':'
+                    | b'['
+                    | b']'
+            )
+        })
+}
+
+fn display_host(local_addr: SocketAddr) -> String {
+    let host = if local_addr.ip().is_unspecified() {
+        "localhost".to_owned()
+    } else if local_addr.ip().is_ipv6() {
+        format!("[{}]", local_addr.ip())
+    } else {
+        local_addr.ip().to_string()
+    };
+    format!("{host}:{}", local_addr.port())
+}
+
+fn json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => escaped.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped.push('"');
+    escaped
 }
 
 fn content_type(path: &Path) -> &'static str {
@@ -703,6 +807,100 @@ mod tests {
             "{stderr}"
         );
         assert!(stderr.contains("/?bundle=vm-workbench"), "{stderr}");
+    }
+
+    #[test]
+    fn serve_once_returns_well_known_discovery_document() {
+        let root = temp_dir("wanix-cli-serve-discovery");
+        fs::write(root.join("index.html"), b"wanix serve discovery").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some("vm-workbench".to_owned()),
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+        );
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(
+            response.contains("Content-Type: application/json\r\n"),
+            "{response}"
+        );
+        assert!(
+            response.contains(
+                "\"p9\":{\"websocket\":\"ws://demo.local:7654/.well-known/export9p\",\
+                 \"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\"}"
+            ),
+            "{response}"
+        );
+        assert!(
+            response.contains(
+                "\"ethernet\":{\"websocket\":\"ws://demo.local:7654/.well-known/ethernet\",\
+                 \"status\":\"not-implemented\"}"
+            ),
+            "{response}"
+        );
+        assert!(
+            response.contains("\"bundle\":\"vm-workbench\""),
+            "{response}"
+        );
+    }
+
+    #[test]
+    fn serve_discovery_falls_back_to_listener_address_without_host_header() {
+        let local_addr = "0.0.0.0:7654".parse().unwrap();
+        let body = serve_discovery_json(
+            local_addr,
+            Some("quote\"bundle"),
+            b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n",
+        );
+
+        assert!(
+            body.contains("\"websocket\":\"ws://localhost:7654/.well-known/export9p\""),
+            "{body}"
+        );
+        assert!(body.contains("\"bundle\":\"quote\\\"bundle\""), "{body}");
+
+        let ipv6_addr = "[::1]:7654".parse().unwrap();
+        let ipv6_body = serve_discovery_json(
+            ipv6_addr,
+            None,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n",
+        );
+        assert!(
+            ipv6_body.contains("\"websocket\":\"ws://[::1]:7654/.well-known/export9p\""),
+            "{ipv6_body}"
+        );
+    }
+
+    #[test]
+    fn serve_discovery_ignores_unsafe_host_header() {
+        let local_addr = "127.0.0.1:7654".parse().unwrap();
+        let body = serve_discovery_json(
+            local_addr,
+            None,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654/escape\r\n\r\n",
+        );
+
+        assert!(
+            body.contains("\"websocket\":\"ws://127.0.0.1:7654/.well-known/export9p\""),
+            "{body}"
+        );
     }
 
     #[test]
