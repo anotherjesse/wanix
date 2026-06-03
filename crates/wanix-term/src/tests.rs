@@ -79,10 +79,19 @@ fn winch_broadcasts_to_open_readers() {
         )
         .unwrap();
 
+    assert!(!first.read_ready().unwrap());
+    assert!(!second.read_ready().unwrap());
+    assert!(!writer.read_ready().unwrap());
+
     writer.write(b"80x24").unwrap();
 
+    assert!(first.read_ready().unwrap());
+    assert!(second.read_ready().unwrap());
     assert_eq!(read_exact(&mut *first, 5), b"80x24");
+    assert!(!first.read_ready().unwrap());
+    assert!(second.read_ready().unwrap());
     assert_eq!(read_exact(&mut *second, 5), b"80x24");
+    assert!(!second.read_ready().unwrap());
 }
 
 #[test]

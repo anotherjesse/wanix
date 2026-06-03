@@ -33,6 +33,18 @@ pub(super) struct QjsShellCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct TermResize {
+    columns: u16,
+    rows: u16,
+}
+
+impl TermResize {
+    fn payload(&self) -> Vec<u8> {
+        format!("{} {}\n", self.columns, self.rows).into_bytes()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PostEvalFeed {
     Bytes(Vec<u8>),
     File(PathBuf),
@@ -40,6 +52,7 @@ enum PostEvalFeed {
     LinesFile(PathBuf),
     LinesProcess,
     RawLinesProcess,
+    Resize(TermResize),
 }
 
 pub(super) fn parse_qjs_term_command(args: &[OsString]) -> Result<QjsTermCommand, CliError> {
@@ -77,6 +90,16 @@ pub(super) fn parse_qjs_term_command(args: &[OsString]) -> Result<QjsTermCommand
             } else {
                 feed_after_eval.push(PostEvalFeed::LinesFile(PathBuf::from(value)));
             }
+            i += 1;
+        } else if args[i] == "--resize-after-eval" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs-term --resize-after-eval expects COLSxROWS"))?;
+            feed_after_eval.push(PostEvalFeed::Resize(parse_term_resize(
+                value,
+                "qjs-term --resize-after-eval",
+            )?));
             i += 1;
         } else if args[i] == "--" {
             qjs_args.extend_from_slice(&args[i..]);
@@ -139,6 +162,28 @@ fn qjs_option_takes_value(arg: &OsString) -> bool {
                 | "--mount"
         )
     )
+}
+
+fn parse_term_resize(arg: &OsString, label: &str) -> Result<TermResize, CliError> {
+    let value = os_arg_to_string(arg, label)?;
+    let Some((columns, rows)) = value.split_once('x').or_else(|| value.split_once('X')) else {
+        return Err(CliError::usage(format!("{label} expects COLSxROWS")));
+    };
+    let columns = parse_positive_u16(columns, &format!("{label} columns"))?;
+    let rows = parse_positive_u16(rows, &format!("{label} rows"))?;
+    Ok(TermResize { columns, rows })
+}
+
+fn parse_positive_u16(value: &str, label: &str) -> Result<u16, CliError> {
+    let number = value
+        .parse::<u16>()
+        .map_err(|_| CliError::usage(format!("{label} expects an integer from 1 to 65535")))?;
+    if number == 0 {
+        return Err(CliError::usage(format!(
+            "{label} expects an integer from 1 to 65535"
+        )));
+    }
+    Ok(number)
 }
 
 pub(super) fn run_qjs_term(
@@ -413,6 +458,30 @@ fn run_post_eval_feeds(
                     process_stdout,
                 )?;
             }
+            PostEvalFeed::Resize(resize) => {
+                flush_terminal_feed_batch(
+                    terminal,
+                    terminal_id,
+                    runtime,
+                    &mut current_batch,
+                    ready_io_turns,
+                    process_stdout,
+                )?;
+                if task_exited(runtime)? {
+                    return Ok(());
+                }
+                feed_terminal_resize_and_pump(
+                    terminal,
+                    terminal_id,
+                    runtime,
+                    &resize,
+                    ready_io_turns,
+                    process_stdout,
+                )?;
+                if task_exited(runtime)? {
+                    return Ok(());
+                }
+            }
         }
     }
     flush_terminal_feed_batch(
@@ -601,6 +670,23 @@ fn feed_terminal_batch_and_pump(
     result
 }
 
+fn feed_terminal_resize_and_pump(
+    terminal: &TermDevice,
+    terminal_id: &str,
+    runtime: &mut QuickJsTaskRuntime,
+    resize: &TermResize,
+    ready_io_turns: usize,
+    process_stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    let result = (|| -> Result<(), CliError> {
+        feed_terminal_resize_after_eval(terminal, terminal_id, resize)?;
+        runtime.run_ready_io_turns(ready_io_turns)?;
+        Ok(())
+    })();
+    drain_terminal_output(terminal, terminal_id, process_stdout)?;
+    result
+}
+
 fn task_exited(runtime: &QuickJsTaskRuntime) -> Result<bool, CliError> {
     Ok(runtime.exit_code()?.is_some())
 }
@@ -621,6 +707,22 @@ fn feed_terminal_after_eval(
         },
     )?;
     data.write(chunk)?;
+    Ok(())
+}
+
+fn feed_terminal_resize_after_eval(
+    terminal: &TermDevice,
+    terminal_id: &str,
+    resize: &TermResize,
+) -> Result<(), CliError> {
+    let mut winch = terminal.open(
+        &NormalizedPath::new(format!("{terminal_id}/winch"))?,
+        OpenOptions {
+            write: true,
+            ..OpenOptions::default()
+        },
+    )?;
+    winch.write(&resize.payload())?;
     Ok(())
 }
 
@@ -700,7 +802,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        PostEvalFeed, QJS_SHELL_SCRIPT_SENTINEL, parse_qjs_shell_command, parse_qjs_term_command,
+        PostEvalFeed, QJS_SHELL_SCRIPT_SENTINEL, TermResize, parse_qjs_shell_command,
+        parse_qjs_term_command,
     };
 
     #[test]
@@ -779,6 +882,41 @@ mod tests {
             ]
         );
         assert_eq!(command.qjs.script_path, PathBuf::from("demo.js"));
+    }
+
+    #[test]
+    fn parse_qjs_term_collects_post_eval_resize_feed() {
+        let command = parse_qjs_term_command(&[
+            "--resize-after-eval".into(),
+            "100x40".into(),
+            "demo.js".into(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            command.feed_after_eval,
+            [PostEvalFeed::Resize(TermResize {
+                columns: 100,
+                rows: 40
+            })]
+        );
+        assert_eq!(command.qjs.script_path, PathBuf::from("demo.js"));
+    }
+
+    #[test]
+    fn parse_qjs_term_rejects_invalid_post_eval_resize_feed() {
+        let error = parse_qjs_term_command(&[
+            "--resize-after-eval".into(),
+            "100by40".into(),
+            "demo.js".into(),
+        ])
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("qjs-term --resize-after-eval expects COLSxROWS")
+        );
     }
 
     #[test]

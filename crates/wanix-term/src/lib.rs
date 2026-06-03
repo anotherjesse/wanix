@@ -473,6 +473,22 @@ impl File for WinchFile {
     fn metadata(&self) -> FsResult<Metadata> {
         Ok(file_metadata(0, 0o666))
     }
+
+    fn read_ready(&self) -> FsResult<bool> {
+        let Some(subscriber) = self.subscriber else {
+            return Ok(false);
+        };
+        let winch = self
+            .resource
+            .winch
+            .lock()
+            .map_err(|_| FsError::Other("term winch lock poisoned".to_owned()))?;
+        let queue = winch
+            .subscribers
+            .get(&subscriber)
+            .ok_or(FsError::InvalidFd)?;
+        Ok(!queue.is_empty())
+    }
 }
 
 impl Drop for WinchFile {

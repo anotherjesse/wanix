@@ -26,6 +26,7 @@ const USAGE: &str = concat!(
     "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
     "[--feed-after-eval TEXT ...] [--feed-after-eval-file PATH|- ...] ",
     "[--feed-after-eval-lines PATH|- ...] ",
+    "[--resize-after-eval COLSxROWS ...] ",
     "[--interrupt-after N] [--memory-limit-bytes N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-shell [--raw] [--env KEY=VALUE ...] [--cwd DIR] ",
@@ -1627,6 +1628,7 @@ mod tests {
         assert!(
             String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval-lines PATH|-")
         );
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--resize-after-eval COLSxROWS"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--mount HOST=GUEST"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--stdin-file PATH|-"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-snapshot"));
@@ -1808,6 +1810,23 @@ std.out.flush();
 
         assert_eq!(output.exit_code(), 0);
         assert_eq!(output.stdout(), b"armed\r\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_term_post_eval_resize_reaches_winch_handler() {
+        let output = run([
+            "qjs-term".into(),
+            "--ready-io-turns".into(),
+            "1".into(),
+            "--resize-after-eval".into(),
+            "100x40".into(),
+            example_script("qjs-term-winch-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"winch armed\r\nwinch 100 40\\n\r\n");
         assert!(output.stderr().is_empty());
     }
 

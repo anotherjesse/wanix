@@ -74,6 +74,9 @@ waiting for native stdin EOF. The user-facing shell demo is now
 same terminal-backed Wanix task runtime with line-oriented native input.
 `qjs-shell --raw` adds native raw-mode setup plus host-side local echo and simple
 line editing while still delivering complete lines to the guest task.
+`qjs-term --resize-after-eval COLSxROWS` sends a deterministic post-eval
+resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
+can observe terminal resize broadcasts through live Wanix-backed fd readiness.
 
 ## Code Quality Guardrails
 
@@ -258,6 +261,9 @@ cargo test --workspace --locked
 - [ADR 0056](docs/adrs/0056-qjs-shell-native-raw-mode.md):
   `qjs-shell --raw` disables host canonical input/echo when stdin is a TTY and
   uses a small host line discipline before feeding Wanix terminal lines.
+- [ADR 0057](docs/adrs/0057-qjs-term-post-eval-resize-feed.md):
+  `qjs-term --resize-after-eval` writes textual resize events to `#term/winch`
+  and pumps ready-IO so QuickJS tasks can observe resize broadcasts.
 
 ## Cycle Rules
 
@@ -275,4 +281,4 @@ cycle before starting the next one.
   broad new behavior.
 - Make `qjs-shell` genuinely interactive beyond line-oriented input by adding a
   host loop that can wait on native input and guest output concurrently, signal
-  handling, and resize propagation.
+  handling, and live native resize propagation.
