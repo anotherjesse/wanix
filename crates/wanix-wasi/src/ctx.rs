@@ -1,14 +1,15 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use wanix_fs::{
-    DirEntry, File, FileSeekFrom, FileSystem, FileType, FsError, NormalizedPath, OpenOptions,
+    DirEntry, FileSeekFrom, FileSystem, FileType, FsError, NormalizedPath, OpenOptions,
 };
 use wanix_vfs::Namespace;
 
 use crate::{
-    Errno, FileStat, WasiConfig, WasiFd, WasiFdStat, WasiFile, WasiFileType, WasiOpenOptions,
-    WasiPathOpen, WasiPrestat, WasiRights,
+    Errno, FileStat, WasiConfig, WasiFd, WasiFdObserver, WasiFdStat, WasiFile, WasiFileAccess,
+    WasiFileType, WasiOpenOptions, WasiPathOpen, WasiPrestat, WasiRights,
 };
 
 const FIRST_PREOPEN_FD: u32 = 3;
@@ -22,6 +23,7 @@ pub struct WasiCtx {
     next_fd: u32,
     args: Vec<String>,
     env: Vec<String>,
+    fd_observer: Option<Arc<dyn WasiFdObserver>>,
 }
 
 enum Handle {
@@ -38,7 +40,7 @@ enum Handle {
         rights_inheriting: WasiRights,
     },
     File {
-        file: Box<dyn File>,
+        file: WasiFile,
         path: NormalizedPath,
         read: bool,
         write: bool,
@@ -125,6 +127,7 @@ impl WasiCtx {
             next_fd,
             args: config.args().to_vec(),
             env: config.env().to_vec(),
+            fd_observer: config.fd_observer(),
         })
     }
 
@@ -248,6 +251,7 @@ impl WasiCtx {
         {
             return Err(Errno::Notcapable);
         }
+        let fd = self.next_file_fd()?;
         let file = self
             .namespace
             .open(&resolved, OpenOptions::from(options))
@@ -264,13 +268,12 @@ impl WasiCtx {
         } else {
             supported_rights.intersection(parent_rights_inheriting)
         };
-        Ok(self.insert_handle(Handle::File {
+        let file = WasiFile::new(
             file,
-            path: resolved,
-            read: options.read,
-            write: options.write,
-            rights_base,
-        }))
+            resolved.as_str(),
+            WasiFileAccess::new(options.read, options.write),
+        );
+        self.insert_file_handle(fd, file, resolved, options.read, options.write, rights_base)
     }
 
     /// Reads bytes from an open fd.
@@ -280,7 +283,7 @@ impl WasiCtx {
                 if !file.can_read() {
                     return Err(Errno::Notcapable);
                 }
-                file.read(buf).map_err(Errno::from)
+                file.read_bytes(buf).map_err(Errno::from)
             }
             Handle::File {
                 file,
@@ -291,7 +294,7 @@ impl WasiCtx {
                 if !*read || !rights_base.contains(WasiRights::FD_READ) {
                     return Err(Errno::Notcapable);
                 }
-                file.read(buf).map_err(Errno::from)
+                file.read_bytes(buf).map_err(Errno::from)
             }
             Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Isdir),
         }
@@ -304,7 +307,7 @@ impl WasiCtx {
                 if !file.can_write() {
                     return Err(Errno::Notcapable);
                 }
-                file.write(buf).map_err(Errno::from)
+                file.write_bytes(buf).map_err(Errno::from)
             }
             Handle::File {
                 file,
@@ -315,7 +318,7 @@ impl WasiCtx {
                 if !*write || !rights_base.contains(WasiRights::FD_WRITE) {
                     return Err(Errno::Notcapable);
                 }
-                file.write(buf).map_err(Errno::from)
+                file.write_bytes(buf).map_err(Errno::from)
             }
             Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Isdir),
         }
@@ -326,13 +329,19 @@ impl WasiCtx {
         if fd.get() < self.next_dynamic_floor() {
             return Err(Errno::Badf);
         }
-        self.fds.remove(&fd).map(|_| ()).ok_or(Errno::Badf)
+        let handle = self.fds.remove(&fd).ok_or(Errno::Badf)?;
+        if matches!(handle, Handle::File { .. })
+            && let Some(observer) = &self.fd_observer
+        {
+            observer.fd_closed(fd)?;
+        }
+        Ok(())
     }
 
     /// Returns stat data for an open fd.
     pub fn fd_filestat_get(&self, fd: WasiFd) -> Result<FileStat, Errno> {
         match self.fds.get(&fd).ok_or(Errno::Badf)? {
-            Handle::Stdio { file } => file.metadata().map(FileStat::new).map_err(Errno::from),
+            Handle::Stdio { file } => file.metadata_file().map(FileStat::new).map_err(Errno::from),
             Handle::Preopen { source_path, .. } => self.stat_path(source_path),
             Handle::Directory {
                 path, rights_base, ..
@@ -348,7 +357,7 @@ impl WasiCtx {
                 if !rights_base.contains(WasiRights::FD_FILESTAT_GET) {
                     return Err(Errno::Notcapable);
                 }
-                file.metadata().map(FileStat::new).map_err(Errno::from)
+                file.metadata_file().map(FileStat::new).map_err(Errno::from)
             }
         }
     }
@@ -408,20 +417,22 @@ impl WasiCtx {
     pub fn fd_seek(&mut self, fd: WasiFd, offset: i64, whence: WasiWhence) -> Result<u64, Errno> {
         match self.fds.get_mut(&fd).ok_or(Errno::Badf)? {
             Handle::Stdio { file } => {
-                if !file.is_seekable().map_err(Errno::from)? {
+                if !file.is_seekable_file().map_err(Errno::from)? {
                     return Err(Errno::Notcapable);
                 }
                 let from = file_seek_from(offset, whence)?;
-                file.seek(from).map_err(Errno::from)
+                file.seek_file(from).map_err(Errno::from)
             }
             Handle::File {
                 file, rights_base, ..
             } => {
-                if !rights_base.contains(WasiRights::FD_SEEK) || !file.is_seekable() {
+                if !rights_base.contains(WasiRights::FD_SEEK)
+                    || !file.is_seekable_file().map_err(Errno::from)?
+                {
                     return Err(Errno::Notcapable);
                 }
                 let from = file_seek_from(offset, whence)?;
-                file.seek(from).map_err(Errno::from)
+                file.seek_file(from).map_err(Errno::from)
             }
             Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Notcapable),
         }
@@ -431,18 +442,20 @@ impl WasiCtx {
     pub fn fd_tell(&self, fd: WasiFd) -> Result<u64, Errno> {
         match self.fds.get(&fd).ok_or(Errno::Badf)? {
             Handle::Stdio { file } => {
-                if !file.is_seekable().map_err(Errno::from)? {
+                if !file.is_seekable_file().map_err(Errno::from)? {
                     return Err(Errno::Notcapable);
                 }
-                file.tell().map_err(Errno::from)
+                file.tell_file().map_err(Errno::from)
             }
             Handle::File {
                 file, rights_base, ..
             } => {
-                if !rights_base.contains(WasiRights::FD_TELL) || !file.is_seekable() {
+                if !rights_base.contains(WasiRights::FD_TELL)
+                    || !file.is_seekable_file().map_err(Errno::from)?
+                {
                     return Err(Errno::Notcapable);
                 }
-                file.tell().map_err(Errno::from)
+                file.tell_file().map_err(Errno::from)
             }
             Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Notcapable),
         }
@@ -493,6 +506,46 @@ impl WasiCtx {
         fd
     }
 
+    fn insert_file_handle(
+        &mut self,
+        fd: WasiFd,
+        file: WasiFile,
+        path: NormalizedPath,
+        read: bool,
+        write: bool,
+        rights_base: WasiRights,
+    ) -> Result<WasiFd, Errno> {
+        if let Some(observer) = &self.fd_observer {
+            observer.file_opened(fd, file.clone(), &path)?;
+        }
+        self.next_fd = self.next_fd.max(fd.get().saturating_add(1));
+        self.fds.insert(
+            fd,
+            Handle::File {
+                file,
+                path,
+                read,
+                write,
+                rights_base,
+            },
+        );
+        Ok(fd)
+    }
+
+    fn next_file_fd(&mut self) -> Result<WasiFd, Errno> {
+        loop {
+            let fd = WasiFd::new(self.next_fd);
+            if self
+                .fd_observer
+                .as_ref()
+                .is_none_or(|observer| observer.file_fd_available(fd))
+            {
+                return Ok(fd);
+            }
+            self.next_fd = self.next_fd.checked_add(1).ok_or(Errno::Inval)?;
+        }
+    }
+
     fn resolve_path(
         &self,
         dirfd: WasiFd,
@@ -537,6 +590,20 @@ impl WasiCtx {
     }
 }
 
+impl Drop for WasiCtx {
+    fn drop(&mut self) {
+        let Some(observer) = &self.fd_observer else {
+            return;
+        };
+        let dynamic_floor = self.next_dynamic_floor();
+        for (fd, _handle) in self.fds.iter().filter(|(fd, handle)| {
+            fd.get() >= dynamic_floor && matches!(handle, Handle::File { .. })
+        }) {
+            let _ = observer.fd_closed(*fd);
+        }
+    }
+}
+
 /// WASI Preview 1 seek origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WasiWhence {
@@ -568,7 +635,7 @@ fn attached_file_rights(file: &WasiFile) -> Result<WasiRights, Errno> {
     if file.can_write() {
         rights |= WasiRights::FD_WRITE;
     }
-    if file.is_seekable().map_err(Errno::from)? {
+    if file.is_seekable_file().map_err(Errno::from)? {
         rights |= WasiRights::FD_SEEK | WasiRights::FD_TELL;
     }
     Ok(rights)

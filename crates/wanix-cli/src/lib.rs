@@ -1188,6 +1188,96 @@ std.exit(5);
     }
 
     #[test]
+    fn qjs_command_exposes_os_open_fds_through_task_service() {
+        let script = write_temp_script(
+            "mirrored-fd-parent.js",
+            r##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+function stringFromBytes(bytes, count) {
+  return Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+}
+
+function bytesFromString(text) {
+  return new Uint8Array(Array.from(text).map((char) => char.charCodeAt(0)));
+}
+
+function readServiceText(path) {
+  const fd = os.open(path, os.O_RDONLY);
+  if (fd < 0) {
+    throw new Error("open " + path + ": " + fd);
+  }
+  const bytes = new Uint8Array(128);
+  const count = os.read(fd, bytes.buffer, 0, bytes.length);
+  os.close(fd);
+  if (count < 0) {
+    throw new Error("read " + path + ": " + count);
+  }
+  return stringFromBytes(bytes, count);
+}
+
+function writeServiceText(path, text) {
+  const fd = os.open(path, os.O_WRONLY);
+  if (fd < 0) {
+    throw new Error("open " + path + ": " + fd);
+  }
+  const bytes = bytesFromString(text);
+  const count = os.write(fd, bytes.buffer, 0, bytes.length);
+  os.close(fd);
+  if (count !== bytes.length) {
+    throw new Error("short write " + path + ": " + count + "/" + bytes.length);
+  }
+}
+
+const parent = readServiceText("#task/self/id").trim();
+std.writeFile("service-visible.txt", "service fd visible");
+const serviceFd = os.open("service-visible.txt", os.O_RDONLY);
+std.out.puts("service read " + std.loadFile("#task/self/fd/" + serviceFd) + "\n");
+os.close(serviceFd);
+
+std.writeFile("child-input.txt", "stdin via mirrored fd\n");
+const childInputFd = os.open("child-input.txt", os.O_RDONLY);
+const child = readServiceText("#task/new/qjs").trim();
+writeServiceText("#task/" + child + "/cmd", "mirrored-fd-child.js\n");
+writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/" + childInputFd + " fd/0\n");
+writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/1 fd/1\n");
+writeServiceText("#task/" + child + "/ctl", "start\n");
+std.out.puts("child exit " + readServiceText("#task/" + child + "/exit").trim() + "\n");
+os.close(childInputFd);
+std.out.flush();
+"##,
+        );
+        fs::write(
+            script.parent().unwrap().join("mirrored-fd-child.js"),
+            r##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+const bytes = new Uint8Array(64);
+const count = os.read(0, bytes.buffer, 0, bytes.length);
+if (count < 0) {
+  throw new Error("stdin read failed: " + count);
+}
+const input = Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+std.out.puts("child task " + std.loadFile("#task/self/id").trim() + " stdin " + input);
+std.out.flush();
+std.exit(7);
+"##,
+        )
+        .unwrap();
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"service read service fd visible\nchild task 2 stdin stdin via mirrored fd\nchild exit 7\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_host_mount_example_starts_child_task_from_mounted_script() {
         let host = temp_dir("wanix-cli-host-spawn");
 

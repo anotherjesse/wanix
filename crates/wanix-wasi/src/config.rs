@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use wanix_fs::{File, FileSeekFrom, FsError, FsResult, Metadata, NormalizedPath};
 use wanix_vfs::Namespace;
 
-use crate::{WasiFd, WasiFileAccess};
+use crate::{Errno, WasiFd, WasiFileAccess};
 
 /// Configured preopen directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,47 +106,100 @@ impl WasiFile {
         self.access.can_write()
     }
 
-    pub(crate) fn read(&self, buf: &mut [u8]) -> FsResult<usize> {
+    pub(crate) fn read_bytes(&self, buf: &mut [u8]) -> FsResult<usize> {
         self.file
             .lock()
             .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
             .read(buf)
     }
 
-    pub(crate) fn write(&self, buf: &[u8]) -> FsResult<usize> {
+    pub(crate) fn write_bytes(&self, buf: &[u8]) -> FsResult<usize> {
         self.file
             .lock()
             .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
             .write(buf)
     }
 
-    pub(crate) fn seek(&self, from: FileSeekFrom) -> FsResult<u64> {
+    pub(crate) fn seek_file(&self, from: FileSeekFrom) -> FsResult<u64> {
         self.file
             .lock()
             .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
             .seek(from)
     }
 
-    pub(crate) fn tell(&self) -> FsResult<u64> {
+    pub(crate) fn tell_file(&self) -> FsResult<u64> {
         self.file
             .lock()
             .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
             .tell()
     }
 
-    pub(crate) fn is_seekable(&self) -> FsResult<bool> {
+    pub(crate) fn is_seekable_file(&self) -> FsResult<bool> {
         self.file
             .lock()
             .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))
             .map(|file| file.is_seekable())
     }
 
-    pub(crate) fn metadata(&self) -> FsResult<Metadata> {
+    pub(crate) fn metadata_file(&self) -> FsResult<Metadata> {
         self.file
             .lock()
             .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
             .metadata()
     }
+}
+
+impl File for WasiFile {
+    fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
+        if !self.can_read() {
+            return Err(FsError::PermissionDenied);
+        }
+        self.read_bytes(buf)
+    }
+
+    fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
+        if !self.can_write() {
+            return Err(FsError::PermissionDenied);
+        }
+        self.write_bytes(buf)
+    }
+
+    fn seek(&mut self, from: FileSeekFrom) -> FsResult<u64> {
+        self.seek_file(from)
+    }
+
+    fn tell(&self) -> FsResult<u64> {
+        self.tell_file()
+    }
+
+    fn is_seekable(&self) -> bool {
+        self.is_seekable_file().unwrap_or(false)
+    }
+
+    fn metadata(&self) -> FsResult<Metadata> {
+        self.metadata_file()
+    }
+}
+
+/// Observer for dynamic WASI fd lifecycle events.
+///
+/// The observer is optional host state. It lets embedding runtimes mirror WASI
+/// dynamic file descriptors into their own process model without making this
+/// crate depend on that process model.
+pub trait WasiFdObserver: fmt::Debug + Send + Sync {
+    /// Returns whether `fd` is available for a mirrored regular-file open.
+    #[must_use]
+    fn file_fd_available(&self, _fd: WasiFd) -> bool {
+        true
+    }
+
+    /// Called after a regular file is opened at a dynamic WASI fd.
+    ///
+    /// Returning an error rejects the open.
+    fn file_opened(&self, fd: WasiFd, file: WasiFile, path: &NormalizedPath) -> Result<(), Errno>;
+
+    /// Called after a mirrored regular file fd is closed.
+    fn fd_closed(&self, fd: WasiFd) -> Result<(), Errno>;
 }
 
 /// WASI host configuration backed by a Wanix namespace.
@@ -157,6 +210,7 @@ pub struct WasiConfig {
     preopens: Vec<Preopen>,
     args: Vec<String>,
     env: Vec<String>,
+    fd_observer: Option<Arc<dyn WasiFdObserver>>,
 }
 
 impl fmt::Debug for WasiConfig {
@@ -167,6 +221,7 @@ impl fmt::Debug for WasiConfig {
             .field("preopens", &self.preopens)
             .field("arg_count", &self.args.len())
             .field("env_count", &self.env.len())
+            .field("has_fd_observer", &self.fd_observer.is_some())
             .finish()
     }
 }
@@ -181,6 +236,7 @@ impl WasiConfig {
             preopens: vec![Preopen::new(".").expect("root path is valid")],
             args: Vec::new(),
             env: Vec::new(),
+            fd_observer: None,
         }
     }
 
@@ -216,6 +272,17 @@ impl WasiConfig {
 
     pub(crate) fn stdio(&self) -> &BTreeMap<WasiFd, WasiFile> {
         &self.stdio
+    }
+
+    pub(crate) fn fd_observer(&self) -> Option<Arc<dyn WasiFdObserver>> {
+        self.fd_observer.as_ref().map(Arc::clone)
+    }
+
+    /// Attaches an observer for dynamic regular-file fd lifecycle events.
+    #[must_use]
+    pub fn with_fd_observer(mut self, observer: impl WasiFdObserver + 'static) -> Self {
+        self.fd_observer = Some(Arc::new(observer));
+        self
     }
 
     /// Attaches a stdin file to fd 0.

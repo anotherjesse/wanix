@@ -1035,6 +1035,87 @@ print(Wanix.readText("input.txt"));
     }
 
     #[test]
+    fn task_wasi_config_mirrors_dynamic_file_fds_into_task_table() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("data.txt", b"from mirrored fd").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+
+        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let fd = ctx
+            .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
+            .unwrap();
+
+        assert_eq!(fd, WasiFd::new(4));
+        assert_eq!(task.fd_numbers(), [Fd::new(4)]);
+        let mut buf = [0; 32];
+        let count = task.read_fd(Fd::new(4), &mut buf).unwrap();
+        assert_eq!(&buf[..count], b"from mirrored fd");
+        assert_eq!(ctx.fd_tell(fd).unwrap(), 16);
+
+        ctx.fd_close(fd).unwrap();
+        assert!(task.fd_numbers().is_empty());
+    }
+
+    #[test]
+    fn task_wasi_config_skips_existing_task_fd_when_mirroring_dynamic_file_fd() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("data.txt", b"from mirrored fd").unwrap();
+        let existing = std::sync::Arc::new(MemFs::new());
+        existing.write_file("existing.txt", b"existing fd").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::new(4),
+            existing
+                .open(
+                    &NormalizedPath::new("existing.txt").unwrap(),
+                    OpenOptions::read(),
+                )
+                .unwrap(),
+            NormalizedPath::new("existing.txt").unwrap(),
+        )
+        .unwrap();
+
+        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let fd = ctx
+            .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
+            .unwrap();
+
+        assert_eq!(fd, WasiFd::new(5));
+        assert_eq!(task.fd_numbers(), [Fd::new(4), Fd::new(5)]);
+        assert_eq!(task.fd_path(Fd::new(4)).unwrap().as_str(), "existing.txt");
+        assert_eq!(task.fd_path(Fd::new(5)).unwrap().as_str(), "data.txt");
+        ctx.fd_close(fd).unwrap();
+        assert_eq!(task.fd_numbers(), [Fd::new(4)]);
+    }
+
+    #[test]
+    fn task_wasi_config_cleans_mirrored_dynamic_fds_on_ctx_drop() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("data.txt", b"from mirrored fd").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+
+        {
+            let mut ctx = WasiCtx::new(task_wasi_config(&task));
+            let fd = ctx
+                .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
+                .unwrap();
+            assert_eq!(fd, WasiFd::new(4));
+            assert_eq!(task.fd_numbers(), [Fd::new(4)]);
+        }
+
+        assert!(task.fd_numbers().is_empty());
+    }
+
+    #[test]
     fn task_wasi_config_tracks_live_task_standard_fd_state() {
         let table = TaskTable::new();
         table.register_noop_driver("qjs").unwrap();
@@ -1714,6 +1795,49 @@ print("os", text);
             read_file(&*stdout, "out"),
             b"std from qjs stdlib\nos from qjs stdlib\n"
         );
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_cleans_unclosed_quickjs_os_file_fds_after_run() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as os from "qjs:os";
+
+const fd = os.open("input.txt", os.O_RDONLY);
+print("opened", fd);
+"#,
+        )
+        .unwrap();
+        root.write_file("input.txt", b"left open by guest").unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(read_file(&*stdout, "out"), b"opened 4\n");
+        assert_eq!(task.fd_numbers(), [Fd::STDOUT]);
         assert_eq!(task.exit(), "0");
     }
 

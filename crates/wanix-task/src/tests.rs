@@ -646,6 +646,44 @@ fn fd_table_allocates_dynamic_fds_and_taskfs_proxies_io() {
     ));
 }
 
+#[test]
+fn fd_table_non_replacing_insert_preserves_existing_fd() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let backing = MemFs::new();
+    backing.write_file("existing", b"first").unwrap();
+    backing.write_file("candidate", b"second").unwrap();
+    task.insert_fd(
+        Fd::new(4),
+        backing
+            .open(
+                &NormalizedPath::new("existing").unwrap(),
+                OpenOptions::read(),
+            )
+            .unwrap(),
+        NormalizedPath::new("existing").unwrap(),
+    )
+    .unwrap();
+
+    let result = task.insert_fd_if_vacant(
+        Fd::new(4),
+        backing
+            .open(
+                &NormalizedPath::new("candidate").unwrap(),
+                OpenOptions::read(),
+            )
+            .unwrap(),
+        NormalizedPath::new("candidate").unwrap(),
+    );
+
+    assert_eq!(result, Err(FsError::AlreadyExists));
+    assert_eq!(task.fd_path(Fd::new(4)).unwrap().as_str(), "existing");
+    let mut buf = [0; 16];
+    let count = task.read_fd(Fd::new(4), &mut buf).unwrap();
+    assert_eq!(&buf[..count], b"first");
+}
+
 #[derive(Debug)]
 struct ReentrantFile {
     task: Task,

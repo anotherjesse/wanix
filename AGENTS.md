@@ -124,6 +124,9 @@ cargo test --workspace --locked
 - [ADR 0019](docs/adrs/0019-task-ctl-bind-shell-words.md): `#task/ctl bind`
   operands use the same shell-word grammar as `#task/cmd`, preserving Wanix
   paths with spaces when wiring fds.
+- [ADR 0020](docs/adrs/0020-qjs-wasi-dynamic-fd-mirroring.md): qjs task
+  runtimes mirror dynamic regular-file WASI fds into the Wanix task fd table at
+  the same numeric fd.
 
 ## Cycle Rules
 

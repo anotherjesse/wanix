@@ -117,6 +117,20 @@ impl FdTable {
         self.files.insert(fd, OpenFile::new(file, path));
     }
 
+    /// Installs a specific fd entry only when it is currently vacant.
+    pub fn insert_at_if_vacant(
+        &mut self,
+        fd: Fd,
+        file: Box<dyn File>,
+        path: NormalizedPath,
+    ) -> FsResult<()> {
+        if self.files.contains_key(&fd) {
+            return Err(FsError::AlreadyExists);
+        }
+        self.insert_at(fd, file, path);
+        Ok(())
+    }
+
     /// Closes an fd by removing it from the table.
     ///
     /// # Errors

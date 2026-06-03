@@ -315,6 +315,16 @@ impl Task {
         })
     }
 
+    /// Installs a specific fd when no file is currently present at that number.
+    pub fn insert_fd_if_vacant(
+        &self,
+        fd: Fd,
+        file: Box<dyn File>,
+        path: NormalizedPath,
+    ) -> FsResult<()> {
+        self.write_state(|state| state.fds.insert_at_if_vacant(fd, file, path))
+    }
+
     /// Opens a namespace path and installs it at a specific fd.
     ///
     /// This is the Rust task-service counterpart of wiring stdio through

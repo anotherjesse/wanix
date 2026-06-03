@@ -13,7 +13,7 @@ mod fd;
 #[cfg(test)]
 mod tests;
 
-pub use config::{Preopen, WasiConfig, WasiFile};
+pub use config::{Preopen, WasiConfig, WasiFdObserver, WasiFile};
 pub use ctx::{WasiCtx, WasiWhence};
 pub use error::Errno;
 pub use fd::{

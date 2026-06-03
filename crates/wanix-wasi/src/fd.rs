@@ -446,6 +446,12 @@ pub struct WasiFileAccess {
 }
 
 impl WasiFileAccess {
+    /// Creates attached fd access from explicit read/write capabilities.
+    #[must_use]
+    pub const fn new(read: bool, write: bool) -> Self {
+        Self { read, write }
+    }
+
     /// Read-only attached fd access.
     #[must_use]
     pub fn read_only() -> Self {
