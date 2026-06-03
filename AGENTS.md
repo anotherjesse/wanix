@@ -19,7 +19,8 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
   frame splitting, tag extraction, version negotiation, and basic
   server-facing 9P2000.L operation codecs.
 - `wanix-9p`: 9P server adapters backed by Wanix filesystems, starting with
-  an in-process frame handler for attach/walk/open/read/write/clunk.
+  an in-process frame handler for attach/walk/open/read/write/clunk and
+  directory listing.
 - `wanix-vfs`: Plan 9-style namespace binding and resolution.
 - `wanix-task`: task model, `#task`, fd table, and driver registry.
 - `wanix-term`: terminal device filesystem for `#term/new`,
@@ -85,6 +86,11 @@ line editing while still delivering complete lines to the guest task.
 `qjs-term --resize-after-eval COLSxROWS` sends a deterministic post-eval
 resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
 can observe terminal resize broadcasts through live Wanix-backed fd readiness.
+
+The next 9P-facing demo target is a native `wanix-9p` transport loop that lets
+external clients browse a Wanix namespace. The server core already negotiates
+9P2000.L, attaches, walks, opens regular files and read-only directories,
+reads/writes regular files, lists directories with `Treaddir`, and clunks fids.
 
 ## Code Quality Guardrails
 
@@ -281,6 +287,9 @@ cargo test --workspace --locked
 - [ADR 0060](docs/adrs/0060-wanix-backed-9p-server-adapter.md):
   `wanix-9p` maps typed 9P frames onto Wanix filesystem fids and Linux errno
   replies while transports remain out of scope.
+- [ADR 0061](docs/adrs/0061-9p-directory-read-cookies.md):
+  `wanix-9p` serves `Treaddir` from Wanix directory entries using opaque
+  one-based cookies that preserve the Go p9kit behavior.
 
 ## Cycle Rules
 
@@ -299,5 +308,5 @@ cycle before starting the next one.
 - Make `qjs-shell` genuinely interactive beyond line-oriented input by adding a
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
-- Extend `wanix-9p` with directory reads, create/remove/rename, getattr/stat,
-  and a native transport loop for serve/v86 integration.
+- Extend `wanix-9p` with create/remove/rename, getattr/stat, and a native
+  transport loop for serve/v86 integration.

@@ -27,6 +27,12 @@ pub const P9_TLOPEN: u8 = 12;
 /// 9P2000.L `Rlopen` message type.
 pub const P9_RLOPEN: u8 = 13;
 
+/// 9P2000.L `Treaddir` message type.
+pub const P9_TREADDIR: u8 = 40;
+
+/// 9P2000.L `Rreaddir` message type.
+pub const P9_RREADDIR: u8 = 41;
+
 /// 9P `Tversion` message type.
 pub const P9_TVERSION: u8 = 100;
 
@@ -70,6 +76,8 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RLERROR => Some("Rlerror"),
         P9_TLOPEN => Some("Tlopen"),
         P9_RLOPEN => Some("Rlopen"),
+        P9_TREADDIR => Some("Treaddir"),
+        P9_RREADDIR => Some("Rreaddir"),
         P9_TVERSION => Some("Tversion"),
         P9_RVERSION => Some("Rversion"),
         P9_TATTACH => Some("Tattach"),
@@ -458,6 +466,30 @@ pub struct P9Read {
     pub count: u32,
 }
 
+/// Decoded payload for `Treaddir`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct P9ReadDir {
+    /// Fid to read directory entries from.
+    pub fid: u32,
+    /// Opaque directory offset cookie supplied by a previous entry.
+    pub offset: u64,
+    /// Maximum number of directory-entry bytes requested.
+    pub count: u32,
+}
+
+/// One 9P2000.L directory entry record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9DirEntry {
+    /// QID for the listed child.
+    pub qid: P9Qid,
+    /// Opaque cookie for the next read position.
+    pub offset: u64,
+    /// Linux `DT_*` directory entry type.
+    pub dirent_type: u8,
+    /// Child basename.
+    pub name: String,
+}
+
 /// Decoded payload for `Twrite`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct P9Write {
@@ -565,6 +597,44 @@ pub fn p9_rlopen(tag: u16, qid: P9Qid, iounit: u32) -> P9Frame {
     push_qid(&mut payload, qid);
     push_u32(&mut payload, iounit);
     P9Frame::new(P9_RLOPEN, tag, payload)
+}
+
+/// Builds a `Treaddir` frame.
+#[must_use]
+pub fn p9_treaddir(tag: u16, fid: u32, offset: u64, count: u32) -> P9Frame {
+    let mut payload = Vec::with_capacity(16);
+    push_u32(&mut payload, fid);
+    push_u64(&mut payload, offset);
+    push_u32(&mut payload, count);
+    P9Frame::new(P9_TREADDIR, tag, payload)
+}
+
+/// Builds an `Rreaddir` frame.
+///
+/// # Errors
+///
+/// Returns an error when an entry name cannot fit in a 9P string field or the
+/// encoded entry stream cannot fit in a 9P u32 count field.
+pub fn p9_rreaddir(tag: u16, entries: &[P9DirEntry]) -> Result<P9Frame, P9Error> {
+    let mut data = Vec::new();
+    for entry in entries {
+        push_dir_entry(&mut data, entry)?;
+    }
+    let mut payload = Vec::with_capacity(4 + data.len());
+    push_counted_data(&mut payload, &data)?;
+    Ok(P9Frame::new(P9_RREADDIR, tag, payload))
+}
+
+/// Returns the encoded byte length of one 9P2000.L directory entry record.
+///
+/// # Errors
+///
+/// Returns an error when the entry name cannot fit in a 9P string field.
+pub fn p9_dir_entry_encoded_len(entry: &P9DirEntry) -> Result<usize, P9Error> {
+    let name_len = u16::try_from(entry.name.len()).map_err(|_| P9Error::StringTooLong {
+        len: entry.name.len(),
+    })? as usize;
+    Ok(13 + 8 + 1 + 2 + name_len)
 }
 
 /// Builds a `Tread` frame.
@@ -739,6 +809,39 @@ pub fn p9_decode_rlopen(frame: &P9Frame) -> Result<(P9Qid, u32), P9Error> {
     Ok((qid, iounit))
 }
 
+/// Decodes a `Treaddir` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Treaddir` or the payload is
+/// malformed.
+pub fn p9_decode_treaddir(frame: &P9Frame) -> Result<P9ReadDir, P9Error> {
+    expect_message_type(frame, P9_TREADDIR)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    let offset = cursor.read_u64()?;
+    let count = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok(P9ReadDir { fid, offset, count })
+}
+
+/// Decodes an `Rreaddir` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rreaddir` or the payload is
+/// malformed.
+pub fn p9_decode_rreaddir(frame: &P9Frame) -> Result<Vec<P9DirEntry>, P9Error> {
+    expect_message_type(frame, P9_RREADDIR)?;
+    let data = decode_data_frame(frame, P9_RREADDIR)?;
+    let mut cursor = PayloadCursor::new(&data);
+    let mut entries = Vec::new();
+    while cursor.remaining_len() > 0 {
+        entries.push(cursor.read_dir_entry()?);
+    }
+    Ok(entries)
+}
+
 /// Decodes a `Tread` frame payload.
 ///
 /// # Errors
@@ -895,6 +998,14 @@ fn push_qid(out: &mut Vec<u8>, qid: P9Qid) {
     push_u64(out, qid.path);
 }
 
+fn push_dir_entry(out: &mut Vec<u8>, entry: &P9DirEntry) -> Result<(), P9Error> {
+    push_qid(out, entry.qid);
+    push_u64(out, entry.offset);
+    out.push(entry.dirent_type);
+    push_string(out, &entry.name)?;
+    Ok(())
+}
+
 fn push_counted_data(out: &mut Vec<u8>, data: &[u8]) -> Result<(), P9Error> {
     let len = u32::try_from(data.len()).map_err(|_| P9Error::DataTooLong { len: data.len() })?;
     push_u32(out, len);
@@ -930,6 +1041,10 @@ impl<'a> PayloadCursor<'a> {
         ))
     }
 
+    fn read_u8(&mut self) -> Result<u8, P9Error> {
+        Ok(self.read_exact(1)?[0])
+    }
+
     fn read_u64(&mut self) -> Result<u64, P9Error> {
         let bytes = self.read_exact(8)?;
         Ok(u64::from_le_bytes(
@@ -947,6 +1062,19 @@ impl<'a> PayloadCursor<'a> {
             qid_type,
             version,
             path,
+        })
+    }
+
+    fn read_dir_entry(&mut self) -> Result<P9DirEntry, P9Error> {
+        let qid = self.read_qid()?;
+        let offset = self.read_u64()?;
+        let dirent_type = self.read_u8()?;
+        let name = self.read_string()?;
+        Ok(P9DirEntry {
+            qid,
+            offset,
+            dirent_type,
+            name,
         })
     }
 
@@ -981,6 +1109,10 @@ impl<'a> PayloadCursor<'a> {
         } else {
             Err(P9Error::TrailingPayload { count })
         }
+    }
+
+    fn remaining_len(&self) -> usize {
+        self.bytes.len().saturating_sub(self.offset)
     }
 }
 
@@ -1133,6 +1265,8 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RLERROR), Some("Rlerror"));
         assert_eq!(p9_message_type_name(P9_TLOPEN), Some("Tlopen"));
         assert_eq!(p9_message_type_name(P9_RLOPEN), Some("Rlopen"));
+        assert_eq!(p9_message_type_name(P9_TREADDIR), Some("Treaddir"));
+        assert_eq!(p9_message_type_name(P9_RREADDIR), Some("Rreaddir"));
         assert_eq!(p9_message_type_name(P9_TATTACH), Some("Tattach"));
         assert_eq!(p9_message_type_name(P9_RATTACH), Some("Rattach"));
         assert_eq!(p9_message_type_name(P9_TWALK), Some("Twalk"));
@@ -1222,6 +1356,44 @@ mod tests {
         assert_eq!(
             p9_decode_rlopen(&P9Frame::decode(&response).unwrap()).unwrap(),
             (qid, 8192)
+        );
+    }
+
+    #[test]
+    fn readdir_round_trips_offsets_types_and_counted_stream() {
+        let frame = p9_treaddir(10, 66, 2, 4096).encode().unwrap();
+        assert_eq!(
+            p9_decode_treaddir(&P9Frame::decode(&frame).unwrap()).unwrap(),
+            P9ReadDir {
+                fid: 66,
+                offset: 2,
+                count: 4096
+            }
+        );
+
+        let entries = vec![
+            P9DirEntry {
+                qid: qid(0x80, 1, 2),
+                offset: 1,
+                dirent_type: 4,
+                name: "bin".to_owned(),
+            },
+            P9DirEntry {
+                qid: qid(0, 3, 4),
+                offset: 2,
+                dirent_type: 8,
+                name: "hello.txt".to_owned(),
+            },
+        ];
+        assert_eq!(p9_dir_entry_encoded_len(&entries[0]).unwrap(), 27);
+        assert_eq!(p9_dir_entry_encoded_len(&entries[1]).unwrap(), 33);
+
+        let response = p9_rreaddir(10, &entries).unwrap();
+        let encoded = response.encode().unwrap();
+        assert_eq!(&encoded[..4], &71_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_rreaddir(&P9Frame::decode(&encoded).unwrap()).unwrap(),
+            entries
         );
     }
 
