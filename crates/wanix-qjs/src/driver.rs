@@ -11,6 +11,7 @@ use crate::{QuickJsRunner, task_program_for_check};
 pub struct QuickJsTaskDriver {
     runner: Arc<QuickJsRunner>,
     event_loop_wait_budget: Duration,
+    ready_io_turns: usize,
 }
 
 impl QuickJsTaskDriver {
@@ -20,6 +21,7 @@ impl QuickJsTaskDriver {
         Self {
             runner,
             event_loop_wait_budget: Duration::ZERO,
+            ready_io_turns: 1,
         }
     }
 
@@ -30,6 +32,17 @@ impl QuickJsTaskDriver {
     #[must_use]
     pub fn with_event_loop_wait_budget(mut self, budget: Duration) -> Self {
         self.event_loop_wait_budget = budget;
+        self
+    }
+
+    /// Sets how many nonblocking ready-fd handler turns run after eval.
+    ///
+    /// QuickJS does not report whether a ready-IO turn was idle or ran a
+    /// handler, so this is an explicit fixed turn count. The default is one,
+    /// matching the first ready-fd lifecycle slice.
+    #[must_use]
+    pub fn with_ready_io_turns(mut self, turns: usize) -> Self {
+        self.ready_io_turns = turns;
         self
     }
 
@@ -46,10 +59,11 @@ impl TaskDriver for QuickJsTaskDriver {
     }
 
     fn start(&self, task: &Task) -> FsResult<()> {
-        match self
-            .runner
-            .run_task_with_event_loop_wait_budget(task, self.event_loop_wait_budget)
-        {
+        match self.runner.run_task_with_event_loop_limits(
+            task,
+            self.event_loop_wait_budget,
+            self.ready_io_turns,
+        ) {
             Ok(_) => Ok(()),
             Err(err) => {
                 let _ = task.set_exit("1");

@@ -38,6 +38,6 @@ explicit wait budget. The proof covers the engine API, qjs task driver, and
 native CLI demo.
 
 This is still not a Wanix scheduler. It does not keep tasks alive forever, does
-not wait for fd readiness beyond ADR 0041's nonblocking turn, and does not add
-signals, cancellation, interval lifecycle policy, or snapshot serialization for
-pending timer state. Those remain task lifecycle work.
+not wait for fd readiness beyond ADR 0043's fixed nonblocking turn budget, and
+does not add signals, cancellation, interval lifecycle policy, or snapshot
+serialization for pending timer state. Those remain task lifecycle work.

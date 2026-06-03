@@ -193,6 +193,9 @@ cargo test --workspace --locked
 - [ADR 0042](docs/adrs/0042-bounded-quickjs-future-timer-pump.md):
   QuickJS future timers can run after qjs task evaluation when the composition
   layer grants an explicit bounded wait budget.
+- [ADR 0043](docs/adrs/0043-bounded-quickjs-ready-io-turns.md):
+  QuickJS ready-fd handlers can run for an explicit fixed number of
+  nonblocking turns after Wanix `qjs` task evaluation.
 
 ## Cycle Rules
 

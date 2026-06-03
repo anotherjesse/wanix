@@ -17,7 +17,7 @@ use wanix_vfs::BindOptions;
 
 const USAGE: &str = concat!(
     "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] ",
+    "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--mount HOST=GUEST ...] ",
@@ -179,6 +179,7 @@ struct QjsCommand {
     cwd: NormalizedPath,
     stdin: Option<QjsStdin>,
     event_loop_wait_budget: Duration,
+    ready_io_turns: usize,
     mounts: Vec<HostMount>,
 }
 
@@ -229,7 +230,8 @@ fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutpu
         "qjs",
         Arc::new(
             QuickJsTaskDriver::new(runner)
-                .with_event_loop_wait_budget(command.event_loop_wait_budget),
+                .with_event_loop_wait_budget(command.event_loop_wait_budget)
+                .with_ready_io_turns(command.ready_io_turns),
         ),
     )?;
     let task = table.allocate_root("qjs")?;
@@ -462,6 +464,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
     let mut cwd = NormalizedPath::new(".")?;
     let mut stdin = None;
     let mut event_loop_wait_budget = Duration::ZERO;
+    let mut ready_io_turns = 1usize;
     let mut mounts = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -511,6 +514,13 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
                 .ok_or_else(|| CliError::usage("qjs --event-loop-ms expects milliseconds"))?;
             event_loop_wait_budget = parse_duration_millis(value, "qjs --event-loop-ms")?;
             i += 1;
+        } else if args[i] == "--ready-io-turns" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs --ready-io-turns expects a count"))?;
+            ready_io_turns = parse_usize(value, "qjs --ready-io-turns")?;
+            i += 1;
         } else if args[i] == "--mount" {
             i += 1;
             let value = args
@@ -551,6 +561,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
         cwd,
         stdin,
         event_loop_wait_budget,
+        ready_io_turns,
         mounts,
     })
 }
@@ -830,6 +841,13 @@ fn parse_duration_millis(arg: &OsString, label: &str) -> Result<Duration, CliErr
         .parse::<u64>()
         .map_err(|_| CliError::usage(format!("{label} expects a non-negative integer")))?;
     Ok(Duration::from_millis(millis))
+}
+
+fn parse_usize(arg: &OsString, label: &str) -> Result<usize, CliError> {
+    let value = os_arg_to_string(arg, label)?;
+    value
+        .parse::<usize>()
+        .map_err(|_| CliError::usage(format!("{label} expects a non-negative integer")))
 }
 
 fn validate_env_line(line: &str, label: &str) -> Result<(), CliError> {
@@ -2412,6 +2430,23 @@ std.out.flush();
 
         assert_eq!(output.exit_code(), 0);
         assert_eq!(output.stdout(), b"sync\nhandler: ready stdin\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_example_ready_io_turns_demo_reads_stdin_twice() {
+        let output = run([
+            "qjs".into(),
+            "--stdin".into(),
+            "abcdef".into(),
+            "--ready-io-turns".into(),
+            "2".into(),
+            example_script("qjs-ready-io-turns-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"sync\nchunk 1: abc\nchunk 2: def\n");
         assert!(output.stderr().is_empty());
     }
 

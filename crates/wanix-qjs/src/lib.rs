@@ -106,11 +106,23 @@ struct RunFailure {
     output: RunOutput,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct RunControl {
     exit_state: Option<WanixExitState>,
     output_task: Option<Task>,
     event_loop_wait_budget: Duration,
+    ready_io_turns: usize,
+}
+
+impl Default for RunControl {
+    fn default() -> Self {
+        Self {
+            exit_state: None,
+            output_task: None,
+            event_loop_wait_budget: Duration::ZERO,
+            ready_io_turns: 1,
+        }
+    }
 }
 
 impl fmt::Debug for QuickJsRunner {
@@ -323,6 +335,7 @@ impl QuickJsRunner {
                 &mut runtime,
                 &control.exit_state,
                 control.event_loop_wait_budget,
+                control.ready_io_turns,
             )?;
             Ok(())
         })();
@@ -371,6 +384,26 @@ impl QuickJsRunner {
         task: &Task,
         event_loop_wait_budget: Duration,
     ) -> FsResult<RunOutput> {
+        self.run_task_with_event_loop_limits(task, event_loop_wait_budget, 1)
+    }
+
+    /// Runs the script named in `task.cmd()` with bounded event-loop limits.
+    ///
+    /// `ready_io_turns` is a fixed nonblocking turn count because QuickJS's
+    /// stdlib fd poll hook cannot distinguish an idle poll from a successful
+    /// callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the command is missing, the script cannot
+    /// be read, QuickJS fails, task fd writes fail, or the bounded event pump
+    /// encounters a callback error.
+    pub fn run_task_with_event_loop_limits(
+        &self,
+        task: &Task,
+        event_loop_wait_budget: Duration,
+        ready_io_turns: usize,
+    ) -> FsResult<RunOutput> {
         let command = task_command(task)?;
         let script_path = command.program.clone();
         let script_filename = script_path.to_string();
@@ -396,6 +429,7 @@ impl QuickJsRunner {
                 exit_state: Some(exit_state.clone()),
                 output_task: Some(task.clone()),
                 event_loop_wait_budget,
+                ready_io_turns,
             },
             move |runtime| {
                 define_wanix_module_loader(runtime, namespace.clone())?;
@@ -519,28 +553,32 @@ fn drain_immediate_runtime_work(
     runtime: &mut QuickJsRuntime,
     exit_state: &Option<WanixExitState>,
 ) -> FsResult<()> {
-    drain_runtime_work(runtime, exit_state, Duration::ZERO)
+    drain_runtime_work(runtime, exit_state, Duration::ZERO, 1)
 }
 
 fn drain_runtime_work(
     runtime: &mut QuickJsRuntime,
     exit_state: &Option<WanixExitState>,
     event_loop_wait_budget: Duration,
+    ready_io_turns: usize,
 ) -> FsResult<()> {
     if exit_requested(exit_state)? {
         return Ok(());
     }
     drain_timer_work(runtime, event_loop_wait_budget)?;
-    if exit_requested(exit_state)? {
-        return Ok(());
+    for _ in 0..ready_io_turns {
+        if exit_requested(exit_state)? {
+            return Ok(());
+        }
+        runtime
+            .execute_ready_io_event_loop_once()
+            .map_err(qjs_error)?;
+        if exit_requested(exit_state)? {
+            return Ok(());
+        }
+        drain_timer_work(runtime, event_loop_wait_budget)?;
     }
-    runtime
-        .execute_ready_io_event_loop_once()
-        .map_err(qjs_error)?;
-    if exit_requested(exit_state)? {
-        return Ok(());
-    }
-    drain_timer_work(runtime, event_loop_wait_budget)
+    Ok(())
 }
 
 fn drain_timer_work(
@@ -1917,6 +1955,75 @@ std.out.flush();
         table.start(task.id()).unwrap();
 
         assert_eq!(read_file(&*stdout, "out"), b"sync\nhandler ready stdin\n");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_runs_multiple_ready_io_turns_when_configured() {
+        let table = TaskTable::new();
+        let runner = runner();
+        let driver = QuickJsTaskDriver::new(runner).with_ready_io_turns(2);
+        table
+            .register_driver("qjs", std::sync::Arc::new(driver))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+let chunks = 0;
+const bytes = new Uint8Array(3);
+
+std.out.puts("sync\n");
+os.setReadHandler(0, () => {
+  const n = os.read(0, bytes.buffer, 0, bytes.length);
+  const text = Array.from(bytes.slice(0, n)).map((byte) => String.fromCharCode(byte)).join("");
+  chunks += 1;
+  std.out.puts("chunk " + chunks + " " + text + "\n");
+  if (chunks >= 2) {
+    os.setReadHandler(0, null);
+    std.out.flush();
+  }
+});
+std.out.flush();
+"#,
+        )
+        .unwrap();
+        let stdin = std::sync::Arc::new(MemFs::new());
+        stdin.write_file("in", b"abcdef").unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDIN,
+            stdin
+                .open(&NormalizedPath::new("in").unwrap(), OpenOptions::read())
+                .unwrap(),
+            NormalizedPath::new("in").unwrap(),
+        )
+        .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"sync\nchunk 1 abc\nchunk 2 def\n"
+        );
         assert_eq!(task.exit(), "0");
     }
 

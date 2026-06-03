@@ -29,10 +29,11 @@ After qjs task/script evaluation, run:
 - bounded immediate job/timer turns again, so callbacks can resolve promises or
   schedule zero-delay async work.
 
-The ready-IO turn is intentionally a single nonblocking turn. QuickJS's
+The first ready-IO turn was intentionally a single nonblocking turn. QuickJS's
 `js_std_poll_io` reports the same success value whether no handler was ready or
-one handler ran successfully, so Wanix cannot yet drain until idle without a
-stronger fixture signal.
+one handler ran successfully, so Wanix cannot drain until idle without a
+stronger fixture signal. ADR 0043 later adds an explicit fixed turn budget for
+demos that need repeated callbacks.
 
 ## Consequences
 
@@ -41,5 +42,6 @@ ready stdin and observe that handler before task exit. The proof covers the
 engine API, the qjs task driver, and a native CLI demo.
 
 This does not implement long-lived fd scheduling, blocking readiness waits,
-repeated handler draining, cancellation, signals, or a Wanix task scheduler.
-Those remain future lifecycle decisions.
+cancellation, signals, or a Wanix task scheduler. Repeated callbacks are later
+available through ADR 0043's fixed nonblocking turn budget, while richer
+readiness lifecycle remains future work.
