@@ -17,12 +17,14 @@ const ERRNO_NOTCAPABLE: i32 = 76;
 const RIGHT_FD_READ: i64 = 1 << 1;
 const RIGHT_FD_SEEK: i64 = 1 << 2;
 const RIGHT_FD_TELL: i64 = 1 << 5;
+const RIGHT_FD_WRITE: i64 = 1 << 6;
 const RIGHT_PATH_OPEN: i64 = 1 << 13;
 const RIGHT_PATH_FILESTAT_GET: i64 = 1 << 18;
 const RIGHT_FD_FILESTAT_GET: i64 = 1 << 21;
 const READ_SEEK_STAT_RIGHTS: i64 =
     RIGHT_FD_READ | RIGHT_FD_SEEK | RIGHT_FD_TELL | RIGHT_FD_FILESTAT_GET;
 
+const OFLAGS_CREATE: i32 = 1 << 0;
 const PREOPEN_ROOT_FD: i32 = 3;
 const FIRST_FILE_FD: i32 = 4;
 const WASI_IOV_SIZE: usize = 8;
@@ -43,6 +45,7 @@ const VIRTUAL_FS_WAT: &str = r#"
   (import "wasi_snapshot_preview1" "fd_prestat_dir_name" (func $fd_prestat_dir_name (param i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_open" (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_readdir" (func $fd_readdir (param i32 i32 i32 i64 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_seek" (func $fd_seek (param i32 i64 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_tell" (func $fd_tell (param i32 i32) (result i32)))
@@ -61,6 +64,8 @@ const VIRTUAL_FS_WAT: &str = r#"
     call $path_open)
   (func (export "fd_read") (param i32 i32 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 local.get 3 call $fd_read)
+  (func (export "fd_write") (param i32 i32 i32 i32) (result i32)
+    local.get 0 local.get 1 local.get 2 local.get 3 call $fd_write)
   (func (export "fd_readdir") (param i32 i32 i32 i64 i32) (result i32)
     local.get 0 local.get 1 local.get 2 local.get 3 local.get 4
     call $fd_readdir)
@@ -87,6 +92,7 @@ struct VirtualFsHarness {
     fd_prestat_dir_name: TypedFunc<(i32, i32, i32), i32>,
     path_open: PathOpenFunc,
     fd_read: TypedFunc<(i32, i32, i32, i32), i32>,
+    fd_write: TypedFunc<(i32, i32, i32, i32), i32>,
     fd_readdir: TypedFunc<(i32, i32, i32, i64, i32), i32>,
     fd_seek: TypedFunc<(i32, i64, i32, i32), i32>,
     fd_tell: TypedFunc<(i32, i32), i32>,
@@ -122,6 +128,7 @@ impl VirtualFsHarness {
             fd_prestat_dir_name: instance.get_typed_func(&mut store, "fd_prestat_dir_name")?,
             path_open: instance.get_typed_func(&mut store, "path_open")?,
             fd_read: instance.get_typed_func(&mut store, "fd_read")?,
+            fd_write: instance.get_typed_func(&mut store, "fd_write")?,
             fd_readdir: instance.get_typed_func(&mut store, "fd_readdir")?,
             fd_seek: instance.get_typed_func(&mut store, "fd_seek")?,
             fd_tell: instance.get_typed_func(&mut store, "fd_tell")?,
@@ -221,6 +228,7 @@ type WasiHostResult<T> = std::result::Result<T, QuickJsWasiErrno>;
 #[derive(Clone, Default)]
 struct MetadataWasiHost {
     calls: Arc<Mutex<Vec<String>>>,
+    writes: Arc<Mutex<Vec<u8>>>,
 }
 
 impl MetadataWasiHost {
@@ -237,15 +245,19 @@ impl QuickJsWasiHost for MetadataWasiHost {
 
     fn path_open(
         &mut self,
-        _dirfd: u32,
-        _dirflags: u32,
-        _path: &[u8],
-        _oflags: u16,
-        _rights_base: u64,
-        _rights_inheriting: u64,
-        _fdflags: u16,
+        dirfd: u32,
+        dirflags: u32,
+        path: &[u8],
+        oflags: u16,
+        rights_base: u64,
+        rights_inheriting: u64,
+        fdflags: u16,
     ) -> WasiHostResult<u32> {
-        Err(QuickJsWasiErrno::Nosys)
+        self.record(format!(
+            "open:{dirfd}:{dirflags}:{}:{oflags}:{rights_base}:{rights_inheriting}:{fdflags}",
+            String::from_utf8_lossy(path)
+        ));
+        Ok(44)
     }
 
     fn fd_read(&mut self, _fd: u32, _buf: &mut [u8]) -> WasiHostResult<usize> {
@@ -260,8 +272,13 @@ impl QuickJsWasiHost for MetadataWasiHost {
         ])
     }
 
-    fn fd_write(&mut self, _fd: u32, _buf: &[u8]) -> WasiHostResult<usize> {
-        Err(QuickJsWasiErrno::Nosys)
+    fn fd_write(&mut self, fd: u32, buf: &[u8]) -> WasiHostResult<usize> {
+        self.record(format!("write:{fd}:{}", String::from_utf8_lossy(buf)));
+        self.writes
+            .lock()
+            .expect("test write lock")
+            .extend_from_slice(buf);
+        Ok(buf.len())
     }
 
     fn fd_seek(&mut self, fd: u32, offset: i64, whence: QuickJsWasiWhence) -> WasiHostResult<u64> {
@@ -402,6 +419,40 @@ fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
             "seek:5:7:Set".to_owned(),
             "tell:5".to_owned(),
             "close:5".to_owned(),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn live_wasi_host_path_open_create_and_fd_write_copy_guest_data() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let writes = Arc::clone(&host.writes);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+
+    assert_eq!(
+        harness.open_path_with("out.txt", RIGHT_FD_WRITE, 0, OFLAGS_CREATE, 0, 64)?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u32(64)?, 44);
+
+    harness.write_bytes(500, b"created")?;
+    harness.write_iov(300, 500, 7)?;
+    assert_eq!(
+        harness
+            .fd_write
+            .call(&mut harness.store, (44, 300, 1, 72))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u32(72)?, 7);
+    assert_eq!(*writes.lock().expect("test write lock"), b"created");
+    assert_eq!(
+        calls.lock().expect("test call lock").as_slice(),
+        &[
+            "open:3:0:out.txt:1:64:0:0".to_owned(),
+            "write:44:created".to_owned(),
         ]
     );
     Ok(())

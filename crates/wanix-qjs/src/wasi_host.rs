@@ -226,7 +226,7 @@ mod tests {
     };
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
     use wanix_vfs::{BindOptions, Namespace};
-    use wanix_wasi::{WasiConfig, WasiRights};
+    use wanix_wasi::{WasiConfig, WasiOpenOptions, WasiRights};
 
     use crate::task_context::WanixExitState;
 
@@ -306,6 +306,40 @@ mod tests {
         assert_eq!(&buf[..count], b"from namespace");
         assert_eq!(host.fd_tell(fd).unwrap(), 14);
         host.fd_close(fd).unwrap();
+    }
+
+    #[test]
+    fn adapter_path_open_create_and_fd_write_reach_wanix_namespace() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        namespace
+            .bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        let fd = host
+            .path_open(
+                3,
+                0,
+                b"out.txt",
+                WasiOpenOptions::OFLAGS_CREATE,
+                WasiRights::FD_WRITE.bits(),
+                0,
+                0,
+            )
+            .unwrap();
+
+        assert_eq!(host.fd_write(fd, b"created").unwrap(), 7);
+        assert_eq!(
+            host.fd_fdstat_get(fd).unwrap(),
+            QuickJsWasiFdStat::new(
+                QuickJsWasiFileType::RegularFile,
+                WasiRights::FD_WRITE.bits(),
+                0
+            )
+        );
+        host.fd_close(fd).unwrap();
+        assert_eq!(root.read_file("out.txt").unwrap(), b"created");
     }
 
     #[test]
