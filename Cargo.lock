@@ -946,6 +946,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wanix-9p"
+version = "0.1.0"
+dependencies = [
+ "wanix-fs",
+ "wanix-protocol",
+]
+
+[[package]]
 name = "wanix-cli"
 version = "0.1.0"
 dependencies = [

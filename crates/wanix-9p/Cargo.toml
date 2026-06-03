@@ -1,0 +1,19 @@
+[package]
+name = "wanix-9p"
+description = "9P server adapters backed by Rust Wanix filesystems."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+wanix-fs = { path = "../wanix-fs" }
+wanix-protocol = { path = "../wanix-protocol" }
+
+[lib]
+name = "wanix_9p"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

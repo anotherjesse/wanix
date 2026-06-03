@@ -18,6 +18,8 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
 - `wanix-protocol`: dependency-free wire protocol helpers, starting with 9P
   frame splitting, tag extraction, version negotiation, and basic
   server-facing 9P2000.L operation codecs.
+- `wanix-9p`: 9P server adapters backed by Wanix filesystems, starting with
+  an in-process frame handler for attach/walk/open/read/write/clunk.
 - `wanix-vfs`: Plan 9-style namespace binding and resolution.
 - `wanix-task`: task model, `#task`, fd table, and driver registry.
 - `wanix-term`: terminal device filesystem for `#term/new`,
@@ -43,6 +45,7 @@ wanix-fs
   -> wanix-task
 
 wanix-protocol
+wanix-9p -> wanix-fs + wanix-protocol
 wanix-term -> wanix-fs
 wanix-wasi -> wanix-fs + wanix-vfs
 wanix-qjs-engine -> Wasmtime + QuickJS WASM fixture
@@ -96,7 +99,7 @@ boundary clearer.
 Required checks before a cycle commit:
 
 ```sh
-cargo fmt --package wanix-cli --package wanix-fs --package wanix-protocol --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-term --package wanix-vfs --package wanix-wasi --check
+cargo fmt --package wanix-9p --package wanix-cli --package wanix-fs --package wanix-protocol --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-term --package wanix-vfs --package wanix-wasi --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 ```
@@ -275,6 +278,9 @@ cargo test --workspace --locked
 - [ADR 0059](docs/adrs/0059-basic-9p-operation-codecs.md):
   `wanix-protocol` owns typed codecs for the first server-facing 9P2000.L
   attach/walk/open/read/write/clunk/error operations.
+- [ADR 0060](docs/adrs/0060-wanix-backed-9p-server-adapter.md):
+  `wanix-9p` maps typed 9P frames onto Wanix filesystem fids and Linux errno
+  replies while transports remain out of scope.
 
 ## Cycle Rules
 
@@ -293,5 +299,5 @@ cycle before starting the next one.
 - Make `qjs-shell` genuinely interactive beyond line-oriented input by adding a
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
-- Add a Wanix namespace-backed 9P server on top of `wanix-protocol` for native
-  serve/v86 integration.
+- Extend `wanix-9p` with directory reads, create/remove/rename, getattr/stat,
+  and a native transport loop for serve/v86 integration.
