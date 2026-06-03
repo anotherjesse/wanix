@@ -430,9 +430,10 @@ let stdout = runtime.take_captured_stdout();
 so long-running hosts can drain output between evaluations and stay under their
 configured per-stream limits. Host config is supplied again on restore; snapshot
 bytes do not serialize stdio capture settings or retained output. The checked-in
-QuickJS fixture does not install `console`, `print`, or the QuickJS standard
-library helpers by default, so JavaScript-visible logging depends on a
-callback-installed console shim or stdlib attachment layer.
+QuickJS fixture initializes `qjs:std` and `qjs:os`, so guest code can import
+`qjs:std` and write through WASI stdout/stderr. The fixture still does not
+install `console`; higher-level adapters such as `wanix-qjs` may install their
+own console shim.
 
 ### Read-only virtual files
 
@@ -465,13 +466,15 @@ virtual file descriptor is open.
 
 The Wanix workspace does not vendor the Vercel reference source or build tree.
 The checked-in reference WASM binary can be rebuilt from an external
-`vercel-labs/quickjs-wasi` checkout:
+`vercel-labs/quickjs-wasi` checkout plus the libc fixture changes recorded in
+`docs/adrs/0012-quickjs-libc-std-fixture.md`:
 
 ```sh
 git clone https://github.com/vercel-labs/quickjs-wasi /tmp/quickjs-wasi
 cd /tmp/quickjs-wasi
 git checkout f26cf71
 make setup
+# Apply the ADR 0012 source/build changes before rebuilding.
 make quickjs.wasm
 cp quickjs.wasm /path/to/wanix/crates/wanix-qjs-engine/fixtures/quickjs.wasm
 ```

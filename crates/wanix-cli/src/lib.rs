@@ -485,6 +485,25 @@ print(text.includes("made inside Wanix"), Wanix.readText("created.txt"));
     }
 
     #[test]
+    fn qjs_command_runs_quickjs_std_stdout_outside_chrome() {
+        let script = write_temp_script(
+            "std-demo.js",
+            r#"
+import * as std from "qjs:std";
+
+std.out.puts("hello std\n");
+std.out.flush();
+"#,
+        );
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"hello std\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_reports_failure_and_preserves_stdout() {
         let script = write_temp_script(
             "boom.js",

@@ -100,6 +100,9 @@ cargo test --workspace --locked
 - [ADR 0011](docs/adrs/0011-live-quickjs-wasi-host-provider.md): Live
   QuickJS WASI hooks are runtime host state carried by create/restore options,
   while deterministic host config stays cloneable and comparable.
+- [ADR 0012](docs/adrs/0012-quickjs-libc-std-fixture.md): The checked-in
+  QuickJS fixture initializes `qjs:std`/`qjs:os` so guest JavaScript can reach
+  Wanix-backed WASI stdio.
 
 ## Cycle Rules
 

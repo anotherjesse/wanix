@@ -9,9 +9,10 @@ Accepted
 The first QuickJS task driver exposed a temporary `Wanix.readText` /
 `Wanix.writeText` object so JavaScript could observe a Wanix namespace before
 full Wanix-backed WASI imports were wired. The `rust-wasi-quickjs` prototype
-also has a read-only virtual WASI filesystem, but the current fixture does not
-initialize QuickJS libc or `qjs:std`, so JavaScript cannot yet issue file-read
-WASI calls directly.
+also has a read-only virtual WASI filesystem. At the time of this decision, the
+fixture did not initialize QuickJS libc or `qjs:std`, so JavaScript could not
+yet issue file-read WASI calls directly. ADR 0012 later enabled
+`qjs:std`/`qjs:os` for stdio-facing guest WASI proofs.
 
 ## Decision
 
@@ -41,5 +42,5 @@ implementation.
 - The projection is centralized at the `QuickJsWanixConfig` /
   `wanix_wasi::WasiConfig` boundary, which is the replacement point for custom
   Wanix-owned WASI imports.
-- `qjs:std` support remains a prototype-side follow-up before guest JS can read
-  Wanix files through actual QuickJS WASI file APIs.
+- `qjs:std` filesystem reads remain a follow-up before guest JS can read Wanix
+  files through actual QuickJS WASI file APIs.
