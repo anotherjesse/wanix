@@ -424,8 +424,8 @@ impl WasiOpenOptions {
     /// Converts Preview 1 `path_open` flags and base rights into open options.
     ///
     /// Directory-only opens, exclusive creation, and non-append fdflags are
-    /// rejected until `WasiCtx::path_open` has explicit semantics for those
-    /// Preview 1 modes.
+    /// rejected because generic file open options cannot express directory
+    /// handles. Use [`WasiPathOpen::from_preview1`] for raw Preview 1 requests.
     pub fn from_preview1(
         oflags: u16,
         rights_base: WasiRights,
@@ -469,22 +469,26 @@ pub struct WasiPathOpen {
     options: WasiOpenOptions,
     rights_base: WasiRights,
     rights_inheriting: WasiRights,
+    directory: bool,
 }
 
 impl WasiPathOpen {
     /// Converts raw Preview 1 `path_open` flags and rights into a request.
     ///
-    /// Directory-only opens, exclusive creation, and non-append fdflags are
-    /// rejected until `WasiCtx::path_open_preview1` has explicit semantics for
-    /// those modes.
+    /// Directory opens are preserved as request metadata because `WasiOpenOptions`
+    /// represents file open behavior. Non-blocking directory fdflags are accepted
+    /// for QuickJS libc compatibility and currently do not affect synchronous
+    /// Wanix namespace operations.
     pub fn from_preview1(
         oflags: u16,
         rights_base: WasiRights,
         rights_inheriting: WasiRights,
         fdflags: u16,
     ) -> Result<Self, Errno> {
-        WasiOpenOptions::validate_preview1_fdflags(fdflags)?;
-        if oflags & !WasiOpenOptions::SUPPORTED_OFLAGS != 0 {
+        if fdflags & !(WasiOpenOptions::FDFLAGS_APPEND | WasiOpenOptions::FDFLAGS_NONBLOCK) != 0 {
+            return Err(Errno::Notcapable);
+        }
+        if oflags & !(WasiOpenOptions::SUPPORTED_OFLAGS | WasiOpenOptions::OFLAGS_DIRECTORY) != 0 {
             return Err(Errno::Notcapable);
         }
         if !WasiRights::DIRECTORY_INHERITING.contains(rights_base)
@@ -493,8 +497,12 @@ impl WasiPathOpen {
             return Err(Errno::Notcapable);
         }
         let create = oflags & WasiOpenOptions::OFLAGS_CREATE != 0;
+        let directory = oflags & WasiOpenOptions::OFLAGS_DIRECTORY != 0;
         let truncate = oflags & WasiOpenOptions::OFLAGS_TRUNCATE != 0;
         let append = fdflags & WasiOpenOptions::FDFLAGS_APPEND != 0;
+        if directory && (create || truncate || append) {
+            return Err(Errno::Notcapable);
+        }
         if (create || truncate || append) && !rights_base.contains(WasiRights::FD_WRITE) {
             return Err(Errno::Notcapable);
         }
@@ -509,6 +517,7 @@ impl WasiPathOpen {
             options,
             rights_base,
             rights_inheriting,
+            directory,
         })
     }
 
@@ -528,6 +537,12 @@ impl WasiPathOpen {
     #[must_use]
     pub const fn rights_inheriting(self) -> WasiRights {
         self.rights_inheriting
+    }
+
+    /// Returns whether Preview 1 required the path to name a directory.
+    #[must_use]
+    pub const fn directory(self) -> bool {
+        self.directory
     }
 
     pub(crate) const fn file_rights_base(self) -> WasiRights {

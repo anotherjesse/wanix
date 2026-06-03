@@ -1283,10 +1283,10 @@ fn preview1_path_open_flags_convert_to_wanix_open_options() {
     );
 
     let directory = WasiPathOpen::from_preview1(
-        0,
+        WasiOpenOptions::OFLAGS_DIRECTORY,
         WasiRights::PATH_OPEN | WasiRights::FD_READDIR,
         WasiRights::FD_READ,
-        0,
+        WasiOpenOptions::FDFLAGS_NONBLOCK,
     )
     .unwrap();
     assert_eq!(
@@ -1304,6 +1304,16 @@ fn preview1_path_open_flags_convert_to_wanix_open_options() {
         WasiRights::PATH_OPEN | WasiRights::FD_READDIR
     );
     assert_eq!(directory.rights_inheriting(), WasiRights::FD_READ);
+    assert!(directory.directory());
+    assert_eq!(
+        WasiPathOpen::from_preview1(
+            WasiOpenOptions::OFLAGS_DIRECTORY | WasiOpenOptions::OFLAGS_CREATE,
+            WasiRights::PATH_OPEN | WasiRights::FD_READDIR,
+            WasiRights::NONE,
+            0
+        ),
+        Err(Errno::Notcapable)
+    );
     assert_eq!(
         WasiPathOpen::from_preview1(
             0,
@@ -1515,10 +1525,10 @@ fn preview1_path_open_preserves_reduced_directory_rights() {
         .path_open_preview1(
             WasiFd::ROOT,
             "dir",
-            0,
+            WasiOpenOptions::OFLAGS_DIRECTORY,
             WasiRights::FD_READDIR,
             WasiRights::NONE,
-            0,
+            WasiOpenOptions::FDFLAGS_NONBLOCK,
         )
         .unwrap();
     let fdstat = ctx.fd_fdstat_get(dir_fd).unwrap();
@@ -1535,6 +1545,17 @@ fn preview1_path_open_preserves_reduced_directory_rights() {
     );
     assert_eq!(
         ctx.path_open_preview1(
+            WasiFd::ROOT,
+            "dir/file.txt",
+            WasiOpenOptions::OFLAGS_DIRECTORY,
+            WasiRights::FD_READDIR,
+            WasiRights::NONE,
+            WasiOpenOptions::FDFLAGS_NONBLOCK,
+        ),
+        Err(Errno::Notdir)
+    );
+    assert_eq!(
+        ctx.path_open_preview1(
             dir_fd,
             "file.txt",
             0,
@@ -1547,6 +1568,39 @@ fn preview1_path_open_preserves_reduced_directory_rights() {
     assert_eq!(
         ctx.path_filestat_get(dir_fd, "file.txt"),
         Err(Errno::Notcapable)
+    );
+}
+
+#[test]
+fn preview1_path_open_accepts_libc_directory_rights() {
+    let root = fixture(&[("dir/file.txt", b"data")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let libc_directory_base = WasiRights::from_preview1_bits(
+        WasiRights::DIRECTORY_INHERITING.bits() & !WasiRights::FD_WRITE.bits(),
+    );
+
+    let dir_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            ".",
+            WasiOpenOptions::OFLAGS_DIRECTORY,
+            libc_directory_base,
+            WasiRights::DIRECTORY_INHERITING,
+            WasiOpenOptions::FDFLAGS_NONBLOCK,
+        )
+        .unwrap();
+    let fdstat = ctx.fd_fdstat_get(dir_fd).unwrap();
+
+    assert_eq!(fdstat.file_type(), WasiFileType::Directory);
+    assert_eq!(fdstat.rights_base(), libc_directory_base);
+    assert_eq!(fdstat.rights_inheriting(), WasiRights::DIRECTORY_INHERITING);
+    assert_eq!(
+        ctx.fd_read_dir(dir_fd)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name().to_owned())
+            .collect::<Vec<_>>(),
+        ["dir"]
     );
 }
 

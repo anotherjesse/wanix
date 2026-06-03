@@ -237,7 +237,12 @@ impl WasiCtx {
                 },
                 |request| (request.rights_base(), request.rights_inheriting()),
             );
-            if !WasiRights::DIRECTORY_BASE.contains(rights_base) {
+            let supported_directory_rights = if request.is_some() {
+                WasiRights::DIRECTORY_INHERITING
+            } else {
+                WasiRights::DIRECTORY_BASE
+            };
+            if !supported_directory_rights.contains(rights_base) {
                 return Err(Errno::Notcapable);
             }
             if let Some(request) = request
@@ -251,6 +256,9 @@ impl WasiCtx {
                 rights_base,
                 rights_inheriting,
             }));
+        }
+        if request.is_some_and(WasiPathOpen::directory) {
+            return Err(Errno::Notdir);
         }
 
         let requested_file_rights = open_file_rights(options.read, options.write, true);

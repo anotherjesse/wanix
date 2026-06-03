@@ -2508,6 +2508,19 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_example_readdir_demo_lists_directories_through_quickjs_os() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-readdir-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"listing: a.txt,b.txt,nested\nnested: \n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_attaches_stdin_as_wanix_task_fd_zero() {
         let script = write_temp_script(
             "stdin-demo.js",

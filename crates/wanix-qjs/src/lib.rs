@@ -2169,6 +2169,69 @@ print("id", std.loadFile("#task/self/id").trim());
     }
 
     #[test]
+    fn task_driver_quickjs_os_readdir_lists_task_namespace() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+function visible(path) {
+  const [entries, err] = os.readdir(path);
+  if (err !== 0) {
+    throw new Error("readdir " + path + ": " + err);
+  }
+  return entries.filter((name) => name !== "." && name !== "..").sort().join(",");
+}
+
+const rootList = visible(".");
+const dirList = visible("dir");
+std.out.puts("root " + rootList + "\n");
+std.out.puts("dir " + dirList + "\n");
+std.out.flush();
+"##,
+        )
+        .unwrap();
+        root.write_file("alpha.txt", b"alpha").unwrap();
+        root.write_file("dir/beta.txt", b"beta").unwrap();
+        root.write_file("dir/gamma.txt", b"gamma").unwrap();
+        root.write_file("#hidden", b"hidden").unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(task.exit(), "0");
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"root alpha.txt,dir,main.js\ndir beta.txt,gamma.txt\n",
+            "task exit {}",
+            task.exit()
+        );
+    }
+
+    #[test]
     fn task_driver_quickjs_os_starts_child_task_through_task_service() {
         let table = TaskTable::new();
         let runner = runner();

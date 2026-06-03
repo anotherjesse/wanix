@@ -36,8 +36,8 @@ granted to the opened file fd. Projection must preserve the requested read or
 write mode, so a read open still requires effective `FD_READ` and a write open
 still requires effective `FD_WRITE`.
 
-Directory opens keep their existing stricter behavior: requested directory base
-and inheriting rights must be directory-capable and parent-authorized.
+Directory-open specifics are handled separately in ADR 0032; this decision is
+limited to regular file handles.
 
 ## Consequences
 
@@ -55,7 +55,6 @@ The engine crate remains Wanix-agnostic. It forwards guest ABI calls to a live
 `QuickJsWasiHost`; the `wanix-qjs` adapter converts those calls into
 `wanix_wasi::WasiCtx` operations backed by task namespaces and fds.
 
-This is not a blanket Preview 1 compatibility pass. Append/nonblock/sync
-fdflags, exclusive/directory-specific open modes, directory mutation calls, and
-richer rights such as fd allocation remain explicit follow-ups until Wanix
-defines their semantics.
+This is not a blanket Preview 1 compatibility pass. Sync fdflags, exclusive open
+modes, and richer rights such as fd allocation remain explicit follow-ups until
+Wanix defines their semantics.
