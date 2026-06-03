@@ -211,6 +211,10 @@ cargo test --workspace --locked
 - [ADR 0048](docs/adrs/0048-snapshot-resume-interrupt-budget-reattachment.md):
   `qjs-snapshot` and `qjs-resume` reattach QuickJS interrupt-poll budgets as
   host policy instead of serializing them into VM snapshot files.
+- [ADR 0049](docs/adrs/0049-snapshot-resume-event-loop-budget-reattachment.md):
+  `qjs-snapshot` and `qjs-resume` reattach bounded future-timer and ready-IO
+  budgets as host lifecycle policy instead of serializing them into VM
+  snapshot files.
 
 ## Cycle Rules
 

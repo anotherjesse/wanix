@@ -22,11 +22,13 @@ const USAGE: &str = concat!(
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--interrupt-after N] ",
-    "[--memory-limit-bytes N] [--mount HOST=GUEST ...] ",
+    "[--memory-limit-bytes N] [--event-loop-ms N] [--ready-io-turns N] ",
+    "[--mount HOST=GUEST ...] ",
     "--snapshot FILE <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-resume [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--interrupt-after N] ",
-    "[--memory-limit-bytes N] [--mount HOST=GUEST ...] ",
+    "[--memory-limit-bytes N] [--event-loop-ms N] [--ready-io-turns N] ",
+    "[--mount HOST=GUEST ...] ",
     "--snapshot FILE <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
     "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
@@ -221,6 +223,8 @@ struct QjsSnapshotFileCommand {
     env: Vec<String>,
     cwd: NormalizedPath,
     stdin: Option<QjsStdin>,
+    event_loop_wait_budget: Duration,
+    ready_io_turns: usize,
     interrupt_poll_budget: Option<usize>,
     memory_limit_bytes: Option<u32>,
     mounts: Vec<HostMount>,
@@ -310,7 +314,13 @@ fn run_qjs_snapshot(
             command.interrupt_poll_budget,
             command.memory_limit_bytes,
         )?;
-        eval_qjs_source(&mut runtime, &script, &guest_script)?;
+        eval_qjs_source(
+            &mut runtime,
+            &script,
+            &guest_script,
+            command.event_loop_wait_budget,
+            command.ready_io_turns,
+        )?;
         ensure_snapshot_task_fds_closed(&task)?;
         let snapshot = runtime.snapshot_bytes()?;
         std::fs::write(&command.snapshot_path, snapshot).map_err(|error| {
@@ -372,7 +382,13 @@ fn run_qjs_resume(
             command.interrupt_poll_budget,
             command.memory_limit_bytes,
         )?;
-        if let Err(error) = eval_qjs_source(&mut runtime, &script, &guest_script) {
+        if let Err(error) = eval_qjs_source(
+            &mut runtime,
+            &script,
+            &guest_script,
+            command.event_loop_wait_budget,
+            command.ready_io_turns,
+        ) {
             let _ = task.set_exit("1");
             return Err(error);
         }
@@ -439,7 +455,13 @@ fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
     let mut after_exit = 0;
     let restore_result = (|| -> Result<(), CliError> {
         let mut runtime = runner.create_task_runtime(&before_task)?;
-        eval_qjs_source(&mut runtime, &before_script, &before_guest_script)?;
+        eval_qjs_source(
+            &mut runtime,
+            &before_script,
+            &before_guest_script,
+            Duration::ZERO,
+            1,
+        )?;
         ensure_snapshot_task_fds_closed(&before_task)?;
         let snapshot = runtime.snapshot_bytes()?;
         drop(runtime);
@@ -455,7 +477,13 @@ fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
         bind_child_output_to_parent(&after_task, &before_task)?;
 
         let mut restored = runner.restore_task_runtime_from_bytes(&after_task, &snapshot)?;
-        if let Err(error) = eval_qjs_source(&mut restored, &after_script, &after_guest_script) {
+        if let Err(error) = eval_qjs_source(
+            &mut restored,
+            &after_script,
+            &after_guest_script,
+            Duration::ZERO,
+            1,
+        ) {
             let _ = after_task.set_exit("1");
             return Err(error);
         }
@@ -667,6 +695,8 @@ fn parse_qjs_snapshot_file_command(
     let mut cwd = NormalizedPath::new(".")?;
     let mut mounts = Vec::new();
     let mut stdin = None;
+    let mut event_loop_wait_budget = Duration::ZERO;
+    let mut ready_io_turns = 1usize;
     let mut interrupt_poll_budget = None;
     let mut memory_limit_bytes = None;
     let mut snapshot_path = None;
@@ -720,6 +750,21 @@ fn parse_qjs_snapshot_file_command(
             })?;
             interrupt_poll_budget =
                 Some(parse_usize(value, &format!("{command} --interrupt-after"))?);
+            i += 1;
+        } else if args[i] == "--event-loop-ms" {
+            i += 1;
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage(format!("{command} --event-loop-ms expects milliseconds"))
+            })?;
+            event_loop_wait_budget =
+                parse_duration_millis(value, &format!("{command} --event-loop-ms"))?;
+            i += 1;
+        } else if args[i] == "--ready-io-turns" {
+            i += 1;
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage(format!("{command} --ready-io-turns expects a count"))
+            })?;
+            ready_io_turns = parse_usize(value, &format!("{command} --ready-io-turns"))?;
             i += 1;
         } else if args[i] == "--memory-limit-bytes" {
             i += 1;
@@ -787,6 +832,8 @@ fn parse_qjs_snapshot_file_command(
         env,
         cwd,
         stdin,
+        event_loop_wait_budget,
+        ready_io_turns,
         interrupt_poll_budget,
         memory_limit_bytes,
         mounts,
@@ -1081,11 +1128,22 @@ fn eval_qjs_source(
     runtime: &mut QuickJsTaskRuntime,
     source: &str,
     filename: &str,
+    event_loop_wait_budget: Duration,
+    ready_io_turns: usize,
 ) -> Result<(), CliError> {
     if uses_module_syntax(source) {
-        runtime.eval_module_discard(source, filename)?;
+        runtime.eval_module_discard_with_event_loop_limits(
+            source,
+            filename,
+            event_loop_wait_budget,
+            ready_io_turns,
+        )?;
     } else {
-        runtime.eval_discard(source)?;
+        runtime.eval_discard_with_event_loop_limits(
+            source,
+            event_loop_wait_budget,
+            ready_io_turns,
+        )?;
     }
     Ok(())
 }
@@ -2245,6 +2303,112 @@ print("snapshotted");
         let stderr = std::str::from_utf8(after.stderr()).unwrap();
         assert!(stderr.contains("wanix-rust qjs-resume:"), "{stderr}");
         assert!(stderr.contains("interrupted"), "{stderr}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn qjs_snapshot_future_timer_runs_with_wait_budget_before_snapshot_file() {
+        let dir = temp_dir("wanix-cli-snapshot-future-timer");
+        let snapshot = dir.join("quickjs.snapshot");
+
+        let output = run([
+            "qjs-snapshot".into(),
+            "--event-loop-ms".into(),
+            "10".into(),
+            "--snapshot".into(),
+            snapshot.clone().into_os_string(),
+            example_script("qjs-future-timer-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"sync\ntimeout\n");
+        assert!(output.stderr().is_empty());
+        assert!(fs::read(&snapshot).unwrap().len() > 1024);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn qjs_resume_future_timer_wait_budget_is_reattached_after_restore() {
+        let dir = temp_dir("wanix-cli-resume-future-timer");
+        let snapshot = dir.join("quickjs.snapshot");
+        let before_script = write_temp_script(
+            "qjs-future-timer-before.js",
+            r#"
+globalThis.snapshotReady = true;
+print("snapshotted");
+"#,
+        );
+
+        let before = run([
+            "qjs-snapshot".into(),
+            "--snapshot".into(),
+            snapshot.clone().into_os_string(),
+            before_script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(before.exit_code(), 0);
+        assert_eq!(before.stdout(), b"snapshotted\n");
+        assert!(before.stderr().is_empty());
+        assert!(fs::read(&snapshot).unwrap().len() > 1024);
+
+        let after = run([
+            "qjs-resume".into(),
+            "--event-loop-ms".into(),
+            "10".into(),
+            "--snapshot".into(),
+            snapshot.into_os_string(),
+            example_script("qjs-future-timer-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(after.exit_code(), 0);
+        assert_eq!(after.stdout(), b"sync\ntimeout\n");
+        assert!(after.stderr().is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn qjs_resume_ready_io_turns_are_reattached_after_restore() {
+        let dir = temp_dir("wanix-cli-resume-ready-io");
+        let snapshot = dir.join("quickjs.snapshot");
+        let before_script = write_temp_script(
+            "qjs-ready-io-before.js",
+            r#"
+globalThis.snapshotReady = true;
+print("snapshotted");
+"#,
+        );
+
+        let before = run([
+            "qjs-snapshot".into(),
+            "--snapshot".into(),
+            snapshot.clone().into_os_string(),
+            before_script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(before.exit_code(), 0);
+        assert_eq!(before.stdout(), b"snapshotted\n");
+        assert!(before.stderr().is_empty());
+        assert!(fs::read(&snapshot).unwrap().len() > 1024);
+
+        let after = run([
+            "qjs-resume".into(),
+            "--stdin".into(),
+            "abcdef".into(),
+            "--ready-io-turns".into(),
+            "2".into(),
+            "--snapshot".into(),
+            snapshot.into_os_string(),
+            example_script("qjs-ready-io-turns-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(after.exit_code(), 0);
+        assert_eq!(after.stdout(), b"sync\nchunk 1: abc\nchunk 2: def\n");
+        assert!(after.stderr().is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
 

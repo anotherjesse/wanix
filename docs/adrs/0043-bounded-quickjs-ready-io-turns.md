@@ -24,6 +24,8 @@ Add an explicit fixed ready-IO turn budget:
 - `QuickJsTaskDriver::with_ready_io_turns(turns)` sets the driver policy.
 - `QuickJsRunner::run_task_with_event_loop_limits(...)` accepts the same count.
 - `wanix-rust qjs --ready-io-turns N` exposes it for native demos.
+- ADR 0049 later applies the same explicit turn budget to persistent
+  `qjs-snapshot` and `qjs-resume` invocations.
 
 After script evaluation, Wanix drains timer/job work, runs up to the configured
 number of nonblocking ready-IO turns, and drains timer/job work after each turn

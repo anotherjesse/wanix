@@ -596,13 +596,6 @@ fn exit_requested_or_poisoned(exit_state: &Option<WanixExitState>) -> bool {
     exit_requested(exit_state).unwrap_or(true)
 }
 
-fn drain_immediate_runtime_work(
-    runtime: &mut QuickJsRuntime,
-    exit_state: &Option<WanixExitState>,
-) -> FsResult<()> {
-    drain_runtime_work(runtime, exit_state, Duration::ZERO, 1)
-}
-
 fn drain_runtime_work(
     runtime: &mut QuickJsRuntime,
     exit_state: &Option<WanixExitState>,

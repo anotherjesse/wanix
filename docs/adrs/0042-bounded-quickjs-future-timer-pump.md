@@ -28,7 +28,8 @@ indefinitely.
 
 `wanix-qjs` keeps a zero wait budget by default. `QuickJsTaskDriver` can opt in
 with `with_event_loop_wait_budget(...)`, and `wanix-rust qjs` exposes that as
-`--event-loop-ms N` for native demos.
+`--event-loop-ms N` for native demos. ADR 0049 later applies the same explicit
+budget to persistent `qjs-snapshot` and `qjs-resume` invocations.
 
 ## Consequences
 
