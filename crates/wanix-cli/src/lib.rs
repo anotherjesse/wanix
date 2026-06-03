@@ -467,6 +467,34 @@ console.error("stderr after exit");
     }
 
     #[test]
+    fn qjs_command_runs_fd_demo_through_wanix_task_fds() {
+        let script = write_temp_script(
+            "fd-demo.js",
+            r#"
+const input = Wanix.open("main.js", "r");
+print("read fd", input);
+print("saw api", Wanix.readFd(input, 80).includes("Wanix.open"));
+Wanix.closeFd(input);
+
+const output = Wanix.open("fd-output.txt", "w+");
+print("write fd", output);
+print("bytes", Wanix.writeFd(output, "via cli fd"));
+Wanix.closeFd(output);
+print(Wanix.readText("fd-output.txt"));
+"#,
+        );
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"read fd 3\nsaw api true\nwrite fd 4\nbytes 10\nvia cli fd\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_flows_env_cwd_and_args_from_wanix_task_state() {
         let script = write_temp_script(
             "context.js",

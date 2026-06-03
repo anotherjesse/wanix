@@ -17,12 +17,14 @@ use wanix_wasi::WasiConfig;
 use wasmtime::Engine;
 
 mod driver;
+mod fd_api;
 mod host_api;
 mod task_context;
 mod virtual_wasi;
 
 pub use driver::QuickJsTaskDriver;
 
+use fd_api::define_fd_output_callback;
 use host_api::{
     define_output_callback, define_output_callback_with_exit_state, define_wanix_host_api,
     define_wanix_module_loader, define_wanix_namespace_api, qjs_error, read_namespace_file,
@@ -201,7 +203,7 @@ impl QuickJsRunner {
         setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
         eval: impl FnOnce(&mut QuickJsRuntime, &str) -> FsResult<()>,
     ) -> Result<RunOutput, RunFailure> {
-        self.run_with_setup_control(source, config, None, setup, eval)
+        self.run_with_setup_control(source, config, None, None, setup, eval)
     }
 
     fn run_with_setup_control(
@@ -209,6 +211,7 @@ impl QuickJsRunner {
         source: &str,
         config: Option<QuickJsHostConfig>,
         exit_state: Option<WanixExitState>,
+        output_task: Option<Task>,
         setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
         eval: impl FnOnce(&mut QuickJsRuntime, &str) -> FsResult<()>,
     ) -> Result<RunOutput, RunFailure> {
@@ -228,12 +231,14 @@ impl QuickJsRunner {
                 "__wanix_stdout",
                 Arc::clone(&stdout),
                 exit_state.clone(),
+                output_task.clone().map(|task| (task, Fd::STDOUT)),
             )?;
             define_task_output_callback(
                 &mut runtime,
                 "__wanix_stderr",
                 Arc::clone(&stderr),
                 exit_state.clone(),
+                output_task.clone().map(|task| (task, Fd::STDERR)),
             )?;
             if let Some(exit_state) = exit_state.clone() {
                 runtime
@@ -286,15 +291,23 @@ impl QuickJsRunner {
         let run_as_module = uses_module_syntax(&source);
         let exit_state = WanixExitState::default();
         let api_exit_state = exit_state.clone();
+        let api_task = task.clone();
         let context =
             WanixTaskContext::new(command.raw, command.args, task_env_map(task), task.dir());
         match self.run_with_setup_control(
             &source,
             Some(config),
             Some(exit_state.clone()),
+            Some(task.clone()),
             move |runtime| {
                 define_wanix_module_loader(runtime, namespace.clone())?;
-                define_wanix_host_api(runtime, namespace, context, Some(api_exit_state.clone()))
+                define_wanix_host_api(
+                    runtime,
+                    namespace,
+                    context,
+                    Some(api_exit_state.clone()),
+                    Some(api_task.clone()),
+                )
             },
             |runtime, source| {
                 if run_as_module {
@@ -349,12 +362,16 @@ fn define_task_output_callback(
     name: &'static str,
     output: Arc<Mutex<Vec<u8>>>,
     exit_state: Option<WanixExitState>,
+    output_fd: Option<(Task, Fd)>,
 ) -> FsResult<()> {
-    match exit_state {
-        Some(exit_state) => {
+    match (exit_state, output_fd) {
+        (Some(exit_state), Some((task, fd))) => {
+            define_fd_output_callback(runtime, name, task, fd, exit_state)
+        }
+        (Some(exit_state), None) => {
             define_output_callback_with_exit_state(runtime, name, output, exit_state)
         }
-        None => define_output_callback(runtime, name, output),
+        (None, _) => define_output_callback(runtime, name, output),
     }
 }
 
@@ -501,12 +518,16 @@ const text = Wanix.readText("input.txt");
 Wanix.writeText("output.txt", text + " / qjs");
 print(Wanix.readText("output.txt"));
 print("exit api", typeof Wanix.exit);
+print("fd api", typeof Wanix.open);
 "#,
                 namespace,
             )
             .unwrap();
 
-        assert_eq!(output.stdout(), b"from wanix / qjs\nexit api undefined\n");
+        assert_eq!(
+            output.stdout(),
+            b"from wanix / qjs\nexit api undefined\nfd api undefined\n"
+        );
         assert_eq!(read_file(&*root, "output.txt"), b"from wanix / qjs");
     }
 
@@ -718,6 +739,9 @@ try {
   print("after exit");
   console.error("stderr after exit");
   Wanix.writeText("after.txt", "should not persist");
+  const fd = Wanix.open("fd-after.txt", "w+");
+  Wanix.writeFd(fd, "should not persist");
+  Wanix.closeFd(fd);
   Promise.resolve().then(() => print("after job"));
 }
 "#,
@@ -761,7 +785,220 @@ try {
             root.read_file("after.txt"),
             Err(wanix_fs::FsError::NotFound)
         ));
+        assert!(matches!(
+            root.read_file("fd-after.txt"),
+            Err(wanix_fs::FsError::NotFound)
+        ));
         assert_eq!(task.exit(), "7");
+    }
+
+    #[test]
+    fn task_driver_exposes_wanix_owned_fd_table_to_javascript() {
+        let table = TaskTable::new();
+        let runner = std::sync::Arc::new(runner());
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "app/main.js",
+            br#"
+const input = Wanix.open("input.txt", "r");
+print("input fd", input);
+print("read", Wanix.readFd(input, 64));
+Wanix.closeFd(input);
+
+const output = Wanix.open("created.txt", "w+");
+print("output fd", output);
+print("wrote", Wanix.writeFd(output, "created via fd"));
+Wanix.closeFd(output);
+"#,
+        )
+        .unwrap();
+        root.write_file("app/input.txt", b"from fd").unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+        task.set_dir("app").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"input fd 3\nread from fd\noutput fd 4\nwrote 14\n"
+        );
+        assert_eq!(
+            root.read_file("app/created.txt").unwrap(),
+            b"created via fd"
+        );
+        assert_eq!(task.fd_numbers(), [Fd::STDOUT]);
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_fd_api_writes_to_wanix_stdio_fds() {
+        let table = TaskTable::new();
+        let runner = std::sync::Arc::new(runner());
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+Wanix.writeFd(1, "direct stdout\n");
+Wanix.writeFd(2, "direct stderr\n");
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        let stderr = std::sync::Arc::new(MemFs::new());
+        stderr.write_file("err", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.insert_fd(
+            Fd::STDERR,
+            stderr
+                .open(
+                    &NormalizedPath::new("err").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("err").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(read_file(&*stdout, "out"), b"direct stdout\n");
+        assert_eq!(read_file(&*stderr, "err"), b"direct stderr\n");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_fd_api_preserves_stdio_order_and_close() {
+        let table = TaskTable::new();
+        let runner = std::sync::Arc::new(runner());
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+print("a");
+Wanix.writeFd(1, "b\n");
+print("c");
+Wanix.closeFd(1);
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(read_file(&*stdout, "out"), b"a\nb\nc\n");
+        assert!(task.fd_numbers().is_empty());
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_rejects_invalid_wanix_fd_calls() {
+        let table = TaskTable::new();
+        let runner = std::sync::Arc::new(runner());
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+try {
+  Wanix.open("input.txt", "bad");
+} catch (err) {
+  Wanix.writeText("bad-mode.txt", "caught");
+}
+try {
+  Wanix.readFd(1.5, 1);
+} catch (err) {
+  Wanix.writeText("bad-fd.txt", "caught");
+}
+try {
+  Wanix.readFd(1, 1048577);
+} catch (err) {
+  Wanix.writeText("bad-len.txt", "caught");
+}
+const utf8 = Wanix.open("utf8.txt", "r");
+try {
+  Wanix.readFd(utf8, 1);
+} catch (err) {
+  Wanix.writeText("split-utf8.txt", "caught");
+} finally {
+  Wanix.closeFd(utf8);
+}
+const fd = Wanix.open("input.txt", "r");
+Wanix.closeFd(fd);
+Wanix.readFd(fd, 1);
+"#,
+        )
+        .unwrap();
+        root.write_file("input.txt", b"from fd").unwrap();
+        root.write_file("utf8.txt", [0xc3, 0xa9]).unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        let err = table.start(task.id()).unwrap_err();
+
+        assert!(err.to_string().contains("Wanix.readFd"));
+        assert_eq!(root.read_file("bad-mode.txt").unwrap(), b"caught");
+        assert_eq!(root.read_file("bad-fd.txt").unwrap(), b"caught");
+        assert_eq!(root.read_file("bad-len.txt").unwrap(), b"caught");
+        assert_eq!(root.read_file("split-utf8.txt").unwrap(), b"caught");
+        assert_eq!(task.exit(), "1");
     }
 
     #[test]

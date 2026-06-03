@@ -3,8 +3,12 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail};
 use rust_wasi_quickjs::{QuickJsHostValue, QuickJsRuntime};
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath, OpenOptions};
+use wanix_task::Task;
 
-use crate::task_context::{WanixExitState, WanixTaskContext};
+use crate::{
+    fd_api::define_wanix_fd_api,
+    task_context::{WanixExitState, WanixTaskContext},
+};
 
 const WANIX_HOST_API_PRELUDE: &str = r#"
 (() => {
@@ -28,6 +32,12 @@ const WANIX_HOST_API_PRELUDE: &str = r#"
       __wanix_exit(Number(code));
       for (;;) {}
     };
+  }
+  if (typeof __wanix_open === "function") {
+    api.open = (path, mode = "r") => __wanix_open(String(path), String(mode));
+    api.readFd = (fd, len) => __wanix_read_fd(Number(fd), Number(len));
+    api.writeFd = (fd, text) => __wanix_write_fd(Number(fd), String(text));
+    api.closeFd = (fd) => __wanix_close_fd(Number(fd));
   }
   globalThis.Wanix = Object.freeze(api);
 })();
@@ -75,7 +85,7 @@ pub(crate) fn define_wanix_namespace_api(
     runtime: &mut QuickJsRuntime,
     namespace: impl FileSystem + Clone + 'static,
 ) -> FsResult<()> {
-    define_wanix_host_api(runtime, namespace, WanixTaskContext::default(), None)
+    define_wanix_host_api(runtime, namespace, WanixTaskContext::default(), None, None)
 }
 
 pub(crate) fn define_wanix_host_api(
@@ -83,6 +93,7 @@ pub(crate) fn define_wanix_host_api(
     namespace: impl FileSystem + Clone + 'static,
     context: WanixTaskContext,
     exit_state: Option<WanixExitState>,
+    task: Option<Task>,
 ) -> FsResult<()> {
     let read_namespace = namespace.clone();
     let read_cwd = context.cwd().clone();
@@ -95,6 +106,7 @@ pub(crate) fn define_wanix_host_api(
         })
         .map_err(qjs_error)?;
 
+    let write_namespace = namespace.clone();
     let write_cwd = context.cwd().clone();
     let write_exit_state = exit_state.clone();
     runtime
@@ -103,7 +115,7 @@ pub(crate) fn define_wanix_host_api(
                 return Ok(QuickJsHostValue::Undefined);
             }
             let (path, text) = two_string_args(args, "Wanix.writeText")?;
-            write_text_path(&namespace, &write_cwd, &path, text.as_bytes())
+            write_text_path(&write_namespace, &write_cwd, &path, text.as_bytes())
                 .map_err(|err| anyhow!("Wanix.writeText({path:?}) failed: {err}"))?;
             Ok(QuickJsHostValue::Undefined)
         })
@@ -143,7 +155,7 @@ pub(crate) fn define_wanix_host_api(
         })
         .map_err(qjs_error)?;
 
-    if let Some(exit_state) = exit_state {
+    if let Some(exit_state) = exit_state.clone() {
         runtime
             .define_global_host_function("__wanix_exit", move |args| {
                 let code = exit_code_arg(args)?;
@@ -151,6 +163,16 @@ pub(crate) fn define_wanix_host_api(
                 Ok(QuickJsHostValue::Undefined)
             })
             .map_err(qjs_error)?;
+    }
+
+    if let Some(task) = task {
+        define_wanix_fd_api(
+            runtime,
+            namespace.clone(),
+            context.cwd().clone(),
+            task,
+            exit_state,
+        )?;
     }
 
     runtime
@@ -289,7 +311,7 @@ fn write_text_path(
     Ok(())
 }
 
-fn resolve_namespace_path(cwd: &NormalizedPath, path: &str) -> FsResult<NormalizedPath> {
+pub(crate) fn resolve_namespace_path(cwd: &NormalizedPath, path: &str) -> FsResult<NormalizedPath> {
     let path = NormalizedPath::new(path)?;
     if path.as_str().starts_with('#') || cwd.as_str() == "." {
         return Ok(path);
@@ -307,7 +329,10 @@ fn one_string_arg(args: &[QuickJsHostValue], function: &str) -> anyhow::Result<S
     }
 }
 
-fn two_string_args(args: &[QuickJsHostValue], function: &str) -> anyhow::Result<(String, String)> {
+pub(crate) fn two_string_args(
+    args: &[QuickJsHostValue],
+    function: &str,
+) -> anyhow::Result<(String, String)> {
     match args {
         [
             QuickJsHostValue::String(left),
@@ -336,14 +361,14 @@ fn exit_code_arg(args: &[QuickJsHostValue]) -> anyhow::Result<i32> {
     Ok(code as i32)
 }
 
-fn exit_requested(exit_state: &Option<WanixExitState>) -> anyhow::Result<bool> {
+pub(crate) fn exit_requested(exit_state: &Option<WanixExitState>) -> anyhow::Result<bool> {
     match exit_state {
         Some(exit_state) => exit_state.is_requested(),
         None => Ok(false),
     }
 }
 
-fn display_host_value(value: &QuickJsHostValue) -> String {
+pub(crate) fn display_host_value(value: &QuickJsHostValue) -> String {
     match value {
         QuickJsHostValue::Undefined => "undefined".to_owned(),
         QuickJsHostValue::Null => "null".to_owned(),

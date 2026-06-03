@@ -31,6 +31,9 @@ driver into a task table.
 - Near-term `qjs` work should flow task `cmd`, `env`, and `dir` into
   QuickJS/WASI, then back WASI path/fd calls with the task namespace and fd
   table.
+- Interim QuickJS fd helpers may demonstrate Wanix-owned task fd allocation
+  before full WASI imports are available, but they must not create a separate
+  QuickJS process or fd model.
 - The synchronous process demo comes before richer lifecycle work such as async
   event loops, signals, cancellation, and snapshot/restore.
 - A useful demo should show JavaScript reading `#task/self/id`, using stdio,
