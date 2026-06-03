@@ -18,6 +18,7 @@ use wanix_vfs::BindOptions;
 const USAGE: &str = concat!(
     "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
+    "[--interrupt-after N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--mount HOST=GUEST ...] ",
@@ -180,6 +181,7 @@ struct QjsCommand {
     stdin: Option<QjsStdin>,
     event_loop_wait_budget: Duration,
     ready_io_turns: usize,
+    interrupt_poll_budget: Option<usize>,
     mounts: Vec<HostMount>,
 }
 
@@ -226,14 +228,13 @@ fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutpu
 
     let table = TaskTable::new();
     let runner = quickjs_runner()?;
-    table.register_driver(
-        "qjs",
-        Arc::new(
-            QuickJsTaskDriver::new(runner)
-                .with_event_loop_wait_budget(command.event_loop_wait_budget)
-                .with_ready_io_turns(command.ready_io_turns),
-        ),
-    )?;
+    let mut driver = QuickJsTaskDriver::new(runner)
+        .with_event_loop_wait_budget(command.event_loop_wait_budget)
+        .with_ready_io_turns(command.ready_io_turns);
+    if let Some(budget) = command.interrupt_poll_budget {
+        driver = driver.with_interrupt_poll_budget(budget);
+    }
+    table.register_driver("qjs", Arc::new(driver))?;
     let task = table.allocate_root("qjs")?;
     let task_spec = qjs_task_spec(QJS_GUEST_SCRIPT, &command.args, &command.env, &command.cwd)?;
     let task_cmd = task_cmd(QJS_GUEST_SCRIPT, &command.args);
@@ -465,6 +466,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
     let mut stdin = None;
     let mut event_loop_wait_budget = Duration::ZERO;
     let mut ready_io_turns = 1usize;
+    let mut interrupt_poll_budget = None;
     let mut mounts = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -521,6 +523,13 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
                 .ok_or_else(|| CliError::usage("qjs --ready-io-turns expects a count"))?;
             ready_io_turns = parse_usize(value, "qjs --ready-io-turns")?;
             i += 1;
+        } else if args[i] == "--interrupt-after" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs --interrupt-after expects a count"))?;
+            interrupt_poll_budget = Some(parse_usize(value, "qjs --interrupt-after")?);
+            i += 1;
         } else if args[i] == "--mount" {
             i += 1;
             let value = args
@@ -562,6 +571,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
         stdin,
         event_loop_wait_budget,
         ready_io_turns,
+        interrupt_poll_budget,
         mounts,
     })
 }
@@ -2431,6 +2441,23 @@ std.out.flush();
         assert_eq!(output.exit_code(), 0);
         assert_eq!(output.stdout(), b"sync\ntick 1\ntick 2\ntick 3\n");
         assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_command_interrupt_budget_stops_cpu_bound_script() {
+        let output = run([
+            "qjs".into(),
+            "--interrupt-after".into(),
+            "1".into(),
+            example_script("qjs-interrupt-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 1);
+        assert_eq!(output.stdout(), b"starting cpu loop\n");
+        let stderr = std::str::from_utf8(output.stderr()).unwrap();
+        assert!(stderr.contains("wanix-rust qjs:"), "{stderr}");
+        assert!(stderr.contains("interrupted"), "{stderr}");
     }
 
     #[test]

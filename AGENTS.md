@@ -199,6 +199,9 @@ cargo test --workspace --locked
 - [ADR 0044](docs/adrs/0044-bounded-quickjs-interval-timers.md):
   QuickJS self-clearing interval timers run inside the bounded future-timer pump
   without defining a general scheduler.
+- [ADR 0045](docs/adrs/0045-qjs-interrupt-poll-budget.md):
+  Wanix `qjs` tasks can stop CPU-bound JavaScript through an explicit QuickJS
+  interrupt-poll budget without adding signals or a scheduler.
 
 ## Cycle Rules
 

@@ -112,6 +112,7 @@ struct RunControl {
     output_task: Option<Task>,
     event_loop_wait_budget: Duration,
     ready_io_turns: usize,
+    interrupt_poll_budget: Option<usize>,
 }
 
 impl Default for RunControl {
@@ -121,6 +122,7 @@ impl Default for RunControl {
             output_task: None,
             event_loop_wait_budget: Duration::ZERO,
             ready_io_turns: 1,
+            interrupt_poll_budget: None,
         }
     }
 }
@@ -321,10 +323,20 @@ impl QuickJsRunner {
                 control.exit_state.clone(),
                 control.output_task.clone().map(|task| (task, Fd::STDERR)),
             )?;
-            if let Some(exit_state) = control.exit_state.clone() {
+            if control.exit_state.is_some() || control.interrupt_poll_budget.is_some() {
+                let exit_state = control.exit_state.clone();
+                let interrupt_poll_budget = control.interrupt_poll_budget;
+                let mut interrupt_polls = 0usize;
                 runtime
                     .set_interrupt_handler(move || {
-                        exit_state.code().map(|code| code.is_some()).unwrap_or(true)
+                        if exit_requested_or_poisoned(&exit_state) {
+                            return true;
+                        }
+                        let Some(budget) = interrupt_poll_budget else {
+                            return false;
+                        };
+                        interrupt_polls = interrupt_polls.saturating_add(1);
+                        interrupt_polls > budget
                     })
                     .map_err(qjs_error)?;
             }
@@ -404,6 +416,28 @@ impl QuickJsRunner {
         event_loop_wait_budget: Duration,
         ready_io_turns: usize,
     ) -> FsResult<RunOutput> {
+        self.run_task_with_runtime_limits(task, event_loop_wait_budget, ready_io_turns, None)
+    }
+
+    /// Runs the script named in `task.cmd()` with bounded runtime limits.
+    ///
+    /// `ready_io_turns` is a fixed nonblocking turn count because QuickJS's
+    /// stdlib fd poll hook cannot distinguish an idle poll from a successful
+    /// callback. `interrupt_poll_budget` bounds CPU-bound eval by asking
+    /// QuickJS to interrupt after the configured number of interrupt polls.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the command is missing, the script cannot
+    /// be read, QuickJS fails or is interrupted by policy, task fd writes fail,
+    /// or the bounded event pump encounters a callback error.
+    pub fn run_task_with_runtime_limits(
+        &self,
+        task: &Task,
+        event_loop_wait_budget: Duration,
+        ready_io_turns: usize,
+        interrupt_poll_budget: Option<usize>,
+    ) -> FsResult<RunOutput> {
         let command = task_command(task)?;
         let script_path = command.program.clone();
         let script_filename = script_path.to_string();
@@ -430,6 +464,7 @@ impl QuickJsRunner {
                 output_task: Some(task.clone()),
                 event_loop_wait_budget,
                 ready_io_turns,
+                interrupt_poll_budget,
             },
             move |runtime| {
                 define_wanix_module_loader(runtime, namespace.clone())?;
@@ -547,6 +582,10 @@ fn exit_requested(exit_state: &Option<WanixExitState>) -> FsResult<bool> {
         Some(exit_state) => exit_state.code().map(|code| code.is_some()),
         None => Ok(false),
     }
+}
+
+fn exit_requested_or_poisoned(exit_state: &Option<WanixExitState>) -> bool {
+    exit_requested(exit_state).unwrap_or(true)
 }
 
 fn drain_immediate_runtime_work(
@@ -1952,6 +1991,31 @@ std.out.flush();
             b"sync\ntick 1\ntick 2\ntick 3\n"
         );
         assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_interrupt_budget_stops_cpu_bound_quickjs() {
+        let table = TaskTable::new();
+        let runner = runner();
+        let driver = QuickJsTaskDriver::new(runner).with_interrupt_poll_budget(0);
+        table
+            .register_driver("qjs", std::sync::Arc::new(driver))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("main.js", b"while (true) {}").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        let err = table
+            .start(task.id())
+            .expect_err("interrupt budget should stop a CPU-bound task");
+
+        assert!(
+            err.to_string().contains("interrupted"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(task.exit(), "1");
     }
 
     #[test]

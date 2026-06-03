@@ -12,6 +12,7 @@ pub struct QuickJsTaskDriver {
     runner: Arc<QuickJsRunner>,
     event_loop_wait_budget: Duration,
     ready_io_turns: usize,
+    interrupt_poll_budget: Option<usize>,
 }
 
 impl QuickJsTaskDriver {
@@ -22,6 +23,7 @@ impl QuickJsTaskDriver {
             runner,
             event_loop_wait_budget: Duration::ZERO,
             ready_io_turns: 1,
+            interrupt_poll_budget: None,
         }
     }
 
@@ -46,6 +48,17 @@ impl QuickJsTaskDriver {
         self
     }
 
+    /// Sets the maximum number of QuickJS interrupt polls allowed during eval.
+    ///
+    /// When the budget is exhausted, the interrupt handler asks QuickJS to stop
+    /// the current script. This is a bounded task-driver policy for CPU-bound
+    /// JavaScript, not a general Wanix cancellation or signal mechanism.
+    #[must_use]
+    pub fn with_interrupt_poll_budget(mut self, polls: usize) -> Self {
+        self.interrupt_poll_budget = Some(polls);
+        self
+    }
+
     /// Returns the shared runner.
     #[must_use]
     pub fn runner(&self) -> &Arc<QuickJsRunner> {
@@ -59,10 +72,11 @@ impl TaskDriver for QuickJsTaskDriver {
     }
 
     fn start(&self, task: &Task) -> FsResult<()> {
-        match self.runner.run_task_with_event_loop_limits(
+        match self.runner.run_task_with_runtime_limits(
             task,
             self.event_loop_wait_budget,
             self.ready_io_turns,
+            self.interrupt_poll_budget,
         ) {
             Ok(_) => Ok(()),
             Err(err) => {

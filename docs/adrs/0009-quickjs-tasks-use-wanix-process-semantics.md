@@ -60,7 +60,9 @@ driver into a task table.
   target task namespace and installs it in the target task fd table; use an
   explicit source such as `#task/1/fd/1` when the child should write through a
   parent fd, because `#task/self` is target-task-relative.
-- The synchronous process demo comes before richer lifecycle work such as async
-  event loops, signals, cancellation, and snapshot/restore.
+- The synchronous process demo comes before richer lifecycle work. Later ADRs
+  add bounded event-loop slices and ADR 0045 adds an interrupt-poll budget for
+  CPU-bound JavaScript, but full signals, asynchronous cancellation, and
+  scheduler policy remain future work.
 - A useful demo should show JavaScript reading `#task/self/id`, using stdio,
   and leaving an observable task exit status.

@@ -32,6 +32,7 @@ JavaScript running as a Wanix `qjs` task can now demonstrate repeated timer
 callbacks through `setInterval(...)` while still exiting deterministically once
 the interval is cleared.
 
-This does not keep tasks alive indefinitely, serialize pending interval state in
-snapshots, or define cancellation/signal policy for long-running interval
-tasks.
+This does not keep tasks alive indefinitely or serialize pending interval state
+in snapshots. ADR 0045 later adds an explicit interrupt-poll budget for
+CPU-bound JavaScript, but open-ended interval lifecycle, signals, and scheduler
+policy remain future work.
