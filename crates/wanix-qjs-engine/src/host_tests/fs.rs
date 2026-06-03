@@ -1,7 +1,7 @@
 use super::*;
 use crate::host::{
-    QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType, QuickJsWasiHost,
-    QuickJsWasiPrestat, QuickJsWasiWhence,
+    QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat,
+    QuickJsWasiFileType, QuickJsWasiHost, QuickJsWasiPrestat, QuickJsWasiWhence,
 };
 use std::sync::{Arc, Mutex};
 use wasmtime::{Engine, Linker, Module, Store, TypedFunc};
@@ -26,6 +26,7 @@ const READ_SEEK_STAT_RIGHTS: i64 =
 const PREOPEN_ROOT_FD: i32 = 3;
 const FIRST_FILE_FD: i32 = 4;
 const WASI_IOV_SIZE: usize = 8;
+const WASI_DIRENT_SIZE: usize = 24;
 const WHENCE_SET: i32 = 0;
 const FILETYPE_CHARACTER_DEVICE: u8 = 2;
 const FILETYPE_DIRECTORY: u8 = 3;
@@ -42,6 +43,7 @@ const VIRTUAL_FS_WAT: &str = r#"
   (import "wasi_snapshot_preview1" "fd_prestat_dir_name" (func $fd_prestat_dir_name (param i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_open" (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_readdir" (func $fd_readdir (param i32 i32 i32 i64 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_seek" (func $fd_seek (param i32 i64 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_close" (func $fd_close (param i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_fdstat_get" (func $fd_fdstat_get (param i32 i32) (result i32)))
@@ -58,6 +60,9 @@ const VIRTUAL_FS_WAT: &str = r#"
     call $path_open)
   (func (export "fd_read") (param i32 i32 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 local.get 3 call $fd_read)
+  (func (export "fd_readdir") (param i32 i32 i32 i64 i32) (result i32)
+    local.get 0 local.get 1 local.get 2 local.get 3 local.get 4
+    call $fd_readdir)
   (func (export "fd_seek") (param i32 i64 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 local.get 3 call $fd_seek)
   (func (export "fd_close") (param i32) (result i32)
@@ -79,6 +84,7 @@ struct VirtualFsHarness {
     fd_prestat_dir_name: TypedFunc<(i32, i32, i32), i32>,
     path_open: PathOpenFunc,
     fd_read: TypedFunc<(i32, i32, i32, i32), i32>,
+    fd_readdir: TypedFunc<(i32, i32, i32, i64, i32), i32>,
     fd_seek: TypedFunc<(i32, i64, i32, i32), i32>,
     fd_close: TypedFunc<i32, i32>,
     fd_fdstat_get: TypedFunc<(i32, i32), i32>,
@@ -112,6 +118,7 @@ impl VirtualFsHarness {
             fd_prestat_dir_name: instance.get_typed_func(&mut store, "fd_prestat_dir_name")?,
             path_open: instance.get_typed_func(&mut store, "path_open")?,
             fd_read: instance.get_typed_func(&mut store, "fd_read")?,
+            fd_readdir: instance.get_typed_func(&mut store, "fd_readdir")?,
             fd_seek: instance.get_typed_func(&mut store, "fd_seek")?,
             fd_close: instance.get_typed_func(&mut store, "fd_close")?,
             fd_fdstat_get: instance.get_typed_func(&mut store, "fd_fdstat_get")?,
@@ -240,6 +247,14 @@ impl QuickJsWasiHost for MetadataWasiHost {
         Err(QuickJsWasiErrno::Nosys)
     }
 
+    fn fd_readdir(&mut self, fd: u32) -> WasiHostResult<Vec<QuickJsWasiDirEntry>> {
+        self.record(format!("readdir:{fd}"));
+        Ok(vec![
+            QuickJsWasiDirEntry::new("config.txt", QuickJsWasiFileType::RegularFile),
+            QuickJsWasiDirEntry::new("data", QuickJsWasiFileType::Directory),
+        ])
+    }
+
     fn fd_write(&mut self, _fd: u32, _buf: &[u8]) -> WasiHostResult<usize> {
         Err(QuickJsWasiErrno::Nosys)
     }
@@ -275,6 +290,50 @@ impl QuickJsWasiHost for MetadataWasiHost {
     ) -> WasiHostResult<QuickJsWasiFileStat> {
         Err(QuickJsWasiErrno::Nosys)
     }
+}
+
+#[test]
+fn live_wasi_host_supplies_readdir_entries() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+
+    assert_eq!(
+        harness
+            .fd_readdir
+            .call(&mut harness.store, (9, 300, 128, 0, 72))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u32(72)?, 62);
+    assert_eq!(harness.read_u64(300)?, 1);
+    assert_eq!(harness.read_u64(308)?, 0);
+    assert_eq!(harness.read_u32(316)?, 10);
+    assert_eq!(harness.read_u8(320)?, FILETYPE_REGULAR_FILE);
+    assert_eq!(harness.read_bytes(324, 10)?, b"config.txt");
+
+    let second = 324 + 10;
+    assert_eq!(harness.read_u64(second)?, 2);
+    assert_eq!(harness.read_u64(second + 8)?, 0);
+    assert_eq!(harness.read_u32(second + 16)?, 4);
+    assert_eq!(harness.read_u8(second + 20)?, FILETYPE_DIRECTORY);
+    assert_eq!(harness.read_bytes(second + WASI_DIRENT_SIZE, 4)?, b"data");
+
+    assert_eq!(
+        harness
+            .fd_readdir
+            .call(&mut harness.store, (9, 400, 128, 1, 76))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u32(76)?, 28);
+    assert_eq!(harness.read_u64(400)?, 2);
+    assert_eq!(harness.read_bytes(400 + WASI_DIRENT_SIZE, 4)?, b"data");
+
+    assert_eq!(
+        calls.lock().expect("test call lock").as_slice(),
+        &["readdir:9".to_owned(), "readdir:9".to_owned()]
+    );
+    Ok(())
 }
 
 #[test]

@@ -1,7 +1,8 @@
 use rust_wasi_quickjs::{
-    QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType, QuickJsWasiHost,
-    QuickJsWasiPrestat, QuickJsWasiWhence,
+    QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat,
+    QuickJsWasiFileType, QuickJsWasiHost, QuickJsWasiPrestat, QuickJsWasiWhence,
 };
+use wanix_fs::FileType;
 use wanix_wasi::{
     Errno, FileStat, WasiConfig, WasiCtx, WasiFd, WasiFdStat, WasiFileType, WasiRights, WasiWhence,
 };
@@ -53,6 +54,23 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
     fn fd_read(&mut self, fd: u32, buf: &mut [u8]) -> Result<usize, QuickJsWasiErrno> {
         self.ctx
             .fd_read(WasiFd::new(fd), buf)
+            .map_err(convert_errno)
+    }
+
+    fn fd_readdir(&mut self, fd: u32) -> Result<Vec<QuickJsWasiDirEntry>, QuickJsWasiErrno> {
+        self.ctx
+            .fd_read_dir(WasiFd::new(fd))
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        QuickJsWasiDirEntry::new(
+                            entry.name().to_owned(),
+                            convert_wanix_file_type(entry.metadata().file_type()),
+                        )
+                    })
+                    .collect()
+            })
             .map_err(convert_errno)
     }
 
@@ -131,6 +149,14 @@ fn convert_file_type(file_type: WasiFileType) -> QuickJsWasiFileType {
     }
 }
 
+fn convert_wanix_file_type(file_type: FileType) -> QuickJsWasiFileType {
+    match file_type {
+        FileType::File => QuickJsWasiFileType::RegularFile,
+        FileType::Directory => QuickJsWasiFileType::Directory,
+        FileType::Symlink => QuickJsWasiFileType::SymbolicLink,
+    }
+}
+
 fn convert_fdstat(stat: WasiFdStat) -> QuickJsWasiFdStat {
     QuickJsWasiFdStat::new(
         convert_file_type(stat.file_type()),
@@ -156,8 +182,8 @@ mod tests {
     use std::sync::Arc;
 
     use rust_wasi_quickjs::{
-        QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType, QuickJsWasiHost,
-        QuickJsWasiPrestat,
+        QuickJsWasiDirEntry, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType,
+        QuickJsWasiHost, QuickJsWasiPrestat,
     };
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
     use wanix_vfs::{BindOptions, Namespace};
@@ -247,6 +273,13 @@ mod tests {
         assert_eq!(
             host.fd_prestat_get(4).unwrap(),
             QuickJsWasiPrestat::new("/mnt")
+        );
+        assert_eq!(
+            host.fd_readdir(4).unwrap(),
+            vec![QuickJsWasiDirEntry::new(
+                "extra.txt",
+                QuickJsWasiFileType::RegularFile
+            )]
         );
 
         let fd = host

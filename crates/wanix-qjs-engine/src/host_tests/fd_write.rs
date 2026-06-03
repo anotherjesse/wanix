@@ -1,7 +1,7 @@
 use super::*;
 use crate::host::{
-    QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType,
-    QuickJsWasiPrestat, QuickJsWasiWhence,
+    QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat,
+    QuickJsWasiFileType, QuickJsWasiPrestat, QuickJsWasiWhence,
 };
 use std::sync::{Arc, Mutex};
 
@@ -127,6 +127,10 @@ impl QuickJsWasiHost for RecordingWasiHost {
     }
 
     fn fd_read(&mut self, _fd: u32, _buf: &mut [u8]) -> WasiHostResult<usize> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_readdir(&mut self, _fd: u32) -> WasiHostResult<Vec<QuickJsWasiDirEntry>> {
         Err(QuickJsWasiErrno::Nosys)
     }
 

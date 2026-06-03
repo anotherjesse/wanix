@@ -5,8 +5,8 @@ use super::{
     ERRNO_SUCCESS, HostState, caller_memory, wasi_stdio_fd,
 };
 use super::{
-    QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiHost, QuickJsWasiPrestat,
-    QuickJsWasiWhence,
+    QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiHost,
+    QuickJsWasiPrestat, QuickJsWasiWhence,
 };
 use crate::allocation::try_copy_bytes;
 use crate::guest::guest_offset;
@@ -22,6 +22,11 @@ const FDSTAT_SIZE: usize = 24;
 const FILESTAT_SIZE: usize = 64;
 const FILESTAT_FILETYPE_OFFSET: usize = 16;
 const FILESTAT_SIZE_OFFSET: usize = 32;
+const DIRENT_SIZE: usize = 24;
+const DIRENT_NEXT_OFFSET: usize = 0;
+const DIRENT_INO_OFFSET: usize = 8;
+const DIRENT_NAMLEN_OFFSET: usize = 16;
+const DIRENT_FILETYPE_OFFSET: usize = 20;
 const WASI_U32_SIZE: usize = 4;
 const WASI_IOV_SIZE: usize = 2 * WASI_U32_SIZE;
 const WASI_IOV_LEN_OFFSET: usize = WASI_U32_SIZE;
@@ -62,6 +67,7 @@ pub(super) fn define_imports(linker: &mut Linker<HostState>) -> anyhow::Result<(
     )?;
     linker.func_wrap("wasi_snapshot_preview1", "path_open", path_open)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_read", fd_read)?;
+    linker.func_wrap("wasi_snapshot_preview1", "fd_readdir", fd_readdir)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_seek", fd_seek)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_close", fd_close)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_fdstat_get", fd_fdstat_get)?;
@@ -330,6 +336,52 @@ fn path_filestat_get(
 
     write_filestat(&memory, &mut caller, stat_ptr, filetype, size)?;
     Ok(ERRNO_SUCCESS)
+}
+
+fn fd_readdir(
+    mut caller: Caller<'_, HostState>,
+    fd: i32,
+    buf_ptr: i32,
+    buf_len: i32,
+    cookie: i64,
+    bufused_ptr: i32,
+) -> wasmtime::Result<i32> {
+    if caller.data().wasi_host().is_some() {
+        let fd = match preview1_fd(fd) {
+            Ok(fd) => fd,
+            Err(errno) => return Ok(errno),
+        };
+        let buf_len = guest_len(buf_len)?;
+        let memory = caller_memory(&caller)?;
+        let buf_range = guest_range(&memory, &caller, guest_offset(buf_ptr), buf_len)?;
+        guest_range(&memory, &caller, guest_offset(bufused_ptr), WASI_U32_SIZE)?;
+
+        let Some(result) = with_wasi_host_u32(&caller, |host| host.fd_readdir(fd))? else {
+            return Ok(ERRNO_BADF);
+        };
+        let entries = match result {
+            Ok(entries) => entries,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        let used = write_wasi_direntries(
+            &memory,
+            &mut caller,
+            buf_range.start,
+            buf_len,
+            cookie.cast_unsigned(),
+            &entries,
+        )?;
+        let used = u32::try_from(used)
+            .map_err(|_| wasmtime::Error::msg("fd_readdir byte count exceeds u32"))?;
+        memory.write(&mut caller, guest_offset(bufused_ptr), &used.to_le_bytes())?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
+    if caller.data().is_virtual_preopen_fd(fd) {
+        Ok(ERRNO_NOSYS)
+    } else {
+        Ok(ERRNO_BADF)
+    }
 }
 
 fn fd_read(
@@ -659,6 +711,68 @@ fn write_wasi_filestat(
         stat.file_type().preview1_code(),
         stat.size(),
     )
+}
+
+fn write_wasi_direntries(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    buf_ptr: usize,
+    buf_len: usize,
+    cookie: u64,
+    entries: &[QuickJsWasiDirEntry],
+) -> wasmtime::Result<usize> {
+    let start = usize::try_from(cookie).unwrap_or(usize::MAX);
+    if start >= entries.len() || buf_len == 0 {
+        return Ok(0);
+    }
+
+    let mut used = 0usize;
+    for (index, entry) in entries.iter().enumerate().skip(start) {
+        let name = entry.name().as_bytes();
+        let entry_len = DIRENT_SIZE
+            .checked_add(name.len())
+            .ok_or_else(|| wasmtime::Error::msg("WASI dirent length overflow"))?;
+        let remaining = buf_len - used;
+        if remaining == 0 {
+            break;
+        }
+        let to_write = remaining.min(entry_len);
+        let header = wasi_dirent_header(index, entry)?;
+        let header_len = to_write.min(DIRENT_SIZE);
+        memory.write(&mut *caller, buf_ptr + used, &header[..header_len])?;
+        if to_write > DIRENT_SIZE {
+            let name_len = to_write - DIRENT_SIZE;
+            memory.write(
+                &mut *caller,
+                buf_ptr + used + DIRENT_SIZE,
+                &name[..name_len],
+            )?;
+        }
+        used += to_write;
+        if to_write < entry_len {
+            break;
+        }
+    }
+    Ok(used)
+}
+
+fn wasi_dirent_header(
+    index: usize,
+    entry: &QuickJsWasiDirEntry,
+) -> wasmtime::Result<[u8; DIRENT_SIZE]> {
+    let next = u64::try_from(index)
+        .map_err(|_| wasmtime::Error::msg("WASI dirent cookie exceeds u64"))?
+        .checked_add(1)
+        .ok_or_else(|| wasmtime::Error::msg("WASI dirent cookie overflow"))?;
+    let name_len = u32::try_from(entry.name().len())
+        .map_err(|_| wasmtime::Error::msg("WASI dirent name length exceeds u32"))?;
+    let mut bytes = [0u8; DIRENT_SIZE];
+    bytes[DIRENT_NEXT_OFFSET..DIRENT_NEXT_OFFSET + 8].copy_from_slice(&next.to_le_bytes());
+    bytes[DIRENT_INO_OFFSET..DIRENT_INO_OFFSET + 8].copy_from_slice(&0_u64.to_le_bytes());
+    bytes[DIRENT_NAMLEN_OFFSET..DIRENT_NAMLEN_OFFSET + WASI_U32_SIZE]
+        .copy_from_slice(&name_len.to_le_bytes());
+    bytes[DIRENT_FILETYPE_OFFSET] = entry.file_type().preview1_code();
+    Ok(bytes)
 }
 
 fn read_absolute_virtual_path(

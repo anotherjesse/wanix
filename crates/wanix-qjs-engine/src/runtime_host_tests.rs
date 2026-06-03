@@ -123,6 +123,10 @@ impl QuickJsWasiHost for RestoreRecordingWasiHost {
         Err(QuickJsWasiErrno::Nosys)
     }
 
+    fn fd_readdir(&mut self, _fd: u32) -> WasiHostResult<Vec<QuickJsWasiDirEntry>> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     fn fd_write(&mut self, fd: u32, buf: &[u8]) -> WasiHostResult<usize> {
         self.writes
             .lock()

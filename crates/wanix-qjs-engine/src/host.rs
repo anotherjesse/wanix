@@ -23,8 +23,8 @@ pub use promise_rejection::QuickJsPromiseRejection;
 pub(crate) use state::HostState;
 pub(crate) use wasi_host::QuickJsWasiHostHandle;
 pub use wasi_host::{
-    QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType, QuickJsWasiHost,
-    QuickJsWasiPrestat, QuickJsWasiWhence,
+    QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat,
+    QuickJsWasiFileType, QuickJsWasiHost, QuickJsWasiPrestat, QuickJsWasiWhence,
 };
 
 const ERRNO_SUCCESS: i32 = 0;

@@ -27,6 +27,9 @@ pub trait QuickJsWasiHost: Send {
     /// Reads from an open fd into `buf`.
     fn fd_read(&mut self, fd: u32, buf: &mut [u8]) -> Result<usize, QuickJsWasiErrno>;
 
+    /// Returns directory entries for an open directory fd.
+    fn fd_readdir(&mut self, fd: u32) -> Result<Vec<QuickJsWasiDirEntry>, QuickJsWasiErrno>;
+
     /// Writes bytes from `buf` to an open fd.
     fn fd_write(&mut self, fd: u32, buf: &[u8]) -> Result<usize, QuickJsWasiErrno>;
 
@@ -183,6 +186,32 @@ impl QuickJsWasiPrestat {
 
     pub(crate) fn dir_name(&self) -> &str {
         &self.dir_name
+    }
+}
+
+/// WASI Preview 1 directory entry metadata returned by a live host provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuickJsWasiDirEntry {
+    name: String,
+    file_type: QuickJsWasiFileType,
+}
+
+impl QuickJsWasiDirEntry {
+    /// Creates directory entry metadata.
+    #[must_use]
+    pub fn new(name: impl Into<String>, file_type: QuickJsWasiFileType) -> Self {
+        Self {
+            name: name.into(),
+            file_type,
+        }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) const fn file_type(&self) -> QuickJsWasiFileType {
+        self.file_type
     }
 }
 
