@@ -169,6 +169,13 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
             .map(convert_filestat)
             .map_err(convert_errno)
     }
+
+    fn path_unlink_file(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
+        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
+        self.ctx
+            .path_unlink_file(WasiFd::new(dirfd), path)
+            .map_err(convert_errno)
+    }
 }
 
 fn convert_errno(errno: Errno) -> QuickJsWasiErrno {
@@ -354,6 +361,28 @@ mod tests {
         );
         host.fd_close(fd).unwrap();
         assert_eq!(root.read_file("out.txt").unwrap(), b"created");
+    }
+
+    #[test]
+    fn adapter_path_unlink_file_reaches_wanix_namespace() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        root.write_file("remove.txt", b"remove me").unwrap();
+        namespace
+            .bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        host.path_unlink_file(3, b"remove.txt").unwrap();
+
+        assert_eq!(
+            root.metadata(&NormalizedPath::new("remove.txt").unwrap()),
+            Err(wanix_fs::FsError::NotFound)
+        );
+        assert_eq!(
+            host.path_unlink_file(3, b"remove.txt"),
+            Err(QuickJsWasiErrno::Noent)
+        );
     }
 
     #[test]

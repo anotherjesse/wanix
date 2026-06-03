@@ -42,6 +42,22 @@ fn read_dir_returns_sorted_direct_children() {
 }
 
 #[test]
+fn remove_file_removes_only_files() {
+    let fs = MemFs::new();
+    fs.write_file("file.txt", b"hello").unwrap();
+    fs.create_dir_all("dir").unwrap();
+    let file = NormalizedPath::new("file.txt").unwrap();
+
+    fs.remove_file(&file).unwrap();
+    assert_eq!(fs.metadata(&file), Err(FsError::NotFound));
+    assert_eq!(fs.remove_file(&file), Err(FsError::NotFound));
+    assert_eq!(
+        fs.remove_file(&NormalizedPath::new("dir").unwrap()),
+        Err(FsError::IsDirectory)
+    );
+}
+
+#[test]
 fn open_read_and_write_round_trip() {
     let fs = MemFs::new();
     fs.write_file("file.txt", b"hello").unwrap();

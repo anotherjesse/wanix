@@ -680,7 +680,7 @@ mod tests {
         wasi_contract_purpose,
     };
     use crate::task_stdio::task_wasi_config;
-    use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
+    use wanix_fs::{FileSystem, FsError, MemFs, NormalizedPath, OpenOptions};
     use wanix_task::{Fd, Task, TaskDriver, TaskId, TaskSpec, TaskTable};
     use wanix_vfs::{BindOptions, Namespace};
     use wanix_wasi::{Errno, WasiConfig, WasiCtx, WasiFd, WasiOpenOptions};
@@ -2324,6 +2324,66 @@ print("bytes", count);
             b"from std write"
         );
         assert_eq!(root.read_file("os-created.txt").unwrap(), b"from os write");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_quickjs_os_removes_wanix_namespace_files() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.writeFile("delete-me.txt", "remove me");
+std.writeFile("keep.txt", "keep me");
+print("remove result", JSON.stringify(os.remove("delete-me.txt")));
+
+const probe = os.open("delete-me.txt", os.O_RDONLY);
+const deleted = probe < 0;
+if (probe >= 0) {
+  os.close(probe);
+}
+print("deleted", deleted);
+print("keep", std.loadFile("keep.txt"));
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"remove result 0\ndeleted true\nkeep keep me\n"
+        );
+        assert_eq!(
+            root.metadata(&NormalizedPath::new("delete-me.txt").unwrap()),
+            Err(FsError::NotFound)
+        );
+        assert_eq!(root.read_file("keep.txt").unwrap(), b"keep me");
         assert_eq!(task.exit(), "0");
     }
 

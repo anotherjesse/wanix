@@ -118,4 +118,13 @@ pub trait FileSystem: Send + Sync {
     ///
     /// Returns a filesystem error when the path cannot be read as a directory.
     fn read_dir(&self, path: &NormalizedPath) -> FsResult<Vec<DirEntry>>;
+
+    /// Removes a non-directory file at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the file cannot be removed.
+    fn remove_file(&self, _path: &NormalizedPath) -> FsResult<()> {
+        Err(FsError::NotSupported)
+    }
 }

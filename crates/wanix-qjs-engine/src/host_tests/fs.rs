@@ -53,6 +53,7 @@ const VIRTUAL_FS_WAT: &str = r#"
   (import "wasi_snapshot_preview1" "fd_fdstat_get" (func $fd_fdstat_get (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_filestat_get" (func $fd_filestat_get (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_filestat_get" (func $path_filestat_get (param i32 i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "path_unlink_file" (func $path_unlink_file (param i32 i32 i32) (result i32)))
   (memory (export "memory") 1)
   (func (export "fd_prestat_get") (param i32 i32) (result i32)
     local.get 0 local.get 1 call $fd_prestat_get)
@@ -82,6 +83,8 @@ const VIRTUAL_FS_WAT: &str = r#"
   (func (export "path_filestat_get") (param i32 i32 i32 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 local.get 3 local.get 4
     call $path_filestat_get)
+  (func (export "path_unlink_file") (param i32 i32 i32) (result i32)
+    local.get 0 local.get 1 local.get 2 call $path_unlink_file)
 )
 "#;
 
@@ -100,6 +103,7 @@ struct VirtualFsHarness {
     fd_fdstat_get: TypedFunc<(i32, i32), i32>,
     fd_filestat_get: TypedFunc<(i32, i32), i32>,
     path_filestat_get: TypedFunc<(i32, i32, i32, i32, i32), i32>,
+    path_unlink_file: TypedFunc<(i32, i32, i32), i32>,
 }
 
 impl VirtualFsHarness {
@@ -136,6 +140,7 @@ impl VirtualFsHarness {
             fd_fdstat_get: instance.get_typed_func(&mut store, "fd_fdstat_get")?,
             fd_filestat_get: instance.get_typed_func(&mut store, "fd_filestat_get")?,
             path_filestat_get: instance.get_typed_func(&mut store, "path_filestat_get")?,
+            path_unlink_file: instance.get_typed_func(&mut store, "path_unlink_file")?,
             memory,
             store,
         })
@@ -317,6 +322,11 @@ impl QuickJsWasiHost for MetadataWasiHost {
     ) -> WasiHostResult<QuickJsWasiFileStat> {
         Err(QuickJsWasiErrno::Nosys)
     }
+
+    fn path_unlink_file(&mut self, dirfd: u32, path: &[u8]) -> WasiHostResult<()> {
+        self.record(format!("unlink:{dirfd}:{}", String::from_utf8_lossy(path)));
+        Ok(())
+    }
 }
 
 #[test]
@@ -359,6 +369,28 @@ fn live_wasi_host_supplies_readdir_entries() -> Result<()> {
     assert_eq!(
         calls.lock().expect("test call lock").as_slice(),
         &["readdir:9".to_owned(), "readdir:9".to_owned()]
+    );
+    Ok(())
+}
+
+#[test]
+fn live_wasi_host_supplies_path_unlink_file() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+    harness.write_bytes(PATH_PTR, b"delete.txt")?;
+
+    assert_eq!(
+        harness
+            .path_unlink_file
+            .call(&mut harness.store, (9, 128, 10))?,
+        ERRNO_SUCCESS
+    );
+
+    assert_eq!(
+        calls.lock().expect("test call lock").as_slice(),
+        &["unlink:9:delete.txt".to_owned()]
     );
     Ok(())
 }

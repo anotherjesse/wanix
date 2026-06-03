@@ -257,6 +257,22 @@ impl FileSystem for Namespace {
             .map(|(name, metadata)| DirEntry::new(name, metadata))
             .collect())
     }
+
+    fn remove_file(&self, path: &NormalizedPath) -> FsResult<()> {
+        let mut saw_directory = false;
+        for target in self.resolve_candidates(path) {
+            match target.filesystem.remove_file(&target.path) {
+                Ok(()) => return Ok(()),
+                Err(FsError::IsDirectory) => saw_directory = true,
+                Err(FsError::NotFound | FsError::NotDirectory) => {}
+                Err(err) => return Err(err),
+            }
+        }
+        if saw_directory || self.has_synthetic_children(path) {
+            return Err(FsError::IsDirectory);
+        }
+        Err(FsError::NotFound)
+    }
 }
 
 struct ResolvedTarget {

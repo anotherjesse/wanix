@@ -133,6 +133,9 @@ cargo test --workspace --locked
 - [ADR 0022](docs/adrs/0022-task-fd-service-open-handoff.md): opening
   `#task/<id>/fd/<n>` captures a shared open-file handle so fd binds remain
   usable after the source task closes its fd.
+- [ADR 0023](docs/adrs/0023-wasi-file-unlink-through-wanix-namespaces.md):
+  `qjs:os.remove(...)` reaches Wanix-owned `PATH_UNLINK_FILE` semantics through
+  namespaces and live WASI providers.
 
 ## Cycle Rules
 

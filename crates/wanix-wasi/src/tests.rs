@@ -369,6 +369,24 @@ fn writes_and_creates_flow_back_to_namespace() {
 }
 
 #[test]
+fn path_unlink_file_removes_namespace_files() {
+    let root = fixture(&[("remove.txt", b"remove me"), ("dir/keep.txt", b"keep")]);
+    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+
+    ctx.path_unlink_file(WasiFd::ROOT, "remove.txt").unwrap();
+
+    assert_eq!(
+        root.metadata(&NormalizedPath::new("remove.txt").unwrap()),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(ctx.path_unlink_file(WasiFd::ROOT, "dir"), Err(Errno::Isdir));
+    assert_eq!(
+        ctx.path_unlink_file(WasiFd::ROOT, "missing.txt"),
+        Err(Errno::Noent)
+    );
+}
+
+#[test]
 fn rights_are_enforced_on_open_fds() {
     let root = fixture(&[("read.txt", b"read"), ("write.txt", b"")]);
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
@@ -554,6 +572,11 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
         root_stat
             .rights_base()
             .contains(WasiRights::PATH_FILESTAT_SET_SIZE)
+    );
+    assert!(
+        root_stat
+            .rights_base()
+            .contains(WasiRights::PATH_UNLINK_FILE)
     );
     assert!(root_stat.rights_base().contains(WasiRights::FD_READDIR));
     assert!(root_stat.rights_inheriting().contains(WasiRights::FD_READ));
@@ -1061,6 +1084,10 @@ fn preview1_path_open_enforces_parent_inheriting_rights() {
         .path_open(dir_fd, "file.txt", WasiOpenOptions::read())
         .unwrap();
     assert_eq!(
+        ctx.path_unlink_file(dir_fd, "file.txt"),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
         ctx.fd_fdstat_get(logical_file_fd).unwrap().rights_base(),
         WasiRights::FD_READ
     );
@@ -1160,6 +1187,7 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiRights::FD_READDIR.bits(), 1 << 14);
     assert_eq!(WasiRights::PATH_FILESTAT_SET_SIZE.bits(), 1 << 19);
     assert_eq!(WasiRights::FD_FILESTAT_GET.bits(), 1 << 21);
+    assert_eq!(WasiRights::PATH_UNLINK_FILE.bits(), 1 << 26);
     assert_eq!(WasiOpenOptions::OFLAGS_CREATE, 1 << 0);
     assert_eq!(WasiOpenOptions::OFLAGS_DIRECTORY, 1 << 1);
     assert_eq!(WasiOpenOptions::OFLAGS_EXCLUSIVE, 1 << 2);

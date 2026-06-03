@@ -369,3 +369,29 @@ fn create_uses_highest_priority_existing_parent() {
     assert_eq!(upper.read_file("c").unwrap(), b"content3");
     assert_eq!(entry_names(&ns, "."), ["a", "b", "c"]);
 }
+
+#[test]
+fn remove_file_flows_to_highest_priority_bound_filesystem() {
+    let lower = fixture(&[("same.txt", b"lower"), ("dir/file.txt", b"nested")]);
+    let upper = fixture(&[("same.txt", b"upper")]);
+    let mut ns = Namespace::new();
+
+    ns.bind(lower.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    ns.bind(upper.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+
+    ns.remove_file(&NormalizedPath::new("same.txt").unwrap())
+        .unwrap();
+
+    assert_eq!(
+        upper.metadata(&NormalizedPath::new("same.txt").unwrap()),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(lower.read_file("same.txt").unwrap(), b"lower");
+    assert_eq!(read_file(&ns, "same.txt"), b"lower");
+    assert_eq!(
+        ns.remove_file(&NormalizedPath::new("dir").unwrap()),
+        Err(FsError::IsDirectory)
+    );
+}

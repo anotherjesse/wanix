@@ -145,6 +145,19 @@ impl FileSystem for LocalFs {
         entries.sort_by(|left, right| left.name().cmp(right.name()));
         Ok(entries)
     }
+
+    fn remove_file(&self, path: &NormalizedPath) -> FsResult<()> {
+        let host_path = self.raw_host_path(path);
+        let metadata = fs::symlink_metadata(&host_path).map_err(map_io_error)?;
+        if metadata.is_dir() {
+            return Err(FsError::IsDirectory);
+        }
+        let resolved = fs::canonicalize(&host_path).map_err(map_io_error)?;
+        if !resolved.starts_with(&*self.root) {
+            return Err(FsError::PermissionDenied);
+        }
+        fs::remove_file(host_path).map_err(map_io_error)
+    }
 }
 
 #[derive(Debug)]
@@ -312,6 +325,28 @@ mod tests {
         assert_eq!(output.write(b"from wanix").unwrap(), 10);
         assert_eq!(fs::read(root.join("dir/out.txt")).unwrap(), b"from wanix");
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn localfs_remove_file_deletes_files_inside_root() {
+        let root = temp_root();
+        fs::write(root.join("input.txt"), "hello host").unwrap();
+        fs::create_dir(root.join("dir")).unwrap();
+        let fs = LocalFs::new(&root).unwrap();
+
+        fs.remove_file(&NormalizedPath::new("input.txt").unwrap())
+            .unwrap();
+
+        assert!(!root.join("input.txt").exists());
+        assert_eq!(
+            fs.remove_file(&NormalizedPath::new("input.txt").unwrap()),
+            Err(FsError::NotFound)
+        );
+        assert_eq!(
+            fs.remove_file(&NormalizedPath::new("dir").unwrap()),
+            Err(FsError::IsDirectory)
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

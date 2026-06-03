@@ -95,6 +95,8 @@ impl WasiRights {
     pub const PATH_FILESTAT_SET_SIZE: Self = Self(1 << 19);
     /// Stat this fd.
     pub const FD_FILESTAT_GET: Self = Self(1 << 21);
+    /// Remove a non-directory file at a path relative to this fd.
+    pub const PATH_UNLINK_FILE: Self = Self(1 << 26);
 
     /// Rights inheritable by files opened from a directory.
     pub const OPEN_FILE_BASE: Self = Self(
@@ -112,7 +114,8 @@ impl WasiRights {
             | Self::FD_READDIR.0
             | Self::PATH_FILESTAT_GET.0
             | Self::PATH_FILESTAT_SET_SIZE.0
-            | Self::FD_FILESTAT_GET.0,
+            | Self::FD_FILESTAT_GET.0
+            | Self::PATH_UNLINK_FILE.0,
     );
 
     /// Rights inheritable by files or directories opened from a directory.

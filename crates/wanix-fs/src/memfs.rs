@@ -219,6 +219,19 @@ impl FileSystem for MemFs {
             })
             .collect()
     }
+
+    fn remove_file(&self, path: &NormalizedPath) -> FsResult<()> {
+        let mut nodes = self
+            .nodes
+            .write()
+            .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
+        let node = nodes.get(path).ok_or(FsError::NotFound)?;
+        if node.kind == FileType::Directory {
+            return Err(FsError::IsDirectory);
+        }
+        nodes.remove(path);
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
