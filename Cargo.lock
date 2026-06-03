@@ -971,7 +971,6 @@ dependencies = [
  "wanix-task",
  "wanix-vfs",
  "wanix-wasi",
- "wasmtime",
 ]
 
 [[package]]

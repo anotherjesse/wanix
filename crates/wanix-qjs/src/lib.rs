@@ -18,7 +18,6 @@ use rust_wasi_quickjs::{
 use wanix_fs::{FsError, FsResult, NormalizedPath};
 use wanix_task::{Fd, Task, TaskSpec, quote_cmd_argv};
 use wanix_wasi::WasiConfig;
-use wasmtime::Engine;
 
 mod driver;
 mod fd_api;
@@ -97,7 +96,6 @@ impl RunOutput {
 
 /// QuickJS runtime runner backed by the `rust-wasi-quickjs` prototype.
 pub struct QuickJsRunner {
-    _engine: Engine,
     module: QuickJsModule,
 }
 
@@ -120,13 +118,9 @@ impl QuickJsRunner {
     ///
     /// Returns a filesystem error if the module cannot be compiled.
     pub fn from_wasm_file(path: impl AsRef<Path>) -> FsResult<Self> {
-        let engine = Engine::default();
-        let module = QuickJsModule::from_file(&engine, path)
+        let module = QuickJsModule::from_file_with_default_engine(path)
             .map_err(|err| FsError::Other(format!("failed to load QuickJS wasm: {err:#}")))?;
-        Ok(Self {
-            _engine: engine,
-            module,
-        })
+        Ok(Self { module })
     }
 
     /// Compiles a QuickJS WASM module from in-memory bytes.
@@ -135,13 +129,9 @@ impl QuickJsRunner {
     ///
     /// Returns a filesystem error if the module cannot be compiled.
     pub fn from_wasm_bytes(bytes: impl AsRef<[u8]>) -> FsResult<Self> {
-        let engine = Engine::default();
-        let module = QuickJsModule::from_bytes(&engine, bytes.as_ref())
+        let module = QuickJsModule::from_bytes_with_default_engine(bytes.as_ref())
             .map_err(|err| FsError::Other(format!("failed to load QuickJS wasm: {err:#}")))?;
-        Ok(Self {
-            _engine: engine,
-            module,
-        })
+        Ok(Self { module })
     }
 
     /// Loads the workspace-local QuickJS WASM fixture bundled by the engine crate.

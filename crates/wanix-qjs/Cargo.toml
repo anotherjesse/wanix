@@ -14,13 +14,6 @@ serde_json = "1"
 wanix-fs = { path = "../wanix-fs" }
 wanix-task = { path = "../wanix-task" }
 wanix-wasi = { path = "../wanix-wasi" }
-wasmtime = { version = "45.0.0", default-features = false, features = [
-    "anyhow",
-    "cranelift",
-    "runtime",
-    "std",
-    "wat",
-] }
 
 [dev-dependencies]
 wanix-vfs = { path = "../wanix-vfs" }

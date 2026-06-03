@@ -97,6 +97,11 @@ assert_eq!(restored.eval_number("counter")?, 42.0);
 assert_eq!(restored.eval_number("Date.now()")?, 1_800_000_000_000.0);
 ```
 
+Callers that do not need a custom Wasmtime engine can use
+`QuickJsModule::from_file_with_default_engine(...)` or
+`QuickJsModule::from_bytes_with_default_engine(...)`; the compiled module then
+owns the engine used for runtime creation and restore.
+
 Snapshots contain the WebAssembly VM image and compatibility metadata. Host
 configuration is supplied again on restore, so clocks, randomness, stdio
 capture, timezone, read-only virtual files, host callback registries, module

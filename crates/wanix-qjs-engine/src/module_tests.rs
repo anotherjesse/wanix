@@ -1,6 +1,6 @@
 use crate::{
     QuickJsBinaryValue, QuickJsBytecode, QuickJsCallbackValue, QuickJsCopiedValue,
-    QuickJsHostValue, QuickJsIntrinsics, QuickJsRuntime, QuickJsValue,
+    QuickJsHostValue, QuickJsIntrinsics, QuickJsModule, QuickJsRuntime, QuickJsValue,
 };
 use anyhow::Result;
 use fixture::{
@@ -15,6 +15,31 @@ mod fixture;
 fn module_preflight_accepts_minimal_quickjs_abi() -> Result<()> {
     module_from_wat(MINIMAL_ABI_WAT)?;
 
+    Ok(())
+}
+
+#[test]
+fn module_preflight_default_engine_constructor_matches_explicit_identity() -> Result<()> {
+    let explicit = module_from_wat(MINIMAL_ABI_WAT)?;
+    let default = QuickJsModule::from_bytes_with_default_engine(MINIMAL_ABI_WAT.as_bytes())?;
+
+    assert_eq!(default.wasm_sha256(), explicit.wasm_sha256());
+    Ok(())
+}
+
+#[test]
+fn module_preflight_default_engine_file_constructor_matches_bytes() -> Result<()> {
+    let path = std::env::temp_dir().join(format!(
+        "wanix-qjs-engine-minimal-{}.wat",
+        std::process::id()
+    ));
+    std::fs::write(&path, MINIMAL_ABI_WAT)?;
+
+    let from_file = QuickJsModule::from_file_with_default_engine(&path)?;
+    let from_bytes = QuickJsModule::from_bytes_with_default_engine(MINIMAL_ABI_WAT.as_bytes())?;
+    std::fs::remove_file(path)?;
+
+    assert_eq!(from_file.wasm_sha256(), from_bytes.wasm_sha256());
     Ok(())
 }
 

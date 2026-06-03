@@ -26,6 +26,23 @@ pub struct QuickJsModule {
 }
 
 impl QuickJsModule {
+    /// Reads, compiles, and ABI-preflights a QuickJS WebAssembly module using a
+    /// default Wasmtime engine owned by the compiled module.
+    ///
+    /// Use this when callers do not need to share a custom Wasmtime engine.
+    /// The resulting module remains responsible for runtime creation and
+    /// restore.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read, Wasmtime cannot compile the
+    /// bytes as a module, or the module does not export the required QuickJS
+    /// runtime ABI.
+    pub fn from_file_with_default_engine(path: impl AsRef<Path>) -> Result<Self> {
+        let engine = Engine::default();
+        Self::from_file(&engine, path)
+    }
+
     /// Reads, compiles, and ABI-preflights a QuickJS WebAssembly module from disk.
     ///
     /// # Errors
@@ -43,6 +60,22 @@ impl QuickJsModule {
                 path.display()
             )
         })
+    }
+
+    /// Compiles and ABI-preflights a QuickJS WebAssembly module from bytes
+    /// using a default Wasmtime engine owned by the compiled module.
+    ///
+    /// Use this when callers do not need to share a custom Wasmtime engine.
+    /// The input bytes are hashed before being discarded so future snapshots can
+    /// prove they were produced by the same module build.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Wasmtime rejects the module bytes, or if the module
+    /// does not export the required QuickJS runtime ABI.
+    pub fn from_bytes_with_default_engine(bytes: &[u8]) -> Result<Self> {
+        let engine = Engine::default();
+        Self::from_bytes(&engine, bytes)
     }
 
     /// Compiles and ABI-preflights a QuickJS WebAssembly module from bytes.

@@ -48,6 +48,8 @@ Engine-level read-only virtual files remain fixture support only.
 The engine crate remains deliberately below `wanix-qjs`: it must not learn
 Wanix task identity or global fd semantics. Those belong to Wanix runtime
 crates, while the engine crate supplies reusable QuickJS/Wasmtime mechanics.
+Later cleanup moved default Wasmtime engine construction behind
+`QuickJsModule`, so `wanix-qjs` no longer owns or depends on Wasmtime directly.
 
 The sibling `~/lw/rust-wasi-quickjs` checkout is left untouched by this
 relocation so any in-progress prototype work can still be inspected or compared
