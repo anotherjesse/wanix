@@ -455,12 +455,19 @@ are capped at 4096 bytes. Files support read, seek, tell, fdstat, and filestat
 rights only; file metadata reports type and byte length, and parent paths
 implied by configured files report as non-enumerable directories. Directory
 listing, mutation, symlinks, and host path mounts are intentionally outside this
-prototype surface.
+engine-owned virtual-file surface.
 
 Virtual filesystem configuration is supplied again on restore just like the
 clock, stdio, callback, and module-loader policies. Snapshot bytes do not
 serialize file contents or open descriptor state, and `snapshot()` fails while a
 virtual file descriptor is open.
+
+Wanix runtime paths should not depend on these read-only virtual files for
+namespace behavior. Mutable files, directory listing, service paths, host mounts,
+stdio/fds, argv/env, process exit, and timestamp mutation flow through live
+`QuickJsWasiHost` providers attached with `QuickJsCreateOptions::with_wasi_host`
+or `QuickJsRestoreOptions::with_wasi_host`; higher-level Wanix crates own the
+actual process, namespace, and fd policy.
 
 ## Reference Build
 
@@ -528,8 +535,12 @@ Working:
 - Optional live `QuickJsWasiHost` providers attached through
   `QuickJsCreateOptions` and `QuickJsRestoreOptions` for runtime-owned Preview
   1 fd/filesystem imports.
-- Read-only virtual WASI files attached through `QuickJsHostConfig`, exposed
-  under a normalized root preopen without host path mounts.
+- Live provider forwarding for argv/env, process exit, stdio/fd reads and
+  writes, path open/stat/create/remove/rename, directory listing, append fdflag
+  mutation, explicit path/fd timestamp mutation, and timer-only `poll_oneoff`.
+- Read-only virtual WASI files attached through `QuickJsHostConfig` as
+  engine-only fixture support, exposed under a normalized root preopen without
+  host path mounts.
 - Scalar Rust host callbacks exposed as JavaScript globals and reattached after
   restore by stable name when the loaded module exports the callback helpers.
 - Opt-in binary-capable Rust host callbacks for copied `ArrayBuffer`, exact
@@ -554,6 +565,9 @@ Not implemented yet:
 
 - Snapshot compression/framing and storage integrations beyond the canonical byte envelope.
 - Native WASM extension dynamic linking and extension metadata restore.
-- Mutable files, directory listing, host path mounts, and general WASI override policy.
+- Engine-owned mutable virtual files, symlinks, or host path mounts. Use a live
+  `QuickJsWasiHost` provider and higher-level Wanix crates for those semantics.
+- General async event-loop and fd-readiness policy beyond bounded pending-job
+  drains and timer-only `poll_oneoff`.
 
 See `docs/investigation.md` for the investigation notes and implementation plan.

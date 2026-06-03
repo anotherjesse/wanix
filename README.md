@@ -20,6 +20,30 @@ A virtual environment toolkit for the web, inspired by Plan 9.
 
 Play with the Wanix shell bundle at [wanix.run](https://wanix.run).
 
+## Rust-Native Port Status
+
+This repository also contains the active Rust-native Wanix port. The north star
+for that work is a Wanix core that can run outside Chrome, with Wasmtime as the
+execution substrate and QuickJS/WASI as the first serious task runtime.
+
+The current Rust vertical slice can run JavaScript as a Wanix `qjs` task from a
+native CLI. Guest code uses QuickJS `qjs:std`, `qjs:os`, `scriptArgs`,
+`std.getenv(...)`, and `#task` service files. Wanix owns task identity,
+namespaces, cwd/env/cmd, stdio/fds, exit status, and WASI filesystem semantics;
+QuickJS is the execution engine inside the task.
+
+Try the native demo path from the workspace root:
+
+```sh
+cargo run --locked --package wanix-cli -- qjs examples/qjs-demo.js
+cargo test --workspace --locked
+```
+
+The Rust workspace crates are documented in [AGENTS.md](AGENTS.md). The
+QuickJS/Wasmtime engine mechanics live in
+[crates/wanix-qjs-engine](crates/wanix-qjs-engine), while Wanix process,
+namespace, fd, and WASI policy stay in the Wanix crates above it.
+
 
 ### Install the Wanix Toolchain
 
