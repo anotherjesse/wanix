@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use wanix_fs::{File, FsError, FsResult, Metadata, NormalizedPath};
+use wanix_fs::{File, FileSeekFrom, FsError, FsResult, Metadata, NormalizedPath};
 
 /// File descriptor identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -36,6 +36,14 @@ pub struct OpenFile {
     path: NormalizedPath,
 }
 
+impl fmt::Debug for OpenFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenFile")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
 impl OpenFile {
     /// Creates an open fd entry.
     #[must_use]
@@ -60,6 +68,30 @@ impl OpenFile {
             .lock()
             .map_err(|_| FsError::Other("fd file lock poisoned".to_owned()))?
             .write(buf)
+    }
+
+    /// Seeks the open file.
+    pub fn seek(&self, from: FileSeekFrom) -> FsResult<u64> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("fd file lock poisoned".to_owned()))?
+            .seek(from)
+    }
+
+    /// Returns the current open-file offset.
+    pub fn tell(&self) -> FsResult<u64> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("fd file lock poisoned".to_owned()))?
+            .tell()
+    }
+
+    /// Returns whether the open file supports seek/tell.
+    pub fn is_seekable(&self) -> FsResult<bool> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("fd file lock poisoned".to_owned()))
+            .map(|file| file.is_seekable())
     }
 
     /// Returns file metadata.

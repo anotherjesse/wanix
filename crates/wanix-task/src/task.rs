@@ -7,7 +7,7 @@ use wanix_fs::{File, FileSystem, FsError, FsResult, Metadata, NormalizedPath, Op
 use wanix_vfs::{BindOptions, Namespace};
 
 use crate::cmd::parse_cmd_argv;
-use crate::{Fd, FdTable};
+use crate::{Fd, FdTable, OpenFile};
 
 /// Stable task identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -358,6 +358,14 @@ impl Task {
     pub fn fd_metadata(&self, fd: Fd) -> FsResult<Metadata> {
         let file = self.read_state(|state| state.fds.file(fd))??;
         file.metadata()
+    }
+
+    /// Returns a cloneable handle for an open fd.
+    ///
+    /// The returned handle remains valid if the fd number is later closed or
+    /// replaced in this task. Clones share the same underlying file and offset.
+    pub fn fd_file(&self, fd: Fd) -> FsResult<OpenFile> {
+        self.read_state(|state| state.fds.file(fd))?
     }
 
     /// Returns the path associated with an open fd.

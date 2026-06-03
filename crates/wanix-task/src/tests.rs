@@ -498,6 +498,7 @@ fn ctl_bind_can_wire_child_fd_to_explicit_parent_fd() {
     let parent = table.allocate_root("qjs").unwrap();
     let backing = Arc::new(MemFs::new());
     backing.write_file("stdout", b"").unwrap();
+    backing.write_file("replacement", b"").unwrap();
     parent
         .insert_fd(
             Fd::STDOUT,
@@ -519,10 +520,25 @@ fn ctl_bind_can_wire_child_fd_to_explicit_parent_fd() {
         "2/ctl",
         format!("bind #task/{}/fd/1 fd/1\n", parent.id().get()).as_bytes(),
     );
+    parent.close_fd(Fd::STDOUT).unwrap();
+    parent
+        .insert_fd(
+            Fd::STDOUT,
+            backing
+                .open(
+                    &NormalizedPath::new("replacement").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("replacement").unwrap(),
+        )
+        .unwrap();
     write_file(&taskfs, "2/fd/1", b"via parent fd");
 
+    assert_eq!(parent.fd_numbers(), [Fd::STDOUT]);
     assert_eq!(child.fd_numbers(), [Fd::STDOUT]);
     assert_eq!(backing.read_file("stdout").unwrap(), b"via parent fd");
+    assert!(backing.read_file("replacement").unwrap().is_empty());
 }
 
 #[test]
@@ -636,7 +652,20 @@ fn fd_table_allocates_dynamic_fds_and_taskfs_proxies_io() {
     write_file(&taskfs, "self/fd/1", b"hello");
     assert_eq!(backing.read_file("stdout").unwrap(), b"hello");
     assert_eq!(read_file(&taskfs, "self/fd/3"), "abc");
+
+    let mut open_service_file = taskfs
+        .open(
+            &NormalizedPath::new("self/fd/3").unwrap(),
+            OpenOptions::read(),
+        )
+        .unwrap();
+    let mut eof_buf = [0; 1];
+    assert_eq!(open_service_file.read(&mut eof_buf).unwrap(), 0);
+    open_service_file.seek(FileSeekFrom::Start(0)).unwrap();
     task.close_fd(fd).unwrap();
+    let mut buf = [0; 8];
+    let count = open_service_file.read(&mut buf).unwrap();
+    assert_eq!(&buf[..count], b"abc");
     assert!(matches!(
         taskfs.open(
             &NormalizedPath::new("self/fd/3").unwrap(),

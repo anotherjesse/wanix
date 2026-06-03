@@ -130,6 +130,9 @@ cargo test --workspace --locked
 - [ADR 0021](docs/adrs/0021-native-qjs-stdin-sources.md): `wanix-rust qjs`
   accepts text, host-file, or native stdin sources and installs them as Wanix
   task fd 0.
+- [ADR 0022](docs/adrs/0022-task-fd-service-open-handoff.md): opening
+  `#task/<id>/fd/<n>` captures a shared open-file handle so fd binds remain
+  usable after the source task closes its fd.
 
 ## Cycle Rules
 
@@ -148,9 +151,6 @@ cycle before starting the next one.
 - Tighten dynamic WASI fd observer close semantics so `fd_close` cannot report
   an observer error after removing the WASI handle and leaving a mirrored task fd
   stale.
-- Clarify and test cross-task fd bind handoff semantics: today fd binds are live
-  task-fd proxies, not duplicated open handles, so closing the source fd can
-  affect a child.
 - Consider moving remaining Wasmtime mechanics out of `wanix-qjs` and into
   `wanix-qjs-engine`, then split large `wanix-qjs`, `wanix-cli`, and
   `wanix-wasi` modules before adding broad new behavior.

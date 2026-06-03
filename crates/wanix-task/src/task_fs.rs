@@ -75,8 +75,8 @@ impl FileSystem for TaskFs {
             [selector, "fd", fd] => {
                 let task = self.task_for_selector(selector)?;
                 let fd = parse_fd(fd)?;
-                task.fd_metadata(fd)?;
-                Ok(Box::new(FdProxyFile::new(task, fd, access(options)?)))
+                let file = task.fd_file(fd)?;
+                Ok(Box::new(FdProxyFile::new(file, access(options)?)))
             }
             _ => Err(FsError::NotFound),
         }

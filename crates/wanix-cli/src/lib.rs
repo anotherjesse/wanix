@@ -1318,9 +1318,9 @@ const child = readServiceText("#task/new/qjs").trim();
 writeServiceText("#task/" + child + "/cmd", "mirrored-fd-child.js\n");
 writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/" + childInputFd + " fd/0\n");
 writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/1 fd/1\n");
+os.close(childInputFd);
 writeServiceText("#task/" + child + "/ctl", "start\n");
 std.out.puts("child exit " + readServiceText("#task/" + child + "/exit").trim() + "\n");
-os.close(childInputFd);
 std.out.flush();
 "##,
         );

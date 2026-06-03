@@ -1,7 +1,7 @@
 use wanix_fs::{DirEntry, File, FileSeekFrom, FileType, FsError, FsResult, Metadata};
 
 use crate::cmd::parse_cmd_argv;
-use crate::{Fd, Task, TaskId, TaskTable};
+use crate::{Fd, OpenFile, Task, TaskId, TaskTable};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FileAccess {
@@ -28,6 +28,14 @@ impl FileAccess {
 
     pub(crate) fn can_write(self) -> FsResult<()> {
         if self.write {
+            Ok(())
+        } else {
+            Err(FsError::PermissionDenied)
+        }
+    }
+
+    pub(crate) fn can_seek(self) -> FsResult<()> {
+        if self.read || self.write {
             Ok(())
         } else {
             Err(FsError::PermissionDenied)
@@ -303,30 +311,43 @@ impl File for NewTaskFile {
 
 #[derive(Debug)]
 pub(crate) struct FdProxyFile {
-    task: Task,
-    fd: Fd,
+    file: OpenFile,
     access: FileAccess,
 }
 
 impl FdProxyFile {
-    pub(crate) fn new(task: Task, fd: Fd, access: FileAccess) -> Self {
-        Self { task, fd, access }
+    pub(crate) fn new(file: OpenFile, access: FileAccess) -> Self {
+        Self { file, access }
     }
 }
 
 impl File for FdProxyFile {
     fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
         self.access.can_read()?;
-        self.task.read_fd(self.fd, buf)
+        self.file.read(buf)
     }
 
     fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
         self.access.can_write()?;
-        self.task.write_fd(self.fd, buf)
+        self.file.write(buf)
+    }
+
+    fn seek(&mut self, from: FileSeekFrom) -> FsResult<u64> {
+        self.access.can_seek()?;
+        self.file.seek(from)
+    }
+
+    fn tell(&self) -> FsResult<u64> {
+        self.access.can_seek()?;
+        self.file.tell()
+    }
+
+    fn is_seekable(&self) -> bool {
+        self.file.is_seekable().unwrap_or(false)
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
-        self.task.fd_metadata(self.fd)
+        self.file.metadata()
     }
 }
 
