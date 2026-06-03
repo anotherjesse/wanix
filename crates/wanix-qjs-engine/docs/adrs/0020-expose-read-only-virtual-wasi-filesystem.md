@@ -1,17 +1,23 @@
-# ADR 0020: Expose Read-Only Virtual WASI Filesystem
+# ADR 0020: Expose Engine-Only Read-Only Virtual WASI Filesystem
 
 ## Status
 
-Accepted
+Accepted for standalone engine fixture support.
+
+Superseded for Wanix runtime namespace semantics by live `QuickJsWasiHost`
+providers attached through create/restore options.
 
 ## Context
 
 QuickJS-NG's standard library can observe WASI filesystem imports when a host
 provides them. Until now, this prototype exposed deterministic clock/random,
 stdio, callbacks, modules, and other host policy, but filesystem access remained
-unsupported. Hosts need a small way to provide configuration files, bundled
-source, fixtures, or other immutable guest-visible bytes without mounting host
-paths or serializing Rust-side file handles into snapshots.
+unsupported. Standalone engine tests still need a small way to provide
+configuration files, bundled source, fixtures, or other immutable guest-visible
+bytes without mounting host paths or serializing Rust-side file handles into
+snapshots. Higher-level Wanix runtime paths now use live `QuickJsWasiHost`
+providers for namespace, fd, service-file, process, and mutable filesystem
+semantics.
 
 Filesystem access is a trust boundary: guest paths are attacker-controlled byte
 strings, WASI file descriptors are host state, and open descriptors cannot be
@@ -19,8 +25,8 @@ faithfully represented by the existing linear-memory snapshot format.
 
 ## Decision
 
-Add read-only virtual files to `QuickJsHostConfig`. Hosts register immutable
-byte contents at absolute normalized guest paths with
+Add engine-only read-only virtual files to `QuickJsHostConfig`. Hosts register
+immutable byte contents at absolute normalized guest paths with
 `with_read_only_virtual_file` or `with_read_only_virtual_files`.
 
 The runtime exposes a narrow WASI Preview 1 surface when at least one virtual
@@ -60,6 +66,9 @@ descriptor is open so resume cannot lose descriptor position or rights state.
 - The first filesystem capability is intentionally not a general WASI
   implementation. Directory enumeration, mutable files, host path mounts,
   symlinks, mutable metadata, and custom preopen layout remain future decisions.
+- Wanix runtimes must not use this surface for task namespace behavior; they
+  attach live `QuickJsWasiHost` providers so higher-level Wanix crates own
+  process, namespace, and fd policy.
 - Long-running guests must close virtual file descriptors before snapshotting.
   A future snapshot format could encode descriptor state, but this ADR keeps the
   current format smaller and avoids pretending that Rust host handles live in

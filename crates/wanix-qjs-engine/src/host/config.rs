@@ -11,7 +11,12 @@ pub(crate) const MAX_VIRTUAL_FILE_PATH_BYTES: usize = 4096;
 /// WebAssembly memory snapshots do not capture Rust host state. Supply this
 /// config when creating or restoring a runtime to define the clock, random, and
 /// timezone behavior that QuickJS observes through its current host imports,
-/// plus stdio capture policy for WASI writes and read-only virtual files.
+/// plus stdio capture policy for WASI writes and engine-only read-only virtual
+/// fixture files.
+///
+/// Use live WASI providers on create/restore options for runtime filesystem,
+/// namespace, process, and fd semantics. The virtual-file surface is not Wanix
+/// task namespace plumbing.
 #[derive(Clone, PartialEq, Eq)]
 pub struct QuickJsHostConfig {
     clock_time_ns: u64,
@@ -110,7 +115,7 @@ impl QuickJsHostConfig {
         self.stderr_capture_byte_limit
     }
 
-    /// Returns the number of configured read-only virtual files.
+    /// Returns the number of configured engine-only virtual fixture files.
     #[must_use]
     pub fn read_only_virtual_file_count(&self) -> usize {
         self.read_only_virtual_files.len()
@@ -238,7 +243,11 @@ impl QuickJsHostConfig {
         self
     }
 
-    /// Adds an immutable read-only virtual file at an absolute guest path.
+    /// Adds an immutable engine-only fixture file at an absolute guest path.
+    ///
+    /// This narrow surface is useful for standalone engine tests or static
+    /// fixture bytes. Runtime hosts that own process, namespace, or fd semantics
+    /// should attach a live WASI provider instead.
     ///
     /// # Errors
     ///
@@ -257,7 +266,7 @@ impl QuickJsHostConfig {
         Ok(self)
     }
 
-    /// Adds immutable read-only virtual files from absolute guest paths.
+    /// Adds immutable engine-only fixture files from absolute guest paths.
     ///
     /// Later entries replace earlier entries with the same normalized path.
     ///

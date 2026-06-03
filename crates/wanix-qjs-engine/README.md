@@ -104,9 +104,9 @@ owns the engine used for runtime creation and restore.
 
 Snapshots contain the WebAssembly VM image and compatibility metadata. Host
 configuration is supplied again on restore, so clocks, randomness, stdio
-capture, timezone, read-only virtual files, host callback registries, module
-loader closures, promise rejection handlers, and interrupt closures remain
-explicit Rust-side policy.
+capture, timezone, engine-only read-only virtual fixture files, host callback
+registries, module loader closures, promise rejection handlers, and interrupt
+closures remain explicit Rust-side policy.
 Use `Snapshot::metadata_from_bytes(&bytes)` when routing persisted snapshots by
 module hash or memory size without copying the embedded WebAssembly memory image;
 it still validates the full restore header, including saved guest pointer fields.
@@ -440,10 +440,11 @@ QuickJS fixture initializes `qjs:std` and `qjs:os`, so guest code can import
 install `console`; higher-level adapters such as `wanix-qjs` may install their
 own console shim.
 
-### Read-only virtual files
+### Engine-only read-only virtual files
 
-Hosts can attach immutable files at absolute guest paths without exposing host
-paths or mutable filesystem authority:
+Standalone engine tests and small fixtures can attach immutable files at
+absolute guest paths without exposing host paths or mutable filesystem
+authority:
 
 ```rust
 let config = QuickJsHostConfig::new()
@@ -467,11 +468,12 @@ clock, stdio, callback, and module-loader policies. Snapshot bytes do not
 serialize file contents or open descriptor state, and `snapshot()` fails while a
 virtual file descriptor is open.
 
-Wanix runtime paths should not depend on these read-only virtual files for
-namespace behavior. Mutable files, directory listing, service paths, host mounts,
-stdio/fds, argv/env, process exit, and timestamp mutation flow through live
-`QuickJsWasiHost` providers attached with `QuickJsCreateOptions::with_wasi_host`
-or `QuickJsRestoreOptions::with_wasi_host`; higher-level Wanix crates own the
+Wanix runtime paths must not depend on these read-only virtual files for
+namespace behavior. They are engine fixture support only. Mutable files,
+directory listing, service paths, host mounts, stdio/fds, argv/env, process
+exit, and timestamp mutation flow through live `QuickJsWasiHost` providers
+attached with `QuickJsCreateOptions::with_wasi_host` or
+`QuickJsRestoreOptions::with_wasi_host`; higher-level Wanix crates own the
 actual process, namespace, and fd policy.
 
 ## Reference Build

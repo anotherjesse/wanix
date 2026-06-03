@@ -30,7 +30,7 @@ The initial config covers host imports that are already present:
 - WASI `fd_write` via optional stdout/stderr capture, defaulting to process
   stdout/stderr inheritance, with optional per-stream retained byte limits.
 - WASI read-only virtual files via explicit guest path-to-bytes mappings, as
-  narrowed by ADR 0020.
+  narrowed by ADR 0020 for standalone engine fixture support.
 
 Snapshots do not serialize this config. On restore, callers provide the host
 config that should be attached to the resumed runtime.
@@ -47,6 +47,9 @@ config that should be attached to the resumed runtime.
 - Virtual filesystem config is runtime host state. Restoring a snapshot
   attaches the restore config's immutable guest files, and snapshots reject live
   virtual file descriptors rather than silently dropping descriptor position.
+- Live `QuickJsWasiHost` providers, not `QuickJsHostConfig` virtual files, are
+  the runtime extension point for hosts that own process, namespace, fd, or
+  mutable filesystem semantics.
 - Future host callbacks and module loaders should be reattached through
   explicit config/registries with stable names instead of being captured inside
   the snapshot.
