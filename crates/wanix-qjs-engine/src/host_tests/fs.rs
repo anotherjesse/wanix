@@ -21,6 +21,7 @@ const RIGHT_FD_TELL: i64 = 1 << 5;
 const RIGHT_FD_WRITE: i64 = 1 << 6;
 const RIGHT_PATH_CREATE_DIRECTORY: i64 = 1 << 9;
 const RIGHT_PATH_OPEN: i64 = 1 << 13;
+const RIGHT_PATH_READLINK: i64 = 1 << 15;
 const RIGHT_PATH_RENAME_SOURCE: i64 = 1 << 16;
 const RIGHT_PATH_RENAME_TARGET: i64 = 1 << 17;
 const RIGHT_PATH_FILESTAT_GET: i64 = 1 << 18;
@@ -28,6 +29,7 @@ const RIGHT_PATH_FILESTAT_SET_TIMES: i64 = 1 << 20;
 const RIGHT_FD_FILESTAT_GET: i64 = 1 << 21;
 const RIGHT_FD_FILESTAT_SET_SIZE: i64 = 1 << 22;
 const RIGHT_FD_FILESTAT_SET_TIMES: i64 = 1 << 23;
+const RIGHT_PATH_SYMLINK: i64 = 1 << 24;
 const RIGHT_PATH_REMOVE_DIRECTORY: i64 = 1 << 25;
 const READ_SEEK_STAT_RIGHTS: i64 =
     RIGHT_FD_READ | RIGHT_FD_SEEK | RIGHT_FD_TELL | RIGHT_FD_FILESTAT_GET;
@@ -70,6 +72,8 @@ const VIRTUAL_FS_WAT: &str = r#"
   (import "wasi_snapshot_preview1" "path_filestat_get" (func $path_filestat_get (param i32 i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_filestat_set_times" (func $path_filestat_set_times (param i32 i32 i32 i32 i64 i64 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_create_directory" (func $path_create_directory (param i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "path_readlink" (func $path_readlink (param i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "path_symlink" (func $path_symlink (param i32 i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_remove_directory" (func $path_remove_directory (param i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_rename" (func $path_rename (param i32 i32 i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_unlink_file" (func $path_unlink_file (param i32 i32 i32) (result i32)))
@@ -115,6 +119,12 @@ const VIRTUAL_FS_WAT: &str = r#"
     call $path_filestat_set_times)
   (func (export "path_create_directory") (param i32 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 call $path_create_directory)
+  (func (export "path_readlink") (param i32 i32 i32 i32 i32 i32) (result i32)
+    local.get 0 local.get 1 local.get 2 local.get 3 local.get 4 local.get 5
+    call $path_readlink)
+  (func (export "path_symlink") (param i32 i32 i32 i32 i32) (result i32)
+    local.get 0 local.get 1 local.get 2 local.get 3 local.get 4
+    call $path_symlink)
   (func (export "path_remove_directory") (param i32 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 call $path_remove_directory)
   (func (export "path_rename") (param i32 i32 i32 i32 i32 i32) (result i32)
@@ -145,6 +155,8 @@ struct VirtualFsHarness {
     path_filestat_get: TypedFunc<(i32, i32, i32, i32, i32), i32>,
     path_filestat_set_times: PathFilestatSetTimesFunc,
     path_create_directory: TypedFunc<(i32, i32, i32), i32>,
+    path_readlink: TypedFunc<(i32, i32, i32, i32, i32, i32), i32>,
+    path_symlink: TypedFunc<(i32, i32, i32, i32, i32), i32>,
     path_remove_directory: TypedFunc<(i32, i32, i32), i32>,
     path_rename: TypedFunc<(i32, i32, i32, i32, i32, i32), i32>,
     path_unlink_file: TypedFunc<(i32, i32, i32), i32>,
@@ -190,6 +202,8 @@ impl VirtualFsHarness {
             path_filestat_set_times: instance
                 .get_typed_func(&mut store, "path_filestat_set_times")?,
             path_create_directory: instance.get_typed_func(&mut store, "path_create_directory")?,
+            path_readlink: instance.get_typed_func(&mut store, "path_readlink")?,
+            path_symlink: instance.get_typed_func(&mut store, "path_symlink")?,
             path_remove_directory: instance.get_typed_func(&mut store, "path_remove_directory")?,
             path_rename: instance.get_typed_func(&mut store, "path_rename")?,
             path_unlink_file: instance.get_typed_func(&mut store, "path_unlink_file")?,
@@ -360,11 +374,13 @@ impl QuickJsWasiHost for MetadataWasiHost {
             FDFLAGS_APPEND,
             (RIGHT_PATH_CREATE_DIRECTORY
                 | RIGHT_PATH_OPEN
+                | RIGHT_PATH_READLINK
                 | RIGHT_PATH_RENAME_SOURCE
                 | RIGHT_PATH_RENAME_TARGET
                 | RIGHT_PATH_FILESTAT_SET_TIMES
                 | RIGHT_FD_FILESTAT_SET_SIZE
                 | RIGHT_FD_FILESTAT_SET_TIMES
+                | RIGHT_PATH_SYMLINK
                 | RIGHT_PATH_REMOVE_DIRECTORY)
                 .cast_unsigned(),
             READ_SEEK_STAT_RIGHTS.cast_unsigned(),
@@ -440,6 +456,23 @@ impl QuickJsWasiHost for MetadataWasiHost {
 
     fn path_create_directory(&mut self, dirfd: u32, path: &[u8]) -> WasiHostResult<()> {
         self.record(format!("mkdir:{dirfd}:{}", String::from_utf8_lossy(path)));
+        Ok(())
+    }
+
+    fn path_readlink(&mut self, dirfd: u32, path: &[u8]) -> WasiHostResult<Vec<u8>> {
+        self.record(format!(
+            "readlink:{dirfd}:{}",
+            String::from_utf8_lossy(path)
+        ));
+        Ok(b"target-file.txt".to_vec())
+    }
+
+    fn path_symlink(&mut self, target: &[u8], dirfd: u32, path: &[u8]) -> WasiHostResult<()> {
+        self.record(format!(
+            "symlink:{}:{dirfd}:{}",
+            String::from_utf8_lossy(target),
+            String::from_utf8_lossy(path)
+        ));
         Ok(())
     }
 
@@ -662,6 +695,76 @@ fn live_wasi_host_supplies_path_create_directory() -> Result<()> {
 }
 
 #[test]
+fn live_wasi_host_supplies_path_readlink_with_truncation() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+    harness.write_bytes(PATH_PTR, b"link.txt")?;
+    harness.write_bytes(256, b"................")?;
+    harness.write_bytes(300, &u32::MAX.to_le_bytes())?;
+
+    assert_eq!(
+        harness.path_readlink.call(
+            &mut harness.store,
+            (9, test_guest_i32(PATH_PTR, "path pointer")?, 8, 256, 6, 300),
+        )?,
+        ERRNO_SUCCESS
+    );
+
+    assert_eq!(harness.read_bytes(256, 16)?, b"target..........");
+    assert_eq!(harness.read_u32(300)?, 6);
+
+    assert_eq!(
+        harness.path_readlink.call(
+            &mut harness.store,
+            (9, test_guest_i32(PATH_PTR, "path pointer")?, 8, 256, 0, 300),
+        )?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u32(300)?, 0);
+
+    assert_eq!(
+        calls.lock().expect("test call lock").as_slice(),
+        &[
+            "readlink:9:link.txt".to_owned(),
+            "readlink:9:link.txt".to_owned(),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn live_wasi_host_supplies_path_symlink() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+    harness.write_bytes(PATH_PTR, b"target-file.txt")?;
+    harness.write_bytes(PATH_PTR + 32, b"created-link")?;
+
+    assert_eq!(
+        harness.path_symlink.call(
+            &mut harness.store,
+            (
+                test_guest_i32(PATH_PTR, "target pointer")?,
+                15,
+                9,
+                test_guest_i32(PATH_PTR + 32, "path pointer")?,
+                12,
+            ),
+        )?,
+        ERRNO_SUCCESS
+    );
+
+    assert_eq!(
+        calls.lock().expect("test call lock").as_slice(),
+        &["symlink:target-file.txt:9:created-link".to_owned()]
+    );
+    Ok(())
+}
+
+#[test]
 fn live_wasi_host_supplies_path_remove_directory() -> Result<()> {
     let host = MetadataWasiHost::default();
     let calls = Arc::clone(&host.calls);
@@ -744,11 +847,13 @@ fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
         harness.read_u64(104)?,
         (RIGHT_PATH_CREATE_DIRECTORY
             | RIGHT_PATH_OPEN
+            | RIGHT_PATH_READLINK
             | RIGHT_PATH_RENAME_SOURCE
             | RIGHT_PATH_RENAME_TARGET
             | RIGHT_PATH_FILESTAT_SET_TIMES
             | RIGHT_FD_FILESTAT_SET_SIZE
             | RIGHT_FD_FILESTAT_SET_TIMES
+            | RIGHT_PATH_SYMLINK
             | RIGHT_PATH_REMOVE_DIRECTORY)
             .cast_unsigned()
     );

@@ -442,6 +442,68 @@ fn path_filestat_get_lookup_flags_control_final_symlink_following_on_host_mounts
     std::fs::remove_dir_all(outside).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn path_readlink_and_symlink_reach_host_mounts_without_following_escapes() {
+    let root = temp_host_dir("link-root");
+    std::fs::write(root.join("target.txt"), "inside").unwrap();
+    let local = Arc::new(LocalFs::new(&root).unwrap());
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(local)));
+
+    ctx.path_symlink(b"target.txt", WasiFd::ROOT, "created-link")
+        .unwrap();
+    assert_eq!(
+        ctx.path_readlink(WasiFd::ROOT, "created-link").unwrap(),
+        b"target.txt"
+    );
+    assert_eq!(
+        ctx.path_filestat_get_with_flags(WasiFd::ROOT, 0, "created-link")
+            .unwrap()
+            .file_type(),
+        FileType::Symlink
+    );
+
+    let fd = ctx
+        .path_open(WasiFd::ROOT, "created-link", WasiOpenOptions::read())
+        .unwrap();
+    let mut buf = [0; 16];
+    let count = ctx.fd_read(fd, &mut buf).unwrap();
+    assert_eq!(&buf[..count], b"inside");
+
+    assert_eq!(
+        ctx.path_readlink(WasiFd::ROOT, "target.txt"),
+        Err(Errno::Inval)
+    );
+    assert_eq!(
+        ctx.path_symlink([0], WasiFd::ROOT, "bad-link"),
+        Err(Errno::Inval)
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn path_readlink_and_symlink_require_directory_rights() {
+    let root = fixture(&[("dir/file.txt", b"file")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let dir_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "dir",
+            0,
+            WasiRights::PATH_OPEN,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(ctx.path_readlink(dir_fd, "link"), Err(Errno::Notcapable));
+    assert_eq!(
+        ctx.path_symlink(b"file.txt", dir_fd, "link"),
+        Err(Errno::Notcapable)
+    );
+}
+
 #[test]
 fn path_filestat_set_times_updates_namespace_metadata() {
     let root = fixture(&[("stamp.txt", b"stamp")]);
@@ -1233,6 +1295,8 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
             .rights_base()
             .contains(WasiRights::PATH_FILESTAT_SET_TIMES)
     );
+    assert!(root_stat.rights_base().contains(WasiRights::PATH_READLINK));
+    assert!(root_stat.rights_base().contains(WasiRights::PATH_SYMLINK));
     assert!(
         root_stat
             .rights_base()
@@ -2019,6 +2083,7 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiRights::PATH_CREATE_FILE.bits(), 1 << 10);
     assert_eq!(WasiRights::PATH_OPEN.bits(), 1 << 13);
     assert_eq!(WasiRights::FD_READDIR.bits(), 1 << 14);
+    assert_eq!(WasiRights::PATH_READLINK.bits(), 1 << 15);
     assert_eq!(WasiRights::PATH_RENAME_SOURCE.bits(), 1 << 16);
     assert_eq!(WasiRights::PATH_RENAME_TARGET.bits(), 1 << 17);
     assert_eq!(WasiRights::PATH_FILESTAT_GET.bits(), 1 << 18);
@@ -2027,6 +2092,7 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiRights::FD_FILESTAT_GET.bits(), 1 << 21);
     assert_eq!(WasiRights::FD_FILESTAT_SET_SIZE.bits(), 1 << 22);
     assert_eq!(WasiRights::FD_FILESTAT_SET_TIMES.bits(), 1 << 23);
+    assert_eq!(WasiRights::PATH_SYMLINK.bits(), 1 << 24);
     assert_eq!(WasiRights::PATH_REMOVE_DIRECTORY.bits(), 1 << 25);
     assert_eq!(WasiRights::PATH_UNLINK_FILE.bits(), 1 << 26);
     assert!(

@@ -630,6 +630,24 @@ impl WasiCtx {
         self.namespace.create_dir(&path).map_err(Errno::from)
     }
 
+    /// Reads a symbolic link target at a namespace path relative to `dirfd`.
+    pub fn path_readlink(&self, dirfd: WasiFd, path: impl AsRef<str>) -> Result<Vec<u8>, Errno> {
+        let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_READLINK)?;
+        self.namespace.read_link(&path).map_err(Errno::from)
+    }
+
+    /// Creates a symbolic link at a namespace path relative to `dirfd`.
+    pub fn path_symlink(
+        &self,
+        target: impl AsRef<[u8]>,
+        dirfd: WasiFd,
+        path: impl AsRef<str>,
+    ) -> Result<(), Errno> {
+        let target = wasi_symlink_target(target.as_ref())?;
+        let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_SYMLINK)?;
+        self.namespace.symlink(target, &path).map_err(Errno::from)
+    }
+
     /// Removes a namespace directory at a path relative to `dirfd`.
     pub fn path_remove_directory(&self, dirfd: WasiFd, path: impl AsRef<str>) -> Result<(), Errno> {
         let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_REMOVE_DIRECTORY)?;
@@ -932,6 +950,16 @@ fn wasi_path(path: &str) -> Result<NormalizedPath, Errno> {
         return Err(Errno::Notcapable);
     }
     NormalizedPath::new(path).map_err(Errno::from)
+}
+
+fn wasi_symlink_target(target: &[u8]) -> Result<&[u8], Errno> {
+    if target.len() > MAX_WASI_PATH_BYTES {
+        return Err(Errno::Nametoolong);
+    }
+    if target.contains(&0) {
+        return Err(Errno::Inval);
+    }
+    Ok(target)
 }
 
 fn join_paths(base: &NormalizedPath, path: &NormalizedPath) -> Result<NormalizedPath, FsError> {

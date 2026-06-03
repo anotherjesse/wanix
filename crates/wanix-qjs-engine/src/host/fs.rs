@@ -48,11 +48,17 @@ const RIGHT_FD_READ: u64 = 1 << 1;
 const RIGHT_FD_SEEK: u64 = 1 << 2;
 const RIGHT_FD_TELL: u64 = 1 << 5;
 const RIGHT_PATH_OPEN: u64 = 1 << 13;
+const RIGHT_PATH_READLINK: u64 = 1 << 15;
 const RIGHT_PATH_FILESTAT_GET: u64 = 1 << 18;
+const RIGHT_PATH_SYMLINK: u64 = 1 << 24;
 const RIGHT_FD_FILESTAT_GET: u64 = 1 << 21;
 const ALLOWED_FILE_RIGHTS: u64 =
     RIGHT_FD_READ | RIGHT_FD_SEEK | RIGHT_FD_TELL | RIGHT_FD_FILESTAT_GET;
-const PREOPEN_ROOT_RIGHTS: u64 = RIGHT_PATH_OPEN | RIGHT_PATH_FILESTAT_GET | RIGHT_FD_FILESTAT_GET;
+const PREOPEN_ROOT_RIGHTS: u64 = RIGHT_PATH_OPEN
+    | RIGHT_PATH_READLINK
+    | RIGHT_PATH_FILESTAT_GET
+    | RIGHT_PATH_SYMLINK
+    | RIGHT_FD_FILESTAT_GET;
 
 #[derive(Debug)]
 pub(super) struct VirtualFileHandle {
@@ -133,6 +139,8 @@ pub(super) fn define_imports(linker: &mut Linker<HostState>) -> anyhow::Result<(
         "path_create_directory",
         path_create_directory,
     )?;
+    linker.func_wrap("wasi_snapshot_preview1", "path_readlink", path_readlink)?;
+    linker.func_wrap("wasi_snapshot_preview1", "path_symlink", path_symlink)?;
     linker.func_wrap(
         "wasi_snapshot_preview1",
         "path_filestat_get",
@@ -505,6 +513,97 @@ fn path_create_directory(
         };
     }
     unsupported_path_mutation(&caller, dirfd, path_ptr, path_len)
+}
+
+fn path_readlink(
+    mut caller: Caller<'_, HostState>,
+    dirfd: i32,
+    path_ptr: i32,
+    path_len: i32,
+    buf_ptr: i32,
+    buf_len: i32,
+    bufused_ptr: i32,
+) -> wasmtime::Result<i32> {
+    if caller.data().wasi_host().is_some() {
+        let dirfd = match preview1_fd(dirfd) {
+            Ok(fd) => fd,
+            Err(errno) => return Ok(errno),
+        };
+        let path_len = match checked_wasi_path_len(path_len)? {
+            Ok(path_len) => path_len,
+            Err(errno) => return Ok(errno),
+        };
+        let buf_len = guest_len(buf_len)?;
+        let memory = caller_memory(&caller)?;
+        guest_range(&memory, &caller, guest_offset(buf_ptr), buf_len)?;
+        guest_range(&memory, &caller, guest_offset(bufused_ptr), WASI_U32_SIZE)?;
+        let path = read_guest_path(&memory, &caller, path_ptr, path_len)?;
+        let Some(result) = with_wasi_host_u32(&caller, |host| host.path_readlink(dirfd, &path))?
+        else {
+            return Ok(ERRNO_BADF);
+        };
+        let target = match result {
+            Ok(target) => target,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        let count = target.len().min(buf_len);
+        memory.write(&mut caller, guest_offset(buf_ptr), &target[..count])?;
+        let count = u32::try_from(count)
+            .map_err(|_| wasmtime::Error::msg("path_readlink byte count exceeds u32"))?;
+        memory.write(&mut caller, guest_offset(bufused_ptr), &count.to_le_bytes())?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
+    let errno = unsupported_path_mutation(&caller, dirfd, path_ptr, path_len)?;
+    if errno != ERRNO_NOSYS {
+        return Ok(errno);
+    }
+    Ok(ERRNO_NOSYS)
+}
+
+fn path_symlink(
+    caller: Caller<'_, HostState>,
+    old_path_ptr: i32,
+    old_path_len: i32,
+    dirfd: i32,
+    new_path_ptr: i32,
+    new_path_len: i32,
+) -> wasmtime::Result<i32> {
+    if caller.data().wasi_host().is_some() {
+        let dirfd = match preview1_fd(dirfd) {
+            Ok(fd) => fd,
+            Err(errno) => return Ok(errno),
+        };
+        let old_path_len = match checked_wasi_path_len(old_path_len)? {
+            Ok(path_len) => path_len,
+            Err(errno) => return Ok(errno),
+        };
+        let new_path_len = match checked_wasi_path_len(new_path_len)? {
+            Ok(path_len) => path_len,
+            Err(errno) => return Ok(errno),
+        };
+        let memory = caller_memory(&caller)?;
+        let old_path = read_guest_path(&memory, &caller, old_path_ptr, old_path_len)?;
+        let new_path = read_guest_path(&memory, &caller, new_path_ptr, new_path_len)?;
+        let Some(result) = with_wasi_host_u32(&caller, |host| {
+            host.path_symlink(&old_path, dirfd, &new_path)
+        })?
+        else {
+            return Ok(ERRNO_BADF);
+        };
+        return match result {
+            Ok(()) => Ok(ERRNO_SUCCESS),
+            Err(errno) => Ok(errno.preview1_result()),
+        };
+    }
+
+    let old_path_len = match checked_wasi_path_len(old_path_len)? {
+        Ok(path_len) => path_len,
+        Err(errno) => return Ok(errno),
+    };
+    let memory = caller_memory(&caller)?;
+    read_guest_path(&memory, &caller, old_path_ptr, old_path_len)?;
+    unsupported_path_mutation(&caller, dirfd, new_path_ptr, new_path_len)
 }
 
 #[allow(clippy::too_many_arguments)]

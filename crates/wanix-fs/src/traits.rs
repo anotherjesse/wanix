@@ -161,6 +161,24 @@ pub trait FileSystem: Send + Sync {
     /// Returns a filesystem error when the path cannot be read as a directory.
     fn read_dir(&self, path: &NormalizedPath) -> FsResult<Vec<DirEntry>>;
 
+    /// Reads the uninterpreted target bytes of a symbolic link at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the link cannot be read.
+    fn read_link(&self, _path: &NormalizedPath) -> FsResult<Vec<u8>> {
+        Err(FsError::NotSupported)
+    }
+
+    /// Creates a symbolic link at `path` with the given target bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the link cannot be created.
+    fn symlink(&self, _target: &[u8], _path: &NormalizedPath) -> FsResult<()> {
+        Err(FsError::NotSupported)
+    }
+
     /// Creates one directory at `path`.
     ///
     /// # Errors

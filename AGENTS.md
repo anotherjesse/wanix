@@ -175,6 +175,9 @@ cargo test --workspace --locked
 - [ADR 0036](docs/adrs/0036-wasi-symlink-metadata-lookup.md):
   WASI `path_filestat_get` lookup flags reach Wanix namespace metadata so live
   providers can distinguish final symlink metadata from followed targets.
+- [ADR 0037](docs/adrs/0037-wasi-symlink-readlink-and-create.md):
+  WASI `path_readlink` and `path_symlink` flow through live Wanix namespaces
+  while link targets remain byte contents rather than normalized Wanix paths.
 
 ## Cycle Rules
 

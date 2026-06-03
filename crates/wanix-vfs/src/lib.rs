@@ -277,6 +277,44 @@ impl FileSystem for Namespace {
             .collect())
     }
 
+    fn read_link(&self, path: &NormalizedPath) -> FsResult<Vec<u8>> {
+        let mut saw_not_directory = false;
+        for target in self.resolve_candidates(path) {
+            match target.filesystem.read_link(&target.path) {
+                Ok(target) => return Ok(target),
+                Err(FsError::NotDirectory) => saw_not_directory = true,
+                Err(FsError::NotFound) => {}
+                Err(err) => return Err(err),
+            }
+        }
+        if self.has_synthetic_children(path) {
+            return Err(FsError::InvalidPath(format!("{path} is not a symlink")));
+        }
+        if saw_not_directory {
+            return Err(FsError::NotDirectory);
+        }
+        Err(FsError::NotFound)
+    }
+
+    fn symlink(&self, target: &[u8], path: &NormalizedPath) -> FsResult<()> {
+        let mut saw_not_directory = false;
+        for bind_target in self.resolve_candidates(path) {
+            match bind_target.filesystem.symlink(target, &bind_target.path) {
+                Ok(()) => return Ok(()),
+                Err(FsError::NotDirectory) => saw_not_directory = true,
+                Err(FsError::NotFound) => {}
+                Err(err) => return Err(err),
+            }
+        }
+        if self.has_synthetic_children(path) {
+            return Err(FsError::AlreadyExists);
+        }
+        if saw_not_directory {
+            return Err(FsError::NotDirectory);
+        }
+        Err(FsError::NotFound)
+    }
+
     fn create_dir(&self, path: &NormalizedPath) -> FsResult<()> {
         let mut saw_not_directory = false;
         for target in self.resolve_candidates(path) {

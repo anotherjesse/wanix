@@ -126,6 +126,21 @@ pub trait QuickJsWasiHost: Send {
         Err(QuickJsWasiErrno::Nosys)
     }
 
+    /// Reads a symbolic link target at `path` relative to `dirfd`.
+    fn path_readlink(&mut self, _dirfd: u32, _path: &[u8]) -> Result<Vec<u8>, QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    /// Creates a symbolic link at `path` relative to `dirfd`.
+    fn path_symlink(
+        &mut self,
+        _target: &[u8],
+        _dirfd: u32,
+        _path: &[u8],
+    ) -> Result<(), QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     /// Removes a directory at `path` relative to `dirfd`.
     fn path_remove_directory(&mut self, _dirfd: u32, _path: &[u8]) -> Result<(), QuickJsWasiErrno> {
         Err(QuickJsWasiErrno::Nosys)

@@ -216,6 +216,25 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
             .map_err(convert_errno)
     }
 
+    fn path_readlink(&mut self, dirfd: u32, path: &[u8]) -> Result<Vec<u8>, QuickJsWasiErrno> {
+        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
+        self.ctx
+            .path_readlink(WasiFd::new(dirfd), path)
+            .map_err(convert_errno)
+    }
+
+    fn path_symlink(
+        &mut self,
+        target: &[u8],
+        dirfd: u32,
+        path: &[u8],
+    ) -> Result<(), QuickJsWasiErrno> {
+        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
+        self.ctx
+            .path_symlink(target, WasiFd::new(dirfd), path)
+            .map_err(convert_errno)
+    }
+
     fn path_remove_directory(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
         let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
         self.ctx
@@ -310,14 +329,15 @@ fn convert_whence(whence: QuickJsWasiWhence) -> WasiWhence {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use rust_wasi_quickjs::{
         QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat,
         QuickJsWasiFileType, QuickJsWasiHost, QuickJsWasiPrestat, QuickJsWasiWhence,
     };
     use wanix_fs::{
-        DirEntry, File, FileSystem, FileType, FsError, FsResult, MemFs, Metadata, MetadataLookup,
-        NormalizedPath, OpenOptions,
+        DirEntry, File, FileSystem, FileType, FsError, FsResult, LocalFs, MemFs, Metadata,
+        MetadataLookup, NormalizedPath, OpenOptions,
     };
     use wanix_vfs::{BindOptions, Namespace};
     use wanix_wasi::{
@@ -327,6 +347,19 @@ mod tests {
     use crate::task_context::WanixExitState;
 
     use super::WanixQuickJsWasiHost;
+
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_host_dir(label: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        let nonce = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        path.push(format!(
+            "wanix-qjs-wasi-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
 
     #[test]
     fn adapter_fd_write_reaches_wanix_wasi_stdout() {
@@ -768,6 +801,43 @@ mod tests {
             host.path_create_directory(3, b"parent/newdir"),
             Err(QuickJsWasiErrno::Exist)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn adapter_path_readlink_and_symlink_reach_wanix_namespace() {
+        let root = temp_host_dir("link-root");
+        std::fs::write(root.join("target.txt"), "inside").unwrap();
+        let mut namespace = Namespace::new();
+        namespace
+            .bind(
+                Arc::new(LocalFs::new(&root).unwrap()),
+                ".",
+                ".",
+                BindOptions::default(),
+            )
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        host.path_symlink(b"target.txt", 3, b"created-link")
+            .unwrap();
+        assert_eq!(
+            host.path_readlink(3, b"created-link").unwrap(),
+            b"target.txt"
+        );
+        let fd = host
+            .path_open(3, 0, b"created-link", 0, WasiRights::FD_READ.bits(), 0, 0)
+            .unwrap();
+        let mut buf = [0; 16];
+        let count = host.fd_read(fd, &mut buf).unwrap();
+        assert_eq!(&buf[..count], b"inside");
+        host.fd_close(fd).unwrap();
+        assert_eq!(
+            host.path_readlink(3, b"target.txt"),
+            Err(QuickJsWasiErrno::Inval)
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

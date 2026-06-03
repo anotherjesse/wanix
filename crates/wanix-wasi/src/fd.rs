@@ -91,6 +91,8 @@ impl WasiRights {
     pub const PATH_OPEN: Self = Self(1 << 13);
     /// Read directory entries from an fd.
     pub const FD_READDIR: Self = Self(1 << 14);
+    /// Read a symbolic link target at a path relative to this fd.
+    pub const PATH_READLINK: Self = Self(1 << 15);
     /// Rename a source path relative to this fd.
     pub const PATH_RENAME_SOURCE: Self = Self(1 << 16);
     /// Rename a target path relative to this fd.
@@ -107,6 +109,8 @@ impl WasiRights {
     pub const FD_FILESTAT_SET_SIZE: Self = Self(1 << 22);
     /// Set access or modification times on this fd.
     pub const FD_FILESTAT_SET_TIMES: Self = Self(1 << 23);
+    /// Create a symbolic link at a path relative to this fd.
+    pub const PATH_SYMLINK: Self = Self(1 << 24);
     /// Remove a directory at a path relative to this fd.
     pub const PATH_REMOVE_DIRECTORY: Self = Self(1 << 25);
     /// Remove a non-directory file at a path relative to this fd.
@@ -129,6 +133,7 @@ impl WasiRights {
             | Self::PATH_CREATE_FILE.0
             | Self::PATH_OPEN.0
             | Self::FD_READDIR.0
+            | Self::PATH_READLINK.0
             | Self::PATH_RENAME_SOURCE.0
             | Self::PATH_RENAME_TARGET.0
             | Self::PATH_FILESTAT_GET.0
@@ -136,6 +141,7 @@ impl WasiRights {
             | Self::PATH_FILESTAT_SET_TIMES.0
             | Self::FD_FILESTAT_GET.0
             | Self::FD_FILESTAT_SET_TIMES.0
+            | Self::PATH_SYMLINK.0
             | Self::PATH_REMOVE_DIRECTORY.0
             | Self::PATH_UNLINK_FILE.0,
     );

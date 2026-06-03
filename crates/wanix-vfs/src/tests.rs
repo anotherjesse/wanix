@@ -679,3 +679,61 @@ fn metadata_lookup_flows_through_namespace_bind_resolution() {
         &[MetadataLookup::NoFollow, MetadataLookup::FollowSymlink]
     );
 }
+
+#[test]
+fn symlink_operations_flow_through_namespace_bind_resolution() {
+    #[derive(Default)]
+    struct LinkFs {
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FileSystem for LinkFs {
+        fn open(&self, _path: &NormalizedPath, _options: OpenOptions) -> FsResult<Box<dyn File>> {
+            Err(FsError::NotSupported)
+        }
+
+        fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
+            match path.as_str() {
+                "root" => Ok(Metadata::new(FileType::Directory, 2, 0o755)),
+                _ => Err(FsError::NotFound),
+            }
+        }
+
+        fn read_dir(&self, _path: &NormalizedPath) -> FsResult<Vec<DirEntry>> {
+            Err(FsError::NotSupported)
+        }
+
+        fn read_link(&self, path: &NormalizedPath) -> FsResult<Vec<u8>> {
+            self.calls
+                .lock()
+                .expect("test calls lock")
+                .push(format!("read:{}", path.as_str()));
+            Ok(b"target.txt".to_vec())
+        }
+
+        fn symlink(&self, target: &[u8], path: &NormalizedPath) -> FsResult<()> {
+            self.calls.lock().expect("test calls lock").push(format!(
+                "symlink:{}:{}",
+                String::from_utf8_lossy(target),
+                path.as_str()
+            ));
+            Ok(())
+        }
+    }
+
+    let backing = Arc::new(LinkFs::default());
+    let mut ns = Namespace::new();
+    ns.bind(backing.clone(), "root", "mnt", BindOptions::default())
+        .unwrap();
+
+    assert_eq!(ns.read_link(&path("mnt/link")).unwrap(), b"target.txt");
+    ns.symlink(b"target.txt", &path("mnt/created")).unwrap();
+
+    assert_eq!(
+        backing.calls.lock().expect("test calls lock").as_slice(),
+        &[
+            "read:root/link".to_owned(),
+            "symlink:target.txt:root/created".to_owned(),
+        ]
+    );
+}

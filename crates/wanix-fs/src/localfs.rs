@@ -1,5 +1,9 @@
+#[cfg(unix)]
+use std::ffi::OsStr;
 use std::fs::{self, File as StdFile, FileTimes};
 use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
@@ -98,6 +102,20 @@ impl LocalFs {
             Err(FsError::PermissionDenied)
         }
     }
+
+    fn host_path_for_final_component_operation(&self, path: &NormalizedPath) -> FsResult<PathBuf> {
+        if path.as_str() == "." {
+            return Err(FsError::AlreadyExists);
+        }
+        let host_path = self.raw_host_path(path);
+        let parent = host_path.parent().ok_or(FsError::PermissionDenied)?;
+        let parent = fs::canonicalize(parent).map_err(map_io_error)?;
+        if parent.starts_with(&*self.root) {
+            Ok(host_path)
+        } else {
+            Err(FsError::PermissionDenied)
+        }
+    }
 }
 
 impl FileSystem for LocalFs {
@@ -174,6 +192,20 @@ impl FileSystem for LocalFs {
         }
         entries.sort_by(|left, right| left.name().cmp(right.name()));
         Ok(entries)
+    }
+
+    fn read_link(&self, path: &NormalizedPath) -> FsResult<Vec<u8>> {
+        let host_path = self.host_path_for_final_component_operation(path)?;
+        let metadata = fs::symlink_metadata(&host_path).map_err(map_io_error)?;
+        if !metadata.file_type().is_symlink() {
+            return Err(FsError::InvalidPath(format!("{path} is not a symlink")));
+        }
+        pathbuf_into_bytes(fs::read_link(host_path).map_err(map_io_error)?)
+    }
+
+    fn symlink(&self, target: &[u8], path: &NormalizedPath) -> FsResult<()> {
+        let host_path = self.host_path_for_final_component_operation(path)?;
+        create_symlink(target, &host_path)
     }
 
     fn create_dir(&self, path: &NormalizedPath) -> FsResult<()> {
@@ -449,6 +481,29 @@ fn system_time_from_ns(timestamp_ns: u64) -> FsResult<std::time::SystemTime> {
     UNIX_EPOCH
         .checked_add(Duration::from_nanos(timestamp_ns))
         .ok_or(FsError::InvalidTime)
+}
+
+#[cfg(unix)]
+fn pathbuf_into_bytes(path: PathBuf) -> FsResult<Vec<u8>> {
+    Ok(path.into_os_string().into_vec())
+}
+
+#[cfg(not(unix))]
+fn pathbuf_into_bytes(path: PathBuf) -> FsResult<Vec<u8>> {
+    path.into_os_string()
+        .into_string()
+        .map(|path| path.into_bytes())
+        .map_err(|_| FsError::InvalidPath("<non-utf8 host symlink target>".to_owned()))
+}
+
+#[cfg(unix)]
+fn create_symlink(target: &[u8], host_path: &Path) -> FsResult<()> {
+    std::os::unix::fs::symlink(OsStr::from_bytes(target), host_path).map_err(map_io_error)
+}
+
+#[cfg(not(unix))]
+fn create_symlink(_target: &[u8], _host_path: &Path) -> FsResult<()> {
+    Err(FsError::NotSupported)
 }
 
 fn map_io_error(error: std::io::Error) -> FsError {
@@ -830,6 +885,58 @@ mod tests {
         assert_eq!(
             fs.metadata_with_lookup(&path("dir-link/secret.txt"), MetadataLookup::NoFollow),
             Err(FsError::PermissionDenied)
+        );
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn localfs_read_link_and_symlink_preserve_mount_boundary() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root();
+        let outside = temp_root();
+        fs::write(root.join("target.txt"), "inside").unwrap();
+        fs::write(outside.join("secret.txt"), "outside").unwrap();
+        symlink(outside.join("secret.txt"), root.join("outside-link")).unwrap();
+        symlink(&outside, root.join("dir-link")).unwrap();
+
+        let fs = LocalFs::new(&root).unwrap();
+
+        fs.symlink(b"target.txt", &path("created-link")).unwrap();
+        assert_eq!(fs.read_link(&path("created-link")).unwrap(), b"target.txt");
+        assert_eq!(
+            fs.metadata_with_lookup(&path("created-link"), MetadataLookup::NoFollow)
+                .unwrap()
+                .file_type(),
+            FileType::Symlink
+        );
+        let mut opened = fs.open(&path("created-link"), OpenOptions::read()).unwrap();
+        let mut bytes = [0; 16];
+        let count = opened.read(&mut bytes).unwrap();
+        assert_eq!(&bytes[..count], b"inside");
+
+        let outside_target = fs.read_link(&path("outside-link")).unwrap();
+        assert!(String::from_utf8_lossy(&outside_target).contains("secret.txt"));
+        assert_eq!(
+            fs.open(&path("outside-link"), OpenOptions::read()).err(),
+            Some(FsError::PermissionDenied)
+        );
+        assert_eq!(
+            fs.read_link(&path("dir-link/secret.txt")),
+            Err(FsError::PermissionDenied)
+        );
+        assert_eq!(
+            fs.symlink(b"new.txt", &path("dir-link/new-link")),
+            Err(FsError::PermissionDenied)
+        );
+        assert_eq!(
+            fs.read_link(&path("target.txt")),
+            Err(FsError::InvalidPath(
+                "target.txt is not a symlink".to_owned()
+            ))
         );
 
         fs::remove_dir_all(root).unwrap();
