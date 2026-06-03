@@ -10,7 +10,9 @@ use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use rust_wasi_quickjs::{QuickJsCreateOptions, QuickJsHostConfig, QuickJsModule, QuickJsRuntime};
+use rust_wasi_quickjs::{
+    QuickJsCreateOptions, QuickJsHostConfig, QuickJsModule, QuickJsRestoreOptions, QuickJsRuntime,
+};
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath};
 use wanix_task::{Fd, Task, TaskSpec};
 use wanix_wasi::WasiConfig;
@@ -195,18 +197,71 @@ impl QuickJsRunner {
         source: &str,
         config: QuickJsWanixConfig,
     ) -> FsResult<RunOutput> {
-        let wasi_host = WanixQuickJsWasiHost::new(config.wasi().clone()).map_err(|err| {
-            FsError::Other(format!(
-                "failed to create Wanix-backed QuickJS WASI host: {err:?}"
-            ))
-        })?;
-        let create_options = captured_stdio_options().with_wasi_host(wasi_host);
         let namespace = config.wasi().namespace().clone();
+        let create_options = captured_stdio_options_with_wanix_wasi(config)?;
         self.run_source_with_setup(source, create_options, move |runtime| {
             define_wanix_module_loader(runtime, namespace.clone())?;
             define_wanix_namespace_api(runtime, namespace)
         })
         .map_err(|failure| failure.error)
+    }
+
+    /// Creates a QuickJS runtime with live Wanix-backed WASI imports.
+    ///
+    /// The returned runtime can be snapshotted through the engine API. Use
+    /// [`Self::restore_runtime_from_bytes_with_wanix_config`] to resume that VM
+    /// image with fresh Wanix host resources. This lifecycle helper intentionally
+    /// installs only the live WASI provider and namespace module loader; it does
+    /// not install the interim `Wanix` global or `print`/`console` callbacks,
+    /// because those are host callback objects that require separate restore-time
+    /// reattachment. Guest `qjs:std` stdout and stderr writes go through the
+    /// `WasiConfig` fd attachments supplied by `config`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the Wanix WASI host cannot be created, the
+    /// QuickJS runtime cannot be instantiated, or the namespace module loader
+    /// cannot be attached.
+    pub fn create_runtime_with_wanix_config(
+        &self,
+        config: QuickJsWanixConfig,
+    ) -> FsResult<QuickJsRuntime> {
+        let namespace = config.wasi().namespace().clone();
+        let create_options = create_options_with_wanix_wasi(config)?;
+        let mut runtime = self
+            .module
+            .create_runtime_with_options(create_options)
+            .map_err(qjs_error)?;
+        define_wanix_module_loader(&mut runtime, namespace)?;
+        Ok(runtime)
+    }
+
+    /// Restores a QuickJS VM image with live Wanix-backed WASI imports.
+    ///
+    /// Snapshot bytes remain a QuickJS VM image. The supplied Wanix config
+    /// reattaches namespace, preopen, fd, argv/env, and stdio host resources for
+    /// the restored runtime. Guest `qjs:std` stdout and stderr writes go through
+    /// the `WasiConfig` fd attachments supplied by `config`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the snapshot bytes are invalid or
+    /// incompatible with this runner's QuickJS module, the Wanix WASI host cannot
+    /// be created, the runtime cannot be restored, or the namespace module loader
+    /// cannot be attached.
+    pub fn restore_runtime_from_bytes_with_wanix_config(
+        &self,
+        bytes: &[u8],
+        config: QuickJsWanixConfig,
+    ) -> FsResult<QuickJsRuntime> {
+        let namespace = config.wasi().namespace().clone();
+        let restore_options = restore_options_with_wanix_wasi(config)?;
+        let mut runtime = self
+            .module
+            .restore_runtime_from_bytes_with_options(bytes, restore_options)
+            .map_err(qjs_error)?;
+        define_wanix_module_loader(&mut runtime, namespace)?;
+        Ok(runtime)
     }
 
     /// Runs JavaScript as an ES module with access to a Wanix namespace.
@@ -436,6 +491,30 @@ fn create_options_with_config(config: QuickJsHostConfig) -> QuickJsCreateOptions
     QuickJsCreateOptions::new().with_host_config(config)
 }
 
+fn captured_stdio_options_with_wanix_wasi(
+    config: QuickJsWanixConfig,
+) -> FsResult<QuickJsCreateOptions> {
+    Ok(captured_stdio_options().with_wasi_host(wanix_wasi_host(config)?))
+}
+
+fn create_options_with_wanix_wasi(config: QuickJsWanixConfig) -> FsResult<QuickJsCreateOptions> {
+    Ok(QuickJsCreateOptions::new().with_wasi_host(wanix_wasi_host(config)?))
+}
+
+fn restore_options_with_wanix_wasi(config: QuickJsWanixConfig) -> FsResult<QuickJsRestoreOptions> {
+    Ok(QuickJsRestoreOptions::new().with_wasi_host(wanix_wasi_host(config)?))
+}
+
+fn wanix_wasi_host(config: QuickJsWanixConfig) -> FsResult<WanixQuickJsWasiHost> {
+    WanixQuickJsWasiHost::new(config.wasi).map_err(wanix_wasi_host_error)
+}
+
+fn wanix_wasi_host_error(err: wanix_wasi::Errno) -> FsError {
+    FsError::Other(format!(
+        "failed to create Wanix-backed QuickJS WASI host: {err:?}"
+    ))
+}
+
 fn define_task_output_callback(
     runtime: &mut QuickJsRuntime,
     name: &'static str,
@@ -597,10 +676,9 @@ mod tests {
 
     use super::{
         CRATE_PURPOSE, FIRST_DEMO_TARGET, QuickJsRunner, QuickJsTaskDriver, QuickJsWanixConfig,
-        WanixQuickJsWasiHost, captured_stdio_config, captured_stdio_options, wasi_contract_purpose,
+        wasi_contract_purpose,
     };
     use crate::task_stdio::task_wasi_config;
-    use rust_wasi_quickjs::QuickJsRestoreOptions;
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
     use wanix_task::{Fd, Task, TaskDriver, TaskId, TaskSpec, TaskTable};
     use wanix_vfs::{BindOptions, Namespace};
@@ -1616,6 +1694,8 @@ print("os", text);
         let runner = runner();
         let root = Arc::new(MemFs::new());
         root.write_file("input.txt", b"from namespace").unwrap();
+        root.write_file("suffix.js", b"export const suffix = 'restored';")
+            .unwrap();
         root.write_file("before-stdout", b"").unwrap();
         root.write_file("after-stdout", b"").unwrap();
         let mut namespace = Namespace::new();
@@ -1629,14 +1709,10 @@ print("os", text);
                 OpenOptions::read_write(),
             )
             .unwrap();
-        let before_host = WanixQuickJsWasiHost::new(
-            WasiConfig::new(namespace.clone()).with_stdout(before_stdout, "before stdout"),
-        )
-        .unwrap();
-        let create_options = captured_stdio_options().with_wasi_host(before_host);
         let mut runtime = runner
-            .module
-            .create_runtime_with_options(create_options)
+            .create_runtime_with_wanix_config(QuickJsWanixConfig::new(
+                WasiConfig::new(namespace.clone()).with_stdout(before_stdout, "before stdout"),
+            ))
             .unwrap();
 
         runtime
@@ -1664,24 +1740,22 @@ std.out.flush();
                 OpenOptions::read_write(),
             )
             .unwrap();
-        let after_host = WanixQuickJsWasiHost::new(
-            WasiConfig::new(namespace).with_stdout(after_stdout, "after stdout"),
-        )
-        .unwrap();
-        let restore_options = QuickJsRestoreOptions::new()
-            .with_host_config(captured_stdio_config())
-            .with_wasi_host(after_host);
         let mut restored = runner
-            .module
-            .restore_runtime_from_bytes_with_options(&snapshot_bytes, restore_options)
+            .restore_runtime_from_bytes_with_wanix_config(
+                &snapshot_bytes,
+                QuickJsWanixConfig::new(
+                    WasiConfig::new(namespace).with_stdout(after_stdout, "after stdout"),
+                ),
+            )
             .unwrap();
 
         restored
             .eval_module_discard(
                 r#"
 import * as std from "qjs:std";
+import { suffix } from "./suffix.js";
 
-const text = globalThis.before + " -> restored";
+const text = globalThis.before + " -> " + suffix;
 std.writeFile("after.txt", text);
 std.out.puts("after " + std.loadFile("after.txt") + "\n");
 std.out.flush();
