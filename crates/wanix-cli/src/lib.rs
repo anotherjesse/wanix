@@ -1520,9 +1520,10 @@ mod tests {
 
     use super::{run, run_with_process_io, run_with_process_stdin};
     use wanix_protocol::{
-        P9_NOFID, P9_RATTACH, P9_RLOPEN, P9_RREAD, P9_RREADDIR, P9_RVERSION, P9_RWALK,
-        P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer, p9_decode_rread, p9_decode_rreaddir,
-        p9_tattach, p9_tlopen, p9_tread, p9_treaddir, p9_tversion, p9_twalk,
+        P9_NOFID, P9_RATTACH, P9_RGETATTR, P9_RLOPEN, P9_RREAD, P9_RREADDIR, P9_RVERSION, P9_RWALK,
+        P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer, p9_decode_rgetattr, p9_decode_rread,
+        p9_decode_rreaddir, p9_tattach, p9_tgetattr, p9_tlopen, p9_tread, p9_treaddir, p9_tversion,
+        p9_twalk,
     };
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -1662,8 +1663,9 @@ mod tests {
             p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
             p9_tattach(2, 1, P9_NOFID, "root", "", 0).unwrap(),
             p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
-            p9_tlopen(4, 2, 0),
-            p9_tread(5, 2, 0, 8),
+            p9_tgetattr(4, 2, u64::MAX),
+            p9_tlopen(5, 2, 0),
+            p9_tread(6, 2, 0, 8),
         ]);
 
         let output = run_with_process_stdin(
@@ -1677,9 +1679,19 @@ mod tests {
         let frames = decode_response_stream(output.stdout());
         assert_eq!(
             frame_types(&frames),
-            [P9_RVERSION, P9_RATTACH, P9_RWALK, P9_RLOPEN, P9_RREAD]
+            [
+                P9_RVERSION,
+                P9_RATTACH,
+                P9_RWALK,
+                P9_RGETATTR,
+                P9_RLOPEN,
+                P9_RREAD
+            ]
         );
-        assert_eq!(p9_decode_rread(&frames[4]).unwrap(), b"hello p9");
+        let attr = p9_decode_rgetattr(&frames[3]).unwrap();
+        assert_eq!(attr.size, 8);
+        assert_eq!(attr.mode & 0o170000, 0o100000);
+        assert_eq!(p9_decode_rread(&frames[5]).unwrap(), b"hello p9");
     }
 
     #[test]

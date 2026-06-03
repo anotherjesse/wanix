@@ -27,6 +27,12 @@ pub const P9_TLOPEN: u8 = 12;
 /// 9P2000.L `Rlopen` message type.
 pub const P9_RLOPEN: u8 = 13;
 
+/// 9P2000.L `Tgetattr` message type.
+pub const P9_TGETATTR: u8 = 24;
+
+/// 9P2000.L `Rgetattr` message type.
+pub const P9_RGETATTR: u8 = 25;
+
 /// 9P2000.L `Treaddir` message type.
 pub const P9_TREADDIR: u8 = 40;
 
@@ -76,6 +82,8 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RLERROR => Some("Rlerror"),
         P9_TLOPEN => Some("Tlopen"),
         P9_RLOPEN => Some("Rlopen"),
+        P9_TGETATTR => Some("Tgetattr"),
+        P9_RGETATTR => Some("Rgetattr"),
         P9_TREADDIR => Some("Treaddir"),
         P9_RREADDIR => Some("Rreaddir"),
         P9_TVERSION => Some("Tversion"),
@@ -455,6 +463,60 @@ pub struct P9Open {
     pub flags: u32,
 }
 
+/// Decoded payload for `Tgetattr`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct P9GetAttr {
+    /// Fid to stat.
+    pub fid: u32,
+    /// 9P2000.L attribute request mask.
+    pub request_mask: u64,
+}
+
+/// 9P2000.L attribute payload returned by `Rgetattr`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9Attr {
+    /// Attribute bits the server considers valid.
+    pub valid: u64,
+    /// QID for the file.
+    pub qid: P9Qid,
+    /// POSIX mode including file type bits.
+    pub mode: u32,
+    /// Numeric owner user id.
+    pub uid: u32,
+    /// Numeric owner group id.
+    pub gid: u32,
+    /// Link count.
+    pub nlink: u64,
+    /// Device id for special files.
+    pub rdev: u64,
+    /// File size in bytes.
+    pub size: u64,
+    /// Preferred block size.
+    pub block_size: u64,
+    /// Allocated 512-byte block count.
+    pub blocks: u64,
+    /// Last access time seconds.
+    pub atime_seconds: u64,
+    /// Last access time nanoseconds.
+    pub atime_nanoseconds: u64,
+    /// Last modification time seconds.
+    pub mtime_seconds: u64,
+    /// Last modification time nanoseconds.
+    pub mtime_nanoseconds: u64,
+    /// Last metadata-change time seconds.
+    pub ctime_seconds: u64,
+    /// Last metadata-change time nanoseconds.
+    pub ctime_nanoseconds: u64,
+    /// Creation/birth time seconds.
+    pub btime_seconds: u64,
+    /// Creation/birth time nanoseconds.
+    pub btime_nanoseconds: u64,
+    /// File generation value.
+    pub generation: u64,
+    /// Server data-version value.
+    pub data_version: u64,
+}
+
 /// Decoded payload for `Tread`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct P9Read {
@@ -597,6 +659,23 @@ pub fn p9_rlopen(tag: u16, qid: P9Qid, iounit: u32) -> P9Frame {
     push_qid(&mut payload, qid);
     push_u32(&mut payload, iounit);
     P9Frame::new(P9_RLOPEN, tag, payload)
+}
+
+/// Builds a `Tgetattr` frame.
+#[must_use]
+pub fn p9_tgetattr(tag: u16, fid: u32, request_mask: u64) -> P9Frame {
+    let mut payload = Vec::with_capacity(12);
+    push_u32(&mut payload, fid);
+    push_u64(&mut payload, request_mask);
+    P9Frame::new(P9_TGETATTR, tag, payload)
+}
+
+/// Builds an `Rgetattr` frame.
+#[must_use]
+pub fn p9_rgetattr(tag: u16, attr: &P9Attr) -> P9Frame {
+    let mut payload = Vec::with_capacity(153);
+    push_attr(&mut payload, attr);
+    P9Frame::new(P9_RGETATTR, tag, payload)
 }
 
 /// Builds a `Treaddir` frame.
@@ -809,6 +888,35 @@ pub fn p9_decode_rlopen(frame: &P9Frame) -> Result<(P9Qid, u32), P9Error> {
     Ok((qid, iounit))
 }
 
+/// Decodes a `Tgetattr` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tgetattr` or the payload is
+/// malformed.
+pub fn p9_decode_tgetattr(frame: &P9Frame) -> Result<P9GetAttr, P9Error> {
+    expect_message_type(frame, P9_TGETATTR)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    let request_mask = cursor.read_u64()?;
+    cursor.finish()?;
+    Ok(P9GetAttr { fid, request_mask })
+}
+
+/// Decodes an `Rgetattr` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rgetattr` or the payload is
+/// malformed.
+pub fn p9_decode_rgetattr(frame: &P9Frame) -> Result<P9Attr, P9Error> {
+    expect_message_type(frame, P9_RGETATTR)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let attr = cursor.read_attr()?;
+    cursor.finish()?;
+    Ok(attr)
+}
+
 /// Decodes a `Treaddir` frame payload.
 ///
 /// # Errors
@@ -998,6 +1106,29 @@ fn push_qid(out: &mut Vec<u8>, qid: P9Qid) {
     push_u64(out, qid.path);
 }
 
+fn push_attr(out: &mut Vec<u8>, attr: &P9Attr) {
+    push_u64(out, attr.valid);
+    push_qid(out, attr.qid);
+    push_u32(out, attr.mode);
+    push_u32(out, attr.uid);
+    push_u32(out, attr.gid);
+    push_u64(out, attr.nlink);
+    push_u64(out, attr.rdev);
+    push_u64(out, attr.size);
+    push_u64(out, attr.block_size);
+    push_u64(out, attr.blocks);
+    push_u64(out, attr.atime_seconds);
+    push_u64(out, attr.atime_nanoseconds);
+    push_u64(out, attr.mtime_seconds);
+    push_u64(out, attr.mtime_nanoseconds);
+    push_u64(out, attr.ctime_seconds);
+    push_u64(out, attr.ctime_nanoseconds);
+    push_u64(out, attr.btime_seconds);
+    push_u64(out, attr.btime_nanoseconds);
+    push_u64(out, attr.generation);
+    push_u64(out, attr.data_version);
+}
+
 fn push_dir_entry(out: &mut Vec<u8>, entry: &P9DirEntry) -> Result<(), P9Error> {
     push_qid(out, entry.qid);
     push_u64(out, entry.offset);
@@ -1075,6 +1206,51 @@ impl<'a> PayloadCursor<'a> {
             offset,
             dirent_type,
             name,
+        })
+    }
+
+    fn read_attr(&mut self) -> Result<P9Attr, P9Error> {
+        let valid = self.read_u64()?;
+        let qid = self.read_qid()?;
+        let mode = self.read_u32()?;
+        let uid = self.read_u32()?;
+        let gid = self.read_u32()?;
+        let nlink = self.read_u64()?;
+        let rdev = self.read_u64()?;
+        let size = self.read_u64()?;
+        let block_size = self.read_u64()?;
+        let blocks = self.read_u64()?;
+        let atime_seconds = self.read_u64()?;
+        let atime_nanoseconds = self.read_u64()?;
+        let mtime_seconds = self.read_u64()?;
+        let mtime_nanoseconds = self.read_u64()?;
+        let ctime_seconds = self.read_u64()?;
+        let ctime_nanoseconds = self.read_u64()?;
+        let btime_seconds = self.read_u64()?;
+        let btime_nanoseconds = self.read_u64()?;
+        let generation = self.read_u64()?;
+        let data_version = self.read_u64()?;
+        Ok(P9Attr {
+            valid,
+            qid,
+            mode,
+            uid,
+            gid,
+            nlink,
+            rdev,
+            size,
+            block_size,
+            blocks,
+            atime_seconds,
+            atime_nanoseconds,
+            mtime_seconds,
+            mtime_nanoseconds,
+            ctime_seconds,
+            ctime_nanoseconds,
+            btime_seconds,
+            btime_nanoseconds,
+            generation,
+            data_version,
         })
     }
 
@@ -1265,6 +1441,8 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RLERROR), Some("Rlerror"));
         assert_eq!(p9_message_type_name(P9_TLOPEN), Some("Tlopen"));
         assert_eq!(p9_message_type_name(P9_RLOPEN), Some("Rlopen"));
+        assert_eq!(p9_message_type_name(P9_TGETATTR), Some("Tgetattr"));
+        assert_eq!(p9_message_type_name(P9_RGETATTR), Some("Rgetattr"));
         assert_eq!(p9_message_type_name(P9_TREADDIR), Some("Treaddir"));
         assert_eq!(p9_message_type_name(P9_RREADDIR), Some("Rreaddir"));
         assert_eq!(p9_message_type_name(P9_TATTACH), Some("Tattach"));
@@ -1356,6 +1534,48 @@ mod tests {
         assert_eq!(
             p9_decode_rlopen(&P9Frame::decode(&response).unwrap()).unwrap(),
             (qid, 8192)
+        );
+    }
+
+    #[test]
+    fn getattr_round_trips_fixed_9p2000_l_payload() {
+        let frame = p9_tgetattr(11, 77, 0x1234_5678_90ab_cdef).encode().unwrap();
+        assert_eq!(&frame[..4], &19_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_tgetattr(&P9Frame::decode(&frame).unwrap()).unwrap(),
+            P9GetAttr {
+                fid: 77,
+                request_mask: 0x1234_5678_90ab_cdef
+            }
+        );
+
+        let attr = P9Attr {
+            valid: 0x200,
+            qid: qid(0x80, 1, 2),
+            mode: 0o040755,
+            uid: 3,
+            gid: 4,
+            nlink: 5,
+            rdev: 6,
+            size: 7,
+            block_size: 8,
+            blocks: 9,
+            atime_seconds: 10,
+            atime_nanoseconds: 11,
+            mtime_seconds: 12,
+            mtime_nanoseconds: 13,
+            ctime_seconds: 14,
+            ctime_nanoseconds: 15,
+            btime_seconds: 16,
+            btime_nanoseconds: 17,
+            generation: 18,
+            data_version: 19,
+        };
+        let response = p9_rgetattr(11, &attr).encode().unwrap();
+        assert_eq!(&response[..4], &160_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_rgetattr(&P9Frame::decode(&response).unwrap()).unwrap(),
+            attr
         );
     }
 

@@ -15,11 +15,12 @@ use wanix_fs::{
     File, FileSeekFrom, FileSystem, FileType, FsError, Metadata, NormalizedPath, OpenOptions,
 };
 use wanix_protocol::{
-    P9_TATTACH, P9_TCLUNK, P9_TLOPEN, P9_TREAD, P9_TREADDIR, P9_TVERSION, P9_TWALK, P9_TWRITE,
-    P9_VERSION_9P2000_L, P9DirEntry, P9Error, P9Frame, P9Qid, P9Version, p9_decode_tattach,
-    p9_decode_tclunk, p9_decode_tlopen, p9_decode_tread, p9_decode_treaddir, p9_decode_tversion,
-    p9_decode_twalk, p9_decode_twrite, p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rlerror,
-    p9_rlopen, p9_rread, p9_rreaddir, p9_rversion, p9_rwalk, p9_rwrite,
+    P9_TATTACH, P9_TCLUNK, P9_TGETATTR, P9_TLOPEN, P9_TREAD, P9_TREADDIR, P9_TVERSION, P9_TWALK,
+    P9_TWRITE, P9_VERSION_9P2000_L, P9Attr, P9DirEntry, P9Error, P9Frame, P9Qid, P9Version,
+    p9_decode_tattach, p9_decode_tclunk, p9_decode_tgetattr, p9_decode_tlopen, p9_decode_tread,
+    p9_decode_treaddir, p9_decode_tversion, p9_decode_twalk, p9_decode_twrite,
+    p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rgetattr, p9_rlerror, p9_rlopen, p9_rread,
+    p9_rreaddir, p9_rversion, p9_rwalk, p9_rwrite,
 };
 
 pub use transport::{P9TransportError, P9TransportStats};
@@ -52,6 +53,12 @@ const O_TRUNC: u32 = 0o1000;
 const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
 const DT_LNK: u8 = 10;
+
+const P9_MODE_TYPE_MASK: u32 = 0o170000;
+const P9_MODE_DIR: u32 = 0o040000;
+const P9_MODE_REG: u32 = 0o100000;
+const P9_MODE_LNK: u32 = 0o120000;
+const P9_DEFAULT_BLOCK_SIZE: u64 = 65_536;
 
 /// Error returned when a request is too malformed to turn into a 9P reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +126,7 @@ impl P9Server {
             P9_TATTACH => self.handle_attach(frame),
             P9_TWALK => self.handle_walk(frame),
             P9_TLOPEN => self.handle_open(frame),
+            P9_TGETATTR => self.handle_getattr(frame),
             P9_TREADDIR => self.handle_readdir(frame),
             P9_TREAD => self.handle_read(frame),
             P9_TWRITE => self.handle_write(frame),
@@ -198,6 +206,19 @@ impl P9Server {
             qid,
             self.msize.saturating_sub(RLOPEN_OVERHEAD),
         ))
+    }
+
+    fn handle_getattr(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let getattr = p9_decode_tgetattr(frame)?;
+        let Some(path) = self.fids.get(&getattr.fid).map(|entry| entry.path.clone()) else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        let metadata = match self.root.metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
+        };
+        let attr = attr_for_metadata(&path, metadata, getattr.request_mask);
+        Ok(p9_rgetattr(frame.tag(), &attr))
     }
 
     fn handle_readdir(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -321,6 +342,50 @@ fn qid_for_metadata(path: &NormalizedPath, metadata: Metadata) -> P9Qid {
     }
 }
 
+fn attr_for_metadata(path: &NormalizedPath, metadata: Metadata, request_mask: u64) -> P9Attr {
+    let (atime_seconds, atime_nanoseconds) = split_unix_time_ns(metadata.accessed_time_ns());
+    let (mtime_seconds, mtime_nanoseconds) = split_unix_time_ns(metadata.modified_time_ns());
+    let (ctime_seconds, ctime_nanoseconds) = split_unix_time_ns(metadata.changed_time_ns());
+    P9Attr {
+        valid: request_mask,
+        qid: qid_for_metadata(path, metadata.clone()),
+        mode: p9_mode_for_metadata(&metadata),
+        uid: 0,
+        gid: 0,
+        nlink: 1,
+        rdev: 0,
+        size: metadata.len(),
+        block_size: P9_DEFAULT_BLOCK_SIZE,
+        blocks: metadata.len().div_ceil(P9_DEFAULT_BLOCK_SIZE),
+        atime_seconds,
+        atime_nanoseconds,
+        mtime_seconds,
+        mtime_nanoseconds,
+        ctime_seconds,
+        ctime_nanoseconds,
+        btime_seconds: 0,
+        btime_nanoseconds: 0,
+        generation: 0,
+        data_version: 0,
+    }
+}
+
+fn p9_mode_for_metadata(metadata: &Metadata) -> u32 {
+    let mode = metadata.mode();
+    if mode & P9_MODE_TYPE_MASK != 0 {
+        return mode;
+    }
+    mode | match metadata.file_type() {
+        FileType::Directory => P9_MODE_DIR,
+        FileType::Symlink => P9_MODE_LNK,
+        FileType::File => P9_MODE_REG,
+    }
+}
+
+fn split_unix_time_ns(value: u64) -> (u64, u64) {
+    (value / 1_000_000_000, value % 1_000_000_000)
+}
+
 fn dirent_type_for_metadata(metadata: &Metadata) -> u8 {
     match metadata.file_type() {
         FileType::Directory => DT_DIR,
@@ -369,10 +434,11 @@ mod tests {
 
     use wanix_fs::MemFs;
     use wanix_protocol::{
-        P9_RATTACH, P9_RLERROR, P9_RLOPEN, P9_RREAD, P9_RREADDIR, P9_RVERSION, P9_RWALK, P9_RWRITE,
-        P9DirEntry, p9_decode_rlerror, p9_decode_rlopen, p9_decode_rread, p9_decode_rreaddir,
-        p9_decode_rversion, p9_decode_rwalk, p9_decode_rwrite, p9_dir_entry_encoded_len,
-        p9_tattach, p9_tclunk, p9_tlopen, p9_tread, p9_treaddir, p9_tversion, p9_twalk, p9_twrite,
+        P9_RATTACH, P9_RGETATTR, P9_RLERROR, P9_RLOPEN, P9_RREAD, P9_RREADDIR, P9_RVERSION,
+        P9_RWALK, P9_RWRITE, P9DirEntry, p9_decode_rgetattr, p9_decode_rlerror, p9_decode_rlopen,
+        p9_decode_rread, p9_decode_rreaddir, p9_decode_rversion, p9_decode_rwalk, p9_decode_rwrite,
+        p9_dir_entry_encoded_len, p9_tattach, p9_tclunk, p9_tgetattr, p9_tlopen, p9_tread,
+        p9_treaddir, p9_tversion, p9_twalk, p9_twrite,
     };
 
     use super::*;
@@ -528,6 +594,70 @@ mod tests {
 
         assert_eq!(response.message_type(), P9_RLERROR);
         assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, ENOTDIR);
+    }
+
+    #[test]
+    fn getattr_reports_file_metadata_before_open() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("hello.txt", b"hello p9").unwrap();
+        fs.set_times(
+            &NormalizedPath::new("hello.txt").unwrap(),
+            1_234_000_000_005,
+            2_345_000_000_006,
+        )
+        .unwrap();
+        let mut server = server(fs);
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["hello.txt"]);
+        let response = server
+            .handle_frame(&p9_tgetattr(3, 2, 0x1234_5678))
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RGETATTR);
+        let attr = p9_decode_rgetattr(&response).unwrap();
+        assert_eq!(attr.valid, 0x1234_5678);
+        assert_eq!(attr.qid.qid_type, 0);
+        assert_eq!(attr.mode, P9_MODE_REG | 0o644);
+        assert_eq!(attr.size, 8);
+        assert_eq!(attr.block_size, P9_DEFAULT_BLOCK_SIZE);
+        assert_eq!(attr.blocks, 1);
+        assert_eq!(attr.uid, 0);
+        assert_eq!(attr.gid, 0);
+        assert_eq!(attr.nlink, 1);
+        assert_eq!(attr.atime_seconds, 1_234);
+        assert_eq!(attr.atime_nanoseconds, 5);
+        assert_eq!(attr.mtime_seconds, 2_345);
+        assert_eq!(attr.mtime_nanoseconds, 6);
+    }
+
+    #[test]
+    fn getattr_reports_directory_metadata() {
+        let fs = Arc::new(MemFs::new());
+        fs.create_dir_all("bin").unwrap();
+        fs.write_file("hello.txt", b"hello").unwrap();
+        let mut server = server(fs);
+
+        attach_root(&mut server);
+        let response = server.handle_frame(&p9_tgetattr(2, 1, u64::MAX)).unwrap();
+
+        assert_eq!(response.message_type(), P9_RGETATTR);
+        let attr = p9_decode_rgetattr(&response).unwrap();
+        assert_eq!(attr.valid, u64::MAX);
+        assert_eq!(attr.qid.qid_type, 0x80);
+        assert_eq!(attr.mode, P9_MODE_DIR | 0o755);
+        assert_eq!(attr.size, 4);
+    }
+
+    #[test]
+    fn getattr_unknown_fid_returns_bad_fd() {
+        let fs = Arc::new(MemFs::new());
+        let mut server = server(fs);
+
+        let response = server.handle_frame(&p9_tgetattr(1, 99, 0)).unwrap();
+
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
     }
 
     #[test]

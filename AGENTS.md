@@ -91,7 +91,8 @@ The next 9P-facing demo target is a native listener or CLI demo that lets
 external clients browse a Wanix namespace. The server core already negotiates
 9P2000.L, attaches, walks, opens regular files and read-only directories,
 reads/writes regular files, lists directories with `Treaddir`, clunks fids, and
-serves encoded request/response frames through a synchronous stream loop.
+reports metadata with `Tgetattr`; it also serves encoded request/response frames
+through a synchronous stream loop.
 `wanix-rust p9-stdio --root DIR` exposes that server over process
 stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
 for human-readable CLI or transport errors.
@@ -300,6 +301,9 @@ cargo test --workspace --locked
 - [ADR 0063](docs/adrs/0063-stdio-9p-cli-bridge.md):
   `wanix-rust p9-stdio --root DIR` exposes a `LocalFs` root as a binary 9P
   request/response stream over native process stdio.
+- [ADR 0064](docs/adrs/0064-9p-getattr-metadata.md):
+  `wanix-9p` maps `Tgetattr` to Wanix metadata and returns fixed 9P2000.L
+  `Rgetattr` payloads with POSIX file-type mode bits.
 
 ## Cycle Rules
 
@@ -318,5 +322,5 @@ cycle before starting the next one.
 - Make `qjs-shell` genuinely interactive beyond line-oriented input by adding a
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
-- Extend `wanix-9p` with create/remove/rename, getattr/stat, and a native
-  listener/auth policy for serve/v86 integration.
+- Extend `wanix-9p` with create/remove/rename and a native listener/auth policy
+  for serve/v86 integration.
