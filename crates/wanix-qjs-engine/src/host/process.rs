@@ -14,6 +14,7 @@ pub(super) fn define_imports(linker: &mut Linker<HostState>) -> anyhow::Result<(
         environ_sizes_get,
     )?;
     linker.func_wrap("wasi_snapshot_preview1", "environ_get", environ_get)?;
+    linker.func_wrap("wasi_snapshot_preview1", "proc_exit", proc_exit)?;
     Ok(())
 }
 
@@ -52,6 +53,24 @@ fn environ_get(
         environ_ptr,
         environ_buf_ptr,
     )
+}
+
+fn proc_exit(caller: Caller<'_, HostState>, code: i32) -> wasmtime::Result<()> {
+    let code = code as u32;
+    let Some(host) = caller.data().wasi_host() else {
+        return Err(wasmtime::Error::msg(format!(
+            "WASI proc_exit({code}) without live host"
+        )));
+    };
+    let mut host = host
+        .lock()
+        .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
+    match host.proc_exit(code) {
+        Ok(()) => Err(wasmtime::Error::msg(format!("WASI proc_exit({code})"))),
+        Err(errno) => Err(wasmtime::Error::msg(format!(
+            "WASI proc_exit({code}) failed: {errno:?}"
+        ))),
+    }
 }
 
 #[derive(Clone, Copy)]

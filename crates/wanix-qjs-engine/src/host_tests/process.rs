@@ -14,6 +14,7 @@ const PROCESS_WASI_WAT: &str = r#"
   (import "wasi_snapshot_preview1" "args_get" (func $args_get (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "environ_sizes_get" (func $environ_sizes_get (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "environ_get" (func $environ_get (param i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
   (memory (export "memory") 1)
   (func (export "args_sizes_get") (param i32 i32) (result i32)
     local.get 0 local.get 1 call $args_sizes_get)
@@ -23,6 +24,8 @@ const PROCESS_WASI_WAT: &str = r#"
     local.get 0 local.get 1 call $environ_sizes_get)
   (func (export "environ_get") (param i32 i32) (result i32)
     local.get 0 local.get 1 call $environ_get)
+  (func (export "proc_exit") (param i32)
+    local.get 0 call $proc_exit)
 )
 "#;
 
@@ -33,6 +36,7 @@ struct ProcessWasiHarness {
     args_get: TypedFunc<(i32, i32), i32>,
     environ_sizes_get: TypedFunc<(i32, i32), i32>,
     environ_get: TypedFunc<(i32, i32), i32>,
+    proc_exit: TypedFunc<i32, ()>,
 }
 
 impl ProcessWasiHarness {
@@ -57,6 +61,7 @@ impl ProcessWasiHarness {
             args_get: instance.get_typed_func(&mut store, "args_get")?,
             environ_sizes_get: instance.get_typed_func(&mut store, "environ_sizes_get")?,
             environ_get: instance.get_typed_func(&mut store, "environ_get")?,
+            proc_exit: instance.get_typed_func(&mut store, "proc_exit")?,
             memory,
             store,
         })
@@ -81,6 +86,7 @@ type WasiHostResult<T> = std::result::Result<T, QuickJsWasiErrno>;
 struct ProcessWasiHost {
     args: Vec<String>,
     env: Vec<String>,
+    exits: Arc<Mutex<Vec<u32>>>,
 }
 
 impl QuickJsWasiHost for ProcessWasiHost {
@@ -90,6 +96,11 @@ impl QuickJsWasiHost for ProcessWasiHost {
 
     fn env(&mut self) -> WasiHostResult<Vec<String>> {
         Ok(self.env.clone())
+    }
+
+    fn proc_exit(&mut self, code: u32) -> WasiHostResult<()> {
+        self.exits.lock().unwrap().push(code);
+        Ok(())
     }
 
     fn fd_prestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiPrestat> {
@@ -183,6 +194,7 @@ fn live_wasi_host_supplies_args_and_env_preview1_buffers() -> Result<()> {
     let host = ProcessWasiHost {
         args: vec!["main.js".to_owned(), "--flag".to_owned()],
         env: vec!["MODE=test".to_owned(), "EMPTY=".to_owned()],
+        ..ProcessWasiHost::default()
     };
     let mut harness = ProcessWasiHarness::new(Some(Box::new(host)))?;
 
@@ -224,7 +236,7 @@ fn live_wasi_host_supplies_args_and_env_preview1_buffers() -> Result<()> {
 fn process_imports_reject_strings_with_nul_bytes() -> Result<()> {
     let host = ProcessWasiHost {
         args: vec!["main\0.js".to_owned()],
-        env: Vec::new(),
+        ..ProcessWasiHost::default()
     };
     let mut harness = ProcessWasiHarness::new(Some(Box::new(host)))?;
 
@@ -236,5 +248,33 @@ fn process_imports_reject_strings_with_nul_bytes() -> Result<()> {
         harness.args_get.call(&mut harness.store, (100, 200))?,
         ERRNO_INVAL
     );
+    Ok(())
+}
+
+#[test]
+fn live_wasi_host_receives_proc_exit_and_import_traps() -> Result<()> {
+    let exits = Arc::new(Mutex::new(Vec::new()));
+    let host = ProcessWasiHost {
+        exits: Arc::clone(&exits),
+        ..ProcessWasiHost::default()
+    };
+    let mut harness = ProcessWasiHarness::new(Some(Box::new(host)))?;
+
+    let err = harness.proc_exit.call(&mut harness.store, 7).unwrap_err();
+    let message = format!("{err:?}");
+
+    assert!(message.contains("WASI proc_exit(7)"), "{message}");
+    assert_eq!(*exits.lock().unwrap(), vec![7]);
+    Ok(())
+}
+
+#[test]
+fn proc_exit_without_live_wasi_host_traps() -> Result<()> {
+    let mut harness = ProcessWasiHarness::new(None)?;
+
+    let err = harness.proc_exit.call(&mut harness.store, 3).unwrap_err();
+    let message = format!("{err:?}");
+
+    assert!(message.contains("without live host"), "{message}");
     Ok(())
 }

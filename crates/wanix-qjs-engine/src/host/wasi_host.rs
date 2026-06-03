@@ -18,6 +18,11 @@ pub trait QuickJsWasiHost: Send {
         Ok(Vec::new())
     }
 
+    /// Requests process exit with a WASI exit code.
+    fn proc_exit(&mut self, _code: u32) -> Result<(), QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     /// Returns metadata for a preopened directory fd.
     fn fd_prestat_get(&mut self, fd: u32) -> Result<QuickJsWasiPrestat, QuickJsWasiErrno>;
 

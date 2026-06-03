@@ -44,8 +44,11 @@ mechanics crate.
 
 The current QuickJS WASM fixture can prove live WASI plumbing through
 stdio-adjacent imports (`fd_write`, `fd_fdstat_get`, `fd_seek`, and `fd_close`)
-plus metadata, path, directory, argv, and env imports in synthetic WAT tests.
-Broader calls can use the same trait as the fixture exposes more WASI surface.
+plus process, metadata, path, directory, argv, and env imports in synthetic WAT
+tests. `proc_exit` is treated as live process state: the engine forwards it to
+the provider and then traps to honor the non-returning WASI import shape, while
+Wanix decides how that exit request updates task metadata. Broader calls can use
+the same trait as the fixture exposes more WASI surface.
 
 The old read-only virtual filesystem remains a fallback for simple engine and
 namespace demos. Wanix-backed task/config paths should prefer the live provider

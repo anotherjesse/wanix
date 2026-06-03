@@ -7,14 +7,28 @@ use wanix_wasi::{
     Errno, FileStat, WasiConfig, WasiCtx, WasiFd, WasiFdStat, WasiFileType, WasiRights, WasiWhence,
 };
 
+use crate::task_context::WanixExitState;
+
 pub(crate) struct WanixQuickJsWasiHost {
     ctx: WasiCtx,
+    exit_state: Option<WanixExitState>,
 }
 
 impl WanixQuickJsWasiHost {
     pub(crate) fn new(config: WasiConfig) -> Result<Self, Errno> {
         Ok(Self {
             ctx: WasiCtx::try_new(config)?,
+            exit_state: None,
+        })
+    }
+
+    pub(crate) fn new_with_exit_state(
+        config: WasiConfig,
+        exit_state: WanixExitState,
+    ) -> Result<Self, Errno> {
+        Ok(Self {
+            ctx: WasiCtx::try_new(config)?,
+            exit_state: Some(exit_state),
         })
     }
 }
@@ -26,6 +40,19 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
 
     fn env(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
         Ok(self.ctx.env().to_vec())
+    }
+
+    fn proc_exit(&mut self, code: u32) -> Result<(), QuickJsWasiErrno> {
+        let code = i32::try_from(code).map_err(|_| QuickJsWasiErrno::Inval)?;
+        if !(0..=255).contains(&code) {
+            return Err(QuickJsWasiErrno::Inval);
+        }
+        let Some(exit_state) = &self.exit_state else {
+            return Err(QuickJsWasiErrno::Nosys);
+        };
+        exit_state
+            .request_exit(code)
+            .map_err(|_| QuickJsWasiErrno::Io)
     }
 
     fn fd_prestat_get(&mut self, fd: u32) -> Result<QuickJsWasiPrestat, QuickJsWasiErrno> {
@@ -190,12 +217,14 @@ mod tests {
     use std::sync::Arc;
 
     use rust_wasi_quickjs::{
-        QuickJsWasiDirEntry, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType,
-        QuickJsWasiHost, QuickJsWasiPrestat,
+        QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat,
+        QuickJsWasiFileType, QuickJsWasiHost, QuickJsWasiPrestat,
     };
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
     use wanix_vfs::{BindOptions, Namespace};
     use wanix_wasi::{WasiConfig, WasiRights};
+
+    use crate::task_context::WanixExitState;
 
     use super::WanixQuickJsWasiHost;
 
@@ -280,6 +309,53 @@ mod tests {
 
         assert_eq!(host.args().unwrap(), ["main.js", "--flag"]);
         assert_eq!(host.env().unwrap(), ["MODE=test", "EMPTY="]);
+    }
+
+    #[test]
+    fn adapter_proc_exit_updates_wanix_exit_state() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        namespace
+            .bind(root, ".", ".", BindOptions::default())
+            .unwrap();
+        let exit_state = WanixExitState::default();
+        let mut host = WanixQuickJsWasiHost::new_with_exit_state(
+            WasiConfig::new(namespace),
+            exit_state.clone(),
+        )
+        .unwrap();
+
+        host.proc_exit(9).unwrap();
+        host.proc_exit(10).unwrap();
+
+        assert_eq!(exit_state.code().unwrap(), Some(9));
+    }
+
+    #[test]
+    fn adapter_proc_exit_without_exit_state_is_unsupported() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        namespace
+            .bind(root, ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        assert_eq!(host.proc_exit(1), Err(QuickJsWasiErrno::Nosys));
+    }
+
+    #[test]
+    fn adapter_proc_exit_rejects_out_of_range_status() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        namespace
+            .bind(root, ".", ".", BindOptions::default())
+            .unwrap();
+        let exit_state = WanixExitState::default();
+        let mut host =
+            WanixQuickJsWasiHost::new_with_exit_state(WasiConfig::new(namespace), exit_state)
+                .unwrap();
+
+        assert_eq!(host.proc_exit(256), Err(QuickJsWasiErrno::Inval));
     }
 
     #[test]

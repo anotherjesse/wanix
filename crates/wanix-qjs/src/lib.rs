@@ -321,14 +321,16 @@ impl QuickJsRunner {
         let namespace = task.namespace();
         let source = read_namespace_file(&namespace, &script_path)?;
         let host = QuickJsWanixConfig::new(task_wasi_config(task));
-        let wasi_host = WanixQuickJsWasiHost::new(host.wasi().clone()).map_err(|err| {
-            FsError::Other(format!(
-                "failed to create Wanix-backed QuickJS WASI host: {err:?}"
-            ))
-        })?;
+        let exit_state = WanixExitState::default();
+        let wasi_host =
+            WanixQuickJsWasiHost::new_with_exit_state(host.wasi().clone(), exit_state.clone())
+                .map_err(|err| {
+                    FsError::Other(format!(
+                        "failed to create Wanix-backed QuickJS WASI host: {err:?}"
+                    ))
+                })?;
         let create_options = captured_stdio_options().with_wasi_host(wasi_host);
         let run_as_module = uses_module_syntax(&source);
-        let exit_state = WanixExitState::default();
         let api_exit_state = exit_state.clone();
         let api_task = task.clone();
         let context =
