@@ -4,7 +4,7 @@ use crate::guest::{guest_i32, guest_u32};
 use crate::snapshot::{
     QUICKJS_WASM_ABI_VERSION, SNAPSHOT_FORMAT_VERSION, snapshot_memory_page_count,
 };
-use crate::{QuickJsHostConfig, QuickJsModule, Snapshot};
+use crate::{QuickJsHostConfig, QuickJsModule, QuickJsRestoreOptions, Snapshot};
 use anyhow::{Result, bail};
 use wasmtime::Engine;
 use wasmtime::Val;
@@ -47,18 +47,45 @@ impl QuickJsRuntime {
         snapshot: &Snapshot,
         config: QuickJsHostConfig,
     ) -> Result<Self> {
+        Self::restore_with_options(
+            engine,
+            module,
+            snapshot,
+            QuickJsRestoreOptions::new().with_host_config(config),
+        )
+    }
+
+    /// Restores a runtime from a snapshot with explicit restore options.
+    ///
+    /// The host config and live WASI provider are not serialized inside the
+    /// snapshot. Passing them here intentionally reattaches host behavior and
+    /// host-owned resources to the resumed runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `engine` did not compile `module`, the snapshot is
+    /// not compatible with `module`, the wasm module cannot be instantiated,
+    /// memory cannot be grown, or the saved QuickJS pointers cannot be
+    /// reattached and verified.
+    pub fn restore_with_options(
+        engine: &Engine,
+        module: &QuickJsModule,
+        snapshot: &Snapshot,
+        options: QuickJsRestoreOptions,
+    ) -> Result<Self> {
         module.ensure_engine(engine)?;
-        module.restore_runtime_with_host_config(snapshot, config)
+        module.restore_runtime_with_options(snapshot, options)
     }
 
     pub(crate) fn restore_for_module(
         module: &QuickJsModule,
         snapshot: &Snapshot,
-        config: QuickJsHostConfig,
+        options: QuickJsRestoreOptions,
     ) -> Result<Self> {
         snapshot.validate_for(module)?;
+        let (config, wasi_host) = options.into_parts();
 
-        let mut vm = Self::instantiate(module.engine(), module, config, None)?.vm;
+        let mut vm = Self::instantiate(module.engine(), module, config, wasi_host)?.vm;
 
         let needed_pages = snapshot_memory_page_count(snapshot.memory.len())?;
         let current_pages = vm.memory.size(&vm.store);

@@ -98,8 +98,8 @@ cargo test --workspace --locked
   QuickJS/Wasmtime engine mechanics live in a Wanix workspace crate so Wanix can
   evolve the WASI boundary directly.
 - [ADR 0011](docs/adrs/0011-live-quickjs-wasi-host-provider.md): Live
-  QuickJS WASI hooks are runtime host state carried by create options, while
-  deterministic host config stays cloneable and comparable.
+  QuickJS WASI hooks are runtime host state carried by create/restore options,
+  while deterministic host config stays cloneable and comparable.
 
 ## Cycle Rules
 

@@ -1,6 +1,7 @@
 use super::*;
 use crate::snapshot::WASM_PAGE_SIZE;
 use anyhow::{Result, bail};
+use std::sync::{Arc, Mutex};
 
 mod fixture;
 
@@ -89,6 +90,138 @@ fn module_byte_restore_reattaches_stdio_capture_limit_from_restore_config() -> R
 
     assert!(format!("{err:#}").contains("captured stdout byte limit exceeded"));
     assert_eq!(restored.captured_stdout(), b"");
+    Ok(())
+}
+
+type WasiHostResult<T> = std::result::Result<T, QuickJsWasiErrno>;
+type WriteLog = Arc<Mutex<Vec<(u32, Vec<u8>)>>>;
+
+#[derive(Clone, Default)]
+struct RestoreRecordingWasiHost {
+    writes: WriteLog,
+}
+
+impl QuickJsWasiHost for RestoreRecordingWasiHost {
+    fn fd_prestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiPrestat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_open(
+        &mut self,
+        _dirfd: u32,
+        _dirflags: u32,
+        _path: &[u8],
+        _oflags: u16,
+        _rights_base: u64,
+        _rights_inheriting: u64,
+        _fdflags: u16,
+    ) -> WasiHostResult<u32> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_read(&mut self, _fd: u32, _buf: &mut [u8]) -> WasiHostResult<usize> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_write(&mut self, fd: u32, buf: &[u8]) -> WasiHostResult<usize> {
+        self.writes
+            .lock()
+            .expect("test writes lock")
+            .push((fd, buf.to_vec()));
+        Ok(buf.len())
+    }
+
+    fn fd_seek(
+        &mut self,
+        _fd: u32,
+        _offset: i64,
+        _whence: QuickJsWasiWhence,
+    ) -> WasiHostResult<u64> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_close(&mut self, _fd: u32) -> WasiHostResult<()> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_fdstat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFdStat> {
+        Ok(QuickJsWasiFdStat::new(
+            QuickJsWasiFileType::CharacterDevice,
+            0,
+            0,
+        ))
+    }
+
+    fn fd_filestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFileStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_filestat_get(
+        &mut self,
+        _dirfd: u32,
+        _flags: u32,
+        _path: &[u8],
+    ) -> WasiHostResult<QuickJsWasiFileStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+}
+
+#[test]
+fn restore_reattaches_live_wasi_host_from_restore_options() -> Result<()> {
+    let (engine, module) = stdio_runtime_fixture()?;
+    let mut vm = QuickJsRuntime::create_with_host_config(
+        &engine,
+        &module,
+        QuickJsHostConfig::new().with_stdout_capture(true),
+    )?;
+    let snapshot = vm.snapshot()?;
+    drop(vm);
+
+    let host = RestoreRecordingWasiHost::default();
+    let writes = Arc::clone(&host.writes);
+    let mut restored = QuickJsRuntime::restore_with_options(
+        &engine,
+        &module,
+        &snapshot,
+        QuickJsRestoreOptions::new()
+            .with_host_config(QuickJsHostConfig::new().with_stdout_capture(true))
+            .with_wasi_host(host),
+    )?;
+
+    restored.eval_discard("emit()")?;
+
+    assert_eq!(restored.captured_stdout(), b"");
+    assert_eq!(
+        &*writes.lock().expect("test writes lock"),
+        &[(1, b"stdio event\n".to_vec())]
+    );
+    Ok(())
+}
+
+#[test]
+fn module_byte_restore_reattaches_live_wasi_host_from_restore_options() -> Result<()> {
+    let (_engine, module) = stdio_runtime_fixture()?;
+    let mut vm = module
+        .create_runtime_with_host_config(QuickJsHostConfig::new().with_stdout_capture(true))?;
+    let bytes = vm.snapshot()?.try_to_bytes()?;
+    drop(vm);
+
+    let host = RestoreRecordingWasiHost::default();
+    let writes = Arc::clone(&host.writes);
+    let mut restored = module.restore_runtime_from_bytes_with_options(
+        &bytes,
+        QuickJsRestoreOptions::new()
+            .with_host_config(QuickJsHostConfig::new().with_stdout_capture(true))
+            .with_wasi_host(host),
+    )?;
+
+    restored.eval_discard("emit()")?;
+
+    assert_eq!(restored.captured_stdout(), b"");
+    assert_eq!(
+        &*writes.lock().expect("test writes lock"),
+        &[(1, b"stdio event\n".to_vec())]
+    );
     Ok(())
 }
 

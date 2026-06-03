@@ -1,4 +1,7 @@
-use crate::{QuickJsCreateOptions, QuickJsHostConfig, QuickJsIntrinsics, QuickJsRuntime, Snapshot};
+use crate::{
+    QuickJsCreateOptions, QuickJsHostConfig, QuickJsIntrinsics, QuickJsRestoreOptions,
+    QuickJsRuntime, Snapshot,
+};
 use anyhow::{Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -157,7 +160,30 @@ impl QuickJsModule {
         snapshot: &Snapshot,
         config: QuickJsHostConfig,
     ) -> Result<QuickJsRuntime> {
-        QuickJsRuntime::restore_for_module(self, snapshot, config)
+        self.restore_runtime_with_options(
+            snapshot,
+            QuickJsRestoreOptions::new().with_host_config(config),
+        )
+    }
+
+    /// Restores a runtime for this module with explicit restore options.
+    ///
+    /// Use this when restore-time policy includes both deterministic host config
+    /// and live host state such as a WASI provider. QuickJS creation options
+    /// such as intrinsic selection are intentionally unavailable because the
+    /// snapshot already contains an initialized QuickJS context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot is not compatible with this module, the
+    /// wasm module cannot be instantiated, memory cannot be grown, or the saved
+    /// QuickJS pointers cannot be reattached and verified.
+    pub fn restore_runtime_with_options(
+        &self,
+        snapshot: &Snapshot,
+        options: QuickJsRestoreOptions,
+    ) -> Result<QuickJsRuntime> {
+        QuickJsRuntime::restore_for_module(self, snapshot, options)
     }
 
     /// Parses snapshot bytes, validates them against this module, and restores a
@@ -188,8 +214,27 @@ impl QuickJsModule {
         bytes: &[u8],
         config: QuickJsHostConfig,
     ) -> Result<QuickJsRuntime> {
+        self.restore_runtime_from_bytes_with_options(
+            bytes,
+            QuickJsRestoreOptions::new().with_host_config(config),
+        )
+    }
+
+    /// Parses snapshot bytes, validates them against this module, and restores a
+    /// runtime with explicit restore options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot bytes are malformed or not compatible
+    /// with this module, the wasm module cannot be instantiated, memory cannot
+    /// be grown, or the saved QuickJS pointers cannot be reattached and verified.
+    pub fn restore_runtime_from_bytes_with_options(
+        &self,
+        bytes: &[u8],
+        options: QuickJsRestoreOptions,
+    ) -> Result<QuickJsRuntime> {
         let snapshot = Snapshot::from_bytes_for_module(bytes, self)?;
-        self.restore_runtime_with_host_config(&snapshot, config)
+        self.restore_runtime_with_options(&snapshot, options)
     }
 
     pub(crate) fn wasmtime_module(&self) -> &Module {

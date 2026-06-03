@@ -213,3 +213,60 @@ impl QuickJsCreateOptions {
         (self.host_config, self.intrinsics, self.wasi_host)
     }
 }
+
+/// Host-side options for restoring a runtime from a snapshot.
+///
+/// Unlike [`QuickJsCreateOptions`], restore options do not include QuickJS
+/// intrinsic selection because a snapshot already contains an initialized
+/// QuickJS context. They only reattach host import policy and live host state
+/// to the restored WebAssembly instance.
+#[derive(Default)]
+pub struct QuickJsRestoreOptions {
+    host_config: crate::QuickJsHostConfig,
+    wasi_host: Option<QuickJsWasiHostHandle>,
+}
+
+impl fmt::Debug for QuickJsRestoreOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QuickJsRestoreOptions")
+            .field("host_config", &self.host_config)
+            .field("has_wasi_host", &self.wasi_host.is_some())
+            .finish()
+    }
+}
+
+impl QuickJsRestoreOptions {
+    /// Creates restore options with the default host import configuration.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the deterministic host import configuration to reattach.
+    #[must_use]
+    pub fn with_host_config(mut self, config: crate::QuickJsHostConfig) -> Self {
+        self.host_config = config;
+        self
+    }
+
+    /// Attaches a live host-owned WASI filesystem implementation.
+    ///
+    /// The provider is restore-time host state, not snapshot bytes. Restoring
+    /// without this option leaves filesystem imports on their deterministic
+    /// virtual-WASI/default behavior.
+    #[must_use]
+    pub fn with_wasi_host(mut self, host: impl QuickJsWasiHost + 'static) -> Self {
+        self.wasi_host = Some(Arc::new(Mutex::new(Box::new(host))));
+        self
+    }
+
+    /// Returns the host import configuration for this restored runtime.
+    #[must_use]
+    pub fn host_config(&self) -> &crate::QuickJsHostConfig {
+        &self.host_config
+    }
+
+    pub(crate) fn into_parts(self) -> (crate::QuickJsHostConfig, Option<QuickJsWasiHostHandle>) {
+        (self.host_config, self.wasi_host)
+    }
+}

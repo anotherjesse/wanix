@@ -65,7 +65,7 @@ pub use host::{
     QuickJsWasiFileStat, QuickJsWasiFileType, QuickJsWasiHost, QuickJsWasiPrestat,
     QuickJsWasiWhence,
 };
-pub use intrinsics::{QuickJsCreateOptions, QuickJsIntrinsics};
+pub use intrinsics::{QuickJsCreateOptions, QuickJsIntrinsics, QuickJsRestoreOptions};
 pub use memory::QuickJsMemoryUsage;
 pub use module::QuickJsModule;
 pub use runtime::QuickJsRuntime;

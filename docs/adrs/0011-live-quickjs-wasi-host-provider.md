@@ -29,9 +29,10 @@ Expose live WASI filesystem hooks through an engine-owned
 metadata so `wanix-qjs-engine` remains responsible only for Wasmtime import
 wiring and guest-memory copying.
 
-Attach the live provider through `QuickJsCreateOptions::with_wasi_host(...)`.
-The provider is runtime host state, not snapshot bytes and not Wanix policy
-inside the engine crate.
+Attach the live provider through `QuickJsCreateOptions::with_wasi_host(...)`
+for fresh runtimes and `QuickJsRestoreOptions::with_wasi_host(...)` for
+restored runtimes. The provider is runtime host state, not snapshot bytes and
+not Wanix policy inside the engine crate.
 
 Implement the Wanix adapter in `wanix-qjs` by wrapping `wanix_wasi::WasiCtx`.
 That keeps Wanix task, namespace, fd, preopen, and stdio semantics in
@@ -49,6 +50,7 @@ The old read-only virtual filesystem remains a fallback for simple engine and
 namespace demos. Wanix-backed task/config paths should prefer the live provider
 and no longer need to flatten or reject additional Wanix preopens.
 
-Snapshot restore still reattaches deterministic `QuickJsHostConfig` only. A
-future cycle should add an explicit restore-time live-provider option when
-snapshot/restore resumes Wanix-backed tasks.
+Snapshot restore reattaches deterministic `QuickJsHostConfig` and live WASI
+providers only through explicit restore options. The provider remains outside
+the snapshot image, so Wanix task metadata and host resources can be restored
+by Wanix policy instead of being serialized by the engine crate.
