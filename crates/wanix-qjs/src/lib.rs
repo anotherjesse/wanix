@@ -18,14 +18,17 @@ use wasmtime::Engine;
 
 mod driver;
 mod host_api;
+mod task_context;
 mod virtual_wasi;
 
 pub use driver::QuickJsTaskDriver;
 
 use host_api::{
-    WanixTaskContext, define_output_callback, define_wanix_host_api, define_wanix_module_loader,
-    define_wanix_namespace_api, qjs_error, read_namespace_file, take_buffer,
+    define_output_callback, define_output_callback_with_exit_state, define_wanix_host_api,
+    define_wanix_module_loader, define_wanix_namespace_api, qjs_error, read_namespace_file,
+    take_buffer,
 };
+use task_context::{WanixExitState, WanixTaskContext};
 use virtual_wasi::with_namespace_read_only_files;
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
@@ -198,6 +201,17 @@ impl QuickJsRunner {
         setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
         eval: impl FnOnce(&mut QuickJsRuntime, &str) -> FsResult<()>,
     ) -> Result<RunOutput, RunFailure> {
+        self.run_with_setup_control(source, config, None, setup, eval)
+    }
+
+    fn run_with_setup_control(
+        &self,
+        source: &str,
+        config: Option<QuickJsHostConfig>,
+        exit_state: Option<WanixExitState>,
+        setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
+        eval: impl FnOnce(&mut QuickJsRuntime, &str) -> FsResult<()>,
+    ) -> Result<RunOutput, RunFailure> {
         let mut runtime = self
             .module
             .create_runtime_with_host_config(config.unwrap_or_else(captured_stdio_config))
@@ -209,14 +223,33 @@ impl QuickJsRunner {
         let stdout = Arc::new(Mutex::new(Vec::new()));
         let stderr = Arc::new(Mutex::new(Vec::new()));
         let result = (|| -> FsResult<()> {
-            define_output_callback(&mut runtime, "__wanix_stdout", Arc::clone(&stdout))?;
-            define_output_callback(&mut runtime, "__wanix_stderr", Arc::clone(&stderr))?;
+            define_task_output_callback(
+                &mut runtime,
+                "__wanix_stdout",
+                Arc::clone(&stdout),
+                exit_state.clone(),
+            )?;
+            define_task_output_callback(
+                &mut runtime,
+                "__wanix_stderr",
+                Arc::clone(&stderr),
+                exit_state.clone(),
+            )?;
+            if let Some(exit_state) = exit_state.clone() {
+                runtime
+                    .set_interrupt_handler(move || {
+                        exit_state.code().map(|code| code.is_some()).unwrap_or(true)
+                    })
+                    .map_err(qjs_error)?;
+            }
             setup(&mut runtime)?;
             runtime.eval_discard(CONSOLE_PRELUDE).map_err(qjs_error)?;
             eval(&mut runtime, source)?;
-            runtime
-                .execute_pending_jobs_with_limit(1024)
-                .map_err(qjs_error)?;
+            if !exit_requested(&exit_state)? {
+                runtime
+                    .execute_pending_jobs_with_limit(1024)
+                    .map_err(qjs_error)?;
+            }
             Ok(())
         })();
 
@@ -251,14 +284,17 @@ impl QuickJsRunner {
         let source = read_namespace_file(&namespace, &script_path)?;
         let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
         let run_as_module = uses_module_syntax(&source);
+        let exit_state = WanixExitState::default();
+        let api_exit_state = exit_state.clone();
         let context =
             WanixTaskContext::new(command.raw, command.args, task_env_map(task), task.dir());
-        match self.run_with_setup(
+        match self.run_with_setup_control(
             &source,
             Some(config),
+            Some(exit_state.clone()),
             move |runtime| {
                 define_wanix_module_loader(runtime, namespace.clone())?;
-                define_wanix_host_api(runtime, namespace, context)
+                define_wanix_host_api(runtime, namespace, context, Some(api_exit_state.clone()))
             },
             |runtime, source| {
                 if run_as_module {
@@ -272,11 +308,16 @@ impl QuickJsRunner {
         ) {
             Ok(output) => {
                 write_task_output(task, &output)?;
-                task.set_exit("0")?;
+                let exit_code = exit_state.code()?.unwrap_or(0);
+                task.set_exit(exit_code.to_string())?;
                 Ok(output)
             }
             Err(failure) => {
                 write_task_output(task, &failure.output)?;
+                if let Some(exit_code) = exit_state.code()? {
+                    task.set_exit(exit_code.to_string())?;
+                    return Ok(failure.output);
+                }
                 Err(failure.error)
             }
         }
@@ -301,6 +342,27 @@ fn captured_stdio_config() -> QuickJsHostConfig {
     QuickJsHostConfig::new()
         .with_stdout_capture(true)
         .with_stderr_capture(true)
+}
+
+fn define_task_output_callback(
+    runtime: &mut QuickJsRuntime,
+    name: &'static str,
+    output: Arc<Mutex<Vec<u8>>>,
+    exit_state: Option<WanixExitState>,
+) -> FsResult<()> {
+    match exit_state {
+        Some(exit_state) => {
+            define_output_callback_with_exit_state(runtime, name, output, exit_state)
+        }
+        None => define_output_callback(runtime, name, output),
+    }
+}
+
+fn exit_requested(exit_state: &Option<WanixExitState>) -> FsResult<bool> {
+    match exit_state {
+        Some(exit_state) => exit_state.code().map(|code| code.is_some()),
+        None => Ok(false),
+    }
 }
 
 fn uses_module_syntax(source: &str) -> bool {
@@ -438,12 +500,13 @@ mod tests {
 const text = Wanix.readText("input.txt");
 Wanix.writeText("output.txt", text + " / qjs");
 print(Wanix.readText("output.txt"));
+print("exit api", typeof Wanix.exit);
 "#,
                 namespace,
             )
             .unwrap();
 
-        assert_eq!(output.stdout(), b"from wanix / qjs\n");
+        assert_eq!(output.stdout(), b"from wanix / qjs\nexit api undefined\n");
         assert_eq!(read_file(&*root, "output.txt"), b"from wanix / qjs");
     }
 
@@ -632,6 +695,92 @@ print("id", Wanix.readText("#task/self/id").trim());
         );
         assert_eq!(read_file(&*root, "app/out.txt"), b"cwd write");
         assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_maps_wanix_exit_to_task_status() {
+        let table = TaskTable::new();
+        let runner = std::sync::Arc::new(runner());
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+print("before exit");
+console.error("stderr before exit");
+Promise.resolve().then(() => print("after queued job"));
+try {
+  Wanix.exit(7);
+} catch (err) {
+  print("after exit");
+  console.error("stderr after exit");
+  Wanix.writeText("after.txt", "should not persist");
+  Promise.resolve().then(() => print("after job"));
+}
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        let stderr = std::sync::Arc::new(MemFs::new());
+        stderr.write_file("err", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.insert_fd(
+            Fd::STDERR,
+            stderr
+                .open(
+                    &NormalizedPath::new("err").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("err").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(read_file(&*stdout, "out"), b"before exit\n");
+        assert_eq!(read_file(&*stderr, "err"), b"stderr before exit\n");
+        assert!(matches!(
+            root.read_file("after.txt"),
+            Err(wanix_fs::FsError::NotFound)
+        ));
+        assert_eq!(task.exit(), "7");
+    }
+
+    #[test]
+    fn task_driver_rejects_invalid_wanix_exit_status() {
+        let table = TaskTable::new();
+        let runner = std::sync::Arc::new(runner());
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("main.js", br#"Wanix.exit(999);"#).unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        let err = table.start(task.id()).unwrap_err();
+
+        assert!(err.to_string().contains("Wanix.exit expects"));
+        assert_eq!(task.exit(), "1");
     }
 
     #[test]

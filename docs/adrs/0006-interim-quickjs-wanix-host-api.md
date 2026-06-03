@@ -24,14 +24,17 @@ Wanix.env() -> object
 Wanix.env(name) -> string | undefined
 Wanix.cwd() -> string
 Wanix.cmd() -> string
+Wanix.exit(code) -> never
 ```
 
 Path functions resolve ordinary paths relative to the task-start working
 directory and keep `#task` service paths rooted in the task namespace. The task
 context functions are sourced from a task-start snapshot of the Wanix `cmd`,
-`env`, and `dir` task fields. Console output continues to flow through task
-stdout and stderr fds. This API is an adapter-level bridge, not the final system
-call surface.
+`env`, and `dir` task fields. `Wanix.exit` is installed only for Wanix task
+runs, where it requests a Wanix task exit status; after an exit request, later
+host-visible output, namespace writes, and pending jobs are suppressed. Console
+output continues to flow through task stdout and stderr fds. This API is an
+adapter-level bridge, not the final system call surface.
 
 ## Consequences
 

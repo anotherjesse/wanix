@@ -1,61 +1,36 @@
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail};
 use rust_wasi_quickjs::{QuickJsHostValue, QuickJsRuntime};
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath, OpenOptions};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct WanixTaskContext {
-    cmd: String,
-    args: Vec<String>,
-    env: BTreeMap<String, String>,
-    cwd: NormalizedPath,
-}
-
-impl WanixTaskContext {
-    pub(crate) fn new(
-        cmd: impl Into<String>,
-        args: Vec<String>,
-        env: BTreeMap<String, String>,
-        cwd: NormalizedPath,
-    ) -> Self {
-        Self {
-            cmd: cmd.into(),
-            args,
-            env,
-            cwd,
-        }
-    }
-}
-
-impl Default for WanixTaskContext {
-    fn default() -> Self {
-        Self {
-            cmd: String::new(),
-            args: Vec::new(),
-            env: BTreeMap::new(),
-            cwd: NormalizedPath::new(".").expect("root path is valid"),
-        }
-    }
-}
+use crate::task_context::{WanixExitState, WanixTaskContext};
 
 const WANIX_HOST_API_PRELUDE: &str = r#"
-globalThis.Wanix = Object.freeze({
-  readText: (path) => __wanix_read_text(String(path)),
-  writeText: (path, text) => __wanix_write_text(String(path), String(text)),
-  args: () => Object.freeze(JSON.parse(__wanix_args_json())),
-  env: function(name) {
-    const env = JSON.parse(__wanix_env_json());
-    if (arguments.length === 0) {
-      return Object.freeze(env);
-    }
-    const key = String(name);
-    return Object.prototype.hasOwnProperty.call(env, key) ? env[key] : undefined;
-  },
-  cwd: () => __wanix_cwd(),
-  cmd: () => __wanix_cmd(),
-});
+(() => {
+  const api = {
+    readText: (path) => __wanix_read_text(String(path)),
+    writeText: (path, text) => __wanix_write_text(String(path), String(text)),
+    args: () => Object.freeze(JSON.parse(__wanix_args_json())),
+    env: function(name) {
+      const env = JSON.parse(__wanix_env_json());
+      if (arguments.length === 0) {
+        return Object.freeze(env);
+      }
+      const key = String(name);
+      return Object.prototype.hasOwnProperty.call(env, key) ? env[key] : undefined;
+    },
+    cwd: () => __wanix_cwd(),
+    cmd: () => __wanix_cmd(),
+  };
+  if (typeof __wanix_exit === "function") {
+    api.exit = (code = 0) => {
+      __wanix_exit(Number(code));
+      for (;;) {}
+    };
+  }
+  globalThis.Wanix = Object.freeze(api);
+})();
 "#;
 
 pub(crate) fn define_output_callback(
@@ -63,8 +38,29 @@ pub(crate) fn define_output_callback(
     name: &'static str,
     output: Arc<Mutex<Vec<u8>>>,
 ) -> FsResult<()> {
+    define_output_callback_inner(runtime, name, output, None)
+}
+
+pub(crate) fn define_output_callback_with_exit_state(
+    runtime: &mut QuickJsRuntime,
+    name: &'static str,
+    output: Arc<Mutex<Vec<u8>>>,
+    exit_state: WanixExitState,
+) -> FsResult<()> {
+    define_output_callback_inner(runtime, name, output, Some(exit_state))
+}
+
+fn define_output_callback_inner(
+    runtime: &mut QuickJsRuntime,
+    name: &'static str,
+    output: Arc<Mutex<Vec<u8>>>,
+    exit_state: Option<WanixExitState>,
+) -> FsResult<()> {
     runtime
         .define_global_host_function(name, move |args| {
+            if exit_requested(&exit_state)? {
+                return Ok(QuickJsHostValue::Undefined);
+            }
             let text = args.iter().map(display_host_value).collect::<String>();
             output
                 .lock()
@@ -79,16 +75,17 @@ pub(crate) fn define_wanix_namespace_api(
     runtime: &mut QuickJsRuntime,
     namespace: impl FileSystem + Clone + 'static,
 ) -> FsResult<()> {
-    define_wanix_host_api(runtime, namespace, WanixTaskContext::default())
+    define_wanix_host_api(runtime, namespace, WanixTaskContext::default(), None)
 }
 
 pub(crate) fn define_wanix_host_api(
     runtime: &mut QuickJsRuntime,
     namespace: impl FileSystem + Clone + 'static,
     context: WanixTaskContext,
+    exit_state: Option<WanixExitState>,
 ) -> FsResult<()> {
     let read_namespace = namespace.clone();
-    let read_cwd = context.cwd.clone();
+    let read_cwd = context.cwd().clone();
     runtime
         .define_global_host_function("__wanix_read_text", move |args| {
             let path = one_string_arg(args, "Wanix.readText")?;
@@ -98,9 +95,13 @@ pub(crate) fn define_wanix_host_api(
         })
         .map_err(qjs_error)?;
 
-    let write_cwd = context.cwd.clone();
+    let write_cwd = context.cwd().clone();
+    let write_exit_state = exit_state.clone();
     runtime
         .define_global_host_function("__wanix_write_text", move |args| {
+            if exit_requested(&write_exit_state)? {
+                return Ok(QuickJsHostValue::Undefined);
+            }
             let (path, text) = two_string_args(args, "Wanix.writeText")?;
             write_text_path(&namespace, &write_cwd, &path, text.as_bytes())
                 .map_err(|err| anyhow!("Wanix.writeText({path:?}) failed: {err}"))?;
@@ -108,7 +109,7 @@ pub(crate) fn define_wanix_host_api(
         })
         .map_err(qjs_error)?;
 
-    let cmd = context.cmd.clone();
+    let cmd = context.cmd().to_owned();
     runtime
         .define_global_host_function("__wanix_cmd", move |args| {
             no_args(args, "Wanix.cmd")?;
@@ -116,7 +117,7 @@ pub(crate) fn define_wanix_host_api(
         })
         .map_err(qjs_error)?;
 
-    let args_json = serde_json::to_string(&context.args)
+    let args_json = serde_json::to_string(context.args())
         .map_err(|err| FsError::Other(format!("failed to encode task args: {err}")))?;
     runtime
         .define_global_host_function("__wanix_args_json", move |args| {
@@ -125,7 +126,7 @@ pub(crate) fn define_wanix_host_api(
         })
         .map_err(qjs_error)?;
 
-    let env_json = serde_json::to_string(&context.env)
+    let env_json = serde_json::to_string(context.env())
         .map_err(|err| FsError::Other(format!("failed to encode task env: {err}")))?;
     runtime
         .define_global_host_function("__wanix_env_json", move |args| {
@@ -134,13 +135,23 @@ pub(crate) fn define_wanix_host_api(
         })
         .map_err(qjs_error)?;
 
-    let cwd = context.cwd.to_string();
+    let cwd = context.cwd().to_string();
     runtime
         .define_global_host_function("__wanix_cwd", move |args| {
             no_args(args, "Wanix.cwd")?;
             Ok(QuickJsHostValue::String(cwd.clone()))
         })
         .map_err(qjs_error)?;
+
+    if let Some(exit_state) = exit_state {
+        runtime
+            .define_global_host_function("__wanix_exit", move |args| {
+                let code = exit_code_arg(args)?;
+                exit_state.request_exit(code)?;
+                Ok(QuickJsHostValue::Undefined)
+            })
+            .map_err(qjs_error)?;
+    }
 
     runtime
         .eval_discard(WANIX_HOST_API_PRELUDE)
@@ -311,6 +322,24 @@ fn no_args(args: &[QuickJsHostValue], function: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         bail!("{function} expects no arguments")
+    }
+}
+
+fn exit_code_arg(args: &[QuickJsHostValue]) -> anyhow::Result<i32> {
+    let code = match args {
+        [QuickJsHostValue::Number(value)] => *value,
+        _ => bail!("Wanix.exit expects one numeric status argument"),
+    };
+    if !code.is_finite() || code.fract() != 0.0 || !(0.0..=255.0).contains(&code) {
+        bail!("Wanix.exit expects an integer status in 0..=255");
+    }
+    Ok(code as i32)
+}
+
+fn exit_requested(exit_state: &Option<WanixExitState>) -> anyhow::Result<bool> {
+    match exit_state {
+        Some(exit_state) => exit_state.is_requested(),
+        None => Ok(false),
     }
 }
 

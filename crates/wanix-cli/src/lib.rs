@@ -447,6 +447,26 @@ print(text.includes("made inside Wanix"), Wanix.readText("created.txt"));
     }
 
     #[test]
+    fn qjs_command_uses_exit_status_requested_by_javascript() {
+        let script = write_temp_script(
+            "exit.js",
+            r#"
+print("before exit");
+console.error("stderr before exit");
+Wanix.exit(9);
+print("after exit");
+console.error("stderr after exit");
+"#,
+        );
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 9);
+        assert_eq!(output.stdout(), b"before exit\n");
+        assert_eq!(output.stderr(), b"stderr before exit\n");
+    }
+
+    #[test]
     fn qjs_command_flows_env_cwd_and_args_from_wanix_task_state() {
         let script = write_temp_script(
             "context.js",
