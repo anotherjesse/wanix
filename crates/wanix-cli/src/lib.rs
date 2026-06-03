@@ -389,9 +389,11 @@ fn parse_exit(exit: &str) -> i32 {
 mod tests {
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::run;
+
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn help_mentions_qjs_demo_target() {
@@ -553,11 +555,8 @@ print("id", Wanix.readText("#task/self/id").trim());
 
     fn write_temp_script(name: &str, source: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        path.push(format!("wanix-cli-test-{nonce}"));
+        let nonce = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        path.push(format!("wanix-cli-test-{}-{nonce}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path.push(name);
         fs::write(&path, source).unwrap();

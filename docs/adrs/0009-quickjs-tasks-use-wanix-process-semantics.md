@@ -34,6 +34,12 @@ driver into a task table.
 - Interim QuickJS fd helpers may demonstrate Wanix-owned task fd allocation
   before full WASI imports are available, but they must not create a separate
   QuickJS process or fd model.
+- QuickJS task setup consumes `QuickJsWanixConfig`, which wraps
+  `wanix_wasi::WasiConfig` for the current read-only projection adapter. Real
+  WASI imports must continue to attach to Wanix task identity and fds rather
+  than exposing the projection as an independent process model. The projection
+  accepts only the root preopen so extra preopen/fd semantics cannot be
+  accidentally flattened.
 - The synchronous process demo comes before richer lifecycle work such as async
   event loops, signals, cancellation, and snapshot/restore.
 - A useful demo should show JavaScript reading `#task/self/id`, using stdio,

@@ -31,7 +31,7 @@ use host_api::{
     take_buffer,
 };
 use task_context::{WanixExitState, WanixTaskContext};
-use virtual_wasi::with_namespace_read_only_files;
+use virtual_wasi::{with_namespace_read_only_files, with_wanix_wasi_read_only_projection};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "quickjs wasi task driver";
@@ -40,14 +40,14 @@ pub const CRATE_PURPOSE: &str = "quickjs wasi task driver";
 pub const FIRST_DEMO_TARGET: &str =
     "run JavaScript outside Chrome with access to a Wanix namespace";
 
-/// Host configuration for QuickJS/WASI task execution.
+/// Wanix-owned configuration for QuickJS task execution.
 #[derive(Debug, Clone)]
-pub struct HostConfig {
+pub struct QuickJsWanixConfig {
     wasi: WasiConfig,
 }
 
-impl HostConfig {
-    /// Creates a host config from Wanix-backed WASI settings.
+impl QuickJsWanixConfig {
+    /// Creates a QuickJS/Wanix config from Wanix-backed WASI settings.
     #[must_use]
     pub fn new(wasi: WasiConfig) -> Self {
         Self { wasi }
@@ -57,6 +57,13 @@ impl HostConfig {
     #[must_use]
     pub fn wasi(&self) -> &WasiConfig {
         &self.wasi
+    }
+
+    fn quickjs_read_only_projection(
+        &self,
+        config: QuickJsHostConfig,
+    ) -> FsResult<QuickJsHostConfig> {
+        with_wanix_wasi_read_only_projection(config, &self.wasi)
     }
 }
 
@@ -146,6 +153,33 @@ impl QuickJsRunner {
     ) -> FsResult<RunOutput> {
         let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
         self.run_source_with_setup(source, Some(config), move |runtime| {
+            define_wanix_module_loader(runtime, namespace.clone())?;
+            define_wanix_namespace_api(runtime, namespace)
+        })
+        .map_err(|failure| failure.error)
+    }
+
+    /// Runs JavaScript source with Wanix-backed QuickJS configuration.
+    ///
+    /// Today this projects the root Wanix WASI preopen into the prototype's
+    /// read-only virtual WASI filesystem before installing the interim
+    /// writable `Wanix` host object. Extra Wanix preopens are rejected because
+    /// the prototype can only model a single copied virtual root. The projection
+    /// is intentionally a narrow adapter point for replacing the prototype
+    /// virtual filesystem with real Wanix-owned WASI imports.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when WASI projection, QuickJS setup,
+    /// namespace callbacks, or JavaScript evaluation fails.
+    pub fn run_source_with_wanix_config(
+        &self,
+        source: &str,
+        config: QuickJsWanixConfig,
+    ) -> FsResult<RunOutput> {
+        let quickjs_config = config.quickjs_read_only_projection(captured_stdio_config())?;
+        let namespace = config.wasi().namespace().clone();
+        self.run_source_with_setup(source, Some(quickjs_config), move |runtime| {
             define_wanix_module_loader(runtime, namespace.clone())?;
             define_wanix_namespace_api(runtime, namespace)
         })
@@ -287,7 +321,8 @@ impl QuickJsRunner {
         let script_filename = script_path.to_string();
         let namespace = task.namespace();
         let source = read_namespace_file(&namespace, &script_path)?;
-        let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
+        let host = QuickJsWanixConfig::new(WasiConfig::new(namespace.clone()));
+        let config = host.quickjs_read_only_projection(captured_stdio_config())?;
         let run_as_module = uses_module_syntax(&source);
         let exit_state = WanixExitState::default();
         let api_exit_state = exit_state.clone();
@@ -445,7 +480,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        CRATE_PURPOSE, FIRST_DEMO_TARGET, HostConfig, QuickJsRunner, QuickJsTaskDriver,
+        CRATE_PURPOSE, FIRST_DEMO_TARGET, QuickJsRunner, QuickJsTaskDriver, QuickJsWanixConfig,
         wasi_contract_purpose,
     };
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
@@ -483,8 +518,8 @@ mod tests {
     }
 
     #[test]
-    fn host_config_wraps_wanix_wasi_settings() {
-        let config = HostConfig::new(WasiConfig::default());
+    fn quickjs_wanix_config_wraps_wanix_wasi_settings() {
+        let config = QuickJsWanixConfig::new(WasiConfig::default());
 
         assert_eq!(config.wasi().preopens()[0].guest_path().as_str(), ".");
         assert_eq!(wasi_contract_purpose(), "wanix-backed wasi imports");
@@ -529,6 +564,31 @@ print("fd api", typeof Wanix.open);
             b"from wanix / qjs\nexit api undefined\nfd api undefined\n"
         );
         assert_eq!(read_file(&*root, "output.txt"), b"from wanix / qjs");
+    }
+
+    #[test]
+    fn runner_uses_quickjs_wanix_config_for_namespace_access() {
+        let mut namespace = wanix_vfs::Namespace::new();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("input.txt", b"from config").unwrap();
+        namespace
+            .bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        let config = QuickJsWanixConfig::new(WasiConfig::new(namespace));
+
+        let output = runner()
+            .run_source_with_wanix_config(
+                r#"
+const text = Wanix.readText("input.txt");
+Wanix.writeText("output.txt", text + " / qjs");
+print(Wanix.readText("output.txt"));
+"#,
+                config,
+            )
+            .unwrap();
+
+        assert_eq!(output.stdout(), b"from config / qjs\n");
+        assert_eq!(read_file(&*root, "output.txt"), b"from config / qjs");
     }
 
     #[test]
