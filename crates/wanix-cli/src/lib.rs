@@ -8,12 +8,12 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::OnceLock;
 
-use wanix_fs::{FileSystem, FsError, MemFs, NormalizedPath, OpenOptions};
+use wanix_fs::{FileSystem, FsError, LocalFs, MemFs, NormalizedPath, OpenOptions};
 use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
 use wanix_task::{Fd, Task, TaskSpec, TaskTable};
 use wanix_vfs::BindOptions;
 
-const USAGE: &str = "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] <script.js> [-- arg ...]\n       wanix-rust qjs-restore [--cwd DIR] <before.js> <after.js>\n       wanix-rust --help";
+const USAGE: &str = "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] [--mount HOST=GUEST ...] <script.js> [-- arg ...]\n       wanix-rust qjs-restore [--cwd DIR] <before.js> <after.js>\n       wanix-rust --help";
 const QJS_GUEST_SCRIPT: &str = "main.js";
 const QJS_RESTORE_BEFORE_SCRIPT: &str = "__wanix_restore/before/main.js";
 const QJS_RESTORE_AFTER_SCRIPT: &str = "__wanix_restore/after/main.js";
@@ -137,6 +137,13 @@ struct QjsCommand {
     env: Vec<String>,
     cwd: NormalizedPath,
     stdin: Option<Vec<u8>>,
+    mounts: Vec<HostMount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HostMount {
+    host_path: PathBuf,
+    guest_path: NormalizedPath,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +171,7 @@ fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
     let guest_script = guest_path_in_cwd(&command.cwd, QJS_GUEST_SCRIPT)?;
     root.write_file(guest_script.as_str(), script.as_bytes())?;
     task.bind(root, ".", ".", BindOptions::default())?;
+    bind_host_mounts(&task, &command.mounts)?;
 
     if let Some(stdin_bytes) = command.stdin {
         let stdin = Arc::new(MemFs::new());
@@ -307,6 +315,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
     let mut env = Vec::new();
     let mut cwd = NormalizedPath::new(".")?;
     let mut stdin = None;
+    let mut mounts = Vec::new();
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--env" {
@@ -331,6 +340,13 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
                 .get(i)
                 .ok_or_else(|| CliError::usage("qjs --stdin expects text"))?;
             stdin = Some(os_arg_to_string(value, "qjs --stdin")?.into_bytes());
+            i += 1;
+        } else if args[i] == "--mount" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs --mount expects HOST=GUEST"))?;
+            mounts.push(parse_host_mount(&os_arg_to_string(value, "qjs --mount")?)?);
             i += 1;
         } else if args[i] == "--" {
             i += 1;
@@ -361,6 +377,26 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
         env,
         cwd,
         stdin,
+        mounts,
+    })
+}
+
+fn parse_host_mount(value: &str) -> Result<HostMount, CliError> {
+    let Some((host, guest)) = value.split_once('=') else {
+        return Err(CliError::usage("qjs --mount expects HOST=GUEST"));
+    };
+    if host.is_empty() || guest.is_empty() {
+        return Err(CliError::usage("qjs --mount expects HOST=GUEST"));
+    }
+    let guest_path = NormalizedPath::new(guest)?;
+    if guest_path.as_str() == "." {
+        return Err(CliError::usage(
+            "qjs --mount guest path must not be . in this demo",
+        ));
+    }
+    Ok(HostMount {
+        host_path: PathBuf::from(host),
+        guest_path,
     })
 }
 
@@ -463,6 +499,28 @@ fn bind_child_output_to_parent(child: &Task, parent: &Task) -> Result<(), CliErr
     let parent_id = parent.id().get();
     child.bind_fd_from_namespace(format!("#task/{parent_id}/fd/1"), Fd::STDOUT)?;
     child.bind_fd_from_namespace(format!("#task/{parent_id}/fd/2"), Fd::STDERR)?;
+    Ok(())
+}
+
+fn bind_host_mounts(task: &Task, mounts: &[HostMount]) -> Result<(), CliError> {
+    for mount in mounts {
+        let local = Arc::new(LocalFs::new(&mount.host_path).map_err(|error| {
+            CliError::new(
+                format!(
+                    "failed to mount {} at {}: {error}",
+                    mount.host_path.display(),
+                    mount.guest_path
+                ),
+                1,
+            )
+        })?);
+        task.bind(
+            local,
+            ".",
+            mount.guest_path.as_str(),
+            BindOptions::default(),
+        )?;
+    }
     Ok(())
 }
 
@@ -685,6 +743,7 @@ mod tests {
 
         assert_eq!(output.exit_code(), 0);
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--mount HOST=GUEST"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-restore"));
         assert!(output.stderr().is_empty());
     }
@@ -801,6 +860,92 @@ print(std.loadFile("created.txt"));
         assert_eq!(output.exit_code(), 0);
         assert_eq!(output.stdout(), b"hello from std write\n");
         assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_command_mounts_host_directory_into_wanix_namespace() {
+        let host = temp_dir("wanix-cli-mount");
+        fs::write(host.join("input.txt"), "from host").unwrap();
+        let script = write_temp_script(
+            "mount-demo.js",
+            r#"
+import * as std from "qjs:std";
+
+std.out.puts(std.loadFile("host/input.txt") + "\n");
+std.writeFile("host/output.txt", "from qjs std");
+std.out.puts(std.loadFile("host/output.txt") + "\n");
+std.out.flush();
+"#,
+        );
+
+        let output = run([
+            "qjs".into(),
+            "--mount".into(),
+            format!("{}=host", host.display()).into(),
+            script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"from host\nfrom qjs std\n");
+        assert!(output.stderr().is_empty());
+        assert_eq!(fs::read(host.join("output.txt")).unwrap(), b"from qjs std");
+        fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn qjs_host_mount_example_writes_host_visible_file() {
+        let host = temp_dir("wanix-cli-mount-example");
+        fs::write(host.join("input.txt"), "native mount").unwrap();
+
+        let output = run([
+            "qjs".into(),
+            "--mount".into(),
+            format!("{}=host", host.display()).into(),
+            example_script("qjs-host-mount.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"host input: native mount\nhost output: mounted output for native mount\n"
+        );
+        assert!(output.stderr().is_empty());
+        assert_eq!(
+            fs::read(host.join("output.txt")).unwrap(),
+            b"mounted output for native mount"
+        );
+        fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn qjs_command_rejects_invalid_host_mounts() {
+        let script = write_temp_script("mount-error.js", "print('unused');");
+
+        let missing_value = run(["qjs", "--mount"]).unwrap_err();
+        assert_eq!(missing_value.exit_code(), 2);
+        assert!(missing_value.to_string().contains("HOST=GUEST"));
+
+        let root_guest = run([
+            "qjs".into(),
+            "--mount".into(),
+            "/tmp=.".into(),
+            script.clone().into_os_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(root_guest.exit_code(), 2);
+        assert!(root_guest.to_string().contains("must not be ."));
+
+        let missing_host = run([
+            "qjs".into(),
+            "--mount".into(),
+            "/definitely/not/a/wanix/test/path=host".into(),
+            script.into_os_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(missing_host.exit_code(), 1);
+        assert!(missing_host.to_string().contains("failed to mount"));
     }
 
     #[test]
@@ -1310,12 +1455,17 @@ print("id", Wanix.readText("#task/self/id").trim());
     }
 
     fn write_temp_script(name: &str, source: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        let nonce = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        path.push(format!("wanix-cli-test-{}-{nonce}", std::process::id()));
-        fs::create_dir_all(&path).unwrap();
+        let mut path = temp_dir("wanix-cli-test");
         path.push(name);
         fs::write(&path, source).unwrap();
+        path
+    }
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nonce = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        path.push(format!("{prefix}-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
         path
     }
 

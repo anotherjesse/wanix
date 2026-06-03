@@ -13,8 +13,8 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
 
 ## Crate Shape
 
-- `wanix-fs`: filesystem traits, metadata, errors, path rules, and in-memory
-  fixtures.
+- `wanix-fs`: filesystem traits, metadata, errors, path rules, in-memory
+  fixtures, and explicit host-directory-backed filesystems for native demos.
 - `wanix-vfs`: Plan 9-style namespace binding and resolution.
 - `wanix-task`: task model, `#task`, fd table, and driver registry.
 - `wanix-wasi`: custom WASI Preview 1 imports backed by Wanix namespaces and
@@ -115,6 +115,9 @@ cargo test --workspace --locked
 - [ADR 0016](docs/adrs/0016-quickjs-task-runtime-restore-lifecycle.md):
   `QuickJsTaskRuntime` owns create/restore lifecycle for qjs task VMs while
   Wanix host resources are reattached outside the snapshot image.
+- [ADR 0017](docs/adrs/0017-explicit-host-directory-qjs-mounts.md):
+  Native qjs demos expose host files only through explicit rooted directory
+  mounts into a Wanix namespace.
 
 ## Cycle Rules
 

@@ -4,12 +4,14 @@
 //! errors, and the first in-memory filesystem used by namespace/task tests.
 
 mod error;
+mod localfs;
 mod memfs;
 mod metadata;
 mod path;
 mod traits;
 
 pub use error::{FsError, FsResult};
+pub use localfs::LocalFs;
 pub use memfs::MemFs;
 pub use metadata::{DirEntry, FileType, Metadata};
 pub use path::NormalizedPath;
