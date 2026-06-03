@@ -5,7 +5,7 @@ use rust_wasi_quickjs::{QuickJsCreateOptions, QuickJsRestoreOptions, QuickJsRunt
 use wanix_fs::{FsError, FsResult};
 use wanix_task::{Fd, Task};
 
-use crate::host_api::{define_wanix_host_api, define_wanix_module_loader, qjs_error};
+use crate::host_api::{define_wanix_module_loader, define_wanix_task_globals, qjs_error};
 use crate::task_context::{WanixExitState, WanixTaskContext};
 use crate::task_stdio::task_wasi_config;
 use crate::wasi_host::WanixQuickJsWasiHost;
@@ -169,10 +169,10 @@ impl QuickJsRunner {
     /// Creates a QuickJS runtime attached to a Wanix task.
     ///
     /// This installs Wanix-backed WASI imports, task stdout/stderr callbacks,
-    /// the namespace module loader, the interim `Wanix` task API, and an
-    /// interrupt handler for process exit. The task script is not evaluated by
-    /// this method; callers can evaluate code, snapshot the VM, restore it with
-    /// fresh task resources, and finally call [`QuickJsTaskRuntime::finish`].
+    /// the namespace module loader, `scriptArgs`, and an interrupt handler for
+    /// process exit. The task script is not evaluated by this method; callers
+    /// can evaluate code, snapshot the VM, restore it with fresh task resources,
+    /// and finally call [`QuickJsTaskRuntime::finish`].
     ///
     /// # Errors
     ///
@@ -180,7 +180,7 @@ impl QuickJsRunner {
     /// Wanix WASI host cannot be created, the QuickJS runtime cannot be
     /// instantiated, or task host callbacks cannot be attached.
     pub fn create_task_runtime(&self, task: &Task) -> FsResult<QuickJsTaskRuntime> {
-        let command = task_command(task)?;
+        task_command(task)?;
         let exit_state = WanixExitState::default();
         let wasi_host =
             WanixQuickJsWasiHost::new_with_exit_state(task_wasi_config(task), exit_state.clone())
@@ -192,7 +192,7 @@ impl QuickJsRunner {
             .module
             .create_runtime_with_options(create_options)
             .map_err(qjs_error)?;
-        attach_task_host_state(&mut runtime, task, command, exit_state.clone())?;
+        attach_task_host_state(&mut runtime, task, exit_state.clone())?;
         Ok(QuickJsTaskRuntime::new(runtime, task.clone(), exit_state))
     }
 
@@ -212,7 +212,7 @@ impl QuickJsRunner {
         task: &Task,
         bytes: &[u8],
     ) -> FsResult<QuickJsTaskRuntime> {
-        let command = task_command(task)?;
+        task_command(task)?;
         let exit_state = WanixExitState::default();
         let wasi_host =
             WanixQuickJsWasiHost::new_with_exit_state(task_wasi_config(task), exit_state.clone())
@@ -224,7 +224,7 @@ impl QuickJsRunner {
             .module
             .restore_runtime_from_bytes_with_options(bytes, restore_options)
             .map_err(qjs_error)?;
-        attach_task_host_state(&mut runtime, task, command, exit_state.clone())?;
+        attach_task_host_state(&mut runtime, task, exit_state.clone())?;
         Ok(QuickJsTaskRuntime::new(runtime, task.clone(), exit_state))
     }
 }
@@ -232,7 +232,6 @@ impl QuickJsRunner {
 fn attach_task_host_state(
     runtime: &mut QuickJsRuntime,
     task: &Task,
-    command: crate::TaskCommand,
     exit_state: WanixExitState,
 ) -> FsResult<()> {
     define_task_output_callback(
@@ -258,13 +257,7 @@ fn attach_task_host_state(
 
     let namespace = task.namespace();
     define_wanix_module_loader(runtime, namespace.clone())?;
-    let context = WanixTaskContext::new(task_wasi_argv(task), command.cwd);
-    define_wanix_host_api(
-        runtime,
-        namespace,
-        context,
-        Some(exit_state),
-        Some(task.clone()),
-    )?;
+    let context = WanixTaskContext::new(task_wasi_argv(task));
+    define_wanix_task_globals(runtime, context)?;
     runtime.eval_discard(CONSOLE_PRELUDE).map_err(qjs_error)
 }

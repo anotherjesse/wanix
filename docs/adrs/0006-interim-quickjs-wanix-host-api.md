@@ -2,8 +2,7 @@
 
 ## Status
 
-Partially superseded. The namespace, task context, and exit helpers have been
-removed. Only the fd helpers remain as a temporary legacy bridge.
+Superseded. The `globalThis.Wanix` bridge has been removed.
 
 ## Context
 
@@ -15,16 +14,7 @@ observe and mutate a Wanix task namespace outside Chrome.
 ## Decision
 
 `wanix-qjs` exposed a narrow temporary JavaScript object,
-`globalThis.Wanix`, for the first vertical slice. The remaining live surface is:
-
-```text
-Wanix.open(path, mode) -> number
-Wanix.readFd(fd, len) -> string
-Wanix.writeFd(fd, text) -> number
-Wanix.closeFd(fd) -> undefined
-```
-
-The removed helpers were:
+`globalThis.Wanix`, for the first vertical slice:
 
 ```text
 Wanix.readText(path)
@@ -34,16 +24,19 @@ Wanix.env(...)
 Wanix.cwd()
 Wanix.cmd()
 Wanix.exit(code)
+Wanix.open(path, mode)
+Wanix.readFd(fd, len)
+Wanix.writeFd(fd, text)
+Wanix.closeFd(fd)
 ```
 
 Guest code should use `qjs:std`, `qjs:os`, `scriptArgs`, and `#task` service
-files instead. Fd helpers allocate, read, write, and close entries in the Wanix
-task fd table; they do not create a separate QuickJS fd namespace. Because the
-current QuickJS callback surface copies scalar values, `readFd` and `writeFd`
-are text/UTF-8 helpers rather than byte-accurate WASI replacements. After an
-exit request, later host-visible output, fd side effects, and pending jobs are
-suppressed. Console output continues to flow through task stdout and stderr fds.
-This API is an adapter-level bridge, not the final system call surface.
+files instead. Dynamic file descriptors opened through `qjs:os.open(...)` are
+mirrored into the Wanix task fd table by the live `wanix-wasi` provider, so
+QuickJS still observes Wanix-owned fd semantics without a separate JavaScript
+bridge object. Console output continues to flow through task stdout and stderr
+fds. The removed API was an adapter-level bridge, not the final system call
+surface.
 
 ## Consequences
 
@@ -53,12 +46,11 @@ This API is an adapter-level bridge, not the final system call surface.
   semantics.
 - QuickJS can observe Wanix-owned task context without owning process identity
   or global fd semantics.
-- The remaining fd helpers preserve the early Wanix task-fd proof while qjs
-  tests/examples migrate to `qjs:os` fd calls.
 - `Wanix.exit` was removed after `qjs:std.exit(...)` reached Wanix-owned WASI
   `proc_exit` through the live provider.
 - `Wanix.readText`, `Wanix.writeText`, `Wanix.args`, `Wanix.env`, `Wanix.cwd`,
   and `Wanix.cmd` were removed after guest code could use live WASI path/env/arg
   calls and `#task` service files directly.
-- The `Wanix` JavaScript object may be removed, renamed, or moved behind a
-  compatibility flag once QuickJS receives Wanix-backed WASI imports directly.
+- `Wanix.open`, `Wanix.readFd`, `Wanix.writeFd`, and `Wanix.closeFd` were
+  removed after `qjs:os` fd calls could mirror dynamic fds into the Wanix task
+  fd table and snapshot blockers could report open dynamic WASI fds.

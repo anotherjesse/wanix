@@ -1,34 +1,20 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
-use wanix_fs::{FsError, FsResult, NormalizedPath};
+use wanix_fs::{FsError, FsResult};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct WanixTaskContext {
     script_args: Vec<String>,
-    cwd: NormalizedPath,
 }
 
 impl WanixTaskContext {
-    pub(crate) fn new(script_args: Vec<String>, cwd: NormalizedPath) -> Self {
-        Self { script_args, cwd }
+    pub(crate) fn new(script_args: Vec<String>) -> Self {
+        Self { script_args }
     }
 
     pub(crate) fn script_args(&self) -> &[String] {
         &self.script_args
-    }
-
-    pub(crate) fn cwd(&self) -> &NormalizedPath {
-        &self.cwd
-    }
-}
-
-impl Default for WanixTaskContext {
-    fn default() -> Self {
-        Self {
-            script_args: Vec::new(),
-            cwd: NormalizedPath::new(".").expect("root path is valid"),
-        }
     }
 }
 

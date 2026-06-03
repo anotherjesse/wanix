@@ -3,24 +3,12 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail};
 use rust_wasi_quickjs::{QuickJsHostValue, QuickJsRuntime};
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath, OpenOptions};
-use wanix_task::Task;
 
-use crate::{
-    fd_api::define_wanix_fd_api,
-    task_context::{WanixExitState, WanixTaskContext},
-};
+use crate::task_context::{WanixExitState, WanixTaskContext};
 
-const WANIX_HOST_API_PRELUDE: &str = r#"
+const WANIX_TASK_GLOBALS_PRELUDE: &str = r#"
 (() => {
   globalThis.scriptArgs = Object.freeze(JSON.parse(__wanix_script_args_json()));
-  const api = {};
-  if (typeof __wanix_open === "function") {
-    api.open = (path, mode = "r") => __wanix_open(String(path), String(mode));
-    api.readFd = (fd, len) => __wanix_read_fd(Number(fd), Number(len));
-    api.writeFd = (fd, text) => __wanix_write_fd(Number(fd), String(text));
-    api.closeFd = (fd) => __wanix_close_fd(Number(fd));
-  }
-  globalThis.Wanix = Object.freeze(api);
 })();
 "#;
 
@@ -62,12 +50,9 @@ fn define_output_callback_inner(
         .map_err(qjs_error)
 }
 
-pub(crate) fn define_wanix_host_api(
+pub(crate) fn define_wanix_task_globals(
     runtime: &mut QuickJsRuntime,
-    namespace: impl FileSystem + Clone + 'static,
     context: WanixTaskContext,
-    exit_state: Option<WanixExitState>,
-    task: Option<Task>,
 ) -> FsResult<()> {
     let script_args_json = serde_json::to_string(context.script_args())
         .map_err(|err| FsError::Other(format!("failed to encode scriptArgs: {err}")))?;
@@ -78,18 +63,8 @@ pub(crate) fn define_wanix_host_api(
         })
         .map_err(qjs_error)?;
 
-    if let Some(task) = task {
-        define_wanix_fd_api(
-            runtime,
-            namespace.clone(),
-            context.cwd().clone(),
-            task,
-            exit_state,
-        )?;
-    }
-
     runtime
-        .eval_discard(WANIX_HOST_API_PRELUDE)
+        .eval_discard(WANIX_TASK_GLOBALS_PRELUDE)
         .map_err(qjs_error)
 }
 
@@ -206,19 +181,6 @@ pub(crate) fn resolve_namespace_path(cwd: &NormalizedPath, path: &str) -> FsResu
         return Ok(cwd.clone());
     }
     NormalizedPath::new(format!("{cwd}/{path}"))
-}
-
-pub(crate) fn two_string_args(
-    args: &[QuickJsHostValue],
-    function: &str,
-) -> anyhow::Result<(String, String)> {
-    match args {
-        [
-            QuickJsHostValue::String(left),
-            QuickJsHostValue::String(right),
-        ] => Ok((left.clone(), right.clone())),
-        _ => bail!("{function} expects two string arguments"),
-    }
 }
 
 fn no_args(args: &[QuickJsHostValue], function: &str) -> anyhow::Result<()> {

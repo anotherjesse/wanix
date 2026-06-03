@@ -1758,12 +1758,16 @@ std.out.flush();
     }
 
     #[test]
-    fn qjs_restore_rejects_open_wanix_task_fds_before_snapshot() {
+    fn qjs_restore_rejects_open_wasi_fds_mirrored_into_task_table_before_snapshot() {
         let before_script = write_temp_script(
             "restore-before-fd.js",
             r##"
-Wanix.open("__wanix_restore/before/main.js", "r");
-print("opened task fd");
+import * as os from "qjs:os";
+import * as std from "qjs:std";
+
+const fd = os.open("__wanix_restore/before/main.js", os.O_RDONLY);
+std.out.puts("opened wasi fd " + fd + "\n");
+std.out.flush();
 "##,
         );
         let after_script = write_temp_script("restore-after-fd.js", "print('after');");
@@ -1776,10 +1780,10 @@ print("opened task fd");
         .unwrap();
 
         assert_eq!(output.exit_code(), 1);
-        assert_eq!(output.stdout(), b"opened task fd\n");
+        assert_eq!(output.stdout(), b"opened wasi fd 4\n");
         assert!(
             String::from_utf8_lossy(output.stderr())
-                .contains("cannot snapshot qjs task with open Wanix task fds: 3")
+                .contains("cannot snapshot qjs task with open Wanix task fds: 4")
         );
     }
 

@@ -25,10 +25,9 @@ restores QuickJS VM bytes and reattaches host state from the supplied task.
 
 The snapshot bytes remain QuickJS/Wasm memory only. On each create or restore,
 `wanix-qjs` installs Wanix-backed WASI imports, task stdout/stderr callbacks,
-the namespace module loader, `scriptArgs`, the remaining fd-only `Wanix` bridge,
-an interrupt handler, and a fresh exit-state cell. `QuickJsTaskRuntime::finish`
-records the observed exit code on the task, defaulting to `0` when JavaScript
-has not requested a status.
+the namespace module loader, `scriptArgs`, an interrupt handler, and a fresh
+exit-state cell. `QuickJsTaskRuntime::finish` records the observed exit code on
+the task, defaulting to `0` when JavaScript has not requested a status.
 
 Guest memory and initialized guest process state, such as globals and QuickJS
 libc environment data, may survive restore. Wanix host context exposed through
