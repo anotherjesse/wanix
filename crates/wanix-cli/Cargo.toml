@@ -11,6 +11,7 @@ version.workspace = true
 wanix-fs = { path = "../wanix-fs" }
 wanix-qjs = { path = "../wanix-qjs" }
 wanix-task = { path = "../wanix-task" }
+wanix-term = { path = "../wanix-term" }
 wanix-vfs = { path = "../wanix-vfs" }
 wanix-wasi = { path = "../wanix-wasi" }
 

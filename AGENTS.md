@@ -56,6 +56,10 @@ stdio/console shim, and exits with an observable status. A strong follow-up demo
 should read `#task/self/id` from JavaScript to prove task context crosses into
 QuickJS.
 
+The next terminal-facing demo is `wanix-rust qjs-term main.js`: JavaScript still
+runs as a Wanix `qjs` task, but fd 0/1/2 are bound through `#term/<id>/program`
+and the CLI emits the terminal `data` transcript.
+
 ## Code Quality Guardrails
 
 Prefer modules under 250-350 non-test lines. Split responsibility-heavy modules
@@ -221,6 +225,9 @@ cargo test --workspace --locked
 - [ADR 0050](docs/adrs/0050-rust-terminal-device-foundation.md):
   `wanix-term` implements the first Rust-native `#term` device contract for
   terminal/program byte flow, id allocation, and resize-event broadcast.
+- [ADR 0051](docs/adrs/0051-terminal-backed-qjs-cli-demo.md):
+  `wanix-rust qjs-term` runs a QuickJS task through `#term` fd bindings and
+  returns the terminal transcript as the native CLI output.
 
 ## Cycle Rules
 
@@ -236,3 +243,5 @@ cycle before starting the next one.
   intentional runtime decision.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
+- Make `qjs-term` genuinely interactive by streaming native terminal input and
+  output while the task runtime remains active.

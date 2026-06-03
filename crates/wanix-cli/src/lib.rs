@@ -1,5 +1,7 @@
 //! Native CLI plumbing for Rust Wanix demos.
 
+mod qjs_term;
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
@@ -17,6 +19,10 @@ use wanix_vfs::BindOptions;
 
 const USAGE: &str = concat!(
     "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
+    "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
+    "[--interrupt-after N] [--memory-limit-bytes N] ",
+    "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
+    "       wanix-rust qjs-term [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
     "[--interrupt-after N] [--memory-limit-bytes N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
@@ -149,6 +155,9 @@ where
         [help] if help == "--help" || help == "-h" => Ok(help_output()),
         [command, rest @ ..] if command == "qjs" => {
             run_qjs(parse_qjs_command(rest)?, &mut process_stdin)
+        }
+        [command, rest @ ..] if command == "qjs-term" => {
+            qjs_term::run_qjs_term(parse_qjs_command_for(rest, "qjs-term")?, &mut process_stdin)
         }
         [command, rest @ ..] if command == "qjs-snapshot" => run_qjs_snapshot(
             parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?,
@@ -507,6 +516,10 @@ fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
 }
 
 fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
+    parse_qjs_command_for(args, "qjs")
+}
+
+fn parse_qjs_command_for(args: &[OsString], command: &str) -> Result<QjsCommand, CliError> {
     let mut env = Vec::new();
     let mut cwd = NormalizedPath::new(".")?;
     let mut stdin = None;
@@ -521,77 +534,86 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
             i += 1;
             let value = args
                 .get(i)
-                .ok_or_else(|| CliError::usage("qjs --env expects KEY=VALUE"))?;
-            let value = os_arg_to_string(value, "qjs --env")?;
-            validate_env_line(&value, "qjs --env")?;
+                .ok_or_else(|| CliError::usage(format!("{command} --env expects KEY=VALUE")))?;
+            let value = os_arg_to_string(value, &format!("{command} --env"))?;
+            validate_env_line(&value, &format!("{command} --env"))?;
             env.push(value);
             i += 1;
         } else if args[i] == "--cwd" {
             i += 1;
             let value = args
                 .get(i)
-                .ok_or_else(|| CliError::usage("qjs --cwd expects a Wanix path"))?;
-            cwd = NormalizedPath::new(os_arg_to_string(value, "qjs --cwd")?)?;
+                .ok_or_else(|| CliError::usage(format!("{command} --cwd expects a Wanix path")))?;
+            cwd = NormalizedPath::new(os_arg_to_string(value, &format!("{command} --cwd"))?)?;
             i += 1;
         } else if args[i] == "--stdin" {
             i += 1;
             let value = args
                 .get(i)
-                .ok_or_else(|| CliError::usage("qjs --stdin expects text"))?;
+                .ok_or_else(|| CliError::usage(format!("{command} --stdin expects text")))?;
             set_qjs_stdin(
                 &mut stdin,
-                QjsStdin::Bytes(os_arg_to_string(value, "qjs --stdin")?.into_bytes()),
-                "qjs",
+                QjsStdin::Bytes(
+                    os_arg_to_string(value, &format!("{command} --stdin"))?.into_bytes(),
+                ),
+                command,
             )?;
             i += 1;
         } else if args[i] == "--stdin-file" {
             i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage("qjs --stdin-file expects PATH or -"))?;
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage(format!("{command} --stdin-file expects PATH or -"))
+            })?;
             let source = if value == "-" {
                 QjsStdin::Process
             } else {
                 QjsStdin::File(PathBuf::from(value))
             };
-            set_qjs_stdin(&mut stdin, source, "qjs")?;
+            set_qjs_stdin(&mut stdin, source, command)?;
             i += 1;
         } else if args[i] == "--event-loop-ms" {
             i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage("qjs --event-loop-ms expects milliseconds"))?;
-            event_loop_wait_budget = parse_duration_millis(value, "qjs --event-loop-ms")?;
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage(format!("{command} --event-loop-ms expects milliseconds"))
+            })?;
+            event_loop_wait_budget =
+                parse_duration_millis(value, &format!("{command} --event-loop-ms"))?;
             i += 1;
         } else if args[i] == "--ready-io-turns" {
             i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage("qjs --ready-io-turns expects a count"))?;
-            ready_io_turns = parse_usize(value, "qjs --ready-io-turns")?;
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage(format!("{command} --ready-io-turns expects a count"))
+            })?;
+            ready_io_turns = parse_usize(value, &format!("{command} --ready-io-turns"))?;
             i += 1;
         } else if args[i] == "--interrupt-after" {
             i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage("qjs --interrupt-after expects a count"))?;
-            interrupt_poll_budget = Some(parse_usize(value, "qjs --interrupt-after")?);
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage(format!("{command} --interrupt-after expects a count"))
+            })?;
+            interrupt_poll_budget =
+                Some(parse_usize(value, &format!("{command} --interrupt-after"))?);
             i += 1;
         } else if args[i] == "--memory-limit-bytes" {
             i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage("qjs --memory-limit-bytes expects a byte count"))?;
-            memory_limit_bytes = Some(parse_u32(value, "qjs --memory-limit-bytes")?);
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage(format!(
+                    "{command} --memory-limit-bytes expects a byte count"
+                ))
+            })?;
+            memory_limit_bytes = Some(parse_u32(
+                value,
+                &format!("{command} --memory-limit-bytes"),
+            )?);
             i += 1;
         } else if args[i] == "--mount" {
             i += 1;
             let value = args
                 .get(i)
-                .ok_or_else(|| CliError::usage("qjs --mount expects HOST=GUEST"))?;
+                .ok_or_else(|| CliError::usage(format!("{command} --mount expects HOST=GUEST")))?;
             mounts.push(parse_host_mount(
-                &os_arg_to_string(value, "qjs --mount")?,
-                "qjs --mount",
+                &os_arg_to_string(value, &format!("{command} --mount"))?,
+                &format!("{command} --mount"),
             )?);
             i += 1;
         } else if args[i] == "--" {
@@ -604,7 +626,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
 
     let script = args
         .get(i)
-        .ok_or_else(|| CliError::usage("qjs expects a script path"))?;
+        .ok_or_else(|| CliError::usage(format!("{command} expects a script path")))?;
     let script_path = PathBuf::from(script);
     i += 1;
 
@@ -614,7 +636,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
 
     let js_args = args[i..]
         .iter()
-        .map(|arg| os_arg_to_string(arg, "qjs script arg"))
+        .map(|arg| os_arg_to_string(arg, &format!("{command} script arg")))
         .collect::<Result<Vec<_>, CliError>>()?;
 
     Ok(QjsCommand {
@@ -1335,6 +1357,7 @@ mod tests {
 
         assert_eq!(output.exit_code(), 0);
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-term"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--mount HOST=GUEST"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--stdin-file PATH|-"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-snapshot"));
@@ -1391,6 +1414,61 @@ std.out.flush();
 
         assert_eq!(output.exit_code(), 0);
         assert_eq!(output.stdout(), b"hello std\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_term_command_runs_script_through_terminal_fds() {
+        let script = write_temp_script(
+            "term-demo.js",
+            r##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+const bytes = new Uint8Array(64);
+const count = os.read(0, bytes.buffer, 0, bytes.length);
+const input = Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+
+std.out.puts("task " + std.loadFile("#task/self/id").trim() + "\n");
+std.out.puts("term " + std.loadFile("#term/1/id").trim() + "\n");
+std.out.puts("input " + input.trimEnd() + "\n");
+std.out.flush();
+std.err.puts("stderr on terminal\n");
+std.err.flush();
+"##,
+        );
+
+        let output = run([
+            "qjs-term".into(),
+            "--stdin".into(),
+            "typed input\n".into(),
+            script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"task 1\r\nterm 1\r\ninput typed input\r\nstderr on terminal\r\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_term_example_runs_terminal_transcript_demo() {
+        let output = run([
+            "qjs-term".into(),
+            "--stdin".into(),
+            "from native stdin\n".into(),
+            example_script("qjs-term-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"terminal task: 1\r\nterminal id: 1\r\nterminal input: from native stdin\r\nterminal stderr: same screen\r\n"
+        );
         assert!(output.stderr().is_empty());
     }
 

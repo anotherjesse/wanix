@@ -952,6 +952,7 @@ dependencies = [
  "wanix-fs",
  "wanix-qjs",
  "wanix-task",
+ "wanix-term",
  "wanix-vfs",
  "wanix-wasi",
 ]
