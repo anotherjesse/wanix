@@ -41,9 +41,9 @@ needed by the current engine behavior.
 ## Consequences
 
 Wanix can evolve the QuickJS/WASI import boundary in one workspace and one
-quality gate. Future patches can replace the engine crate's virtual WASI
-projection with Wanix-owned syscall hooks without crossing a sibling repo
-boundary.
+quality gate. Later patches replaced the `wanix-qjs` virtual WASI projection
+with Wanix-owned syscall hooks without crossing a sibling repo boundary.
+Engine-level read-only virtual files remain fixture support only.
 
 The engine crate remains deliberately below `wanix-qjs`: it must not learn
 Wanix task identity or global fd semantics. Those belong to Wanix runtime

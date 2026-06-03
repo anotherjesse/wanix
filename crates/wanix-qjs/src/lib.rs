@@ -1508,9 +1508,11 @@ const readStdin = () => {
 };
 
 const env = std.getenviron();
+std.out.puts("wanix " + typeof globalThis.Wanix + "\n");
 std.out.puts("argv " + scriptArgs.join("|") + "\n");
 std.out.puts("mode " + std.getenv("MODE") + "\n");
 std.out.puts("env " + env.MODE + " " + (env.EMPTY === "") + " " + String(env.MISSING) + "\n");
+std.out.puts("task " + std.loadFile('#task/self/id').trim() + "\n");
 std.out.puts("stdin " + readStdin() + "\n");
 std.out.puts("source " + std.loadFile("main.js").includes("std.getenv") + "\n");
 std.writeFile("created.txt", "made via std cwd");
@@ -1552,7 +1554,7 @@ std.out.flush();
 
         assert_eq!(
             read_file(&*stdout, "out"),
-            b"argv main.js|alpha|beta\nmode test\nenv test true undefined\nstdin hello from fd0\nsource true\ncreated made via std cwd\n"
+            b"wanix undefined\nargv main.js|alpha|beta\nmode test\nenv test true undefined\ntask 1\nstdin hello from fd0\nsource true\ncreated made via std cwd\n"
         );
         assert_eq!(
             root.read_file("app/created.txt").unwrap(),

@@ -59,7 +59,7 @@ validation. Snapshots produced by the older non-libc fixture are expected to be
 rejected by the new module, preserving the exact-build snapshot contract.
 
 ADR 0013 adds the first filesystem read semantic pass for `std.loadFile(...)`
-and `os.open(...)`/`os.read(...)`, then extends the same projection to basic
-create/truncate writes through `std.writeFile(...)` and `os.write(...)`.
+and `os.open(...)`/`os.read(...)`, then extends the same rights projection to
+basic create/truncate writes through `std.writeFile(...)` and `os.write(...)`.
 Directory-specific open modes, fd flag mutation, and richer libc compatibility
 remain follow-up work.
