@@ -146,6 +146,20 @@ impl WasiCtx {
         &self.env
     }
 
+    /// Returns the number of currently open dynamic file descriptors.
+    ///
+    /// Standard descriptors and preopens are fixed process attachments; fds
+    /// opened through `path_open` are dynamic and must be closed before a
+    /// QuickJS VM snapshot can safely claim to contain all guest-visible state.
+    #[must_use]
+    pub fn open_dynamic_fd_count(&self) -> usize {
+        let dynamic_floor = self.next_dynamic_floor();
+        self.fds
+            .keys()
+            .filter(|fd| fd.get() >= dynamic_floor)
+            .count()
+    }
+
     /// Opens a namespace path relative to `dirfd`.
     pub fn path_open(
         &mut self,

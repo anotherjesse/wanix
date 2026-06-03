@@ -146,6 +146,13 @@ impl QuickJsRuntime {
         if self.store.data().open_virtual_file_count() != 0 {
             bail!("cannot snapshot while a virtual file descriptor is open");
         }
+        let wasi_host_blockers = self.store.data().wasi_host_snapshot_blockers()?;
+        if !wasi_host_blockers.is_empty() {
+            bail!(
+                "cannot snapshot while live WASI host resources are open: {}",
+                wasi_host_blockers.join(", ")
+            );
+        }
 
         let stack_pointer = self.read_stack_pointer()?;
         let runtime_ptr = self.read_runtime_ptr()?;

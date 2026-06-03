@@ -95,13 +95,22 @@ fn module_byte_restore_reattaches_stdio_capture_limit_from_restore_config() -> R
 
 type WasiHostResult<T> = std::result::Result<T, QuickJsWasiErrno>;
 type WriteLog = Arc<Mutex<Vec<(u32, Vec<u8>)>>>;
+type SnapshotBlockers = Arc<Mutex<Vec<String>>>;
 
 #[derive(Clone, Default)]
 struct RestoreRecordingWasiHost {
     writes: WriteLog,
+    snapshot_blockers: SnapshotBlockers,
 }
 
 impl QuickJsWasiHost for RestoreRecordingWasiHost {
+    fn snapshot_blockers(&mut self) -> WasiHostResult<Vec<String>> {
+        self.snapshot_blockers
+            .lock()
+            .map_err(|_| QuickJsWasiErrno::Io)
+            .map(|blockers| blockers.clone())
+    }
+
     fn fd_prestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiPrestat> {
         Err(QuickJsWasiErrno::Nosys)
     }
@@ -226,6 +235,30 @@ fn module_byte_restore_reattaches_live_wasi_host_from_restore_options() -> Resul
         &*writes.lock().expect("test writes lock"),
         &[(1, b"stdio event\n".to_vec())]
     );
+    Ok(())
+}
+
+#[test]
+fn snapshot_rejects_live_wasi_host_blockers() -> Result<()> {
+    let (engine, module) = stdio_runtime_fixture()?;
+    let host = RestoreRecordingWasiHost::default();
+    host.snapshot_blockers
+        .lock()
+        .expect("test snapshot blockers lock")
+        .push("open dynamic WASI fd 4".to_owned());
+    let mut vm = QuickJsRuntime::create_with_options(
+        &engine,
+        &module,
+        QuickJsCreateOptions::new().with_wasi_host(host),
+    )?;
+
+    let err = vm
+        .snapshot()
+        .expect_err("snapshot should reject live WASI host blockers");
+    let message = format!("{err:#}");
+
+    assert!(message.contains("live WASI host resources"));
+    assert!(message.contains("open dynamic WASI fd 4"));
     Ok(())
 }
 

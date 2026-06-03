@@ -90,6 +90,17 @@ impl HostState {
         self.wasi_host.as_ref().map(Arc::clone)
     }
 
+    pub(crate) fn wasi_host_snapshot_blockers(&self) -> Result<Vec<String>> {
+        let Some(wasi_host) = &self.wasi_host else {
+            return Ok(Vec::new());
+        };
+        wasi_host
+            .lock()
+            .map_err(|_| anyhow::anyhow!("WASI host lock poisoned"))?
+            .snapshot_blockers()
+            .map_err(|errno| anyhow::anyhow!("WASI host snapshot blocker check failed: {errno:?}"))
+    }
+
     pub(crate) fn mark_process_exited(&mut self) {
         self.process_exited = true;
     }

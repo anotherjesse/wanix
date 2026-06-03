@@ -34,6 +34,15 @@ impl WanixQuickJsWasiHost {
 }
 
 impl QuickJsWasiHost for WanixQuickJsWasiHost {
+    fn snapshot_blockers(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
+        let open_fds = self.ctx.open_dynamic_fd_count();
+        if open_fds == 0 {
+            Ok(Vec::new())
+        } else {
+            Ok(vec![format!("{open_fds} open dynamic WASI fd(s)")])
+        }
+    }
+
     fn args(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
         Ok(self.ctx.args().to_vec())
     }
@@ -294,6 +303,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
+            host.snapshot_blockers().unwrap(),
+            vec!["1 open dynamic WASI fd(s)".to_owned()]
+        );
+        assert_eq!(
             host.fd_fdstat_get(fd).unwrap(),
             QuickJsWasiFdStat::new(
                 QuickJsWasiFileType::RegularFile,
@@ -306,6 +319,7 @@ mod tests {
         assert_eq!(&buf[..count], b"from namespace");
         assert_eq!(host.fd_tell(fd).unwrap(), 14);
         host.fd_close(fd).unwrap();
+        assert!(host.snapshot_blockers().unwrap().is_empty());
     }
 
     #[test]

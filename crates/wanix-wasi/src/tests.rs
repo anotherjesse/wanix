@@ -472,12 +472,15 @@ fn readdir_inherits_namespace_union_synthesis_and_hidden_filtering() {
 fn close_only_accepts_dynamic_fds() {
     let root = fixture(&[("hello.txt", b"hello")]);
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    assert_eq!(ctx.open_dynamic_fd_count(), 0);
     let fd = ctx
         .path_open(WasiFd::ROOT, "hello.txt", WasiOpenOptions::read())
         .unwrap();
+    assert_eq!(ctx.open_dynamic_fd_count(), 1);
 
     assert_eq!(ctx.fd_close(WasiFd::ROOT), Err(Errno::Badf));
     ctx.fd_close(fd).unwrap();
+    assert_eq!(ctx.open_dynamic_fd_count(), 0);
     assert_eq!(ctx.fd_read(fd, &mut [0; 1]), Err(Errno::Badf));
 }
 

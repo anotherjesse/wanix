@@ -22,11 +22,13 @@ mod driver;
 mod fd_api;
 mod host_api;
 mod task_context;
+mod task_runtime;
 mod task_stdio;
 mod virtual_wasi;
 mod wasi_host;
 
 pub use driver::QuickJsTaskDriver;
+pub use task_runtime::QuickJsTaskRuntime;
 
 use fd_api::define_fd_output_callback;
 use host_api::{
@@ -1780,7 +1782,7 @@ std.out.flush();
 
         restored
             .eval_module_discard(
-                r#"
+                r##"
 import * as std from "qjs:std";
 import { suffix } from "./suffix.js";
 
@@ -1788,7 +1790,7 @@ const text = globalThis.before + " -> " + suffix;
 std.writeFile("after.txt", text);
 std.out.puts("after " + std.loadFile("after.txt") + "\n");
 std.out.flush();
-"#,
+"##,
                 "after-restore.mjs",
             )
             .unwrap();
@@ -1805,6 +1807,158 @@ std.out.flush();
             read_file(&*root, "before-stdout"),
             b"before from namespace\n"
         );
+    }
+
+    #[test]
+    fn task_runtime_snapshot_restore_reattaches_wanix_task_state() {
+        let runner = runner();
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = Arc::new(MemFs::new());
+        root.write_file("app/input.txt", b"from task cwd").unwrap();
+        root.write_file("app/main.js", b"").unwrap();
+        let before_stdout = Arc::new(MemFs::new());
+        before_stdout.write_file("stdout", b"").unwrap();
+        let after_stdout = Arc::new(MemFs::new());
+        after_stdout.write_file("stdout", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            before_stdout
+                .open(
+                    &NormalizedPath::new("stdout").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("stdout").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js 'two words'").unwrap();
+        task.set_env_lines("MODE=before").unwrap();
+        task.set_dir("app").unwrap();
+        let mut runtime = runner.create_task_runtime(&task).unwrap();
+
+        runtime
+            .eval_module_discard(
+                r#"
+import * as std from "qjs:std";
+
+globalThis.before = std.loadFile("input.txt").trim();
+std.out.puts("before " + globalThis.before + " " + scriptArgs.join("|") + "\n");
+std.out.flush();
+"#,
+                "app/main.js",
+            )
+            .unwrap();
+        let snapshot_bytes = runtime.snapshot_bytes().unwrap();
+        drop(runtime);
+
+        task.close_fd(Fd::STDOUT).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            after_stdout
+                .open(
+                    &NormalizedPath::new("stdout").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("stdout").unwrap(),
+        )
+        .unwrap();
+        task.set_env_lines("MODE=after").unwrap();
+        root.write_file("app/suffix.js", b"export const suffix = 'restored';")
+            .unwrap();
+        let mut restored = runner
+            .restore_task_runtime_from_bytes(&task, &snapshot_bytes)
+            .unwrap();
+
+        restored
+            .eval_module_discard(
+                r##"
+import * as std from "qjs:std";
+import { suffix } from "./suffix.js";
+
+std.out.puts(
+  "after " + globalThis.before
+    + " wasi=" + std.getenv("MODE")
+    + " wanix=" + Wanix.env("MODE")
+    + " " + std.loadFile("#task/self/id").trim()
+    + " " + suffix
+    + "\n"
+);
+Wanix.writeText("after.txt", Wanix.args().join("|"));
+std.out.flush();
+std.exit(6);
+"##,
+                "app/after.mjs",
+            )
+            .unwrap();
+        assert_eq!(restored.exit_code().unwrap(), Some(6));
+        restored.finish().unwrap();
+
+        assert_eq!(
+            before_stdout.read_file("stdout").unwrap(),
+            b"before from task cwd main.js|two words\n"
+        );
+        assert_eq!(
+            after_stdout.read_file("stdout").unwrap(),
+            b"after from task cwd wasi=before wanix=after 1 restored\n"
+        );
+        assert_eq!(root.read_file("app/after.txt").unwrap(), b"two words");
+        assert_eq!(task.exit(), "6");
+    }
+
+    #[test]
+    fn task_runtime_snapshot_rejects_open_wanix_wasi_fd() {
+        let runner = runner();
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = Arc::new(MemFs::new());
+        root.write_file("app/input.txt", b"from task cwd").unwrap();
+        root.write_file("app/main.js", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.set_cmd("main.js").unwrap();
+        task.set_dir("app").unwrap();
+        let mut runtime = runner.create_task_runtime(&task).unwrap();
+
+        runtime
+            .eval_module_discard(
+                r#"
+import * as os from "qjs:os";
+
+globalThis.openFd = os.open("input.txt", os.O_RDONLY);
+"#,
+                "app/main.js",
+            )
+            .unwrap();
+        let err = runtime
+            .snapshot_bytes()
+            .expect_err("snapshot should reject open Wanix WASI fds");
+
+        assert!(err.to_string().contains("open dynamic WASI fd"));
+    }
+
+    #[test]
+    fn task_runtime_snapshot_rejects_after_wanix_exit() {
+        let runner = runner();
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = Arc::new(MemFs::new());
+        root.write_file("main.js", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.set_cmd("main.js").unwrap();
+        let mut runtime = runner.create_task_runtime(&task).unwrap();
+
+        runtime.eval_discard("Wanix.exit(5);").unwrap();
+        let err = runtime
+            .snapshot_bytes()
+            .expect_err("snapshot should reject exited Wanix task runtimes");
+
+        assert!(err.to_string().contains("Wanix process exit"));
     }
 
     #[test]

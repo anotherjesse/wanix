@@ -112,6 +112,9 @@ cargo test --workspace --locked
 - [ADR 0015](docs/adrs/0015-task-cmd-shell-argv-format.md): `#task/cmd`
   writes use a shell-quoted argv format so file-controlled tasks preserve
   spaces, quotes, and empty arguments.
+- [ADR 0016](docs/adrs/0016-quickjs-task-runtime-restore-lifecycle.md):
+  `QuickJsTaskRuntime` owns create/restore lifecycle for qjs task VMs while
+  Wanix host resources are reattached outside the snapshot image.
 
 ## Cycle Rules
 

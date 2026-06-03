@@ -8,6 +8,15 @@ pub(crate) type QuickJsWasiHostHandle = Arc<Mutex<Box<dyn QuickJsWasiHost>>>;
 /// Implementations own process, descriptor, and namespace semantics. The
 /// QuickJS engine only copies data between guest memory and this trait surface.
 pub trait QuickJsWasiHost: Send {
+    /// Returns host-owned live resources that make VM snapshotting unsafe.
+    ///
+    /// Snapshot bytes contain QuickJS WebAssembly memory only. Implementations
+    /// should report any open descriptor, callback, or host resource state that
+    /// cannot be safely serialized into that VM image.
+    fn snapshot_blockers(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
+        Ok(Vec::new())
+    }
+
     /// Returns process arguments in WASI argv order.
     fn args(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
         Ok(Vec::new())
