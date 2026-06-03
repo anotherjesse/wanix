@@ -35,5 +35,6 @@ Persistent QuickJS demos can now prove both sides of the host-policy boundary:
 VM state persists across invocations, while heap limits are selected and
 reattached by the native Wanix composition layer.
 
-This does not add a general serialized resource-policy format, stack limits,
-interrupt budgets for snapshot/resume, or a full task checkpoint format.
+This does not add a general serialized resource-policy format, stack limits, or
+a full task checkpoint format. ADR 0048 later adds interrupt-budget
+reattachment for snapshot/resume using the same host-policy boundary.

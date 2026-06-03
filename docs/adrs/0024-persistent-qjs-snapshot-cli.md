@@ -21,20 +21,20 @@ reattached explicitly each time the VM image is restored.
 Add two native CLI commands:
 
 - `wanix-rust qjs-snapshot [--stdin TEXT | --stdin-file PATH|-]
-  [--memory-limit-bytes N] --snapshot FILE <script.js>` runs JavaScript as a
-  qjs Wanix task, writes the captured QuickJS VM image to `FILE`, and reports
-  task output through ordinary Wanix stdio fds.
+  [--interrupt-after N] [--memory-limit-bytes N] --snapshot FILE <script.js>`
+  runs JavaScript as a qjs Wanix task, writes the captured QuickJS VM image to
+  `FILE`, and reports task output through ordinary Wanix stdio fds.
 - `wanix-rust qjs-resume [--stdin TEXT | --stdin-file PATH|-]
-  [--memory-limit-bytes N] --snapshot FILE <script.js>` reads the VM image from
-  `FILE`, restores it into a fresh qjs Wanix task, reattaches cwd, argv, env,
-  stdio, namespace, and explicit host mounts from the new CLI invocation, then
-  evaluates the supplied resume script.
+  [--interrupt-after N] [--memory-limit-bytes N] --snapshot FILE <script.js>`
+  reads the VM image from `FILE`, restores it into a fresh qjs Wanix task,
+  reattaches cwd, argv, env, stdio, namespace, and explicit host mounts from the
+  new CLI invocation, then evaluates the supplied resume script.
 
 Both commands accept the same `--env`, `--cwd`, `--stdin`, `--stdin-file`,
 `--mount`, script path, and script argument shape used by the ordinary qjs
 demo. ADR 0047 later adds explicit QuickJS heap memory-limit reattachment for
-both commands. Open dynamic Wanix task fds and live WASI fds continue to block
-snapshot creation.
+both commands; ADR 0048 adds explicit interrupt-poll budget reattachment. Open
+dynamic Wanix task fds and live WASI fds continue to block snapshot creation.
 
 When a stdin source is supplied, its bytes are captured before the qjs task
 starts and installed as fresh Wanix fd 0 for that invocation.

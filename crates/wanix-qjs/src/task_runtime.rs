@@ -125,6 +125,22 @@ impl QuickJsTaskRuntime {
         self.runtime.set_memory_limit(bytes).map_err(qjs_error)
     }
 
+    /// Sets the maximum number of QuickJS interrupt polls allowed during eval.
+    ///
+    /// The budget is host policy, not serialized Wanix task state. Callers that
+    /// restore a VM image must reapply it to the restored runtime when they need
+    /// the same policy after restore. The installed handler preserves Wanix
+    /// process-exit interruption while also stopping CPU-bound JavaScript once
+    /// the poll budget is exhausted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error if the underlying QuickJS runtime cannot
+    /// install the interrupt handler.
+    pub fn set_interrupt_poll_budget(&mut self, polls: usize) -> FsResult<()> {
+        set_task_interrupt_handler(&mut self.runtime, self.exit_state.clone(), Some(polls))
+    }
+
     /// Returns the requested Wanix process exit code, if JavaScript has exited.
     ///
     /// # Errors
@@ -276,16 +292,31 @@ fn attach_task_host_state(
         Some(exit_state.clone()),
         Some((task.clone(), Fd::STDERR)),
     )?;
-    runtime
-        .set_interrupt_handler({
-            let exit_state = exit_state.clone();
-            move || exit_state.code().map(|code| code.is_some()).unwrap_or(true)
-        })
-        .map_err(qjs_error)?;
+    set_task_interrupt_handler(runtime, exit_state.clone(), None)?;
 
     let namespace = task.namespace();
     define_wanix_module_loader(runtime, namespace.clone())?;
     let context = WanixTaskContext::new(task_wasi_argv(task));
     define_wanix_task_globals(runtime, context)?;
     runtime.eval_discard(CONSOLE_PRELUDE).map_err(qjs_error)
+}
+
+fn set_task_interrupt_handler(
+    runtime: &mut QuickJsRuntime,
+    exit_state: WanixExitState,
+    interrupt_poll_budget: Option<usize>,
+) -> FsResult<()> {
+    let mut interrupt_polls = 0usize;
+    runtime
+        .set_interrupt_handler(move || {
+            if exit_state.code().map(|code| code.is_some()).unwrap_or(true) {
+                return true;
+            }
+            let Some(budget) = interrupt_poll_budget else {
+                return false;
+            };
+            interrupt_polls = interrupt_polls.saturating_add(1);
+            interrupt_polls > budget
+        })
+        .map_err(qjs_error)
 }

@@ -208,6 +208,9 @@ cargo test --workspace --locked
 - [ADR 0047](docs/adrs/0047-snapshot-resume-memory-limit-reattachment.md):
   `qjs-snapshot` and `qjs-resume` reattach QuickJS heap limits as host policy
   instead of serializing them into VM snapshot files.
+- [ADR 0048](docs/adrs/0048-snapshot-resume-interrupt-budget-reattachment.md):
+  `qjs-snapshot` and `qjs-resume` reattach QuickJS interrupt-poll budgets as
+  host policy instead of serializing them into VM snapshot files.
 
 ## Cycle Rules
 

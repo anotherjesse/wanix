@@ -25,10 +25,12 @@ budget counts QuickJS interrupt-handler polls during script evaluation. When the
 poll count exceeds the configured budget, the combined interrupt handler asks
 QuickJS to interrupt the current script.
 
-`wanix-rust qjs` exposes this policy as `--interrupt-after N`. The default is no
-interrupt poll budget, preserving existing behavior. Exhausting the budget is a
-task failure: the driver records exit status `1`, and the CLI reports the
-QuickJS interruption error with native exit status `1`.
+`wanix-rust qjs` exposes this policy as `--interrupt-after N`. ADR 0048 later
+extends the same explicit policy to `qjs-snapshot` and `qjs-resume` as
+restore-time host reattachment. The default is no interrupt poll budget,
+preserving existing behavior. Exhausting the budget is a task failure: the
+driver records exit status `1`, and the CLI reports the QuickJS interruption
+error with native exit status `1`.
 
 The interrupt handler remains host state reattached by Wanix composition. It is
 not serialized inside QuickJS VM snapshots.
@@ -42,6 +44,7 @@ QuickJS-owned process model.
 
 The budget is based on QuickJS interrupt polls, not wall-clock time or
 instruction fuel. ADR 0046 adds a separate QuickJS heap memory limit for
-allocation-heavy JavaScript. Together they are bounded host policies for demos
+allocation-heavy JavaScript, and ADR 0048 applies interrupt budgets to
+persistent snapshot commands. Together they are bounded host policies for demos
 and tests, but they do not add signals, asynchronous cancellation, preemptive
 scheduling, or long-running task liveness management.
