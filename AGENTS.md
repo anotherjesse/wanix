@@ -87,15 +87,17 @@ line editing while still delivering complete lines to the guest task.
 resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
 can observe terminal resize broadcasts through live Wanix-backed fd readiness.
 
-The next 9P-facing demo target is a native listener or CLI demo that lets
-external clients browse a Wanix namespace. The server core already negotiates
-9P2000.L, attaches, walks, opens regular files and read-only directories,
-reads/writes regular files, lists directories with `Treaddir`, clunks fids, and
-reports metadata with `Tgetattr`; it also serves encoded request/response frames
-through a synchronous stream loop.
+The next 9P-facing demo target is wiring a native listener into serve/v86
+experiments so external clients can browse a Wanix namespace. The server core
+already negotiates 9P2000.L, attaches, walks, opens regular files and read-only
+directories, reads/writes regular files, lists directories with `Treaddir`,
+clunks fids, and reports metadata with `Tgetattr`; it also serves encoded
+request/response frames through a synchronous stream loop.
 `wanix-rust p9-stdio --root DIR` exposes that server over process
 stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
-for human-readable CLI or transport errors.
+for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
+--addr 127.0.0.1:5640` exposes the same `LocalFs` export over a native TCP
+listener, and `--once` gives tests and scripted demos a one-connection exit.
 
 ## Code Quality Guardrails
 
@@ -304,6 +306,9 @@ cargo test --workspace --locked
 - [ADR 0064](docs/adrs/0064-9p-getattr-metadata.md):
   `wanix-9p` maps `Tgetattr` to Wanix metadata and returns fixed 9P2000.L
   `Rgetattr` payloads with POSIX file-type mode bits.
+- [ADR 0065](docs/adrs/0065-native-tcp-9p-listener.md):
+  `wanix-rust p9-listen --root DIR --addr HOST:PORT` exposes the Rust 9P
+  server over native TCP, with `--once` for deterministic smoke tests.
 
 ## Cycle Rules
 
@@ -322,5 +327,5 @@ cycle before starting the next one.
 - Make `qjs-shell` genuinely interactive beyond line-oriented input by adding a
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
-- Extend `wanix-9p` with create/remove/rename and a native listener/auth policy
-  for serve/v86 integration.
+- Extend `wanix-9p` with create/remove/rename and decide the auth/WebSocket
+  policy needed for browser v86 and VS Code integration.

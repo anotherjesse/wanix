@@ -1,5 +1,6 @@
 //! Native CLI plumbing for Rust Wanix demos.
 
+mod p9_listen;
 mod p9_stdio;
 mod qjs_term;
 
@@ -48,6 +49,7 @@ const USAGE: &str = concat!(
     "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
     "[--mount HOST=GUEST ...] <before.js> <after.js>\n",
     "       wanix-rust p9-stdio --root DIR\n",
+    "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust --help",
 );
 const QJS_GUEST_SCRIPT: &str = "main.js";
@@ -205,6 +207,10 @@ where
             &mut process_stdout,
             &mut process_stderr,
         ),
+        [command, rest @ ..] if command == "p9-listen" => p9_listen::run_p9_listen_streaming(
+            p9_listen::parse_p9_listen_command(rest)?,
+            &mut process_stderr,
+        ),
         _ => {
             let output = run_collected(args, &mut process_stdin)?;
             write_process_output(&mut process_stdout, "stdout", output.stdout())?;
@@ -240,6 +246,12 @@ fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<Cl
         }
         [command, rest @ ..] if command == "p9-stdio" => {
             p9_stdio::run_p9_stdio(p9_stdio::parse_p9_stdio_command(rest)?, process_stdin)
+        }
+        [command, rest @ ..] if command == "p9-listen" => {
+            let _ = p9_listen::parse_p9_listen_command(rest)?;
+            Err(CliError::usage(
+                "p9-listen requires live process IO; use the wanix-rust binary",
+            ))
         }
         [command, ..] => Err(CliError::usage(format!(
             "unknown wanix-rust command: {}",
