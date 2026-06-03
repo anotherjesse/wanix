@@ -92,6 +92,9 @@ external clients browse a Wanix namespace. The server core already negotiates
 9P2000.L, attaches, walks, opens regular files and read-only directories,
 reads/writes regular files, lists directories with `Treaddir`, clunks fids, and
 serves encoded request/response frames through a synchronous stream loop.
+`wanix-rust p9-stdio --root DIR` exposes that server over process
+stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
+for human-readable CLI or transport errors.
 
 ## Code Quality Guardrails
 
@@ -294,6 +297,9 @@ cargo test --workspace --locked
 - [ADR 0062](docs/adrs/0062-sync-9p-stream-transport-loop.md):
   `wanix-9p` serves decoded request frames from synchronous byte streams while
   keeping socket/listener policy outside the server core.
+- [ADR 0063](docs/adrs/0063-stdio-9p-cli-bridge.md):
+  `wanix-rust p9-stdio --root DIR` exposes a `LocalFs` root as a binary 9P
+  request/response stream over native process stdio.
 
 ## Cycle Rules
 
@@ -313,4 +319,4 @@ cycle before starting the next one.
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
 - Extend `wanix-9p` with create/remove/rename, getattr/stat, and a native
-  listener or CLI demo for serve/v86 integration.
+  listener/auth policy for serve/v86 integration.

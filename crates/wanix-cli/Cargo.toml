@@ -9,12 +9,16 @@ version.workspace = true
 
 [dependencies]
 libc = "0.2"
+wanix-9p = { path = "../wanix-9p" }
 wanix-fs = { path = "../wanix-fs" }
 wanix-qjs = { path = "../wanix-qjs" }
 wanix-task = { path = "../wanix-task" }
 wanix-term = { path = "../wanix-term" }
 wanix-vfs = { path = "../wanix-vfs" }
 wanix-wasi = { path = "../wanix-wasi" }
+
+[dev-dependencies]
+wanix-protocol = { path = "../wanix-protocol" }
 
 [[bin]]
 name = "wanix-rust"

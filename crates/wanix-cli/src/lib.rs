@@ -1,5 +1,6 @@
 //! Native CLI plumbing for Rust Wanix demos.
 
+mod p9_stdio;
 mod qjs_term;
 
 use std::collections::BTreeMap;
@@ -46,6 +47,7 @@ const USAGE: &str = concat!(
     "       wanix-rust qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
     "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
     "[--mount HOST=GUEST ...] <before.js> <after.js>\n",
+    "       wanix-rust p9-stdio --root DIR\n",
     "       wanix-rust --help",
 );
 const QJS_GUEST_SCRIPT: &str = "main.js";
@@ -197,6 +199,12 @@ where
             &mut process_stdout,
             &mut process_stderr,
         ),
+        [command, rest @ ..] if command == "p9-stdio" => p9_stdio::run_p9_stdio_streaming(
+            p9_stdio::parse_p9_stdio_command(rest)?,
+            &mut process_stdin,
+            &mut process_stdout,
+            &mut process_stderr,
+        ),
         _ => {
             let output = run_collected(args, &mut process_stdin)?;
             write_process_output(&mut process_stdout, "stdout", output.stdout())?;
@@ -229,6 +237,9 @@ fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<Cl
         ),
         [command, rest @ ..] if command == "qjs-restore" => {
             run_qjs_restore(parse_qjs_restore_command(rest)?)
+        }
+        [command, rest @ ..] if command == "p9-stdio" => {
+            p9_stdio::run_p9_stdio(p9_stdio::parse_p9_stdio_command(rest)?, process_stdin)
         }
         [command, ..] => Err(CliError::usage(format!(
             "unknown wanix-rust command: {}",
@@ -1508,6 +1519,11 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{run, run_with_process_io, run_with_process_stdin};
+    use wanix_protocol::{
+        P9_NOFID, P9_RATTACH, P9_RLOPEN, P9_RREAD, P9_RREADDIR, P9_RVERSION, P9_RWALK,
+        P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer, p9_decode_rread, p9_decode_rreaddir,
+        p9_tattach, p9_tlopen, p9_tread, p9_treaddir, p9_tversion, p9_twalk,
+    };
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1634,7 +1650,102 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-snapshot"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-resume"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-restore"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-stdio"));
         assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn p9_stdio_serves_host_file_over_binary_stdio() {
+        let root = temp_dir("wanix-cli-p9-stdio-file");
+        fs::write(root.join("hello.txt"), b"hello p9").unwrap();
+        let input = request_stream([
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, P9_NOFID, "root", "", 0).unwrap(),
+            p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
+            p9_tlopen(4, 2, 0),
+            p9_tread(5, 2, 0, 8),
+        ]);
+
+        let output = run_with_process_stdin(
+            ["p9-stdio".into(), "--root".into(), root.into_os_string()],
+            input.as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.stderr().is_empty());
+        let frames = decode_response_stream(output.stdout());
+        assert_eq!(
+            frame_types(&frames),
+            [P9_RVERSION, P9_RATTACH, P9_RWALK, P9_RLOPEN, P9_RREAD]
+        );
+        assert_eq!(p9_decode_rread(&frames[4]).unwrap(), b"hello p9");
+    }
+
+    #[test]
+    fn p9_stdio_streaming_browses_host_directory() {
+        let root = temp_dir("wanix-cli-p9-stdio-dir");
+        fs::create_dir(root.join("bin")).unwrap();
+        fs::write(root.join("hello.txt"), b"hello").unwrap();
+        let input = request_stream([
+            p9_tversion(1, 4096, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, P9_NOFID, "root", "", 0).unwrap(),
+            p9_tlopen(3, 1, 0),
+            p9_treaddir(4, 1, 0, 4096),
+        ]);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io(
+            ["p9-stdio".into(), "--root".into(), root.into_os_string()],
+            input.as_slice(),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert!(stderr.is_empty());
+        let frames = decode_response_stream(&stdout);
+        assert_eq!(
+            frame_types(&frames),
+            [P9_RVERSION, P9_RATTACH, P9_RLOPEN, P9_RREADDIR]
+        );
+        let entries = p9_decode_rreaddir(&frames[3]).unwrap();
+        let names = entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["bin", "hello.txt"]);
+    }
+
+    #[test]
+    fn p9_stdio_reports_transport_error_on_stderr() {
+        let root = temp_dir("wanix-cli-p9-stdio-error");
+        let mut input = p9_tversion(1, 8192, P9_VERSION_9P2000_L)
+            .unwrap()
+            .encode()
+            .unwrap();
+        input.truncate(input.len() - 1);
+
+        let output = run_with_process_stdin(
+            ["p9-stdio".into(), "--root".into(), root.into_os_string()],
+            input.as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 1);
+        assert!(output.stdout().is_empty());
+        assert!(String::from_utf8_lossy(output.stderr()).contains("wanix-rust p9-stdio"));
+        assert!(String::from_utf8_lossy(output.stderr()).contains("EOF"));
+    }
+
+    #[test]
+    fn p9_stdio_requires_root_argument() {
+        let error = run(["p9-stdio"]).unwrap_err();
+
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("p9-stdio requires --root DIR"));
     }
 
     #[test]
@@ -4016,5 +4127,24 @@ std.out.flush();
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples")
             .join(name)
+    }
+
+    fn request_stream<const N: usize>(frames: [P9Frame; N]) -> Vec<u8> {
+        let mut stream = Vec::new();
+        for frame in frames {
+            stream.extend_from_slice(&frame.encode().unwrap());
+        }
+        stream
+    }
+
+    fn decode_response_stream(bytes: &[u8]) -> Vec<P9Frame> {
+        let mut buffer = P9FrameBuffer::new();
+        let frames = buffer.push(bytes).unwrap();
+        assert_eq!(buffer.buffered_len(), 0);
+        frames
+    }
+
+    fn frame_types(frames: &[P9Frame]) -> Vec<u8> {
+        frames.iter().map(P9Frame::message_type).collect()
     }
 }
