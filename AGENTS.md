@@ -159,8 +159,7 @@ cargo test --workspace --locked
   `qjs:os.utimes(...)` and `fd_filestat_set_times` reach Wanix-owned timestamp
   mutation and stat-visible atime/mtime through live WASI providers.
 - [ADR 0031](docs/adrs/0031-wasi-timer-poll-oneoff.md):
-  `qjs:os.sleep(...)` reaches timer-only Preview 1 `poll_oneoff`, while fd
-  readiness, async timers, and lifecycle polling remain Wanix task work.
+  `qjs:os.sleep(...)` reaches timer-only Preview 1 `poll_oneoff`.
 - [ADR 0032](docs/adrs/0032-wasi-directory-listing-through-quickjs.md):
   `qjs:os.readdir(...)` reaches Wanix-owned directory listing through live WASI
   providers and libc-style directory rights.
@@ -170,6 +169,9 @@ cargo test --workspace --locked
 - [ADR 0034](docs/adrs/0034-wasi-timestamp-now-clock-policy.md):
   WASI `ATIM_NOW`/`MTIM_NOW` timestamp updates use the deterministic clock value
   carried by `WasiConfig`.
+- [ADR 0035](docs/adrs/0035-wasi-poll-fd-readiness.md):
+  `poll_oneoff` reports immediately-ready fd read/write events through live
+  WASI providers while async scheduling remains future Wanix task work.
 
 ## Cycle Rules
 

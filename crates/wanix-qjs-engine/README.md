@@ -545,7 +545,7 @@ Working:
 - Live provider forwarding for argv/env, process exit, stdio/fd reads and
   writes, path open/stat/create/remove/rename, directory listing, append fdflag
   mutation, explicit path/fd timestamp mutation, fd size mutation, and
-  timer-only `poll_oneoff`.
+  `poll_oneoff` clock plus live fd read/write readiness events.
 - Read-only virtual WASI files attached through `QuickJsHostConfig` as
   engine-only fixture support, exposed under a normalized root preopen without
   host path mounts.
@@ -575,7 +575,7 @@ Not implemented yet:
 - Native WASM extension dynamic linking and extension metadata restore.
 - Engine-owned mutable virtual files, symlinks, or host path mounts. Use a live
   `QuickJsWasiHost` provider and higher-level Wanix crates for those semantics.
-- General async event-loop and fd-readiness policy beyond bounded pending-job
-  drains and timer-only `poll_oneoff`.
+- General async event-loop policy beyond bounded pending-job drains, timer-only
+  sleeps, and immediately-ready live fd poll events.
 
 See `docs/investigation.md` for the investigation notes and implementation plan.

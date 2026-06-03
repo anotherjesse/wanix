@@ -4,6 +4,7 @@ use wasmtime::{Engine, Linker, Memory, Module, Store, TypedFunc};
 const ERRNO_BADF: i32 = 8;
 const ERRNO_INVAL: i32 = 28;
 const ERRNO_NOSYS: i32 = 52;
+const ERRNO_NOTCAPABLE: i32 = 76;
 const ERRNO_SUCCESS: i32 = 0;
 const SUBSCRIPTION_SIZE: usize = 48;
 const SUBSCRIPTION_USERDATA_OFFSET: usize = 0;
@@ -11,6 +12,7 @@ const SUBSCRIPTION_TAG_OFFSET: usize = 8;
 const SUBSCRIPTION_CLOCK_ID_OFFSET: usize = 16;
 const SUBSCRIPTION_CLOCK_TIMEOUT_OFFSET: usize = 24;
 const SUBSCRIPTION_CLOCK_FLAGS_OFFSET: usize = 40;
+const SUBSCRIPTION_FD_OFFSET: usize = 16;
 const EVENT_SIZE: usize = 32;
 const EVENT_USERDATA_OFFSET: usize = 0;
 const EVENT_ERROR_OFFSET: usize = 8;
@@ -21,6 +23,8 @@ const EVENTTYPE_FD_WRITE: u8 = 2;
 const CLOCKID_MONOTONIC: u32 = 1;
 const CLOCKID_PROCESS_CPUTIME_ID: u32 = 2;
 const SUBCLOCKFLAGS_ABSTIME: u16 = 1 << 0;
+const RIGHT_FD_READ: u64 = 1 << 1;
+const RIGHT_FD_WRITE: u64 = 1 << 6;
 
 type PathFilestatSetTimesFunc = TypedFunc<(i32, i32, i32, i32, i64, i64, i32), i32>;
 
@@ -106,11 +110,19 @@ struct UnsupportedWasiHarness {
 }
 
 fn unsupported_wasi_harness(config: QuickJsHostConfig) -> Result<UnsupportedWasiHarness> {
+    unsupported_wasi_harness_with_wasi_host(config, None)
+}
+
+fn unsupported_wasi_harness_with_wasi_host(
+    config: QuickJsHostConfig,
+    wasi_host: Option<Box<dyn QuickJsWasiHost>>,
+) -> Result<UnsupportedWasiHarness> {
     let engine = Engine::default();
     let module = Module::new(&engine, UNSUPPORTED_WASI_WAT)?;
     let mut linker = Linker::<HostState>::new(&engine);
     define_wasi_imports(&mut linker)?;
-    let mut store = Store::new(&engine, HostState::new(config));
+    let wasi_host = wasi_host.map(|host| Arc::new(Mutex::new(host)));
+    let mut store = Store::new(&engine, HostState::new_with_wasi_host(config, wasi_host));
     let instance = linker.instantiate(&mut store, &module)?;
     let memory = instance
         .get_memory(&mut store, "memory")
@@ -130,6 +142,106 @@ fn unsupported_wasi_harness(config: QuickJsHostConfig) -> Result<UnsupportedWasi
         memory,
         store,
     })
+}
+
+struct PollFdHost;
+
+impl QuickJsWasiHost for PollFdHost {
+    fn fd_prestat_get(
+        &mut self,
+        _fd: u32,
+    ) -> std::result::Result<crate::QuickJsWasiPrestat, crate::QuickJsWasiErrno> {
+        Err(crate::QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_open(
+        &mut self,
+        _dirfd: u32,
+        _dirflags: u32,
+        _path: &[u8],
+        _oflags: u16,
+        _rights_base: u64,
+        _rights_inheriting: u64,
+        _fdflags: u16,
+    ) -> std::result::Result<u32, crate::QuickJsWasiErrno> {
+        Err(crate::QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_read(
+        &mut self,
+        _fd: u32,
+        _buf: &mut [u8],
+    ) -> std::result::Result<usize, crate::QuickJsWasiErrno> {
+        Err(crate::QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_readdir(
+        &mut self,
+        _fd: u32,
+    ) -> std::result::Result<Vec<crate::QuickJsWasiDirEntry>, crate::QuickJsWasiErrno> {
+        Err(crate::QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_write(
+        &mut self,
+        _fd: u32,
+        _buf: &[u8],
+    ) -> std::result::Result<usize, crate::QuickJsWasiErrno> {
+        Err(crate::QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_seek(
+        &mut self,
+        _fd: u32,
+        _offset: i64,
+        _whence: crate::QuickJsWasiWhence,
+    ) -> std::result::Result<u64, crate::QuickJsWasiErrno> {
+        Err(crate::QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_close(&mut self, _fd: u32) -> std::result::Result<(), crate::QuickJsWasiErrno> {
+        Err(crate::QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_fdstat_get(
+        &mut self,
+        fd: u32,
+    ) -> std::result::Result<crate::QuickJsWasiFdStat, crate::QuickJsWasiErrno> {
+        match fd {
+            4 => Ok(crate::QuickJsWasiFdStat::new(
+                crate::QuickJsWasiFileType::RegularFile,
+                RIGHT_FD_READ,
+                0,
+            )),
+            5 => Ok(crate::QuickJsWasiFdStat::new(
+                crate::QuickJsWasiFileType::RegularFile,
+                RIGHT_FD_WRITE,
+                0,
+            )),
+            6 => Ok(crate::QuickJsWasiFdStat::new(
+                crate::QuickJsWasiFileType::RegularFile,
+                0,
+                0,
+            )),
+            _ => Err(crate::QuickJsWasiErrno::Badf),
+        }
+    }
+
+    fn fd_filestat_get(
+        &mut self,
+        _fd: u32,
+    ) -> std::result::Result<crate::QuickJsWasiFileStat, crate::QuickJsWasiErrno> {
+        Err(crate::QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_filestat_get(
+        &mut self,
+        _dirfd: u32,
+        _flags: u32,
+        _path: &[u8],
+    ) -> std::result::Result<crate::QuickJsWasiFileStat, crate::QuickJsWasiErrno> {
+        Err(crate::QuickJsWasiErrno::Nosys)
+    }
 }
 
 #[test]
@@ -367,6 +479,252 @@ fn poll_oneoff_fd_subscriptions_remain_unsupported() -> Result<()> {
 }
 
 #[test]
+fn poll_oneoff_live_fd_read_subscription_reports_ready_event() -> Result<()> {
+    let mut harness = unsupported_wasi_harness_with_wasi_host(
+        QuickJsHostConfig::new(),
+        Some(Box::new(PollFdHost)),
+    )?;
+    write_fd_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        FdSubscription {
+            userdata: 0x1122_3344_5566_7788,
+            event_type: EVENTTYPE_FD_READ,
+            fd: 4,
+        },
+    )?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_SUCCESS
+    );
+
+    let mut event = [0; EVENT_SIZE];
+    harness.memory.read(&harness.store, 128, &mut event)?;
+    assert_eq!(
+        read_u64(&event, EVENT_USERDATA_OFFSET),
+        0x1122_3344_5566_7788
+    );
+    assert_eq!(read_u16(&event, EVENT_ERROR_OFFSET), 0);
+    assert_eq!(event[EVENT_TYPE_OFFSET], EVENTTYPE_FD_READ);
+    assert_eq!(read_nevents(&harness)?, 1);
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_live_fd_write_subscription_reports_ready_event() -> Result<()> {
+    let mut harness = unsupported_wasi_harness_with_wasi_host(
+        QuickJsHostConfig::new(),
+        Some(Box::new(PollFdHost)),
+    )?;
+    write_fd_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        FdSubscription {
+            userdata: 0xaabb_ccdd_eeff_0011,
+            event_type: EVENTTYPE_FD_WRITE,
+            fd: 5,
+        },
+    )?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_SUCCESS
+    );
+
+    let mut event = [0; EVENT_SIZE];
+    harness.memory.read(&harness.store, 128, &mut event)?;
+    assert_eq!(
+        read_u64(&event, EVENT_USERDATA_OFFSET),
+        0xaabb_ccdd_eeff_0011
+    );
+    assert_eq!(read_u16(&event, EVENT_ERROR_OFFSET), 0);
+    assert_eq!(event[EVENT_TYPE_OFFSET], EVENTTYPE_FD_WRITE);
+    assert_eq!(read_nevents(&harness)?, 1);
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_live_fd_subscription_reports_notcapable_event() -> Result<()> {
+    let mut harness = unsupported_wasi_harness_with_wasi_host(
+        QuickJsHostConfig::new(),
+        Some(Box::new(PollFdHost)),
+    )?;
+    write_fd_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        FdSubscription {
+            userdata: 0x1234,
+            event_type: EVENTTYPE_FD_READ,
+            fd: 6,
+        },
+    )?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_SUCCESS
+    );
+
+    let mut event = [0; EVENT_SIZE];
+    harness.memory.read(&harness.store, 128, &mut event)?;
+    assert_eq!(read_u64(&event, EVENT_USERDATA_OFFSET), 0x1234);
+    assert_eq!(
+        read_u16(&event, EVENT_ERROR_OFFSET),
+        ERRNO_NOTCAPABLE as u16
+    );
+    assert_eq!(event[EVENT_TYPE_OFFSET], EVENTTYPE_FD_READ);
+    assert_eq!(read_nevents(&harness)?, 1);
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_live_fd_multi_subscription_reports_ready_events() -> Result<()> {
+    let mut harness = unsupported_wasi_harness_with_wasi_host(
+        QuickJsHostConfig::new(),
+        Some(Box::new(PollFdHost)),
+    )?;
+    write_fd_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        FdSubscription {
+            userdata: 1,
+            event_type: EVENTTYPE_FD_READ,
+            fd: 4,
+        },
+    )?;
+    write_fd_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64 + SUBSCRIPTION_SIZE,
+        FdSubscription {
+            userdata: 2,
+            event_type: EVENTTYPE_FD_WRITE,
+            fd: 5,
+        },
+    )?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 256, 2, 192))?,
+        ERRNO_SUCCESS
+    );
+
+    let mut first = [0; EVENT_SIZE];
+    let mut second = [0; EVENT_SIZE];
+    harness.memory.read(&harness.store, 256, &mut first)?;
+    harness
+        .memory
+        .read(&harness.store, 256 + EVENT_SIZE, &mut second)?;
+    assert_eq!(read_u64(&first, EVENT_USERDATA_OFFSET), 1);
+    assert_eq!(read_u16(&first, EVENT_ERROR_OFFSET), 0);
+    assert_eq!(first[EVENT_TYPE_OFFSET], EVENTTYPE_FD_READ);
+    assert_eq!(read_u64(&second, EVENT_USERDATA_OFFSET), 2);
+    assert_eq!(read_u16(&second, EVENT_ERROR_OFFSET), 0);
+    assert_eq!(second[EVENT_TYPE_OFFSET], EVENTTYPE_FD_WRITE);
+    assert_eq!(read_nevents(&harness)?, 2);
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_live_fd_multi_subscription_reports_due_clock_event() -> Result<()> {
+    let mut harness = unsupported_wasi_harness_with_wasi_host(
+        QuickJsHostConfig::new().with_clock_time_ns(100),
+        Some(Box::new(PollFdHost)),
+    )?;
+    write_fd_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        FdSubscription {
+            userdata: 1,
+            event_type: EVENTTYPE_FD_READ,
+            fd: 4,
+        },
+    )?;
+    write_clock_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64 + SUBSCRIPTION_SIZE,
+        ClockSubscription {
+            userdata: 2,
+            clock_id: CLOCKID_MONOTONIC,
+            timeout_ns: 100,
+            flags: SUBCLOCKFLAGS_ABSTIME,
+        },
+    )?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 256, 2, 192))?,
+        ERRNO_SUCCESS
+    );
+
+    let mut first = [0; EVENT_SIZE];
+    let mut second = [0; EVENT_SIZE];
+    harness.memory.read(&harness.store, 256, &mut first)?;
+    harness
+        .memory
+        .read(&harness.store, 256 + EVENT_SIZE, &mut second)?;
+    assert_eq!(read_u64(&first, EVENT_USERDATA_OFFSET), 1);
+    assert_eq!(read_u16(&first, EVENT_ERROR_OFFSET), 0);
+    assert_eq!(first[EVENT_TYPE_OFFSET], EVENTTYPE_FD_READ);
+    assert_eq!(read_u64(&second, EVENT_USERDATA_OFFSET), 2);
+    assert_eq!(read_u16(&second, EVENT_ERROR_OFFSET), 0);
+    assert_eq!(second[EVENT_TYPE_OFFSET], EVENTTYPE_CLOCK);
+    assert_eq!(read_nevents(&harness)?, 2);
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_live_fd_multi_subscription_validates_clock_fields() -> Result<()> {
+    let mut harness = unsupported_wasi_harness_with_wasi_host(
+        QuickJsHostConfig::new(),
+        Some(Box::new(PollFdHost)),
+    )?;
+    write_fd_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        FdSubscription {
+            userdata: 1,
+            event_type: EVENTTYPE_FD_READ,
+            fd: 4,
+        },
+    )?;
+    write_clock_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64 + SUBSCRIPTION_SIZE,
+        ClockSubscription {
+            userdata: 2,
+            clock_id: CLOCKID_MONOTONIC,
+            timeout_ns: 0,
+            flags: 1 << 1,
+        },
+    )?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 256, 2, 192))?,
+        ERRNO_INVAL
+    );
+    Ok(())
+}
+
+#[test]
 fn poll_oneoff_multi_subscription_sets_remain_unsupported() -> Result<()> {
     let mut harness = unsupported_wasi_harness(QuickJsHostConfig::new())?;
     harness
@@ -387,6 +745,12 @@ struct ClockSubscription {
     clock_id: u32,
     timeout_ns: u64,
     flags: u16,
+}
+
+struct FdSubscription {
+    userdata: u64,
+    event_type: u8,
+    fd: u32,
 }
 
 fn write_clock_subscription(
@@ -435,10 +799,38 @@ fn write_fd_subscription(
     ptr: usize,
     event_type: u8,
 ) -> Result<()> {
+    write_fd_subscription_with(
+        memory,
+        store,
+        ptr,
+        FdSubscription {
+            userdata: 0,
+            event_type,
+            fd: 0,
+        },
+    )
+}
+
+fn write_fd_subscription_with(
+    memory: &Memory,
+    store: &mut Store<HostState>,
+    ptr: usize,
+    fd: FdSubscription,
+) -> Result<()> {
     let mut subscription = [0; SUBSCRIPTION_SIZE];
-    subscription[SUBSCRIPTION_TAG_OFFSET] = event_type;
+    subscription[SUBSCRIPTION_USERDATA_OFFSET..SUBSCRIPTION_USERDATA_OFFSET + 8]
+        .copy_from_slice(&fd.userdata.to_le_bytes());
+    subscription[SUBSCRIPTION_TAG_OFFSET] = fd.event_type;
+    subscription[SUBSCRIPTION_FD_OFFSET..SUBSCRIPTION_FD_OFFSET + 4]
+        .copy_from_slice(&fd.fd.to_le_bytes());
     memory.write(store, ptr, &subscription)?;
     Ok(())
+}
+
+fn read_nevents(harness: &UnsupportedWasiHarness) -> Result<u32> {
+    let mut nevents = [0; 4];
+    harness.memory.read(&harness.store, 192, &mut nevents)?;
+    Ok(u32::from_le_bytes(nevents))
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> u16 {

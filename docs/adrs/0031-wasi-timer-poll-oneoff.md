@@ -19,9 +19,10 @@ that can hold pending host timer state, wake the runtime later, and integrate
 with task cancellation and fd readiness. Draining the QuickJS microtask queue is
 not that event loop.
 
-Full polling is broader than this need. Read/write fd readiness, async event
-loops, signals, cancellation, and integration with Wanix task scheduling are
-process lifecycle semantics, not QuickJS engine plumbing.
+Full polling is broader than this need. At the time of this ADR, read/write fd
+readiness, async event loops, signals, cancellation, and integration with Wanix
+task scheduling were process lifecycle semantics still outside the timer-only
+slice.
 
 ## Decision
 
@@ -34,12 +35,10 @@ absolute timeouts as due when they are at or before
 `QuickJsHostConfig::clock_time_ns()`, and writes one clock event with the
 guest-provided userdata.
 
-The engine continues to reject fd read/write subscriptions and multi-event
-polls as unsupported. `QuickJsWasiHost` is not extended for this cycle because
-the accepted synchronous timer shape does not need Wanix namespace, fd, task,
-or process policy. Future fd readiness or async timer integration should be
-added through Wanix task lifecycle semantics, not hidden inside deterministic
-host config.
+This timer-only decision did not extend `QuickJsWasiHost` because the accepted
+synchronous timer shape does not need Wanix namespace, fd, task, or process
+policy. ADR 0035 later adds immediately-ready fd read/write events through live
+WASI providers rather than hiding fd policy inside deterministic host config.
 
 ## Consequences
 
@@ -48,7 +47,7 @@ JavaScript running on the bundled QuickJS/WASI fixture can call
 non-zero sleeps block the current host thread.
 
 This does not implement `sleepAsync`, `setTimeout`, `setInterval`, signal
-delivery, fd readiness, task cancellation, or a Wanix scheduler. Snapshot bytes
-remain QuickJS/Wasm memory only; pending async timer state is still out of
-scope. Engine tests pin that pending QuickJS jobs alone do not complete async
-timer work.
+delivery, task cancellation, or a Wanix scheduler. Snapshot bytes remain
+QuickJS/Wasm memory only; pending async timer state is still out of scope.
+Engine tests pin that pending QuickJS jobs alone do not complete async timer
+work.
