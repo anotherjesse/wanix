@@ -2,8 +2,25 @@ use super::*;
 use wasmtime::{Engine, Linker, Memory, Module, Store, TypedFunc};
 
 const ERRNO_BADF: i32 = 8;
+const ERRNO_INVAL: i32 = 28;
 const ERRNO_NOSYS: i32 = 52;
 const ERRNO_SUCCESS: i32 = 0;
+const SUBSCRIPTION_SIZE: usize = 48;
+const SUBSCRIPTION_USERDATA_OFFSET: usize = 0;
+const SUBSCRIPTION_TAG_OFFSET: usize = 8;
+const SUBSCRIPTION_CLOCK_ID_OFFSET: usize = 16;
+const SUBSCRIPTION_CLOCK_TIMEOUT_OFFSET: usize = 24;
+const SUBSCRIPTION_CLOCK_FLAGS_OFFSET: usize = 40;
+const EVENT_SIZE: usize = 32;
+const EVENT_USERDATA_OFFSET: usize = 0;
+const EVENT_ERROR_OFFSET: usize = 8;
+const EVENT_TYPE_OFFSET: usize = 10;
+const EVENTTYPE_CLOCK: u8 = 0;
+const EVENTTYPE_FD_READ: u8 = 1;
+const EVENTTYPE_FD_WRITE: u8 = 2;
+const CLOCKID_MONOTONIC: u32 = 1;
+const CLOCKID_PROCESS_CPUTIME_ID: u32 = 2;
+const SUBCLOCKFLAGS_ABSTIME: u16 = 1 << 0;
 
 type PathFilestatSetTimesFunc = TypedFunc<(i32, i32, i32, i32, i64, i64, i32), i32>;
 
@@ -199,7 +216,158 @@ fn path_mutation_imports_are_defined_but_unsupported() -> Result<()> {
 }
 
 #[test]
-fn poll_oneoff_empty_subscription_set_reports_zero_events() -> Result<()> {
+fn poll_oneoff_empty_subscription_set_is_invalid() -> Result<()> {
+    let mut harness = unsupported_wasi_harness(QuickJsHostConfig::new())?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (0, 0, 0, 64))?,
+        ERRNO_INVAL
+    );
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_single_clock_subscription_reports_clock_event() -> Result<()> {
+    let mut harness = unsupported_wasi_harness(QuickJsHostConfig::new())?;
+    write_clock_subscription(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        0x1122_3344_5566_7788,
+        0,
+    )?;
+    harness
+        .memory
+        .write(&mut harness.store, 192, &u32::MAX.to_le_bytes())?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_SUCCESS
+    );
+
+    let mut event = [0; EVENT_SIZE];
+    harness.memory.read(&harness.store, 128, &mut event)?;
+    let mut nevents = [0; 4];
+    harness.memory.read(&harness.store, 192, &mut nevents)?;
+    assert_eq!(u32::from_le_bytes(nevents), 1);
+    assert_eq!(
+        read_u64(&event, EVENT_USERDATA_OFFSET),
+        0x1122_3344_5566_7788
+    );
+    assert_eq!(read_u16(&event, EVENT_ERROR_OFFSET), 0);
+    assert_eq!(event[EVENT_TYPE_OFFSET], EVENTTYPE_CLOCK);
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_absolute_clock_subscription_reports_due_event() -> Result<()> {
+    let mut harness = unsupported_wasi_harness(QuickJsHostConfig::new().with_clock_time_ns(100))?;
+    write_clock_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        ClockSubscription {
+            userdata: 0xaabb_ccdd_eeff_0011,
+            clock_id: CLOCKID_MONOTONIC,
+            timeout_ns: 100,
+            flags: SUBCLOCKFLAGS_ABSTIME,
+        },
+    )?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_SUCCESS
+    );
+
+    let mut event = [0; EVENT_SIZE];
+    harness.memory.read(&harness.store, 128, &mut event)?;
+    assert_eq!(
+        read_u64(&event, EVENT_USERDATA_OFFSET),
+        0xaabb_ccdd_eeff_0011
+    );
+    assert_eq!(read_u16(&event, EVENT_ERROR_OFFSET), 0);
+    assert_eq!(event[EVENT_TYPE_OFFSET], EVENTTYPE_CLOCK);
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_unknown_clock_flags_are_invalid() -> Result<()> {
+    let mut harness = unsupported_wasi_harness(QuickJsHostConfig::new())?;
+    write_clock_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        ClockSubscription {
+            userdata: 0,
+            clock_id: CLOCKID_MONOTONIC,
+            timeout_ns: 0,
+            flags: 1 << 1,
+        },
+    )?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_INVAL
+    );
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_unsupported_clock_ids_remain_unsupported() -> Result<()> {
+    let mut harness = unsupported_wasi_harness(QuickJsHostConfig::new())?;
+    write_clock_subscription_with(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        ClockSubscription {
+            userdata: 0,
+            clock_id: CLOCKID_PROCESS_CPUTIME_ID,
+            timeout_ns: 0,
+            flags: 0,
+        },
+    )?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_NOSYS
+    );
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_fd_subscriptions_remain_unsupported() -> Result<()> {
+    let mut harness = unsupported_wasi_harness(QuickJsHostConfig::new())?;
+    write_fd_subscription(&harness.memory, &mut harness.store, 64, EVENTTYPE_FD_READ)?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_NOSYS
+    );
+    write_fd_subscription(&harness.memory, &mut harness.store, 64, EVENTTYPE_FD_WRITE)?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_NOSYS
+    );
+    Ok(())
+}
+
+#[test]
+fn poll_oneoff_multi_subscription_sets_remain_unsupported() -> Result<()> {
     let mut harness = unsupported_wasi_harness(QuickJsHostConfig::new())?;
     harness
         .memory
@@ -208,17 +376,84 @@ fn poll_oneoff_empty_subscription_set_reports_zero_events() -> Result<()> {
     assert_eq!(
         harness
             .poll_oneoff
-            .call(&mut harness.store, (0, 0, 0, 64))?,
-        ERRNO_SUCCESS
-    );
-    let mut events = [0; 4];
-    harness.memory.read(&harness.store, 64, &mut events)?;
-    assert_eq!(u32::from_le_bytes(events), 0);
-    assert_eq!(
-        harness
-            .poll_oneoff
-            .call(&mut harness.store, (0, 0, 1, 64))?,
+            .call(&mut harness.store, (0, 0, 2, 64))?,
         ERRNO_NOSYS
     );
     Ok(())
+}
+
+struct ClockSubscription {
+    userdata: u64,
+    clock_id: u32,
+    timeout_ns: u64,
+    flags: u16,
+}
+
+fn write_clock_subscription(
+    memory: &Memory,
+    store: &mut Store<HostState>,
+    ptr: usize,
+    userdata: u64,
+    timeout_ns: u64,
+) -> Result<()> {
+    write_clock_subscription_with(
+        memory,
+        store,
+        ptr,
+        ClockSubscription {
+            userdata,
+            clock_id: CLOCKID_MONOTONIC,
+            timeout_ns,
+            flags: 0,
+        },
+    )
+}
+
+fn write_clock_subscription_with(
+    memory: &Memory,
+    store: &mut Store<HostState>,
+    ptr: usize,
+    clock: ClockSubscription,
+) -> Result<()> {
+    let mut bytes = [0; SUBSCRIPTION_SIZE];
+    bytes[SUBSCRIPTION_USERDATA_OFFSET..SUBSCRIPTION_USERDATA_OFFSET + 8]
+        .copy_from_slice(&clock.userdata.to_le_bytes());
+    bytes[SUBSCRIPTION_TAG_OFFSET] = EVENTTYPE_CLOCK;
+    bytes[SUBSCRIPTION_CLOCK_ID_OFFSET..SUBSCRIPTION_CLOCK_ID_OFFSET + 4]
+        .copy_from_slice(&clock.clock_id.to_le_bytes());
+    bytes[SUBSCRIPTION_CLOCK_TIMEOUT_OFFSET..SUBSCRIPTION_CLOCK_TIMEOUT_OFFSET + 8]
+        .copy_from_slice(&clock.timeout_ns.to_le_bytes());
+    bytes[SUBSCRIPTION_CLOCK_FLAGS_OFFSET..SUBSCRIPTION_CLOCK_FLAGS_OFFSET + 2]
+        .copy_from_slice(&clock.flags.to_le_bytes());
+    memory.write(store, ptr, &bytes)?;
+    Ok(())
+}
+
+fn write_fd_subscription(
+    memory: &Memory,
+    store: &mut Store<HostState>,
+    ptr: usize,
+    event_type: u8,
+) -> Result<()> {
+    let mut subscription = [0; SUBSCRIPTION_SIZE];
+    subscription[SUBSCRIPTION_TAG_OFFSET] = event_type;
+    memory.write(store, ptr, &subscription)?;
+    Ok(())
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+        bytes[offset + 4],
+        bytes[offset + 5],
+        bytes[offset + 6],
+        bytes[offset + 7],
+    ])
 }

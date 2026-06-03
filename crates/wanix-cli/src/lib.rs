@@ -2319,6 +2319,19 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_example_sleep_demo_runs_timer_poll_oneoff() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-sleep-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"before sleep\nafter sleep\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_updates_times_through_quickjs_os_utimes() {
         let script = write_temp_script(
             "utimes-demo.js",

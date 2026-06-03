@@ -10,6 +10,7 @@ mod fd_write;
 mod fs;
 mod guest_memory;
 mod module_loader;
+mod poll;
 mod process;
 mod promise_rejection;
 mod state;
@@ -88,25 +89,8 @@ pub(crate) fn define_wasi_imports(linker: &mut Linker<HostState>) -> Result<()> 
 
     fd_write::define_import(linker)?;
     fs::define_imports(linker)?;
+    poll::define_import(linker)?;
     process::define_imports(linker)?;
-
-    linker.func_wrap(
-        "wasi_snapshot_preview1",
-        "poll_oneoff",
-        |mut caller: Caller<'_, HostState>,
-         _in_ptr: i32,
-         _out_ptr: i32,
-         nsubscriptions: i32,
-         nevents_ptr: i32|
-         -> wasmtime::Result<i32> {
-            if nsubscriptions != 0 {
-                return Ok(ERRNO_NOSYS);
-            }
-            let memory = caller_memory(&caller)?;
-            memory.write(&mut caller, guest_offset(nevents_ptr), &0_u32.to_le_bytes())?;
-            Ok(ERRNO_SUCCESS)
-        },
-    )?;
 
     linker.func_wrap(
         "wasi_snapshot_preview1",

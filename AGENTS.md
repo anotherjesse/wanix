@@ -157,6 +157,9 @@ cargo test --workspace --locked
 - [ADR 0030](docs/adrs/0030-wasi-path-timestamp-mutation.md):
   `qjs:os.utimes(...)` reaches Wanix-owned path timestamp mutation and
   stat-visible atime/mtime through live WASI providers.
+- [ADR 0031](docs/adrs/0031-wasi-timer-poll-oneoff.md):
+  `qjs:os.sleep(...)` reaches timer-only Preview 1 `poll_oneoff`, while fd
+  readiness and async lifecycle polling remain Wanix task work.
 
 ## Cycle Rules
 
@@ -175,3 +178,6 @@ cycle before starting the next one.
 - Consider moving remaining Wasmtime mechanics out of `wanix-qjs` and into
   `wanix-qjs-engine`, then split large `wanix-qjs`, `wanix-cli`, and
   `wanix-wasi` modules before adding broad new behavior.
+- Do not treat file-size mutation as a QuickJS-visible truncate demo until the
+  fixture exposes `truncate` or `ftruncate`; Preview 1 has
+  `fd_filestat_set_size`, while `PATH_FILESTAT_SET_SIZE` is a rights bit.

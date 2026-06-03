@@ -134,6 +134,25 @@ fn fixture_exposes_quickjs_std_and_os_modules() -> Result<()> {
 }
 
 #[test]
+fn quickjs_os_sleep_uses_timer_poll_oneoff() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+        globalThis.beforeSleep = true;
+        os.sleep(0);
+        globalThis.afterSleep = true;
+        "#,
+        "stdlib-sleep.mjs",
+    )?;
+
+    assert_eq!(vm.eval_string("String(beforeSleep && afterSleep)")?, "true");
+    Ok(())
+}
+
+#[test]
 fn quickjs_std_stdout_uses_wasi_capture() -> Result<()> {
     let (engine, module) = quickjs_fixture()?;
     let config = QuickJsHostConfig::new().with_stdout_capture(true);

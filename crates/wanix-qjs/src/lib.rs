@@ -1748,6 +1748,50 @@ std.out.flush();
     }
 
     #[test]
+    fn task_driver_quickjs_os_sleep_completes_timer_poll() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.out.puts("before sleep\n");
+os.sleep(0);
+std.out.puts("after sleep\n");
+std.out.flush();
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(read_file(&*stdout, "out"), b"before sleep\nafter sleep\n");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
     fn task_driver_quickjs_std_and_os_read_wanix_namespace_files() {
         let table = TaskTable::new();
         let runner = runner();
