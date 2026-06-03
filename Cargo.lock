@@ -963,6 +963,10 @@ name = "wanix-fs"
 version = "0.1.0"
 
 [[package]]
+name = "wanix-protocol"
+version = "0.1.0"
+
+[[package]]
 name = "wanix-qjs"
 version = "0.1.0"
 dependencies = [

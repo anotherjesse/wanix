@@ -2,6 +2,7 @@
 members = [
     "crates/wanix-cli",
     "crates/wanix-fs",
+    "crates/wanix-protocol",
     "crates/wanix-qjs",
     "crates/wanix-qjs-engine",
     "crates/wanix-task",

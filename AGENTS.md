@@ -15,6 +15,8 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
 
 - `wanix-fs`: filesystem traits, metadata, errors, path rules, in-memory
   fixtures, and explicit host-directory-backed filesystems for native demos.
+- `wanix-protocol`: dependency-free wire protocol helpers, starting with 9P
+  frame splitting, tag extraction, and version negotiation.
 - `wanix-vfs`: Plan 9-style namespace binding and resolution.
 - `wanix-task`: task model, `#task`, fd table, and driver registry.
 - `wanix-term`: terminal device filesystem for `#term/new`,
@@ -27,7 +29,8 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
 - `wanix-qjs`: QuickJS/WASI task driver that adapts the engine crate to Wanix
   task semantics.
 - `wanix-cli`: native CLI and demo runner.
-- Future `wanix-protocol`: 9P, CBOR/RPC, HTTPFS, and R2FS protocol pieces.
+- Future protocol work: typed 9P operations and server/client adapters, plus
+  CBOR/RPC, HTTPFS, and R2FS protocol pieces when those integrations need them.
 
 ## Dependency Direction
 
@@ -38,6 +41,7 @@ wanix-fs
   -> wanix-vfs
   -> wanix-task
 
+wanix-protocol
 wanix-term -> wanix-fs
 wanix-wasi -> wanix-fs + wanix-vfs
 wanix-qjs-engine -> Wasmtime + QuickJS WASM fixture
@@ -91,7 +95,7 @@ boundary clearer.
 Required checks before a cycle commit:
 
 ```sh
-cargo fmt --package wanix-cli --package wanix-fs --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-term --package wanix-vfs --package wanix-wasi --check
+cargo fmt --package wanix-cli --package wanix-fs --package wanix-protocol --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-term --package wanix-vfs --package wanix-wasi --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 ```
@@ -264,6 +268,9 @@ cargo test --workspace --locked
 - [ADR 0057](docs/adrs/0057-qjs-term-post-eval-resize-feed.md):
   `qjs-term --resize-after-eval` writes textual resize events to `#term/winch`
   and pumps ready-IO so QuickJS tasks can observe resize broadcasts.
+- [ADR 0058](docs/adrs/0058-rust-9p-protocol-framing.md):
+  `wanix-protocol` owns dependency-free 9P frame splitting, tag extraction, and
+  version negotiation before Rust grows a Wanix-backed 9P server.
 
 ## Cycle Rules
 
@@ -282,3 +289,5 @@ cycle before starting the next one.
 - Make `qjs-shell` genuinely interactive beyond line-oriented input by adding a
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
+- Add typed 9P request/response payloads and a Wanix namespace-backed 9P server
+  on top of `wanix-protocol` for native serve/v86 integration.
