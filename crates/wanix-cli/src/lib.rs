@@ -5,6 +5,8 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::OnceLock;
 
 use wanix_fs::{FileSystem, FsError, MemFs, NormalizedPath, OpenOptions};
 use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver};
@@ -149,7 +151,7 @@ fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
     })?;
 
     let table = TaskTable::new();
-    let runner = Arc::new(quickjs_runner()?);
+    let runner = quickjs_runner()?;
     table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(runner)))?;
     let task = table.allocate_root("qjs")?;
     let task_spec = qjs_task_spec(&command)?;
@@ -309,12 +311,30 @@ fn env_map(lines: &[String]) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn quickjs_runner() -> Result<QuickJsRunner, CliError> {
+fn quickjs_runner() -> Result<Arc<QuickJsRunner>, CliError> {
     match std::env::var_os("WANIX_QJS_WASM") {
-        Some(path) => QuickJsRunner::from_wasm_file(PathBuf::from(path)),
-        None => QuickJsRunner::from_bundled_wasm(),
+        Some(path) => QuickJsRunner::from_wasm_file(PathBuf::from(path)).map(Arc::new),
+        None => bundled_quickjs_runner(),
     }
     .map_err(CliError::from)
+}
+
+#[cfg(not(test))]
+fn bundled_quickjs_runner() -> Result<Arc<QuickJsRunner>, FsError> {
+    QuickJsRunner::from_bundled_wasm().map(Arc::new)
+}
+
+#[cfg(test)]
+fn bundled_quickjs_runner() -> Result<Arc<QuickJsRunner>, FsError> {
+    static RUNNER: OnceLock<Result<Arc<QuickJsRunner>, String>> = OnceLock::new();
+    match RUNNER.get_or_init(|| {
+        QuickJsRunner::from_bundled_wasm()
+            .map(Arc::new)
+            .map_err(|err| err.to_string())
+    }) {
+        Ok(runner) => Ok(Arc::clone(runner)),
+        Err(error) => Err(FsError::Other(error.clone())),
+    }
 }
 
 fn copy_script_directory(

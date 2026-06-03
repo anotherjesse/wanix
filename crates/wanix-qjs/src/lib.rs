@@ -591,6 +591,8 @@ fn write_task_output(task: &Task, output: &RunOutput) -> FsResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, OnceLock};
+
     use super::{
         CRATE_PURPOSE, FIRST_DEMO_TARGET, QuickJsRunner, QuickJsTaskDriver, QuickJsWanixConfig,
         wasi_contract_purpose,
@@ -601,8 +603,16 @@ mod tests {
     use wanix_vfs::BindOptions;
     use wanix_wasi::{Errno, WasiConfig, WasiCtx, WasiFd, WasiOpenOptions};
 
-    fn runner() -> QuickJsRunner {
-        QuickJsRunner::from_bundled_wasm().unwrap()
+    fn runner() -> Arc<QuickJsRunner> {
+        static RUNNER: OnceLock<Result<Arc<QuickJsRunner>, String>> = OnceLock::new();
+        match RUNNER.get_or_init(|| {
+            QuickJsRunner::from_bundled_wasm()
+                .map(Arc::new)
+                .map_err(|err| err.to_string())
+        }) {
+            Ok(runner) => Arc::clone(runner),
+            Err(error) => panic!("failed to load bundled QuickJS wasm: {error}"),
+        }
     }
 
     fn read_file(fs: &dyn FileSystem, path: &str) -> Vec<u8> {
@@ -1017,7 +1027,7 @@ print(message);
     #[test]
     fn task_driver_loads_script_from_namespace_and_writes_task_fds() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
@@ -1075,7 +1085,7 @@ console.error("stderr", "line");
     #[test]
     fn task_driver_loads_es_modules_from_namespace() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
@@ -1121,7 +1131,7 @@ print(message);
     #[test]
     fn task_driver_exposes_wanix_task_context_to_javascript() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
@@ -1174,7 +1184,7 @@ print("id", Wanix.readText("#task/self/id").trim());
     #[test]
     fn task_driver_maps_wanix_exit_to_task_status() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
@@ -1248,7 +1258,7 @@ try {
     #[test]
     fn task_driver_exposes_wanix_owned_fd_table_to_javascript() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
@@ -1305,7 +1315,7 @@ Wanix.closeFd(output);
     #[test]
     fn task_driver_fd_api_writes_to_wanix_stdio_fds() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
@@ -1358,7 +1368,7 @@ Wanix.writeFd(2, "direct stderr\n");
     #[test]
     fn task_driver_fd_api_preserves_stdio_order_and_close() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
@@ -1400,7 +1410,7 @@ Wanix.closeFd(1);
     #[test]
     fn task_driver_rejects_invalid_wanix_fd_calls() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
@@ -1457,7 +1467,7 @@ Wanix.readFd(fd, 1);
     #[test]
     fn task_driver_rejects_invalid_wanix_exit_status() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
@@ -1475,7 +1485,7 @@ Wanix.readFd(fd, 1);
 
     #[test]
     fn task_driver_check_uses_the_first_command_word() {
-        let driver = QuickJsTaskDriver::new(std::sync::Arc::new(runner()));
+        let driver = QuickJsTaskDriver::new(runner());
         let task = Task::new(
             TaskId::new(1),
             TaskSpec::new(".").unwrap(),
@@ -1491,7 +1501,7 @@ Wanix.readFd(fd, 1);
 
     #[test]
     fn task_driver_check_uses_typed_task_spec_program_when_present() {
-        let driver = QuickJsTaskDriver::new(std::sync::Arc::new(runner()));
+        let driver = QuickJsTaskDriver::new(runner());
         let task = Task::new(
             TaskId::new(1),
             TaskSpec::new("notes.txt").unwrap(),
@@ -1510,7 +1520,7 @@ Wanix.readFd(fd, 1);
     #[test]
     fn task_driver_sets_nonzero_exit_on_failure() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
@@ -1526,7 +1536,7 @@ Wanix.readFd(fd, 1);
     #[test]
     fn task_driver_preserves_output_before_javascript_failure() {
         let table = TaskTable::new();
-        let runner = std::sync::Arc::new(runner());
+        let runner = runner();
         table
             .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
             .unwrap();
