@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,10 +17,18 @@ use super::{
     read_qjs_stdin, read_utf8_script, write_process_output,
 };
 
+const QJS_SHELL_SOURCE: &str = include_str!("../../../examples/qjs-term-shell-demo.js");
+const QJS_SHELL_SCRIPT_SENTINEL: &str = "__wanix_qjs_shell.js";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QjsTermCommand {
     qjs: QjsCommand,
     feed_after_eval: Vec<PostEvalFeed>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct QjsShellCommand {
+    qjs: QjsCommand,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +97,23 @@ pub(super) fn parse_qjs_term_command(args: &[OsString]) -> Result<QjsTermCommand
     })
 }
 
+pub(super) fn parse_qjs_shell_command(args: &[OsString]) -> Result<QjsShellCommand, CliError> {
+    let mut qjs_args = args.to_vec();
+    qjs_args.push(OsString::from(QJS_SHELL_SCRIPT_SENTINEL));
+    let qjs = parse_qjs_command_for(&qjs_args, "qjs-shell")?;
+    if qjs.script_path != Path::new(QJS_SHELL_SCRIPT_SENTINEL) || !qjs.args.is_empty() {
+        return Err(CliError::usage(
+            "qjs-shell does not accept a script path or script arguments",
+        ));
+    }
+    if qjs.stdin.is_some() {
+        return Err(CliError::usage(
+            "qjs-shell reads native stdin line-by-line; use qjs-term for explicit stdin fixtures",
+        ));
+    }
+    Ok(QjsShellCommand { qjs })
+}
+
 fn qjs_option_takes_value(arg: &OsString) -> bool {
     matches!(
         arg.to_str(),
@@ -121,10 +147,57 @@ pub(super) fn run_qjs_term_streaming(
     process_stdout: &mut dyn Write,
     process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
-    let qjs_command = command.qjs;
-    let feed_after_eval = command.feed_after_eval;
-    let script_path = qjs_command.script_path.as_path();
-    let script = read_utf8_script(script_path)?;
+    run_qjs_term_program_streaming(
+        command.qjs,
+        command.feed_after_eval,
+        QjsTermProgram::HostScript,
+        process_stdin,
+        process_stdout,
+        process_stderr,
+    )
+}
+
+pub(super) fn run_qjs_shell(
+    command: QjsShellCommand,
+    process_stdin: &mut dyn Read,
+) -> Result<CliOutput, CliError> {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let exit_code = run_qjs_shell_streaming(command, process_stdin, &mut stdout, &mut stderr)?;
+    Ok(CliOutput::new(stdout, stderr, exit_code))
+}
+
+pub(super) fn run_qjs_shell_streaming(
+    command: QjsShellCommand,
+    process_stdin: &mut dyn Read,
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    run_qjs_term_program_streaming(
+        command.qjs,
+        vec![PostEvalFeed::LinesProcess],
+        QjsTermProgram::BundledShell,
+        process_stdin,
+        process_stdout,
+        process_stderr,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QjsTermProgram {
+    HostScript,
+    BundledShell,
+}
+
+fn run_qjs_term_program_streaming(
+    qjs_command: QjsCommand,
+    feed_after_eval: Vec<PostEvalFeed>,
+    program: QjsTermProgram,
+    process_stdin: &mut dyn Read,
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    let script = read_qjs_term_program(&qjs_command.script_path, program)?;
     let stdin_bytes = read_qjs_stdin(qjs_command.stdin, process_stdin)?;
 
     let runner = quickjs_runner()?;
@@ -142,7 +215,9 @@ pub(super) fn run_qjs_term_streaming(
     let task = table.allocate_root("qjs")?;
 
     let root = Arc::new(MemFs::new());
-    copy_script_directory(script_path, &root, &qjs_command.cwd)?;
+    if program == QjsTermProgram::HostScript {
+        copy_script_directory(&qjs_command.script_path, &root, &qjs_command.cwd)?;
+    }
     let guest_script = guest_path_in_cwd(&qjs_command.cwd, QJS_GUEST_SCRIPT)?;
     root.write_file(guest_script.as_str(), script.as_bytes())?;
     task.bind(root, ".", ".", BindOptions::default())?;
@@ -203,6 +278,13 @@ pub(super) fn run_qjs_term_streaming(
         process_stdout,
         process_stderr,
     )
+}
+
+fn read_qjs_term_program(script_path: &Path, program: QjsTermProgram) -> Result<String, CliError> {
+    match program {
+        QjsTermProgram::HostScript => read_utf8_script(script_path),
+        QjsTermProgram::BundledShell => Ok(QJS_SHELL_SOURCE.to_owned()),
+    }
 }
 
 fn run_post_eval_feeds(
@@ -510,7 +592,9 @@ fn drain_terminal_output(
 mod tests {
     use std::path::PathBuf;
 
-    use super::{PostEvalFeed, parse_qjs_term_command};
+    use super::{
+        PostEvalFeed, QJS_SHELL_SCRIPT_SENTINEL, parse_qjs_shell_command, parse_qjs_term_command,
+    };
 
     #[test]
     fn parse_qjs_term_collects_pre_script_post_eval_feeds() {
@@ -588,5 +672,43 @@ mod tests {
             ]
         );
         assert_eq!(command.qjs.script_path, PathBuf::from("demo.js"));
+    }
+
+    #[test]
+    fn parse_qjs_shell_uses_bundled_script_sentinel_without_script_args() {
+        let command = parse_qjs_shell_command(&[
+            "--cwd".into(),
+            "app".into(),
+            "--ready-io-turns".into(),
+            "2".into(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            command.qjs.script_path,
+            PathBuf::from(QJS_SHELL_SCRIPT_SENTINEL)
+        );
+        assert_eq!(command.qjs.cwd.as_str(), "app");
+        assert_eq!(command.qjs.ready_io_turns, 2);
+        assert!(command.qjs.args.is_empty());
+        assert!(command.qjs.stdin.is_none());
+    }
+
+    #[test]
+    fn parse_qjs_shell_rejects_script_path_and_preloaded_stdin() {
+        let script_error = parse_qjs_shell_command(&["demo.js".into()]).unwrap_err();
+        assert!(
+            script_error
+                .to_string()
+                .contains("qjs-shell does not accept a script path")
+        );
+
+        let stdin_error =
+            parse_qjs_shell_command(&["--stdin".into(), "preloaded".into()]).unwrap_err();
+        assert!(
+            stdin_error
+                .to_string()
+                .contains("qjs-shell reads native stdin line-by-line")
+        );
     }
 }

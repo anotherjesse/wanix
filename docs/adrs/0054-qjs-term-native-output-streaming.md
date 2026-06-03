@@ -41,7 +41,8 @@ The native `wanix-rust qjs-term` path can now emit a shell prompt before it read
 the next post-eval native stdin line. This is a visible step from transcript
 demos toward an interactive shell loop. Combined with ADR 0052's task-exit stop
 condition for post-eval feeds, a shell command can also request process exit and
-return without waiting for native stdin EOF.
+return without waiting for native stdin EOF. ADR 0055 builds on this by exposing
+the bundled shell as `wanix-rust qjs-shell`.
 
 This does not yet provide a full TTY event loop: native input is still driven by
 the existing post-eval feed modes, there is no raw terminal mode, no concurrent

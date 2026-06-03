@@ -69,7 +69,9 @@ post-eval native stdin line streaming. Terminal fd readiness is queue-aware, so
 ready-IO pumps can run while a read handler is armed without firing on empty
 terminal input. Post-eval terminal feeds stop when the qjs task requests a
 Wanix process exit, which lets the shell demo's `exit` command return without
-waiting for native stdin EOF.
+waiting for native stdin EOF. The user-facing shell demo is now
+`wanix-rust qjs-shell`, which runs the bundled QuickJS shell source through the
+same terminal-backed Wanix task runtime with line-oriented native input.
 
 ## Code Quality Guardrails
 
@@ -248,6 +250,9 @@ cargo test --workspace --locked
 - [ADR 0054](docs/adrs/0054-qjs-term-native-output-streaming.md):
   `wanix-rust` uses a process-IO CLI entrypoint so `qjs-term` can stream
   terminal output during eval/feed/ready-IO slices.
+- [ADR 0055](docs/adrs/0055-native-qjs-shell-command.md):
+  `wanix-rust qjs-shell` runs the bundled QuickJS shell through the
+  terminal-backed qjs task runtime as the direct native shell demo.
 
 ## Cycle Rules
 
@@ -263,6 +268,6 @@ cycle before starting the next one.
   intentional runtime decision.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
-- Make `qjs-term` genuinely interactive by replacing scripted session feeds with
-  a live native terminal input loop while the task runtime remains active, then
-  add raw TTY mode, signal handling, and resize propagation.
+- Make `qjs-shell` genuinely interactive beyond line-oriented input by adding
+  raw TTY mode, signal handling, resize propagation, and a host loop that can
+  wait on native input and guest output concurrently.

@@ -28,6 +28,10 @@ const USAGE: &str = concat!(
     "[--feed-after-eval-lines PATH|- ...] ",
     "[--interrupt-after N] [--memory-limit-bytes N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
+    "       wanix-rust qjs-shell [--env KEY=VALUE ...] [--cwd DIR] ",
+    "[--event-loop-ms N] [--ready-io-turns N] ",
+    "[--interrupt-after N] [--memory-limit-bytes N] ",
+    "[--mount HOST=GUEST ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--interrupt-after N] ",
     "[--memory-limit-bytes N] [--event-loop-ms N] [--ready-io-turns N] ",
@@ -186,6 +190,12 @@ where
             &mut process_stdout,
             &mut process_stderr,
         ),
+        [command, rest @ ..] if command == "qjs-shell" => qjs_term::run_qjs_shell_streaming(
+            qjs_term::parse_qjs_shell_command(rest)?,
+            &mut process_stdin,
+            &mut process_stdout,
+            &mut process_stderr,
+        ),
         _ => {
             let output = run_collected(args, &mut process_stdin)?;
             write_process_output(&mut process_stdout, "stdout", output.stdout())?;
@@ -204,6 +214,9 @@ fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<Cl
         }
         [command, rest @ ..] if command == "qjs-term" => {
             qjs_term::run_qjs_term(qjs_term::parse_qjs_term_command(rest)?, process_stdin)
+        }
+        [command, rest @ ..] if command == "qjs-shell" => {
+            qjs_term::run_qjs_shell(qjs_term::parse_qjs_shell_command(rest)?, process_stdin)
         }
         [command, rest @ ..] if command == "qjs-snapshot" => run_qjs_snapshot(
             parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?,
@@ -1514,6 +1527,7 @@ mod tests {
         assert_eq!(output.exit_code(), 0);
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-term"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-shell"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval-file PATH|-"));
         assert!(
@@ -1893,6 +1907,45 @@ std.out.flush();
 
         assert_eq!(exit_code, 0);
         assert_eq!(stdout, b"shell task: 1\r\n$ bye\r\n");
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn qjs_shell_runs_bundled_terminal_shell() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io(
+            ["qjs-shell"],
+            EofForbiddenStdin::new(b"echo hello shell\nid\npwd\nexit\n"),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            stdout,
+            b"shell task: 1\r\n$ hello shell\r\n$ 1\r\n$ .\r\n$ bye\r\n"
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn qjs_shell_flows_cwd_into_bundled_shell_task() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io(
+            ["qjs-shell", "--cwd", "app"],
+            EofForbiddenStdin::new(b"pwd\nexit\n"),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(stdout, b"shell task: 1\r\n$ app\r\n$ bye\r\n");
         assert!(stderr.is_empty());
     }
 
