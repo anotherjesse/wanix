@@ -36,7 +36,8 @@ files, and task exit state is restore-time state from the supplied task.
 
 Snapshots must reject open dynamic WASI descriptors. The engine asks the live
 `QuickJsWasiHost` provider for snapshot blockers, and the Wanix adapter reports
-open dynamic fds from `wanix_wasi::WasiCtx`.
+open dynamic fds from `wanix_wasi::WasiCtx`, including directory descriptors
+that are not mirrored into the Wanix task fd table.
 
 ## Consequences
 

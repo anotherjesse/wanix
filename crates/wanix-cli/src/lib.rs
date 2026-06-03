@@ -1984,6 +1984,36 @@ std.exit(6);
     }
 
     #[test]
+    fn qjs_snapshot_rejects_open_directory_wasi_fd() {
+        let dir = temp_dir("wanix-cli-open-directory-snapshot");
+        let snapshot = dir.join("quickjs.snapshot");
+        let script = write_temp_script(
+            "snapshot-open-directory.js",
+            r#"
+import * as os from "qjs:os";
+import * as std from "qjs:std";
+
+const fd = os.open(".", os.O_RDONLY);
+std.out.puts("opened directory fd " + fd + "\n");
+std.out.flush();
+"#,
+        );
+
+        let output = run([
+            "qjs-snapshot".into(),
+            "--snapshot".into(),
+            snapshot.into_os_string(),
+            script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 1);
+        assert_eq!(output.stdout(), b"opened directory fd 4\n");
+        assert!(String::from_utf8_lossy(output.stderr()).contains("open dynamic WASI fd(s)"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn qjs_snapshot_and_resume_reattach_stdin_between_cli_invocations() {
         let snapshot_dir = temp_dir("wanix-cli-persist-stdin");
         let snapshot = snapshot_dir.join("quickjs.snapshot");
