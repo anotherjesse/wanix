@@ -1,0 +1,26 @@
+[package]
+name = "wanix-qjs-engine"
+description = "Wasmtime-hosted QuickJS/WASI engine mechanics for Rust-native Wanix."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow = "1"
+sha2 = "0.10"
+wasmtime = { version = "45.0.0", default-features = false, features = [
+    "anyhow",
+    "cranelift",
+    "runtime",
+    "std",
+    "wat",
+] }
+
+[dev-dependencies]
+proptest = "1"
+
+[lib]
+name = "rust_wasi_quickjs"
+path = "src/lib.rs"

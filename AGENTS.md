@@ -19,8 +19,11 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
 - `wanix-task`: task model, `#task`, fd table, and driver registry.
 - `wanix-wasi`: custom WASI Preview 1 imports backed by Wanix namespaces and
   task fds supplied by adapter configuration.
-- `wanix-qjs`: QuickJS/WASI task driver adapted from the
-  `rust-wasi-quickjs` prototype.
+- `wanix-qjs-engine`: Wasmtime-hosted QuickJS/WASI engine mechanics relocated
+  from the `rust-wasi-quickjs` prototype, keeping the existing Rust import path
+  during the first workspace-local boundary cleanup.
+- `wanix-qjs`: QuickJS/WASI task driver that adapts the engine crate to Wanix
+  task semantics.
 - `wanix-cli`: native CLI and demo runner.
 - Future `wanix-protocol`: 9P, CBOR/RPC, HTTPFS, and R2FS protocol pieces.
 
@@ -34,7 +37,8 @@ wanix-fs
   -> wanix-task
 
 wanix-wasi -> wanix-fs + wanix-vfs
-wanix-qjs  -> wanix-task + wanix-wasi + rust-wasi-quickjs
+wanix-qjs-engine -> Wasmtime + QuickJS WASM fixture
+wanix-qjs  -> wanix-task + wanix-wasi + wanix-qjs-engine
 wanix-cli  -> runtime crates for orchestration
 ```
 
@@ -62,7 +66,7 @@ boundary clearer.
 Required checks before a cycle commit:
 
 ```sh
-cargo fmt --package wanix-cli --package wanix-fs --package wanix-qjs --package wanix-task --package wanix-vfs --package wanix-wasi --check
+cargo fmt --package wanix-cli --package wanix-fs --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-vfs --package wanix-wasi --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 ```
@@ -90,6 +94,9 @@ cargo test --workspace --locked
 - [ADR 0009](docs/adrs/0009-quickjs-tasks-use-wanix-process-semantics.md):
   QuickJS is the execution engine inside `qjs` Wanix tasks, not a separate
   process model.
+- [ADR 0010](docs/adrs/0010-workspace-local-quickjs-engine-crate.md):
+  QuickJS/Wasmtime engine mechanics live in a Wanix workspace crate so Wanix can
+  evolve the WASI boundary directly.
 
 ## Cycle Rules
 
