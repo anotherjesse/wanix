@@ -4,7 +4,17 @@
 //! per-task namespace cloning, and synthesized directory views for unioned
 //! bindings.
 
-use wanix_fs::{FsResult, NormalizedPath};
+use std::cmp::Reverse;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
+
+use wanix_fs::{
+    DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
+};
+
+#[cfg(test)]
+mod tests;
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix namespace binding";
@@ -13,11 +23,11 @@ pub const CRATE_PURPOSE: &str = "wanix namespace binding";
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum BindPosition {
     /// Place the binding before existing bindings at the destination.
+    #[default]
     First,
     /// Replace existing bindings at the destination.
     Replace,
     /// Place the binding after existing bindings at the destination.
-    #[default]
     Last,
 }
 
@@ -28,7 +38,7 @@ pub struct BindOptions {
     pub position: BindPosition,
 }
 
-/// A stored binding between a source path and destination path.
+/// A public view of a stored binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     source: NormalizedPath,
@@ -49,10 +59,24 @@ impl Binding {
     }
 }
 
-/// Early namespace skeleton used to encode bind ordering before full FS wiring.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone)]
+struct BindTarget {
+    filesystem: Arc<dyn FileSystem>,
+    source: NormalizedPath,
+}
+
+/// A Wanix namespace containing bind targets.
+#[derive(Clone, Default)]
 pub struct Namespace {
-    bindings: Vec<Binding>,
+    bindings: BTreeMap<NormalizedPath, Vec<BindTarget>>,
+}
+
+impl fmt::Debug for Namespace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Namespace")
+            .field("binding_count", &self.binding_count())
+            .finish()
+    }
 }
 
 impl Namespace {
@@ -62,86 +86,251 @@ impl Namespace {
         Self::default()
     }
 
-    /// Adds a path binding.
+    /// Adds a filesystem binding.
     ///
     /// # Errors
     ///
-    /// Returns a filesystem error if either path is invalid.
+    /// Returns a filesystem error if either path is invalid, the source path
+    /// does not exist, or the destination path is invalid.
     pub fn bind(
         &mut self,
+        filesystem: Arc<dyn FileSystem>,
         source: impl AsRef<str>,
         destination: impl AsRef<str>,
         options: BindOptions,
     ) -> FsResult<()> {
-        let binding = Binding {
-            source: NormalizedPath::new(source)?,
-            destination: NormalizedPath::new(destination.as_ref())?,
-        };
+        let source = NormalizedPath::new(source)?;
+        let destination = NormalizedPath::new(destination)?;
+        filesystem.metadata(&source)?;
+
+        let target = BindTarget { filesystem, source };
+        let targets = self.bindings.entry(destination).or_default();
         match options.position {
-            BindPosition::First => self.bindings.insert(0, binding),
+            BindPosition::First => targets.insert(0, target),
             BindPosition::Replace => {
-                self.bindings
-                    .retain(|existing| existing.destination != binding.destination);
-                self.bindings.push(binding);
+                targets.clear();
+                targets.push(target);
             }
-            BindPosition::Last => self.bindings.push(binding),
+            BindPosition::Last => targets.push(target),
         }
         Ok(())
     }
 
-    /// Returns the currently stored bindings in resolution order.
+    /// Returns stored bindings in destination order, then resolution order.
     #[must_use]
-    pub fn bindings(&self) -> &[Binding] {
-        &self.bindings
+    pub fn bindings(&self) -> Vec<Binding> {
+        self.bindings
+            .iter()
+            .flat_map(|(destination, targets)| {
+                targets.iter().map(|target| Binding {
+                    source: target.source.clone(),
+                    destination: destination.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Returns the number of bind targets stored in this namespace.
+    #[must_use]
+    pub fn binding_count(&self) -> usize {
+        self.bindings.values().map(Vec::len).sum()
+    }
+
+    fn resolve_candidates(&self, path: &NormalizedPath) -> Vec<ResolvedTarget> {
+        let mut candidates = Vec::new();
+        for (destination, targets) in &self.bindings {
+            let Some(relative) = relative_to_destination(path, destination) else {
+                continue;
+            };
+            for target in targets {
+                candidates.push(ResolvedTarget {
+                    filesystem: Arc::clone(&target.filesystem),
+                    path: join_paths(&target.source, relative),
+                    destination_len: destination.as_str().len(),
+                });
+            }
+        }
+        candidates.sort_by_key(|candidate| Reverse(candidate.destination_len));
+        candidates
+    }
+
+    fn has_synthetic_children(&self, path: &NormalizedPath) -> bool {
+        self.bindings
+            .keys()
+            .any(|destination| immediate_child_name(destination, path).is_some())
+    }
+
+    fn synthetic_child_metadata(targets: &[BindTarget]) -> Option<Metadata> {
+        targets
+            .iter()
+            .find_map(|target| target.filesystem.metadata(&target.source).ok())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{BindOptions, BindPosition, CRATE_PURPOSE, Namespace};
-
-    #[test]
-    fn purpose_is_declared() {
-        assert!(!CRATE_PURPOSE.is_empty());
+impl FileSystem for Namespace {
+    fn open(&self, path: &NormalizedPath, options: OpenOptions) -> FsResult<Box<dyn File>> {
+        let mut saw_directory = false;
+        for target in self.resolve_candidates(path) {
+            match target.filesystem.open(&target.path, options) {
+                Ok(file) => return Ok(file),
+                Err(FsError::IsDirectory) => saw_directory = true,
+                Err(FsError::NotFound | FsError::NotDirectory) => {}
+                Err(err) => return Err(err),
+            }
+        }
+        if saw_directory || self.has_synthetic_children(path) {
+            return Err(FsError::IsDirectory);
+        }
+        Err(FsError::NotFound)
     }
 
-    #[test]
-    fn bind_order_is_encoded() {
-        let mut ns = Namespace::new();
-        ns.bind("a", "mnt", BindOptions::default()).unwrap();
-        ns.bind(
-            "b",
-            "mnt",
-            BindOptions {
-                position: BindPosition::First,
-            },
-        )
-        .unwrap();
-        ns.bind("c", "other", BindOptions::default()).unwrap();
-
-        let sources = ns
-            .bindings()
-            .iter()
-            .map(|binding| binding.source().as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(sources, ["b", "a", "c"]);
+    fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
+        for target in self.resolve_candidates(path) {
+            match target.filesystem.metadata(&target.path) {
+                Ok(metadata) => return Ok(metadata),
+                Err(FsError::NotFound | FsError::NotDirectory) => {}
+                Err(err) => return Err(err),
+            }
+        }
+        if path.as_str() == "." {
+            return Ok(directory_metadata());
+        }
+        if self.has_synthetic_children(path) {
+            return Ok(directory_metadata());
+        }
+        Err(FsError::NotFound)
     }
 
-    #[test]
-    fn replace_removes_existing_destination_bindings() {
-        let mut ns = Namespace::new();
-        ns.bind("a", "mnt", BindOptions::default()).unwrap();
-        ns.bind("b", "mnt", BindOptions::default()).unwrap();
-        ns.bind(
-            "c",
-            "mnt",
-            BindOptions {
-                position: BindPosition::Replace,
-            },
-        )
-        .unwrap();
+    fn read_dir(&self, path: &NormalizedPath) -> FsResult<Vec<DirEntry>> {
+        let mut entries = BTreeMap::<String, Metadata>::new();
+        let mut found_directory = path.as_str() == ".";
 
-        assert_eq!(ns.bindings().len(), 1);
-        assert_eq!(ns.bindings()[0].source().as_str(), "c");
+        for target in self.resolve_candidates(path) {
+            match target.filesystem.metadata(&target.path) {
+                Ok(metadata) if metadata.file_type() != FileType::Directory => {
+                    return Err(FsError::NotDirectory);
+                }
+                Ok(_) => {}
+                Err(FsError::NotFound | FsError::NotDirectory) => continue,
+                Err(err) => return Err(err),
+            }
+            match target.filesystem.read_dir(&target.path) {
+                Ok(target_entries) => {
+                    found_directory = true;
+                    for entry in target_entries {
+                        if !is_hidden(entry.name()) {
+                            entries
+                                .entry(entry.name().to_owned())
+                                .or_insert_with(|| entry.metadata().clone());
+                        }
+                    }
+                }
+                Err(FsError::NotFound | FsError::NotDirectory) => {}
+                Err(err) => return Err(err),
+            }
+        }
+
+        for (destination, targets) in &self.bindings {
+            if let Some(child) = immediate_child_name(destination, path) {
+                found_directory = true;
+                if is_hidden(child) {
+                    continue;
+                }
+                if is_direct_child(destination, path) {
+                    if let Some(metadata) = Self::synthetic_child_metadata(targets) {
+                        entries.insert(child.to_owned(), metadata);
+                    }
+                } else {
+                    entries
+                        .entry(child.to_owned())
+                        .or_insert_with(directory_metadata);
+                }
+            }
+        }
+
+        if !found_directory {
+            return Err(FsError::NotFound);
+        }
+
+        Ok(entries
+            .into_iter()
+            .map(|(name, metadata)| DirEntry::new(name, metadata))
+            .collect())
     }
+}
+
+struct ResolvedTarget {
+    filesystem: Arc<dyn FileSystem>,
+    path: NormalizedPath,
+    destination_len: usize,
+}
+
+fn relative_to_destination<'a>(
+    path: &'a NormalizedPath,
+    destination: &NormalizedPath,
+) -> Option<&'a str> {
+    if destination.as_str() == "." {
+        return Some(if path.as_str() == "." {
+            ""
+        } else {
+            path.as_str()
+        });
+    }
+    if path == destination {
+        return Some("");
+    }
+    path.as_str()
+        .strip_prefix(destination.as_str())?
+        .strip_prefix('/')
+}
+
+fn join_paths(base: &NormalizedPath, relative: &str) -> NormalizedPath {
+    if relative.is_empty() {
+        return base.clone();
+    }
+    if base.as_str() == "." {
+        NormalizedPath::new(relative).expect("relative path is already normalized")
+    } else {
+        NormalizedPath::new(format!("{base}/{relative}"))
+            .expect("joined bind path is already normalized")
+    }
+}
+
+fn immediate_child_name<'a>(
+    destination: &'a NormalizedPath,
+    parent: &NormalizedPath,
+) -> Option<&'a str> {
+    if destination == parent {
+        return None;
+    }
+
+    let rest = if parent.as_str() == "." {
+        destination.as_str()
+    } else {
+        destination
+            .as_str()
+            .strip_prefix(parent.as_str())?
+            .strip_prefix('/')?
+    };
+
+    if rest.is_empty() {
+        return None;
+    }
+    Some(
+        rest.split('/')
+            .next()
+            .expect("split always has one segment"),
+    )
+}
+
+fn is_hidden(name: &str) -> bool {
+    name.starts_with('#')
+}
+
+fn is_direct_child(destination: &NormalizedPath, parent: &NormalizedPath) -> bool {
+    destination.parent().as_ref() == Some(parent)
+}
+
+fn directory_metadata() -> Metadata {
+    Metadata::new(FileType::Directory, 2, 0o755)
 }
