@@ -2534,6 +2534,32 @@ std.out.flush();
         assert!(output.stderr().is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn qjs_example_symlink_demo_uses_live_wasi_host_mount() {
+        let host = temp_dir("wanix-cli-symlink-demo");
+        let output = run([
+            "qjs".into(),
+            "--mount".into(),
+            format!("{}=host", host.display()).into(),
+            example_script("qjs-symlink-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"symlink: 0\nreadlink: 0 target.txt\nlstat link: 0 true\nstat target: 0 true\nload: linked data\n"
+        );
+        assert!(output.stderr().is_empty());
+        assert_eq!(
+            fs::read_link(host.join("link.txt")).unwrap(),
+            std::path::Path::new("target.txt")
+        );
+        assert_eq!(fs::read(host.join("target.txt")).unwrap(), b"linked data");
+        fs::remove_dir_all(host).unwrap();
+    }
+
     #[test]
     fn qjs_command_attaches_stdin_as_wanix_task_fd_zero() {
         let script = write_temp_script(

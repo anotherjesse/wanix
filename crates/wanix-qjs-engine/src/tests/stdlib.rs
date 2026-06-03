@@ -124,12 +124,18 @@ fn fixture_exposes_quickjs_std_and_os_modules() -> Result<()> {
         import * as os from "qjs:os";
         globalThis.qjsStdOutPuts = typeof std.out.puts;
         globalThis.qjsOsOpen = typeof os.open;
+        globalThis.qjsOsLstat = typeof os.lstat;
+        globalThis.qjsOsReadlink = typeof os.readlink;
+        globalThis.qjsOsSymlink = typeof os.symlink;
         "#,
         "stdlib-modules.mjs",
     )?;
 
     assert_eq!(vm.eval_string("qjsStdOutPuts")?, "function");
     assert_eq!(vm.eval_string("qjsOsOpen")?, "function");
+    assert_eq!(vm.eval_string("qjsOsLstat")?, "function");
+    assert_eq!(vm.eval_string("qjsOsReadlink")?, "function");
+    assert_eq!(vm.eval_string("qjsOsSymlink")?, "function");
     Ok(())
 }
 

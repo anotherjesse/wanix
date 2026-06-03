@@ -45,11 +45,9 @@ fallback and does not grow engine-owned mutable symlink policy.
 
 Wanix now owns Preview 1 symlink read/create semantics for live WASI providers.
 The behavior is proven at the engine WAT import layer, the `wanix-qjs` adapter,
-the `wanix-wasi` context, VFS bind resolution, and LocalFs host mounts.
-
-The checked-in QuickJS fixture still exposes `qjs:os.stat` but not
-`qjs:os.readlink`, `qjs:os.symlink`, or `qjs:os.lstat`, so guest JavaScript
-coverage for these calls remains future fixture work.
+the `wanix-wasi` context, VFS bind resolution, and LocalFs host mounts. ADR 0038
+later makes this behavior directly visible to guest JavaScript through
+`qjs:os.readlink`, `qjs:os.symlink`, and `qjs:os.lstat`.
 
 This does not change `path_open` symlink following policy, add Windows symlink
 creation support, or add snapshot serialization for open symlink-related fd

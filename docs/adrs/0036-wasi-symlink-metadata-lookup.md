@@ -36,16 +36,17 @@ final symlink itself, and `LOOKUP_SYMLINK_FOLLOW` reports the target. Unsupporte
 lookup bits remain `NOTCAPABLE`.
 
 `wanix-qjs` passes the engine's live-WASI lookup flags into `wanix-wasi` instead
-of discarding them. The bundled QuickJS fixture currently exposes `qjs:os.stat`
-but not `qjs:os.lstat`, so this cycle proves the behavior at the LocalFs,
-namespace, WASI, and QuickJS live-provider adapter layers.
+of discarding them. At the time of this ADR, the bundled QuickJS fixture exposed
+`qjs:os.stat` but not `qjs:os.lstat`, so this cycle proved the behavior at the
+LocalFs, namespace, WASI, and QuickJS live-provider adapter layers.
 
 ## Consequences
 
 Wanix now owns Preview 1 symlink metadata semantics across live WASI providers
 without changing `path_open` or `read_dir` behavior. Existing Wanix callers that
 use ordinary metadata continue to see followed metadata, while WASI path stat
-can distinguish `stat` from `lstat`.
+can distinguish `stat` from `lstat`. ADR 0038 later makes `lstat` directly
+visible through `qjs:os.lstat`.
 
-This does not add symlink creation, `path_readlink`, `path_symlink`,
-QuickJS-level `os.lstat`, or broader path-open symlink policy.
+This does not add symlink creation, `path_readlink`, `path_symlink`, or broader
+path-open symlink policy.

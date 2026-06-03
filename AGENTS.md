@@ -178,6 +178,9 @@ cargo test --workspace --locked
 - [ADR 0037](docs/adrs/0037-wasi-symlink-readlink-and-create.md):
   WASI `path_readlink` and `path_symlink` flow through live Wanix namespaces
   while link targets remain byte contents rather than normalized Wanix paths.
+- [ADR 0038](docs/adrs/0038-quickjs-wasi-symlink-stdlib-fixture.md):
+  QuickJS `qjs:os.lstat`, `readlink`, and `symlink` reach live Wanix-backed
+  WASI providers without enabling QuickJS process APIs.
 
 ## Cycle Rules
 
@@ -188,11 +191,9 @@ cycle before starting the next one.
 
 ## Queued Follow-ups
 
-- If QuickJS-heavy tests become too slow, add a test-only
-  `OnceLock<Result<Arc<QuickJsRunner>, String>>` fixture in `wanix-qjs`, adjust
-  qjs task-driver tests to clone the cached runner, and consider a similar
-  injection seam for `wanix-cli` qjs tests. Keep production runner caching out
-  of scope unless it becomes an intentional runtime decision.
+- Current `wanix-qjs` and `wanix-cli` tests cache the bundled QuickJS runner per
+  test process; keep production runner caching out of scope unless it becomes an
+  intentional runtime decision.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
 - Do not treat `fd_filestat_set_size` as a QuickJS-visible truncate demo until

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 const OFLAGS_CREATE_TRUNCATE: u16 = 9;
 const OFLAGS_DIRECTORY: u16 = 2;
 const FDFLAGS_NONBLOCK: u16 = 4;
+const PATH_LOOKUP_SYMLINK_FOLLOW: u32 = 1;
 const LIBC_REGULAR_FILE_READ_RIGHTS: u64 = (1 << 1)
     | (1 << 2)
     | (1 << 5)
@@ -42,6 +43,7 @@ enum OpenKind {
 struct LiveFileHost {
     calls: Arc<Mutex<Vec<String>>>,
     files: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    symlinks: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
     open: BTreeMap<u32, OpenFile>,
     next_fd: u32,
 }
@@ -53,6 +55,7 @@ impl LiveFileHost {
         Self {
             calls: Arc::new(Mutex::new(Vec::new())),
             files: Arc::new(Mutex::new(files)),
+            symlinks: Arc::new(Mutex::new(BTreeMap::new())),
             open: BTreeMap::new(),
             next_fd: 4,
         }
@@ -62,6 +65,7 @@ impl LiveFileHost {
         Self {
             calls: Arc::new(Mutex::new(Vec::new())),
             files: Arc::new(Mutex::new(BTreeMap::new())),
+            symlinks: Arc::new(Mutex::new(BTreeMap::new())),
             open: BTreeMap::new(),
             next_fd: 4,
         }
@@ -73,6 +77,10 @@ impl LiveFileHost {
 
     fn files(&self) -> Arc<Mutex<BTreeMap<String, Vec<u8>>>> {
         Arc::clone(&self.files)
+    }
+
+    fn symlinks(&self) -> Arc<Mutex<BTreeMap<String, Vec<u8>>>> {
+        Arc::clone(&self.symlinks)
     }
 
     fn record(&self, call: impl Into<String>) {
@@ -134,16 +142,19 @@ impl QuickJsWasiHost for LiveFileHost {
         let directory_requested = oflags & OFLAGS_DIRECTORY != 0;
         let mut files = self.files.lock().expect("test files lock");
         let kind = if oflags & OFLAGS_CREATE_TRUNCATE != 0 {
-            if directory_exists(&files, &path) {
+            let symlinks = self.symlinks.lock().expect("test symlink lock");
+            if path_exists(&files, &symlinks, &path) {
                 return Err(QuickJsWasiErrno::Isdir);
             }
             if directory_requested {
                 return Err(QuickJsWasiErrno::Notcapable);
             }
+            drop(symlinks);
             files.insert(path.clone(), Vec::new());
             OpenKind::File
         } else {
-            path_kind(&files, &path).ok_or(QuickJsWasiErrno::Noent)?
+            let symlinks = self.symlinks.lock().expect("test symlink lock");
+            open_path_kind(&files, &symlinks, &path).ok_or(QuickJsWasiErrno::Noent)?
         };
         if directory_requested && kind != OpenKind::Directory {
             return Err(QuickJsWasiErrno::Notdir);
@@ -191,7 +202,8 @@ impl QuickJsWasiHost for LiveFileHost {
             return Err(QuickJsWasiErrno::Notdir);
         }
         let files = self.files.lock().expect("test files lock");
-        Ok(directory_entries(&files, &open.path))
+        let symlinks = self.symlinks.lock().expect("test symlink lock");
+        Ok(directory_entries(&files, &symlinks, &open.path))
     }
 
     fn fd_write(&mut self, fd: u32, buf: &[u8]) -> std::result::Result<usize, QuickJsWasiErrno> {
@@ -312,11 +324,55 @@ impl QuickJsWasiHost for LiveFileHost {
             self.resolve_dir_path(dirfd, &normalize_test_path(&String::from_utf8_lossy(path)))?;
         self.record(format!("pathstat:{dirfd}:{flags}:{path}"));
         let files = self.files.lock().expect("test files lock");
-        match path_kind(&files, &path) {
-            Some(OpenKind::File) => file_stat(files.get(&path).ok_or(QuickJsWasiErrno::Noent)?),
-            Some(OpenKind::Directory) => directory_stat(),
-            None => Err(QuickJsWasiErrno::Noent),
+        let symlinks = self.symlinks.lock().expect("test symlink lock");
+        path_stat(
+            &files,
+            &symlinks,
+            &path,
+            flags & PATH_LOOKUP_SYMLINK_FOLLOW != 0,
+        )
+    }
+
+    fn path_readlink(
+        &mut self,
+        dirfd: u32,
+        path: &[u8],
+    ) -> std::result::Result<Vec<u8>, QuickJsWasiErrno> {
+        let path =
+            self.resolve_dir_path(dirfd, &normalize_test_path(&String::from_utf8_lossy(path)))?;
+        self.record(format!("readlink:{dirfd}:{path}"));
+        let symlinks = self.symlinks.lock().expect("test symlink lock");
+        symlinks.get(&path).cloned().ok_or(QuickJsWasiErrno::Inval)
+    }
+
+    fn path_symlink(
+        &mut self,
+        target: &[u8],
+        dirfd: u32,
+        path: &[u8],
+    ) -> std::result::Result<(), QuickJsWasiErrno> {
+        let path =
+            self.resolve_dir_path(dirfd, &normalize_test_path(&String::from_utf8_lossy(path)))?;
+        self.record(format!(
+            "symlink:{}:{dirfd}:{path}",
+            String::from_utf8_lossy(target)
+        ));
+        if path == "." {
+            return Err(QuickJsWasiErrno::Exist);
         }
+
+        let files = self.files.lock().expect("test files lock");
+        let mut symlinks = self.symlinks.lock().expect("test symlink lock");
+        if path_exists(&files, &symlinks, &path) {
+            return Err(QuickJsWasiErrno::Exist);
+        }
+        if let Some(parent) = parent_path(&path)
+            && !directory_exists(&files, &symlinks, parent)
+        {
+            return Err(QuickJsWasiErrno::Noent);
+        }
+        symlinks.insert(path, target.to_vec());
+        Ok(())
     }
 }
 
@@ -331,6 +387,13 @@ fn directory_stat() -> std::result::Result<QuickJsWasiFileStat, QuickJsWasiErrno
     Ok(QuickJsWasiFileStat::new(QuickJsWasiFileType::Directory, 0))
 }
 
+fn symlink_stat(target: &[u8]) -> std::result::Result<QuickJsWasiFileStat, QuickJsWasiErrno> {
+    Ok(QuickJsWasiFileStat::new(
+        QuickJsWasiFileType::SymbolicLink,
+        u64::try_from(target.len()).map_err(|_| QuickJsWasiErrno::Inval)?,
+    ))
+}
+
 fn normalize_test_path(path: &str) -> String {
     let path = path.trim_end_matches('/');
     if path.is_empty() || path == "." || path == "/" {
@@ -339,25 +402,84 @@ fn normalize_test_path(path: &str) -> String {
     path.strip_prefix("./").unwrap_or(path).to_owned()
 }
 
-fn path_kind(files: &BTreeMap<String, Vec<u8>>, path: &str) -> Option<OpenKind> {
+fn path_exists(
+    files: &BTreeMap<String, Vec<u8>>,
+    symlinks: &BTreeMap<String, Vec<u8>>,
+    path: &str,
+) -> bool {
+    files.contains_key(path)
+        || symlinks.contains_key(path)
+        || directory_exists(files, symlinks, path)
+}
+
+fn open_path_kind(
+    files: &BTreeMap<String, Vec<u8>>,
+    symlinks: &BTreeMap<String, Vec<u8>>,
+    path: &str,
+) -> Option<OpenKind> {
     if files.contains_key(path) {
         Some(OpenKind::File)
-    } else if directory_exists(files, path) {
+    } else if directory_exists(files, symlinks, path) {
         Some(OpenKind::Directory)
+    } else if let Some(target) = symlinks.get(path) {
+        let target = normalize_test_path(&String::from_utf8_lossy(target));
+        if files.contains_key(&target) {
+            Some(OpenKind::File)
+        } else if directory_exists(files, symlinks, &target) {
+            Some(OpenKind::Directory)
+        } else {
+            None
+        }
     } else {
         None
     }
 }
 
-fn directory_exists(files: &BTreeMap<String, Vec<u8>>, path: &str) -> bool {
+fn path_stat(
+    files: &BTreeMap<String, Vec<u8>>,
+    symlinks: &BTreeMap<String, Vec<u8>>,
+    path: &str,
+    follow_symlink: bool,
+) -> std::result::Result<QuickJsWasiFileStat, QuickJsWasiErrno> {
+    if let Some(bytes) = files.get(path) {
+        return file_stat(bytes);
+    }
+    if directory_exists(files, symlinks, path) {
+        return directory_stat();
+    }
+    if let Some(target) = symlinks.get(path) {
+        if !follow_symlink {
+            return symlink_stat(target);
+        }
+        let target = normalize_test_path(&String::from_utf8_lossy(target));
+        return path_stat(files, symlinks, &target, false);
+    }
+    Err(QuickJsWasiErrno::Noent)
+}
+
+fn directory_exists(
+    files: &BTreeMap<String, Vec<u8>>,
+    symlinks: &BTreeMap<String, Vec<u8>>,
+    path: &str,
+) -> bool {
     if path == "." {
         return true;
     }
     let prefix = format!("{path}/");
     files.keys().any(|file| file.starts_with(&prefix))
+        || symlinks.keys().any(|link| link.starts_with(&prefix))
 }
 
-fn directory_entries(files: &BTreeMap<String, Vec<u8>>, path: &str) -> Vec<QuickJsWasiDirEntry> {
+fn parent_path(path: &str) -> Option<&str> {
+    path.rsplit_once('/')
+        .map(|(parent, _)| if parent.is_empty() { "." } else { parent })
+}
+
+fn directory_entries(
+    files: &BTreeMap<String, Vec<u8>>,
+    symlinks: &BTreeMap<String, Vec<u8>>,
+    path: &str,
+) -> Vec<QuickJsWasiDirEntry> {
     let prefix = if path == "." {
         String::new()
     } else {
@@ -365,22 +487,44 @@ fn directory_entries(files: &BTreeMap<String, Vec<u8>>, path: &str) -> Vec<Quick
     };
     let mut entries = BTreeMap::new();
     for file in files.keys() {
-        let Some(rest) = file.strip_prefix(&prefix) else {
-            continue;
-        };
-        if rest.is_empty() {
-            continue;
-        }
-        let (name, file_type) = match rest.split_once('/') {
-            Some((name, _)) => (name, QuickJsWasiFileType::Directory),
-            None => (rest, QuickJsWasiFileType::RegularFile),
-        };
-        entries.entry(name.to_owned()).or_insert(file_type);
+        insert_directory_entry(
+            &mut entries,
+            &prefix,
+            file,
+            QuickJsWasiFileType::RegularFile,
+        );
+    }
+    for link in symlinks.keys() {
+        insert_directory_entry(
+            &mut entries,
+            &prefix,
+            link,
+            QuickJsWasiFileType::SymbolicLink,
+        );
     }
     entries
         .into_iter()
         .map(|(name, file_type)| QuickJsWasiDirEntry::new(name, file_type))
         .collect()
+}
+
+fn insert_directory_entry(
+    entries: &mut BTreeMap<String, QuickJsWasiFileType>,
+    prefix: &str,
+    path: &str,
+    direct_type: QuickJsWasiFileType,
+) {
+    let Some(rest) = path.strip_prefix(prefix) else {
+        return;
+    };
+    if rest.is_empty() {
+        return;
+    }
+    let (name, file_type) = match rest.split_once('/') {
+        Some((name, _)) => (name, QuickJsWasiFileType::Directory),
+        None => (rest, direct_type),
+    };
+    entries.entry(name.to_owned()).or_insert(file_type);
 }
 
 #[test]
@@ -492,6 +636,59 @@ fn quickjs_os_readdir_uses_live_wasi_host() -> Result<()> {
     }));
     assert!(calls.iter().any(|call| call == "readdir:4"));
     assert!(calls.iter().any(|call| call == "readdir:5"));
+    Ok(())
+}
+
+#[test]
+fn quickjs_os_symlink_readlink_and_lstat_use_live_wasi_host() -> Result<()> {
+    let (_engine, module) = quickjs_fixture()?;
+    let host = LiveFileHost::with_file("target.txt", b"from live host".to_vec());
+    let calls = host.calls();
+    let symlinks = host.symlinks();
+    let options = QuickJsCreateOptions::new().with_wasi_host(host);
+    let mut vm = module.create_runtime_with_options(options)?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+
+        const symlinkErr = os.symlink("target.txt", "link.txt");
+        const [target, readlinkErr] = os.readlink("link.txt");
+        const [linkStat, lstatErr] = os.lstat("link.txt");
+        const [targetStat, statErr] = os.stat("link.txt");
+
+        globalThis.symlinkSummary = [
+          symlinkErr,
+          readlinkErr,
+          target,
+          lstatErr,
+          (linkStat.mode & os.S_IFMT) === os.S_IFLNK,
+          linkStat.size,
+          statErr,
+          (targetStat.mode & os.S_IFMT) === os.S_IFREG,
+          targetStat.size,
+        ].join("|");
+        "#,
+        "stdlib-symlink.mjs",
+    )?;
+
+    assert_eq!(
+        vm.eval_string("symlinkSummary")?,
+        "0|0|target.txt|0|true|10|0|true|14"
+    );
+    assert_eq!(
+        symlinks.lock().expect("test symlink lock").get("link.txt"),
+        Some(&b"target.txt".to_vec())
+    );
+    let calls = calls.lock().expect("test call lock");
+    assert!(
+        calls
+            .iter()
+            .any(|call| call == "symlink:target.txt:3:link.txt")
+    );
+    assert!(calls.iter().any(|call| call == "readlink:3:link.txt"));
+    assert!(calls.iter().any(|call| call == "pathstat:3:0:link.txt"));
+    assert!(calls.iter().any(|call| call == "pathstat:3:1:link.txt"));
     Ok(())
 }
 

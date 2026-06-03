@@ -624,6 +624,8 @@ mod tests {
         QuickJsWanixConfig, wasi_contract_purpose,
     };
     use crate::task_stdio::task_wasi_config;
+    #[cfg(unix)]
+    use wanix_fs::LocalFs;
     use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
     use wanix_task::{Fd, Task, TaskDriver, TaskId, TaskSpec, TaskTable};
     use wanix_vfs::{BindOptions, Namespace};
@@ -654,6 +656,18 @@ mod tests {
             }
             out.extend_from_slice(&buf[..n]);
         }
+    }
+
+    #[cfg(unix)]
+    fn temp_dir(prefix: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock is after epoch")
+            .as_nanos();
+        path.push(format!("{prefix}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
     }
 
     #[test]
@@ -2332,6 +2346,66 @@ print("bytes", count);
         );
         assert_eq!(root.read_file("os-created.txt").unwrap(), b"from os write");
         assert_eq!(task.exit(), "0");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_driver_quickjs_os_symlink_readlink_and_lstat_reach_wanix_namespace() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let host = temp_dir("wanix-qjs-symlink");
+        std::fs::write(host.join("target.txt"), b"from host target").unwrap();
+        std::fs::write(
+            host.join("main.js"),
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+print("symlink", os.symlink("target.txt", "link.txt"));
+const [target, readlinkErr] = os.readlink("link.txt");
+print("readlink", readlinkErr, target);
+const [linkStat, lstatErr] = os.lstat("link.txt");
+print("lstat", lstatErr, (linkStat.mode & os.S_IFMT) === os.S_IFLNK, linkStat.size);
+const [targetStat, statErr] = os.stat("link.txt");
+print("stat", statErr, (targetStat.mode & os.S_IFMT) === os.S_IFREG, targetStat.size);
+print("load", std.loadFile("link.txt"));
+"#,
+        )
+        .unwrap();
+        let local = std::sync::Arc::new(LocalFs::new(&host).unwrap());
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(local.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"symlink 0\nreadlink 0 target.txt\nlstat 0 true 10\nstat 0 true 16\nload from host target\n"
+        );
+        assert_eq!(
+            std::fs::read_link(host.join("link.txt")).unwrap(),
+            std::path::Path::new("target.txt")
+        );
+        assert_eq!(task.exit(), "0");
+        std::fs::remove_dir_all(host).unwrap();
     }
 
     #[test]
