@@ -1474,6 +1474,48 @@ print("os", text);
     }
 
     #[test]
+    fn task_driver_quickjs_std_reads_task_service_paths_through_wasi() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "app/main.js",
+            br##"
+import * as std from "qjs:std";
+
+print("source", std.loadFile("main.js").includes("qjs:std"));
+print("id", std.loadFile("#task/self/id").trim());
+"##,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+        task.set_dir("app").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(read_file(&*stdout, "out"), b"source true\nid 1\n");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
     fn task_driver_quickjs_std_and_os_write_wanix_namespace_files() {
         let table = TaskTable::new();
         let runner = runner();

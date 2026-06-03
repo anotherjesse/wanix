@@ -285,6 +285,34 @@ fn quickjs_std_load_file_uses_live_wasi_host() -> Result<()> {
 }
 
 #[test]
+fn quickjs_std_load_file_passes_service_paths_to_live_wasi_host() -> Result<()> {
+    let (_engine, module) = quickjs_fixture()?;
+    let host = LiveFileHost::with_file("#task/self/id", b"1\n".to_vec());
+    let calls = host.calls();
+    let options = QuickJsCreateOptions::new().with_wasi_host(host);
+    let mut vm = module.create_runtime_with_options(options)?;
+
+    vm.eval_module_discard(
+        r##"
+        import * as std from "qjs:std";
+        globalThis.loadedTaskId = std.loadFile("#task/self/id");
+        "##,
+        "stdlib-load-service-file.mjs",
+    )?;
+
+    assert_eq!(vm.eval_string("loadedTaskId")?, "1\n");
+    let calls = calls.lock().expect("test call lock");
+    assert!(calls.iter().any(|call| {
+        call == &format!(
+            "open:3:1:#task/self/id:0:{LIBC_REGULAR_FILE_READ_RIGHTS}:{LIBC_REGULAR_FILE_INHERITING_RIGHTS}:0"
+        )
+    }));
+    assert!(calls.iter().any(|call| call.starts_with("read:4:")));
+    assert!(calls.iter().any(|call| call == "close:4"));
+    Ok(())
+}
+
+#[test]
 fn quickjs_std_write_file_uses_live_wasi_host() -> Result<()> {
     let (_engine, module) = quickjs_fixture()?;
     let host = LiveFileHost::empty();

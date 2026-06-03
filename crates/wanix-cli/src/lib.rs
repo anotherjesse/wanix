@@ -523,6 +523,31 @@ print(std.loadFile("input.txt"));
     }
 
     #[test]
+    fn qjs_command_reads_task_id_with_quickjs_std_load_file() {
+        let script = write_temp_script(
+            "std-task-id-demo.js",
+            r##"
+import * as std from "qjs:std";
+
+print("source", std.loadFile("main.js").includes("qjs:std"));
+print("id", std.loadFile("#task/self/id").trim());
+"##,
+        );
+
+        let output = run([
+            "qjs".into(),
+            "--cwd".into(),
+            "app".into(),
+            script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"source true\nid 1\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_writes_script_sibling_with_quickjs_std_write_file() {
         let script = write_temp_script(
             "std-write-demo.js",

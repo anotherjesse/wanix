@@ -488,6 +488,9 @@ impl WasiCtx {
             return Err(Errno::Notcapable);
         }
         let path = wasi_path(path)?;
+        if path.as_str() == "#task" || path.as_str().starts_with("#task/") {
+            return Ok(path);
+        }
         join_paths(base, &path).map_err(Errno::from)
     }
 

@@ -106,6 +106,9 @@ cargo test --workspace --locked
 - [ADR 0013](docs/adrs/0013-preview1-regular-file-rights-projection.md):
   Broad libc regular-file open requests are projected to the Wanix-enforced
   file rights reported on the opened fd.
+- [ADR 0014](docs/adrs/0014-wasi-service-paths-root-relative.md):
+  WASI paths beginning with `#task` stay rooted at the Wanix task service root
+  even when the ordinary root preopen maps to a task cwd.
 
 ## Cycle Rules
 

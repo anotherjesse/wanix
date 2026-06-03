@@ -1,4 +1,4 @@
-use wanix_fs::{DirEntry, File, FileType, FsError, FsResult, Metadata};
+use wanix_fs::{DirEntry, File, FileSeekFrom, FileType, FsError, FsResult, Metadata};
 
 use crate::{Fd, Task, TaskId, TaskTable};
 
@@ -104,6 +104,21 @@ impl File for FieldFile {
             self.read_data.len() as u64,
             field_mode(self.field),
         ))
+    }
+
+    fn seek(&mut self, from: FileSeekFrom) -> FsResult<u64> {
+        self.access.can_read()?;
+        self.offset = seek_offset(self.offset, self.read_data.len(), from)?;
+        Ok(self.offset as u64)
+    }
+
+    fn tell(&self) -> FsResult<u64> {
+        self.access.can_read()?;
+        Ok(self.offset as u64)
+    }
+
+    fn is_seekable(&self) -> bool {
+        self.access.read
     }
 }
 
@@ -298,4 +313,23 @@ fn read_from_slice(data: &[u8], offset: &mut usize, buf: &mut [u8]) -> FsResult<
     buf[..count].copy_from_slice(&data[*offset..*offset + count]);
     *offset += count;
     Ok(count)
+}
+
+fn seek_offset(current: usize, len: usize, from: FileSeekFrom) -> FsResult<usize> {
+    let base = match from {
+        FileSeekFrom::Start(offset) => {
+            return usize::try_from(offset).map_err(|_| FsError::InvalidOffset);
+        }
+        FileSeekFrom::Current(_) => current as i128,
+        FileSeekFrom::End(_) => len as i128,
+    };
+    let delta = match from {
+        FileSeekFrom::Start(_) => 0,
+        FileSeekFrom::Current(offset) | FileSeekFrom::End(offset) => offset as i128,
+    };
+    let next = base + delta;
+    if next < 0 || next > usize::MAX as i128 {
+        return Err(FsError::InvalidOffset);
+    }
+    Ok(next as usize)
 }

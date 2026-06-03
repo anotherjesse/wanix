@@ -310,6 +310,41 @@ fn task_service_paths_are_reachable_through_wasi_namespace() {
 }
 
 #[test]
+fn service_paths_remain_rooted_when_guest_root_maps_to_cwd() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let root = fixture(&[
+        ("app/main.js", b"from app"),
+        ("app/#svc/id", b"from cwd hash path"),
+        ("#task/self/id", b"not the task service"),
+    ]);
+    task.bind(root, ".", ".", BindOptions::default()).unwrap();
+    let mut ctx = WasiCtx::new(
+        WasiConfig::new(task.namespace())
+            .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
+    );
+
+    let app_fd = ctx
+        .path_open(WasiFd::ROOT, "main.js", WasiOpenOptions::read())
+        .unwrap();
+    let service_fd = ctx
+        .path_open(WasiFd::ROOT, "#task/self/id", WasiOpenOptions::read())
+        .unwrap();
+    let hash_fd = ctx
+        .path_open(WasiFd::ROOT, "#svc/id", WasiOpenOptions::read())
+        .unwrap();
+    let mut buf = [0; 32];
+    let app_count = ctx.fd_read(app_fd, &mut buf).unwrap();
+    assert_eq!(&buf[..app_count], b"from app");
+    let service_count = ctx.fd_read(service_fd, &mut buf).unwrap();
+    assert_eq!(&buf[..service_count], b"1\n");
+    let hash_count = ctx.fd_read(hash_fd, &mut buf).unwrap();
+
+    assert_eq!(&buf[..hash_count], b"from cwd hash path");
+}
+
+#[test]
 fn writes_and_creates_flow_back_to_namespace() {
     let root = Arc::new(MemFs::new());
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
@@ -768,6 +803,44 @@ fn preview1_path_open_projects_libc_regular_file_rights() {
     let count = ctx.fd_read(fd, &mut buf).unwrap();
     assert_eq!(&buf[..count], b"data");
     assert_eq!(ctx.fd_write(fd, b"nope"), Err(Errno::Notcapable));
+}
+
+#[test]
+fn preview1_path_open_projects_libc_rights_for_rooted_service_paths() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let root = fixture(&[("app/main.js", b"from app")]);
+    task.bind(root, ".", ".", BindOptions::default()).unwrap();
+    let mut ctx = WasiCtx::new(
+        WasiConfig::new(task.namespace())
+            .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
+    );
+    let libc_read_rights = WasiRights::FD_READ
+        | WasiRights::FD_SEEK
+        | WasiRights::FD_TELL
+        | WasiRights::PATH_CREATE_FILE
+        | WasiRights::PATH_OPEN
+        | WasiRights::FD_READDIR
+        | WasiRights::PATH_FILESTAT_GET
+        | WasiRights::PATH_FILESTAT_SET_SIZE
+        | WasiRights::FD_FILESTAT_GET;
+    let libc_inheriting_rights = libc_read_rights | WasiRights::FD_WRITE;
+
+    let fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "#task/self/id",
+            0,
+            libc_read_rights,
+            libc_inheriting_rights,
+            0,
+        )
+        .unwrap();
+    let mut buf = [0; 8];
+    let count = ctx.fd_read(fd, &mut buf).unwrap();
+
+    assert_eq!(&buf[..count], b"1\n");
 }
 
 #[test]

@@ -5,7 +5,9 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use wanix_fs::{File, FileSystem, FileType, FsError, MemFs, Metadata, NormalizedPath, OpenOptions};
+use wanix_fs::{
+    File, FileSeekFrom, FileSystem, FileType, FsError, MemFs, Metadata, NormalizedPath, OpenOptions,
+};
 use wanix_vfs::BindOptions;
 
 use crate::{CRATE_PURPOSE, Fd, NoopDriver, Task, TaskDriver, TaskId, TaskSpec, TaskTable};
@@ -130,6 +132,46 @@ fn task_table_allocates_root_and_self_taskfs_view() {
     assert_eq!(read_file(&root.namespace(), "#task/self/id"), "1\n");
     assert_eq!(entry_names(&taskfs, "new"), ["auto", "qjs"]);
     assert_eq!(entry_names(&taskfs, "."), ["1", "new", "self"]);
+}
+
+#[test]
+fn task_field_files_support_seek_and_tell() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let root = table.allocate_root("qjs").unwrap();
+    let taskfs = table.filesystem_for(root.id());
+    let mut file = taskfs
+        .open(
+            &NormalizedPath::new("self/id").unwrap(),
+            OpenOptions::read(),
+        )
+        .unwrap();
+    let mut buf = [0; 8];
+
+    assert!(file.is_seekable());
+    assert_eq!(file.tell().unwrap(), 0);
+    assert_eq!(
+        file.seek(FileSeekFrom::Current(-1)),
+        Err(FsError::InvalidOffset)
+    );
+    assert_eq!(file.seek(FileSeekFrom::End(-1)).unwrap(), 1);
+    let count = file.read(&mut buf).unwrap();
+    assert_eq!(&buf[..count], b"\n");
+    assert_eq!(file.seek(FileSeekFrom::Start(0)).unwrap(), 0);
+    let count = file.read(&mut buf).unwrap();
+    assert_eq!(&buf[..count], b"1\n");
+
+    let write_only = taskfs
+        .open(
+            &NormalizedPath::new("self/cmd").unwrap(),
+            OpenOptions {
+                write: true,
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+    assert!(!write_only.is_seekable());
+    assert_eq!(write_only.tell(), Err(FsError::PermissionDenied));
 }
 
 #[test]
