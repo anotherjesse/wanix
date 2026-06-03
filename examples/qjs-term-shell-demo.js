@@ -25,6 +25,7 @@ function runCommand(line) {
     os.setReadHandler(0, null);
     std.out.puts("bye\n");
     std.out.flush();
+    std.exit(0);
     return;
   }
   if (trimmed === "id") {

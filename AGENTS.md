@@ -67,7 +67,9 @@ input can arrive after JS has registered a read handler while the runtime
 remains live, including deterministic line-by-line scripted sessions and
 post-eval native stdin line streaming. Terminal fd readiness is queue-aware, so
 ready-IO pumps can run while a read handler is armed without firing on empty
-terminal input.
+terminal input. Post-eval terminal feeds stop when the qjs task requests a
+Wanix process exit, which lets the shell demo's `exit` command return without
+waiting for native stdin EOF.
 
 ## Code Quality Guardrails
 

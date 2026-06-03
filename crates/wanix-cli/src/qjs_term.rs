@@ -249,6 +249,9 @@ fn run_post_eval_feeds(
                     ready_io_turns,
                     process_stdout,
                 )?;
+                if task_exited(runtime)? {
+                    return Ok(());
+                }
                 let bytes = std::fs::read(&path).map_err(|error| {
                     CliError::new(
                         format!(
@@ -267,6 +270,9 @@ fn run_post_eval_feeds(
                         ready_io_turns,
                         process_stdout,
                     )?;
+                    if task_exited(runtime)? {
+                        return Ok(());
+                    }
                 }
             }
             PostEvalFeed::LinesProcess => {
@@ -278,6 +284,9 @@ fn run_post_eval_feeds(
                     ready_io_turns,
                     process_stdout,
                 )?;
+                if task_exited(runtime)? {
+                    return Ok(());
+                }
                 run_process_line_feed_session_after_eval(
                     process_stdin,
                     terminal,
@@ -332,6 +341,9 @@ fn run_process_line_feed_session_after_eval(
             ready_io_turns,
             process_stdout,
         )?;
+        if task_exited(runtime)? {
+            break;
+        }
     }
     Ok(())
 }
@@ -398,6 +410,10 @@ fn feed_terminal_batch_and_pump(
     })();
     drain_terminal_output(terminal, terminal_id, process_stdout)?;
     result
+}
+
+fn task_exited(runtime: &QuickJsTaskRuntime) -> Result<bool, CliError> {
+    Ok(runtime.exit_code()?.is_some())
 }
 
 fn feed_terminal_after_eval(

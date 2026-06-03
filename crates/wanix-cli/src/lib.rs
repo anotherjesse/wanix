@@ -1478,6 +1478,35 @@ mod tests {
         }
     }
 
+    struct EofForbiddenStdin {
+        bytes: Vec<u8>,
+        offset: usize,
+    }
+
+    impl EofForbiddenStdin {
+        fn new(bytes: impl Into<Vec<u8>>) -> Self {
+            Self {
+                bytes: bytes.into(),
+                offset: 0,
+            }
+        }
+    }
+
+    impl Read for EofForbiddenStdin {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.offset == self.bytes.len() {
+                return Err(io::Error::other(
+                    "process stdin was read after the scripted terminal exit",
+                ));
+            }
+            let remaining = self.bytes.len() - self.offset;
+            let len = remaining.min(buf.len());
+            buf[..len].copy_from_slice(&self.bytes[self.offset..self.offset + len]);
+            self.offset += len;
+            Ok(len)
+        }
+    }
+
     #[test]
     fn help_mentions_qjs_demo_target() {
         let output = run(["--help"]).unwrap();
@@ -1840,6 +1869,31 @@ std.out.flush();
         assert!(stderr.is_empty());
         assert_eq!(fs::read(marker).unwrap(), b"streamed");
         fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn qjs_term_line_feed_stops_after_guest_exit_without_process_eof() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io(
+            [
+                "qjs-term".into(),
+                "--ready-io-turns".into(),
+                "1".into(),
+                "--feed-after-eval-lines".into(),
+                "-".into(),
+                example_script("qjs-term-shell-demo.js").into_os_string(),
+            ],
+            EofForbiddenStdin::new(b"exit\n"),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(stdout, b"shell task: 1\r\n$ bye\r\n");
+        assert!(stderr.is_empty());
     }
 
     #[test]

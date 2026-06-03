@@ -35,6 +35,10 @@ File-backed line feeds may be preloaded, but native stdin line feeds are
 streamed after eval so a future interactive host loop does not need EOF before
 delivering the first line.
 
+Stop delivering post-eval terminal feeds once the live `QuickJsTaskRuntime`
+reports a process exit. A guest read handler that calls `std.exit(...)` should
+let the host-side line feed loop return without waiting for native stdin EOF.
+
 Expose a small `QuickJsTaskRuntime::run_ready_io_turns` method so composition
 layers can pump task fd readiness without reaching through to the raw QuickJS
 engine API.
