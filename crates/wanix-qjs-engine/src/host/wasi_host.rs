@@ -3,11 +3,21 @@ use std::sync::{Arc, Mutex};
 
 pub(crate) type QuickJsWasiHostHandle = Arc<Mutex<Box<dyn QuickJsWasiHost>>>;
 
-/// Host-owned WASI Preview 1 filesystem hooks for QuickJS runtimes.
+/// Host-owned WASI Preview 1 hooks for QuickJS runtimes.
 ///
-/// Implementations own descriptor and namespace semantics. The QuickJS engine
-/// only copies data between guest memory and this trait surface.
+/// Implementations own process, descriptor, and namespace semantics. The
+/// QuickJS engine only copies data between guest memory and this trait surface.
 pub trait QuickJsWasiHost: Send {
+    /// Returns process arguments in WASI argv order.
+    fn args(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
+        Ok(Vec::new())
+    }
+
+    /// Returns process environment strings in `KEY=value` form.
+    fn env(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
+        Ok(Vec::new())
+    }
+
     /// Returns metadata for a preopened directory fd.
     fn fd_prestat_get(&mut self, fd: u32) -> Result<QuickJsWasiPrestat, QuickJsWasiErrno>;
 

@@ -10,6 +10,7 @@ mod fd_write;
 mod fd_write_capture_limits;
 mod fs;
 mod module_loader;
+mod process;
 mod random_get;
 mod unsupported_wasi;
 

@@ -20,6 +20,8 @@ pub struct WasiCtx {
     namespace: Namespace,
     fds: BTreeMap<WasiFd, Handle>,
     next_fd: u32,
+    args: Vec<String>,
+    env: Vec<String>,
 }
 
 enum Handle {
@@ -104,6 +106,8 @@ impl WasiCtx {
             namespace: config.namespace().clone(),
             fds,
             next_fd,
+            args: config.args().to_vec(),
+            env: config.env().to_vec(),
         })
     }
 
@@ -111,6 +115,18 @@ impl WasiCtx {
     #[must_use]
     pub fn namespace(&self) -> &Namespace {
         &self.namespace
+    }
+
+    /// Returns configured process arguments in WASI argv order.
+    #[must_use]
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+
+    /// Returns configured environment strings in `KEY=value` form.
+    #[must_use]
+    pub fn env(&self) -> &[String] {
+        &self.env
     }
 
     /// Opens a namespace path relative to `dirfd`.

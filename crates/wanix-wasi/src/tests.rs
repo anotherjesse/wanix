@@ -36,7 +36,29 @@ fn config_exposes_namespace_and_root_preopen() {
     assert_eq!(config.preopens()[0].guest_path().as_str(), ".");
     assert!(config.namespace().bindings().is_empty());
     assert!(config.stdio_fds().is_empty());
+    assert!(config.args().is_empty());
+    assert!(config.env().is_empty());
     assert_eq!(Errno::Success, Errno::Success);
+}
+
+#[test]
+fn config_and_ctx_expose_process_args_and_env() {
+    let config = WasiConfig::new(Namespace::new())
+        .with_args(["main.js", "--flag"])
+        .with_env(["MODE=test", "EMPTY="]);
+
+    assert_eq!(config.args(), ["main.js", "--flag"]);
+    assert_eq!(config.env(), ["MODE=test", "EMPTY="]);
+    let debug = format!("{config:?}");
+    assert!(debug.contains("arg_count"));
+    assert!(debug.contains("env_count"));
+    assert!(!debug.contains("main.js"));
+    assert!(!debug.contains("MODE=test"));
+
+    let ctx = WasiCtx::new(config);
+
+    assert_eq!(ctx.args(), ["main.js", "--flag"]);
+    assert_eq!(ctx.env(), ["MODE=test", "EMPTY="]);
 }
 
 #[test]

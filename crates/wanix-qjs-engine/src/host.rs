@@ -10,6 +10,7 @@ mod fd_write;
 mod fs;
 mod guest_memory;
 mod module_loader;
+mod process;
 mod promise_rejection;
 mod state;
 mod wasi_host;
@@ -87,6 +88,7 @@ pub(crate) fn define_wasi_imports(linker: &mut Linker<HostState>) -> Result<()> 
 
     fd_write::define_import(linker)?;
     fs::define_imports(linker)?;
+    process::define_imports(linker)?;
 
     linker.func_wrap(
         "wasi_snapshot_preview1",

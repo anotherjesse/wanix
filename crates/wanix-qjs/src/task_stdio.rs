@@ -3,7 +3,9 @@ use wanix_task::{Fd, Task};
 use wanix_wasi::WasiConfig;
 
 pub(crate) fn task_wasi_config(task: &Task) -> WasiConfig {
-    let mut config = WasiConfig::new(task.namespace());
+    let mut config = WasiConfig::new(task.namespace())
+        .with_args(task.cmd().split_whitespace())
+        .with_env(task.env());
     let fds = task.fd_numbers();
     if fds.contains(&Fd::STDIN) {
         config = config.with_stdin(

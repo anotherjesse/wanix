@@ -724,6 +724,20 @@ print(Wanix.readText("input.txt"));
     }
 
     #[test]
+    fn task_wasi_config_flows_task_cmd_and_env_to_wasi_process_state() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        task.set_cmd("main.js --mode test").unwrap();
+        task.set_env_lines("MODE=test\nEMPTY=").unwrap();
+
+        let ctx = WasiCtx::new(task_wasi_config(&task));
+
+        assert_eq!(ctx.args(), ["main.js", "--mode", "test"]);
+        assert_eq!(ctx.env(), ["MODE=test", "EMPTY="]);
+    }
+
+    #[test]
     fn task_wasi_config_ignores_non_standard_task_fds() {
         let table = TaskTable::new();
         table.register_noop_driver("qjs").unwrap();

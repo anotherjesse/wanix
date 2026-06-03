@@ -20,6 +20,14 @@ impl WanixQuickJsWasiHost {
 }
 
 impl QuickJsWasiHost for WanixQuickJsWasiHost {
+    fn args(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
+        Ok(self.ctx.args().to_vec())
+    }
+
+    fn env(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
+        Ok(self.ctx.env().to_vec())
+    }
+
     fn fd_prestat_get(&mut self, fd: u32) -> Result<QuickJsWasiPrestat, QuickJsWasiErrno> {
         self.ctx
             .fd_prestat_get(WasiFd::new(fd))
@@ -256,6 +264,22 @@ mod tests {
         let count = host.fd_read(fd, &mut buf).unwrap();
         assert_eq!(&buf[..count], b"from namespace");
         host.fd_close(fd).unwrap();
+    }
+
+    #[test]
+    fn adapter_process_args_and_env_come_from_wanix_wasi_ctx() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        namespace
+            .bind(root, ".", ".", BindOptions::default())
+            .unwrap();
+        let config = WasiConfig::new(namespace)
+            .with_args(["main.js", "--flag"])
+            .with_env(["MODE=test", "EMPTY="]);
+        let mut host = WanixQuickJsWasiHost::new(config).unwrap();
+
+        assert_eq!(host.args().unwrap(), ["main.js", "--flag"]);
+        assert_eq!(host.env().unwrap(), ["MODE=test", "EMPTY="]);
     }
 
     #[test]

@@ -134,6 +134,8 @@ pub struct WasiConfig {
     namespace: Namespace,
     stdio: BTreeMap<WasiFd, WasiFile>,
     preopens: Vec<Preopen>,
+    args: Vec<String>,
+    env: Vec<String>,
 }
 
 impl fmt::Debug for WasiConfig {
@@ -142,6 +144,8 @@ impl fmt::Debug for WasiConfig {
             .field("namespace", &self.namespace)
             .field("stdio_fds", &self.stdio.keys().collect::<Vec<_>>())
             .field("preopens", &self.preopens)
+            .field("arg_count", &self.args.len())
+            .field("env_count", &self.env.len())
             .finish()
     }
 }
@@ -156,6 +160,8 @@ impl WasiConfig {
             preopens: vec![Preopen {
                 guest_path: NormalizedPath::new(".").expect("root path is valid"),
             }],
+            args: Vec::new(),
+            env: Vec::new(),
         }
     }
 
@@ -175,6 +181,18 @@ impl WasiConfig {
     #[must_use]
     pub fn stdio_fds(&self) -> Vec<WasiFd> {
         self.stdio.keys().copied().collect()
+    }
+
+    /// Returns configured process arguments in WASI argv order.
+    #[must_use]
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+
+    /// Returns configured environment strings in `KEY=value` form.
+    #[must_use]
+    pub fn env(&self) -> &[String] {
+        &self.env
     }
 
     pub(crate) fn stdio(&self) -> &BTreeMap<WasiFd, WasiFile> {
@@ -201,6 +219,28 @@ impl WasiConfig {
 
     fn with_stdio(mut self, fd: WasiFd, file: WasiFile) -> Self {
         self.stdio.insert(fd, file);
+        self
+    }
+
+    /// Replaces the configured process arguments in WASI argv order.
+    #[must_use]
+    pub fn with_args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.args = args.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Replaces the configured environment strings in `KEY=value` form.
+    #[must_use]
+    pub fn with_env<I, S>(mut self, env: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.env = env.into_iter().map(Into::into).collect();
         self
     }
 
