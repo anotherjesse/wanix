@@ -517,6 +517,18 @@ pub(crate) fn task_wasi_argv(task: &Task) -> Vec<String> {
     task.cmd().split_whitespace().map(str::to_owned).collect()
 }
 
+pub(crate) fn task_wasi_env(task: &Task) -> Vec<String> {
+    let spec = task.spec();
+    if task_spec_is_set(&spec) {
+        return spec
+            .env
+            .into_iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+    }
+    task.env()
+}
+
 pub(crate) fn task_program_for_check(task: &Task) -> Option<String> {
     let spec = task.spec();
     if task_spec_is_set(&spec) {
@@ -547,7 +559,7 @@ fn resolve_from_cwd(cwd: &NormalizedPath, path: &NormalizedPath) -> FsResult<Nor
 }
 
 fn task_env_map(task: &Task) -> BTreeMap<String, String> {
-    task.env()
+    task_wasi_env(task)
         .into_iter()
         .filter_map(|line| {
             let (key, value) = line.split_once('=')?;
@@ -821,8 +833,11 @@ print(Wanix.readText("input.txt"));
         task.set_dir("app").unwrap();
         let mut spec = TaskSpec::new("main.js").unwrap();
         spec.args = vec!["two words".to_owned(), "".to_owned(), "--flag".to_owned()];
+        spec.env.insert("EMPTY".to_owned(), String::new());
+        spec.env.insert("MODE".to_owned(), "test".to_owned());
         spec.cwd = NormalizedPath::new("app").unwrap();
         task.set_spec(spec).unwrap();
+        task.set_env_lines("RAW=1").unwrap();
 
         let command = super::task_command(&task).unwrap();
         let ctx = WasiCtx::new(task_wasi_config(&task));
@@ -832,6 +847,9 @@ print(Wanix.readText("input.txt"));
         assert_eq!(command.args, ["two words", "", "--flag"]);
         assert_eq!(command.cwd.as_str(), "app");
         assert_eq!(ctx.args(), ["main.js", "two words", "", "--flag"]);
+        assert_eq!(ctx.env(), ["EMPTY=", "MODE=test"]);
+        assert_eq!(super::task_env_map(&task)["MODE"], "test");
+        assert!(!super::task_env_map(&task).contains_key("RAW"));
     }
 
     #[test]

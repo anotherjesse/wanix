@@ -2,12 +2,12 @@ use wanix_fs::{File, FsResult, Metadata};
 use wanix_task::{Fd, Task};
 use wanix_wasi::WasiConfig;
 
-use crate::task_wasi_argv;
+use crate::{task_wasi_argv, task_wasi_env};
 
 pub(crate) fn task_wasi_config(task: &Task) -> WasiConfig {
     let mut config = WasiConfig::new(task.namespace())
         .with_args(task_wasi_argv(task))
-        .with_env(task.env());
+        .with_env(task_wasi_env(task));
     let fds = task.fd_numbers();
     if fds.contains(&Fd::STDIN) {
         config = config.with_stdin(
