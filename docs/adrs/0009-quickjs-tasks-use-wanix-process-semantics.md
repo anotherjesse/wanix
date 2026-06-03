@@ -31,16 +31,16 @@ driver into a task table.
 - Near-term `qjs` work should flow task `cmd`, `env`, and `dir` into
   QuickJS/WASI, then back WASI path/fd calls with the task namespace and fd
   table.
-- Interim QuickJS fd helpers may demonstrate Wanix-owned task fd allocation
-  before full WASI imports are available, but they must not create a separate
-  QuickJS process or fd model.
+- QuickJS fd behavior now flows through live Wanix-backed WASI. Dynamic regular
+  file fds opened by `qjs:os` are mirrored into the Wanix task fd table as
+  described in ADR 0020, rather than using separate helper-only fd semantics.
 - QuickJS task setup consumes `QuickJsWanixConfig`, which wraps
   `wanix_wasi::WasiConfig` for live Wanix-backed WASI imports. Those imports
   attach to Wanix task identity and fds rather than exposing QuickJS as an
   independent process model.
 - `wanix-qjs` attaches open task stdio fds to `QuickJsWanixConfig` through
   private `wanix_fs::File` proxy handles. That keeps `wanix-wasi` generic while
-  preserving Wanix task fd ownership for the future live WASI import path.
+  preserving Wanix task fd ownership for the live WASI import path.
 - `wanix-qjs` maps the task cwd to WASI fd 3 as the guest root preopen. The
   preopen still reports `/`, but bare WASI path calls resolve from the Wanix
   task cwd so `path_open("main.js")` matches `std.loadFile("main.js")`.

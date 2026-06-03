@@ -94,7 +94,7 @@ impl RunOutput {
     }
 }
 
-/// QuickJS runtime runner backed by the `rust-wasi-quickjs` prototype.
+/// QuickJS runtime runner backed by the workspace engine crate.
 pub struct QuickJsRunner {
     module: QuickJsModule,
 }
@@ -195,10 +195,10 @@ impl QuickJsRunner {
     /// [`Self::restore_runtime_from_bytes_with_wanix_config`] to resume that VM
     /// image with fresh Wanix host resources. This lifecycle helper intentionally
     /// installs only the live WASI provider and namespace module loader; it does
-    /// not install the interim `Wanix` global or `print`/`console` callbacks,
-    /// because those are host callback objects that require separate restore-time
-    /// reattachment. Guest `qjs:std` stdout and stderr writes go through the
-    /// `WasiConfig` fd attachments supplied by `config`.
+    /// not install convenience `print`/`console` callback shims, because those
+    /// are host callback objects that require separate restore-time reattachment.
+    /// Guest `qjs:std` stdout and stderr writes go through the `WasiConfig` fd
+    /// attachments supplied by `config`.
     ///
     /// # Errors
     ///
