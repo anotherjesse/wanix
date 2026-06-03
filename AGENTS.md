@@ -16,7 +16,8 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
 - `wanix-fs`: filesystem traits, metadata, errors, path rules, in-memory
   fixtures, and explicit host-directory-backed filesystems for native demos.
 - `wanix-protocol`: dependency-free wire protocol helpers, starting with 9P
-  frame splitting, tag extraction, and version negotiation.
+  frame splitting, tag extraction, version negotiation, and basic
+  server-facing 9P2000.L operation codecs.
 - `wanix-vfs`: Plan 9-style namespace binding and resolution.
 - `wanix-task`: task model, `#task`, fd table, and driver registry.
 - `wanix-term`: terminal device filesystem for `#term/new`,
@@ -271,6 +272,9 @@ cargo test --workspace --locked
 - [ADR 0058](docs/adrs/0058-rust-9p-protocol-framing.md):
   `wanix-protocol` owns dependency-free 9P frame splitting, tag extraction, and
   version negotiation before Rust grows a Wanix-backed 9P server.
+- [ADR 0059](docs/adrs/0059-basic-9p-operation-codecs.md):
+  `wanix-protocol` owns typed codecs for the first server-facing 9P2000.L
+  attach/walk/open/read/write/clunk/error operations.
 
 ## Cycle Rules
 
@@ -289,5 +293,5 @@ cycle before starting the next one.
 - Make `qjs-shell` genuinely interactive beyond line-oriented input by adding a
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
-- Add typed 9P request/response payloads and a Wanix namespace-backed 9P server
-  on top of `wanix-protocol` for native serve/v86 integration.
+- Add a Wanix namespace-backed 9P server on top of `wanix-protocol` for native
+  serve/v86 integration.
