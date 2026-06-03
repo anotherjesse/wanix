@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use super::{
-    CRATE_PURPOSE, Errno, Preopen, WasiConfig, WasiCtx, WasiFd, WasiFileType, WasiOpenOptions,
-    WasiRights, WasiWhence,
+    CRATE_PURPOSE, Errno, FileStat, Preopen, WasiConfig, WasiCtx, WasiFd, WasiFileType,
+    WasiOpenOptions, WasiRights, WasiWhence,
 };
 use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
 use wanix_task::TaskTable;
@@ -436,6 +436,29 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
     assert!(!read_stat.rights_base().contains(WasiRights::FD_WRITE));
     assert!(read_stat.rights_base().contains(WasiRights::FD_SEEK));
     assert!(read_stat.rights_base().contains(WasiRights::FD_TELL));
+    let read_file_stat = ctx.fd_filestat_get(read_fd).unwrap();
+    let read_file_stat_bytes = read_file_stat.to_preview1_bytes();
+    assert_eq!(
+        read_file_stat_bytes[16],
+        WasiFileType::RegularFile.preview1_code()
+    );
+    assert_eq!(
+        u64::from_le_bytes(read_file_stat_bytes[32..40].try_into().unwrap()),
+        read_file_stat.len()
+    );
+    assert_eq!(read_file_stat_bytes[..16], [0; 16]);
+    assert_eq!(read_file_stat_bytes[17..32], [0; 15]);
+    assert_eq!(read_file_stat_bytes[40..], [0; 24]);
+    let root_file_stat = ctx.fd_filestat_get(WasiFd::ROOT).unwrap();
+    let root_file_stat_bytes = root_file_stat.to_preview1_bytes();
+    assert_eq!(
+        root_file_stat_bytes[16],
+        WasiFileType::Directory.preview1_code()
+    );
+    assert_eq!(
+        u64::from_le_bytes(root_file_stat_bytes[32..40].try_into().unwrap()),
+        root_file_stat.len()
+    );
     let read_stat_bytes = read_stat.to_preview1_bytes();
     assert_eq!(
         read_stat_bytes[0],
@@ -508,6 +531,78 @@ fn fd_seek_and_tell_use_seekable_file_handles() {
         Err(Errno::Notcapable)
     );
     assert_eq!(ctx.fd_tell(WasiFd::ROOT), Err(Errno::Notcapable));
+}
+
+#[test]
+fn preview1_path_open_flags_convert_to_wanix_open_options() {
+    let read = WasiOpenOptions::from_preview1(
+        0,
+        WasiRights::FD_READ | WasiRights::FD_SEEK | WasiRights::FD_TELL,
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        read,
+        WasiOpenOptions {
+            read: true,
+            write: false,
+            create: false,
+            truncate: false,
+        }
+    );
+
+    let create_truncate = WasiOpenOptions::from_preview1(
+        WasiOpenOptions::OFLAGS_CREATE | WasiOpenOptions::OFLAGS_TRUNCATE,
+        WasiRights::FD_WRITE | WasiRights::FD_FILESTAT_GET,
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        create_truncate,
+        WasiOpenOptions {
+            read: false,
+            write: true,
+            create: true,
+            truncate: true,
+        }
+    );
+
+    assert_eq!(
+        WasiOpenOptions::from_preview1(WasiOpenOptions::OFLAGS_CREATE, WasiRights::FD_READ, 0),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiOpenOptions::from_preview1(WasiOpenOptions::OFLAGS_DIRECTORY, WasiRights::FD_READ, 0),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiOpenOptions::from_preview1(WasiOpenOptions::OFLAGS_EXCLUSIVE, WasiRights::FD_WRITE, 0),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiOpenOptions::from_preview1(1 << 15, WasiRights::FD_READ, 0),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiOpenOptions::from_preview1(0, WasiRights::FD_READ, WasiOpenOptions::FDFLAGS_APPEND),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiOpenOptions::from_preview1(0, WasiRights::PATH_OPEN, 0),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiOpenOptions::from_preview1(
+            0,
+            WasiRights::from_preview1_bits(WasiRights::FD_READ.bits() | (1 << 63)),
+            0
+        ),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiRights::from_preview1_bits(WasiRights::FD_READ.bits()),
+        WasiRights::FD_READ
+    );
 }
 
 #[test]
@@ -589,4 +684,14 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiRights::FD_READDIR.bits(), 1 << 14);
     assert_eq!(WasiRights::PATH_FILESTAT_SET_SIZE.bits(), 1 << 19);
     assert_eq!(WasiRights::FD_FILESTAT_GET.bits(), 1 << 21);
+    assert_eq!(WasiOpenOptions::OFLAGS_CREATE, 1 << 0);
+    assert_eq!(WasiOpenOptions::OFLAGS_DIRECTORY, 1 << 1);
+    assert_eq!(WasiOpenOptions::OFLAGS_EXCLUSIVE, 1 << 2);
+    assert_eq!(WasiOpenOptions::OFLAGS_TRUNCATE, 1 << 3);
+    assert_eq!(WasiOpenOptions::FDFLAGS_APPEND, 1 << 0);
+    assert_eq!(WasiOpenOptions::FDFLAGS_DSYNC, 1 << 1);
+    assert_eq!(WasiOpenOptions::FDFLAGS_NONBLOCK, 1 << 2);
+    assert_eq!(WasiOpenOptions::FDFLAGS_RSYNC, 1 << 3);
+    assert_eq!(WasiOpenOptions::FDFLAGS_SYNC, 1 << 4);
+    assert_eq!(FileStat::PREVIEW1_SIZE, 64);
 }

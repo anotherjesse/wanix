@@ -34,6 +34,9 @@ does not depend upward on `wanix-task`.
   fdstat file types/rights, and numeric errno codes without depending on
   Wasmtime guest memory. Engine-specific import providers translate those typed
   results and byte-layout encoders into guest ABI structs.
+- Engine-specific providers also use `wanix-wasi` helpers for Preview 1
+  filestat layout and supported `path_open` flag/rights conversion. Unsupported
+  Preview 1 modes remain explicit errors until Wanix owns their semantics.
 - Directory fdstat rights should describe the operations Wanix already allows:
   directory reads, recursive path opens, file creation, and truncation during
   path open. Directory fds inherit both regular-file and child-directory rights.

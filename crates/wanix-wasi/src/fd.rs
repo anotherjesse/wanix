@@ -2,6 +2,8 @@ use std::ops::{BitOr, BitOrAssign};
 
 use wanix_fs::{FileType, NormalizedPath};
 
+use crate::Errno;
+
 /// WASI file descriptor identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WasiFd(u32);
@@ -120,6 +122,12 @@ impl WasiRights {
     #[must_use]
     pub const fn bits(self) -> u64 {
         self.0
+    }
+
+    /// Creates rights from raw WASI Preview 1 bits.
+    #[must_use]
+    pub const fn from_preview1_bits(bits: u64) -> Self {
+        Self(bits)
     }
 
     /// Returns whether all `right` bits are set.
@@ -251,6 +259,28 @@ pub struct WasiOpenOptions {
 }
 
 impl WasiOpenOptions {
+    /// Preview 1 `oflags` bit for create.
+    pub const OFLAGS_CREATE: u16 = 1 << 0;
+    /// Preview 1 `oflags` bit requiring a directory.
+    pub const OFLAGS_DIRECTORY: u16 = 1 << 1;
+    /// Preview 1 `oflags` bit for exclusive create.
+    pub const OFLAGS_EXCLUSIVE: u16 = 1 << 2;
+    /// Preview 1 `oflags` bit for truncate.
+    pub const OFLAGS_TRUNCATE: u16 = 1 << 3;
+    /// Preview 1 `fdflags` bit for append mode.
+    pub const FDFLAGS_APPEND: u16 = 1 << 0;
+    /// Preview 1 `fdflags` bit for data-sync writes.
+    pub const FDFLAGS_DSYNC: u16 = 1 << 1;
+    /// Preview 1 `fdflags` bit for non-blocking mode.
+    pub const FDFLAGS_NONBLOCK: u16 = 1 << 2;
+    /// Preview 1 `fdflags` bit for read-sync behavior.
+    pub const FDFLAGS_RSYNC: u16 = 1 << 3;
+    /// Preview 1 `fdflags` bit for sync writes.
+    pub const FDFLAGS_SYNC: u16 = 1 << 4;
+
+    const SUPPORTED_OFLAGS: u16 = Self::OFLAGS_CREATE | Self::OFLAGS_TRUNCATE;
+    const SUPPORTED_FDFLAGS: u16 = 0;
+
     /// Read-only file open.
     #[must_use]
     pub fn read() -> Self {
@@ -282,6 +312,36 @@ impl WasiOpenOptions {
             create: true,
             truncate: false,
         }
+    }
+
+    /// Converts Preview 1 `path_open` flags and base rights into open options.
+    ///
+    /// Directory-only opens, exclusive creation, and fdflags are rejected until
+    /// `WasiCtx::path_open` has explicit semantics for those Preview 1 modes.
+    pub fn from_preview1(
+        oflags: u16,
+        rights_base: WasiRights,
+        fdflags: u16,
+    ) -> Result<Self, Errno> {
+        if oflags & !Self::SUPPORTED_OFLAGS != 0 || fdflags & !Self::SUPPORTED_FDFLAGS != 0 {
+            return Err(Errno::Notcapable);
+        }
+        if rights_base.bits() & !WasiRights::OPEN_FILE_BASE.bits() != 0 {
+            return Err(Errno::Notcapable);
+        }
+        let read = rights_base.contains(WasiRights::FD_READ);
+        let write = rights_base.contains(WasiRights::FD_WRITE);
+        let create = oflags & Self::OFLAGS_CREATE != 0;
+        let truncate = oflags & Self::OFLAGS_TRUNCATE != 0;
+        if (create || truncate) && !write {
+            return Err(Errno::Notcapable);
+        }
+        Ok(Self {
+            read,
+            write,
+            create,
+            truncate,
+        })
     }
 }
 
@@ -349,6 +409,9 @@ pub struct FileStat {
 }
 
 impl FileStat {
+    /// Byte size of a WASI Preview 1 `filestat` record.
+    pub const PREVIEW1_SIZE: usize = 64;
+
     pub(crate) fn new(metadata: wanix_fs::Metadata) -> Self {
         Self {
             file_type: metadata.file_type(),
@@ -385,5 +448,14 @@ impl FileStat {
     #[must_use]
     pub fn mode(&self) -> u32 {
         self.mode
+    }
+
+    /// Encodes this filestat using the WASI Preview 1 little-endian layout.
+    #[must_use]
+    pub fn to_preview1_bytes(&self) -> [u8; Self::PREVIEW1_SIZE] {
+        let mut bytes = [0; Self::PREVIEW1_SIZE];
+        bytes[16] = self.wasi_file_type().preview1_code();
+        bytes[32..40].copy_from_slice(&self.len.to_le_bytes());
+        bytes
     }
 }
