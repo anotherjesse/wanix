@@ -151,6 +151,9 @@ cargo test --workspace --locked
 - [ADR 0028](docs/adrs/0028-wasi-append-fdflag-through-wanix-files.md):
   `qjs:os.open(..., O_APPEND)` and `qjs:std.open(..., "a")` append through
   Wanix-owned WASI fdflags and shared file handles.
+- [ADR 0029](docs/adrs/0029-wasi-runtime-append-fdflag-mutation.md):
+  `fd_fdstat_set_flags(APPEND)` mutates shared Wanix fd state so
+  `qjs:std.fdopen(fd, "a")` appends through live and mirrored task fds.
 
 ## Cycle Rules
 

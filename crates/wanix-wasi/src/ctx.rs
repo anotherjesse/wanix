@@ -447,6 +447,35 @@ impl WasiCtx {
         }
     }
 
+    /// Updates mutable Preview 1 fdflags for an open fd.
+    pub fn fd_fdstat_set_flags(&mut self, fd: WasiFd, fdflags: u16) -> Result<(), Errno> {
+        WasiOpenOptions::validate_preview1_fdflags(fdflags)?;
+        match self.fds.get_mut(&fd).ok_or(Errno::Badf)? {
+            Handle::File {
+                file,
+                write,
+                rights_base,
+                fdflags: current_fdflags,
+                ..
+            } => {
+                let append = fdflags & WasiOpenOptions::FDFLAGS_APPEND != 0;
+                if append && (!*write || !rights_base.contains(WasiRights::FD_WRITE)) {
+                    return Err(Errno::Notcapable);
+                }
+                file.set_append(append).map_err(Errno::from)?;
+                *current_fdflags = fdflags;
+                Ok(())
+            }
+            Handle::Stdio { .. } | Handle::Preopen { .. } | Handle::Directory { .. } => {
+                if fdflags == 0 {
+                    Ok(())
+                } else {
+                    Err(Errno::Notcapable)
+                }
+            }
+        }
+    }
+
     /// Seeks an fd offset.
     pub fn fd_seek(&mut self, fd: WasiFd, offset: i64, whence: WasiWhence) -> Result<u64, Errno> {
         match self.fds.get_mut(&fd).ok_or(Errno::Badf)? {

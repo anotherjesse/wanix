@@ -76,6 +76,11 @@ pub trait QuickJsWasiHost: Send {
     /// Returns fdstat metadata for an open fd.
     fn fd_fdstat_get(&mut self, fd: u32) -> Result<QuickJsWasiFdStat, QuickJsWasiErrno>;
 
+    /// Updates mutable Preview 1 fdflags for an open fd.
+    fn fd_fdstat_set_flags(&mut self, _fd: u32, _fdflags: u16) -> Result<(), QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     /// Returns filestat metadata for an open fd.
     fn fd_filestat_get(&mut self, fd: u32) -> Result<QuickJsWasiFileStat, QuickJsWasiErrno>;
 

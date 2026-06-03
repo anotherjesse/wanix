@@ -2288,6 +2288,11 @@ os.close(fd);
 const file = std.open("log.txt", "a");
 file.puts("-std");
 file.close();
+
+const fd2 = os.open("log.txt", os.O_WRONLY);
+const file2 = std.fdopen(fd2, "a");
+file2.puts("-fdopen");
+file2.close();
 std.out.puts("log " + std.loadFile("log.txt") + "\n");
 std.out.flush();
 "#,
@@ -2296,7 +2301,7 @@ std.out.flush();
         let output = run(["qjs".into(), script.into_os_string()]).unwrap();
 
         assert_eq!(output.exit_code(), 0);
-        assert_eq!(output.stdout(), b"os 3\nlog start-os-std\n");
+        assert_eq!(output.stdout(), b"os 3\nlog start-os-std-fdopen\n");
         assert!(output.stderr().is_empty());
     }
 
@@ -2309,7 +2314,7 @@ std.out.flush();
         .unwrap();
 
         assert_eq!(output.exit_code(), 0);
-        assert_eq!(output.stdout(), b"os bytes: 3\nlog: start-os-std\n");
+        assert_eq!(output.stdout(), b"os bytes: 3\nlog: start-os-std-fdopen\n");
         assert!(output.stderr().is_empty());
     }
 

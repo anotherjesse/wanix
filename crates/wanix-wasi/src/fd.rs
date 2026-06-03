@@ -374,7 +374,8 @@ impl WasiOpenOptions {
         rights_base: WasiRights,
         fdflags: u16,
     ) -> Result<Self, Errno> {
-        if oflags & !Self::SUPPORTED_OFLAGS != 0 || fdflags & !Self::SUPPORTED_FDFLAGS != 0 {
+        Self::validate_preview1_fdflags(fdflags)?;
+        if oflags & !Self::SUPPORTED_OFLAGS != 0 {
             return Err(Errno::Notcapable);
         }
         if rights_base.bits() & !WasiRights::OPEN_FILE_BASE.bits() != 0 {
@@ -395,6 +396,13 @@ impl WasiOpenOptions {
             truncate,
             append,
         })
+    }
+
+    pub(crate) fn validate_preview1_fdflags(fdflags: u16) -> Result<(), Errno> {
+        if fdflags & !Self::SUPPORTED_FDFLAGS != 0 {
+            return Err(Errno::Notcapable);
+        }
+        Ok(())
     }
 }
 
@@ -418,9 +426,8 @@ impl WasiPathOpen {
         rights_inheriting: WasiRights,
         fdflags: u16,
     ) -> Result<Self, Errno> {
-        if oflags & !WasiOpenOptions::SUPPORTED_OFLAGS != 0
-            || fdflags & !WasiOpenOptions::SUPPORTED_FDFLAGS != 0
-        {
+        WasiOpenOptions::validate_preview1_fdflags(fdflags)?;
+        if oflags & !WasiOpenOptions::SUPPORTED_OFLAGS != 0 {
             return Err(Errno::Notcapable);
         }
         if !WasiRights::DIRECTORY_INHERITING.contains(rights_base)

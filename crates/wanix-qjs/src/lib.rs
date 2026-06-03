@@ -2353,6 +2353,11 @@ const file = std.open("log.txt", "a");
 file.puts("-std");
 file.close();
 
+const fd2 = os.open("log.txt", os.O_WRONLY);
+const file2 = std.fdopen(fd2, "a");
+file2.puts("-fdopen");
+file2.close();
+
 print("log", std.loadFile("log.txt"));
 "#,
         )
@@ -2378,9 +2383,63 @@ print("log", std.loadFile("log.txt"));
 
         assert_eq!(
             read_file(&*stdout, "out"),
-            b"os bytes 3\nlog start-os-std\n"
+            b"os bytes 3\nlog start-os-std-fdopen\n"
         );
-        assert_eq!(root.read_file("log.txt").unwrap(), b"start-os-std");
+        assert_eq!(root.read_file("log.txt").unwrap(), b"start-os-std-fdopen");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_fd_fdstat_set_flags_updates_mirrored_task_fd_append() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.writeFile("log.txt", "start");
+const fd = os.open("log.txt", os.O_WRONLY);
+const file = std.fdopen(fd, "a");
+const mirror = os.open("#task/self/fd/" + fd, os.O_WRONLY);
+const bytes = new Uint8Array([45, 109, 105, 114, 114, 111, 114]);
+print("mirror bytes", os.write(mirror, bytes.buffer, 0, bytes.length));
+os.close(mirror);
+file.close();
+print("log", std.loadFile("log.txt"));
+"##,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"mirror bytes 7\nlog start-mirror\n"
+        );
+        assert_eq!(root.read_file("log.txt").unwrap(), b"start-mirror");
         assert_eq!(task.exit(), "0");
     }
 

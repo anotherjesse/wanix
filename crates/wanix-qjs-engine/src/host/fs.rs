@@ -819,12 +819,15 @@ fn fd_fdstat_set_flags(
     if let Err(errno) = preview1_fd(fd) {
         return Ok(errno);
     }
-    if preview1_u16_flags(flags).is_err() {
-        return Ok(ERRNO_NOTCAPABLE);
-    }
-    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| host.fd_fdstat_get(fd))? {
+    let flags = match preview1_u16_flags(flags) {
+        Ok(flags) => flags,
+        Err(errno) => return Ok(errno),
+    };
+    if let Some(result) =
+        with_wasi_host(&caller, fd, |host, fd| host.fd_fdstat_set_flags(fd, flags))?
+    {
         return Ok(match result {
-            Ok(_) => ERRNO_NOSYS,
+            Ok(()) => ERRNO_SUCCESS,
             Err(errno) => errno.preview1_result(),
         });
     }

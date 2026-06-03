@@ -57,6 +57,7 @@ const VIRTUAL_FS_WAT: &str = r#"
   (import "wasi_snapshot_preview1" "fd_tell" (func $fd_tell (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_close" (func $fd_close (param i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_fdstat_get" (func $fd_fdstat_get (param i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_fdstat_set_flags" (func $fd_fdstat_set_flags (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_filestat_get" (func $fd_filestat_get (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_filestat_get" (func $path_filestat_get (param i32 i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_create_directory" (func $path_create_directory (param i32 i32 i32) (result i32)))
@@ -87,6 +88,8 @@ const VIRTUAL_FS_WAT: &str = r#"
     local.get 0 call $fd_close)
   (func (export "fd_fdstat_get") (param i32 i32) (result i32)
     local.get 0 local.get 1 call $fd_fdstat_get)
+  (func (export "fd_fdstat_set_flags") (param i32 i32) (result i32)
+    local.get 0 local.get 1 call $fd_fdstat_set_flags)
   (func (export "fd_filestat_get") (param i32 i32) (result i32)
     local.get 0 local.get 1 call $fd_filestat_get)
   (func (export "path_filestat_get") (param i32 i32 i32 i32 i32) (result i32)
@@ -117,6 +120,7 @@ struct VirtualFsHarness {
     fd_tell: TypedFunc<(i32, i32), i32>,
     fd_close: TypedFunc<i32, i32>,
     fd_fdstat_get: TypedFunc<(i32, i32), i32>,
+    fd_fdstat_set_flags: TypedFunc<(i32, i32), i32>,
     fd_filestat_get: TypedFunc<(i32, i32), i32>,
     path_filestat_get: TypedFunc<(i32, i32, i32, i32, i32), i32>,
     path_create_directory: TypedFunc<(i32, i32, i32), i32>,
@@ -157,6 +161,7 @@ impl VirtualFsHarness {
             fd_tell: instance.get_typed_func(&mut store, "fd_tell")?,
             fd_close: instance.get_typed_func(&mut store, "fd_close")?,
             fd_fdstat_get: instance.get_typed_func(&mut store, "fd_fdstat_get")?,
+            fd_fdstat_set_flags: instance.get_typed_func(&mut store, "fd_fdstat_set_flags")?,
             fd_filestat_get: instance.get_typed_func(&mut store, "fd_filestat_get")?,
             path_filestat_get: instance.get_typed_func(&mut store, "path_filestat_get")?,
             path_create_directory: instance.get_typed_func(&mut store, "path_create_directory")?,
@@ -336,6 +341,11 @@ impl QuickJsWasiHost for MetadataWasiHost {
                 .cast_unsigned(),
             READ_SEEK_STAT_RIGHTS.cast_unsigned(),
         ))
+    }
+
+    fn fd_fdstat_set_flags(&mut self, fd: u32, fdflags: u16) -> WasiHostResult<()> {
+        self.record(format!("setflags:{fd}:{fdflags}"));
+        Ok(())
     }
 
     fn fd_filestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFileStat> {
@@ -568,6 +578,13 @@ fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
 
     assert_eq!(
         harness
+            .fd_fdstat_set_flags
+            .call(&mut harness.store, (5, i32::from(FDFLAGS_APPEND)))?,
+        ERRNO_SUCCESS
+    );
+
+    assert_eq!(
+        harness
             .fd_seek
             .call(&mut harness.store, (5, 7, WHENCE_SET, 128))?,
         ERRNO_SUCCESS
@@ -587,6 +604,7 @@ fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
             "prestat:9".to_owned(),
             "prestat:9".to_owned(),
             "fdstat:9".to_owned(),
+            "setflags:5:1".to_owned(),
             "seek:5:7:Set".to_owned(),
             "tell:5".to_owned(),
             "close:5".to_owned(),

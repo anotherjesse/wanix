@@ -13,5 +13,10 @@ const file = std.open("append-log.txt", "a");
 file.puts("-std");
 file.close();
 
+const fd2 = os.open("append-log.txt", os.O_WRONLY);
+const file2 = std.fdopen(fd2, "a");
+file2.puts("-fdopen");
+file2.close();
+
 std.out.puts("log: " + std.loadFile("append-log.txt") + "\n");
 std.out.flush();

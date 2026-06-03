@@ -58,14 +58,15 @@ impl Preopen {
 pub struct WasiFile {
     file: Arc<Mutex<Box<dyn File>>>,
     label: String,
-    access: WasiFileAccess,
+    access: Arc<Mutex<WasiFileAccess>>,
 }
 
 impl fmt::Debug for WasiFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let access = self.access.lock().map(|access| *access).ok();
         f.debug_struct("WasiFile")
             .field("label", &self.label)
-            .field("access", &self.access)
+            .field("access", &access)
             .finish_non_exhaustive()
     }
 }
@@ -76,7 +77,7 @@ impl WasiFile {
         Self {
             file: Arc::new(Mutex::new(file)),
             label: label.into(),
-            access,
+            access: Arc::new(Mutex::new(access)),
         }
     }
 
@@ -99,11 +100,17 @@ impl WasiFile {
     }
 
     pub(crate) fn can_read(&self) -> bool {
-        self.access.can_read()
+        self.access().is_ok_and(WasiFileAccess::can_read)
     }
 
     pub(crate) fn can_write(&self) -> bool {
-        self.access.can_write()
+        self.access().is_ok_and(WasiFileAccess::can_write)
+    }
+
+    pub(crate) fn set_append(&self, append: bool) -> FsResult<()> {
+        let mut access = self.access.lock().map_err(access_lock_poisoned)?;
+        *access = access.with_append(append);
+        Ok(())
     }
 
     pub(crate) fn read_bytes(&self, buf: &mut [u8]) -> FsResult<usize> {
@@ -114,11 +121,12 @@ impl WasiFile {
     }
 
     pub(crate) fn write_bytes(&self, buf: &[u8]) -> FsResult<usize> {
+        let append = self.access()?.append();
         let mut file = self
             .file
             .lock()
             .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?;
-        if self.access.append() {
+        if append {
             file.seek(FileSeekFrom::End(0))?;
         }
         file.write(buf)
@@ -151,6 +159,17 @@ impl WasiFile {
             .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
             .metadata()
     }
+
+    fn access(&self) -> FsResult<WasiFileAccess> {
+        self.access
+            .lock()
+            .map(|access| *access)
+            .map_err(access_lock_poisoned)
+    }
+}
+
+fn access_lock_poisoned<T>(_: T) -> FsError {
+    FsError::Other("WASI fd access lock poisoned".to_owned())
 }
 
 impl File for WasiFile {

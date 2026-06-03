@@ -1009,6 +1009,67 @@ fn preview1_append_fdflag_writes_at_end_of_file() {
 }
 
 #[test]
+fn preview1_fd_fdstat_set_flags_updates_append_mode() {
+    let root = fixture(&[("log.txt", b"start"), ("read.txt", b"read")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "log.txt",
+            0,
+            WasiRights::FD_WRITE | WasiRights::FD_SEEK | WasiRights::FD_TELL,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(ctx.fd_fdstat_get(fd).unwrap().fdflags(), 0);
+    ctx.fd_fdstat_set_flags(fd, WasiOpenOptions::FDFLAGS_APPEND)
+        .unwrap();
+    assert_eq!(
+        ctx.fd_fdstat_get(fd).unwrap().fdflags(),
+        WasiOpenOptions::FDFLAGS_APPEND
+    );
+    ctx.fd_seek(fd, 0, WasiWhence::Set).unwrap();
+    assert_eq!(ctx.fd_write(fd, b"-app").unwrap(), 4);
+    assert_eq!(root.read_file("log.txt").unwrap(), b"start-app");
+
+    ctx.fd_fdstat_set_flags(fd, 0).unwrap();
+    assert_eq!(ctx.fd_fdstat_get(fd).unwrap().fdflags(), 0);
+    ctx.fd_seek(fd, 0, WasiWhence::Set).unwrap();
+    assert_eq!(ctx.fd_write(fd, b"HEAD").unwrap(), 4);
+    assert_eq!(root.read_file("log.txt").unwrap(), b"HEADt-app");
+
+    let read_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "read.txt",
+            0,
+            WasiRights::FD_READ,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        ctx.fd_fdstat_set_flags(read_fd, WasiOpenOptions::FDFLAGS_APPEND),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.fd_fdstat_set_flags(fd, WasiOpenOptions::FDFLAGS_DSYNC),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(ctx.fd_fdstat_set_flags(WasiFd::ROOT, 0), Ok(()));
+    assert_eq!(
+        ctx.fd_fdstat_set_flags(WasiFd::ROOT, WasiOpenOptions::FDFLAGS_APPEND),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.fd_fdstat_set_flags(WasiFd::new(99), 0),
+        Err(Errno::Badf)
+    );
+}
+
+#[test]
 fn preview1_path_open_flags_convert_to_wanix_open_options() {
     let read = WasiOpenOptions::from_preview1(
         0,
