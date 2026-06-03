@@ -165,12 +165,12 @@ pub(super) fn run_qjs_term(
             eval_ready_io_turns,
         )?;
         if !feed_after_eval.is_empty() {
-            let post_eval_batches = read_post_eval_feed_batches(feed_after_eval, process_stdin)?;
-            run_terminal_feed_session_after_eval(
+            run_post_eval_feeds(
+                feed_after_eval,
+                process_stdin,
                 &terminal,
                 &terminal_id,
                 &mut runtime,
-                &post_eval_batches,
                 qjs_command.ready_io_turns,
             )?;
         }
@@ -181,11 +181,14 @@ pub(super) fn run_qjs_term(
     finish_terminal_task_output(start_result, &task, &terminal, &terminal_id)
 }
 
-fn read_post_eval_feed_batches(
+fn run_post_eval_feeds(
     feeds: Vec<PostEvalFeed>,
     process_stdin: &mut dyn Read,
-) -> Result<Vec<Vec<Vec<u8>>>, CliError> {
-    let mut batches = Vec::new();
+    terminal: &TermDevice,
+    terminal_id: &str,
+    runtime: &mut QuickJsTaskRuntime,
+    ready_io_turns: usize,
+) -> Result<(), CliError> {
     let mut current_batch = Vec::new();
     for feed in feeds {
         match feed {
@@ -213,6 +216,13 @@ fn read_post_eval_feed_batches(
                 current_batch.push(bytes);
             }
             PostEvalFeed::LinesFile(path) => {
+                flush_terminal_feed_batch(
+                    terminal,
+                    terminal_id,
+                    runtime,
+                    &mut current_batch,
+                    ready_io_turns,
+                )?;
                 let bytes = std::fs::read(&path).map_err(|error| {
                     CliError::new(
                         format!(
@@ -222,35 +232,41 @@ fn read_post_eval_feed_batches(
                         1,
                     )
                 })?;
-                push_line_batches(&mut batches, &mut current_batch, split_feed_lines(bytes));
+                for line in split_feed_lines(bytes) {
+                    feed_terminal_batch_and_pump(
+                        terminal,
+                        terminal_id,
+                        runtime,
+                        &[line],
+                        ready_io_turns,
+                    )?;
+                }
             }
             PostEvalFeed::LinesProcess => {
-                let mut bytes = Vec::new();
-                process_stdin.read_to_end(&mut bytes).map_err(|error| {
-                    CliError::new(
-                        format!("failed to read process stdin lines after eval: {error}"),
-                        1,
-                    )
-                })?;
-                push_line_batches(&mut batches, &mut current_batch, split_feed_lines(bytes));
+                flush_terminal_feed_batch(
+                    terminal,
+                    terminal_id,
+                    runtime,
+                    &mut current_batch,
+                    ready_io_turns,
+                )?;
+                run_process_line_feed_session_after_eval(
+                    process_stdin,
+                    terminal,
+                    terminal_id,
+                    runtime,
+                    ready_io_turns,
+                )?;
             }
         }
     }
-    if !current_batch.is_empty() {
-        batches.push(current_batch);
-    }
-    Ok(batches)
-}
-
-fn push_line_batches(
-    batches: &mut Vec<Vec<Vec<u8>>>,
-    current_batch: &mut Vec<Vec<u8>>,
-    lines: Vec<Vec<u8>>,
-) {
-    if !current_batch.is_empty() {
-        batches.push(std::mem::take(current_batch));
-    }
-    batches.extend(lines.into_iter().map(|line| vec![line]));
+    flush_terminal_feed_batch(
+        terminal,
+        terminal_id,
+        runtime,
+        &mut current_batch,
+        ready_io_turns,
+    )
 }
 
 fn split_feed_lines(bytes: Vec<u8>) -> Vec<Vec<u8>> {
@@ -268,19 +284,74 @@ fn split_feed_lines(bytes: Vec<u8>) -> Vec<Vec<u8>> {
     chunks
 }
 
-fn run_terminal_feed_session_after_eval(
+fn run_process_line_feed_session_after_eval(
+    process_stdin: &mut dyn Read,
     terminal: &TermDevice,
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
-    batches: &[Vec<Vec<u8>>],
     ready_io_turns: usize,
 ) -> Result<(), CliError> {
-    for batch in batches {
-        for chunk in batch {
-            feed_terminal_after_eval(terminal, terminal_id, chunk)?;
-        }
-        runtime.run_ready_io_turns(ready_io_turns)?;
+    let mut line = Vec::new();
+    while read_process_line_after_eval(process_stdin, &mut line)? {
+        feed_terminal_batch_and_pump(
+            terminal,
+            terminal_id,
+            runtime,
+            &[line.clone()],
+            ready_io_turns,
+        )?;
     }
+    Ok(())
+}
+
+fn read_process_line_after_eval(
+    process_stdin: &mut dyn Read,
+    line: &mut Vec<u8>,
+) -> Result<bool, CliError> {
+    line.clear();
+    let mut byte = [0; 1];
+    loop {
+        let count = process_stdin.read(&mut byte).map_err(|error| {
+            CliError::new(
+                format!("failed to read process stdin lines after eval: {error}"),
+                1,
+            )
+        })?;
+        if count == 0 {
+            return Ok(!line.is_empty());
+        }
+        line.push(byte[0]);
+        if byte[0] == b'\n' {
+            return Ok(true);
+        }
+    }
+}
+
+fn flush_terminal_feed_batch(
+    terminal: &TermDevice,
+    terminal_id: &str,
+    runtime: &mut QuickJsTaskRuntime,
+    batch: &mut Vec<Vec<u8>>,
+    ready_io_turns: usize,
+) -> Result<(), CliError> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    let flushed = std::mem::take(batch);
+    feed_terminal_batch_and_pump(terminal, terminal_id, runtime, &flushed, ready_io_turns)
+}
+
+fn feed_terminal_batch_and_pump(
+    terminal: &TermDevice,
+    terminal_id: &str,
+    runtime: &mut QuickJsTaskRuntime,
+    batch: &[Vec<u8>],
+    ready_io_turns: usize,
+) -> Result<(), CliError> {
+    for chunk in batch {
+        feed_terminal_after_eval(terminal, terminal_id, chunk)?;
+    }
+    runtime.run_ready_io_turns(ready_io_turns)?;
     Ok(())
 }
 

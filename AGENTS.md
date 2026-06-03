@@ -63,9 +63,10 @@ and the CLI emits the terminal `data` transcript. The checked-in
 terminal-backed fd 0 in bounded turns. The `--feed-after-eval`,
 `--feed-after-eval-file`, and `--feed-after-eval-lines` options prove terminal
 input can arrive after JS has registered a read handler while the runtime
-remains live, including deterministic line-by-line scripted sessions. Terminal
-fd readiness is queue-aware, so ready-IO pumps can run while a read handler is
-armed without firing on empty terminal input.
+remains live, including deterministic line-by-line scripted sessions and
+post-eval native stdin line streaming. Terminal fd readiness is queue-aware, so
+ready-IO pumps can run while a read handler is armed without firing on empty
+terminal input.
 
 ## Code Quality Guardrails
 
@@ -237,8 +238,8 @@ cargo test --workspace --locked
   returns the terminal transcript as the native CLI output.
 - [ADR 0052](docs/adrs/0052-qjs-term-post-eval-input-feed.md):
   `qjs-term` post-eval feeds keep the task runtime alive after initial eval,
-  feed terminal data, and pump ready-IO handlers after each scripted input
-  batch.
+  feed terminal data, and pump ready-IO handlers after each input batch or
+  streamed native stdin line.
 - [ADR 0053](docs/adrs/0053-terminal-fd-readiness.md): Wanix fd readiness hooks
   let `#term` report readable only when terminal input or output is queued.
 

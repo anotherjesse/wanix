@@ -1346,12 +1346,47 @@ fn parse_exit(exit: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::{self, Read};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{run, run_with_process_stdin};
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct MarkerCheckedStdin {
+        marker: PathBuf,
+        bytes: Vec<u8>,
+        offset: usize,
+    }
+
+    impl MarkerCheckedStdin {
+        fn new(marker: PathBuf, bytes: impl Into<Vec<u8>>) -> Self {
+            Self {
+                marker,
+                bytes: bytes.into(),
+                offset: 0,
+            }
+        }
+    }
+
+    impl Read for MarkerCheckedStdin {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if !self.marker.exists() {
+                return Err(io::Error::other(
+                    "process stdin was read before qjs eval marker",
+                ));
+            }
+            let remaining = self.bytes.len().saturating_sub(self.offset);
+            let len = remaining.min(buf.len());
+            if len == 0 {
+                return Ok(0);
+            }
+            buf[..len].copy_from_slice(&self.bytes[self.offset..self.offset + len]);
+            self.offset += len;
+            Ok(len)
+        }
+    }
 
     #[test]
     fn help_mentions_qjs_demo_target() {
@@ -1635,6 +1670,57 @@ std.out.flush();
             b"session task: 1\r\nevent 1: first\\n\r\nevent 2: second\\n\r\nevent 3: exit\\n\r\n"
         );
         assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_term_process_line_feed_reads_native_stdin_after_eval() {
+        let host = temp_dir("wanix-cli-term-stream-order");
+        let marker = host.join("armed.txt");
+        let script = write_temp_script(
+            "term-stream-order.js",
+            r##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+function stringFromBytes(bytes, count) {
+  return Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+}
+
+std.writeFile("host/armed.txt", "ready");
+std.out.puts("armed\n");
+
+os.setReadHandler(0, () => {
+  const bytes = new Uint8Array(64);
+  const count = os.read(0, bytes.buffer, 0, bytes.length);
+  std.out.puts("stream " + stringFromBytes(bytes, count));
+  os.setReadHandler(0, null);
+  std.out.flush();
+});
+
+std.out.flush();
+"##,
+        );
+
+        let output = run_with_process_stdin(
+            [
+                "qjs-term".into(),
+                "--mount".into(),
+                format!("{}=host", host.display()).into(),
+                "--ready-io-turns".into(),
+                "1".into(),
+                "--feed-after-eval-lines".into(),
+                "-".into(),
+                script.into_os_string(),
+            ],
+            MarkerCheckedStdin::new(marker.clone(), b"streamed line\n"),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"armed\r\nstream streamed line\r\n");
+        assert!(output.stderr().is_empty());
+        assert_eq!(fs::read(marker).unwrap(), b"ready");
+        fs::remove_dir_all(host).unwrap();
     }
 
     #[test]
