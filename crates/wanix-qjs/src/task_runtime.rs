@@ -179,6 +179,21 @@ impl QuickJsTaskRuntime {
         set_task_interrupt_handler(&mut self.runtime, self.exit_state.clone(), Some(polls))
     }
 
+    /// Runs bounded nonblocking ready-fd handler turns while the task VM is live.
+    ///
+    /// This is the task-runtime counterpart of QuickJS `qjs:os` fd readiness
+    /// polling. It lets a composition layer feed task fds after initial script
+    /// evaluation, then explicitly pump read/write handlers without exposing
+    /// engine-specific errors or raw runtime plumbing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when a QuickJS readiness turn fails, unless
+    /// the failure is due to a requested Wanix process exit.
+    pub fn run_ready_io_turns(&mut self, turns: usize) -> FsResult<()> {
+        self.drain_event_loop_if_running(Duration::ZERO, turns)
+    }
+
     /// Returns the requested Wanix process exit code, if JavaScript has exited.
     ///
     /// # Errors

@@ -60,7 +60,9 @@ The next terminal-facing demo is `wanix-rust qjs-term main.js`: JavaScript still
 runs as a Wanix `qjs` task, but fd 0/1/2 are bound through `#term/<id>/program`
 and the CLI emits the terminal `data` transcript. The checked-in
 `qjs-term-ready-io-demo.js` also proves QuickJS ready-IO handlers can consume
-terminal-backed fd 0 in bounded turns.
+terminal-backed fd 0 in bounded turns. The `--feed-after-eval` option proves
+terminal input can arrive after JS has registered a read handler while the
+runtime remains live.
 
 ## Code Quality Guardrails
 
@@ -230,6 +232,9 @@ cargo test --workspace --locked
 - [ADR 0051](docs/adrs/0051-terminal-backed-qjs-cli-demo.md):
   `wanix-rust qjs-term` runs a QuickJS task through `#term` fd bindings and
   returns the terminal transcript as the native CLI output.
+- [ADR 0052](docs/adrs/0052-qjs-term-post-eval-input-feed.md):
+  `qjs-term --feed-after-eval` keeps the task runtime alive after initial eval,
+  feeds terminal data, and pumps ready-IO handlers.
 
 ## Cycle Rules
 

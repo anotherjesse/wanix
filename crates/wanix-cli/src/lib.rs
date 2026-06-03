@@ -24,6 +24,7 @@ const USAGE: &str = concat!(
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-term [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
+    "[--feed-after-eval TEXT ...] ",
     "[--interrupt-after N] [--memory-limit-bytes N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
@@ -157,7 +158,7 @@ where
             run_qjs(parse_qjs_command(rest)?, &mut process_stdin)
         }
         [command, rest @ ..] if command == "qjs-term" => {
-            qjs_term::run_qjs_term(parse_qjs_command_for(rest, "qjs-term")?, &mut process_stdin)
+            qjs_term::run_qjs_term(qjs_term::parse_qjs_term_command(rest)?, &mut process_stdin)
         }
         [command, rest @ ..] if command == "qjs-snapshot" => run_qjs_snapshot(
             parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?,
@@ -1358,6 +1359,7 @@ mod tests {
         assert_eq!(output.exit_code(), 0);
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-term"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--mount HOST=GUEST"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--stdin-file PATH|-"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-snapshot"));
@@ -1488,6 +1490,28 @@ std.err.flush();
         assert_eq!(
             output.stdout(),
             b"terminal task: 1\r\nterminal id: 1\r\nsync\r\nterminal chunk 1: abcd\r\nterminal chunk 2: ef\r\nterminal handler done\r\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_term_example_feeds_terminal_input_after_eval() {
+        let output = run([
+            "qjs-term".into(),
+            "--ready-io-turns".into(),
+            "2".into(),
+            "--feed-after-eval".into(),
+            "abcd".into(),
+            "--feed-after-eval".into(),
+            "ef".into(),
+            example_script("qjs-term-post-eval-feed-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"terminal task: 1\r\nterminal id: 1\r\nwaiting for terminal input\r\npost-eval chunk 1: abcd\r\npost-eval chunk 2: ef\r\npost-eval handler done\r\n"
         );
         assert!(output.stderr().is_empty());
     }
