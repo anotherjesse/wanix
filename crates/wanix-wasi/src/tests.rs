@@ -771,6 +771,46 @@ fn preview1_path_open_projects_libc_regular_file_rights() {
 }
 
 #[test]
+fn preview1_path_open_projects_libc_regular_file_write_rights() {
+    let root = fixture(&[("created.txt", b"older longer content")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let libc_write_rights = WasiRights::FD_SEEK
+        | WasiRights::FD_TELL
+        | WasiRights::FD_WRITE
+        | WasiRights::PATH_CREATE_FILE
+        | WasiRights::PATH_OPEN
+        | WasiRights::PATH_FILESTAT_GET
+        | WasiRights::PATH_FILESTAT_SET_SIZE
+        | WasiRights::FD_FILESTAT_GET;
+    let libc_inheriting_rights = libc_write_rights | WasiRights::FD_READ | WasiRights::FD_READDIR;
+
+    let fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "created.txt",
+            WasiOpenOptions::OFLAGS_CREATE | WasiOpenOptions::OFLAGS_TRUNCATE,
+            libc_write_rights,
+            libc_inheriting_rights,
+            0,
+        )
+        .unwrap();
+    let fdstat = ctx.fd_fdstat_get(fd).unwrap();
+
+    assert_eq!(fdstat.file_type(), WasiFileType::RegularFile);
+    assert_eq!(
+        fdstat.rights_base(),
+        WasiRights::FD_WRITE
+            | WasiRights::FD_SEEK
+            | WasiRights::FD_TELL
+            | WasiRights::FD_FILESTAT_GET
+    );
+    assert_eq!(fdstat.rights_inheriting(), WasiRights::NONE);
+    assert_eq!(ctx.fd_write(fd, b"created by libc").unwrap(), 15);
+    assert_eq!(root.read_file("created.txt").unwrap(), b"created by libc");
+    assert_eq!(ctx.fd_read(fd, &mut [0; 1]), Err(Errno::Notcapable));
+}
+
+#[test]
 fn preview1_path_open_preserves_reduced_directory_rights() {
     let root = fixture(&[("dir/file.txt", b"data")]);
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));

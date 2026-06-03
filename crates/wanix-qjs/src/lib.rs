@@ -1474,6 +1474,63 @@ print("os", text);
     }
 
     #[test]
+    fn task_driver_quickjs_std_and_os_write_wanix_namespace_files() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.writeFile("std-created.txt", "from std write");
+const bytes = new Uint8Array([102, 114, 111, 109, 32, 111, 115, 32, 119, 114, 105, 116, 101]);
+const fd = os.open("os-created.txt", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666);
+const count = os.write(fd, bytes.buffer, 0, bytes.length);
+os.close(fd);
+print("std", std.loadFile("std-created.txt"));
+print("os", std.loadFile("os-created.txt"));
+print("bytes", count);
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"std from std write\nos from os write\nbytes 13\n"
+        );
+        assert_eq!(
+            root.read_file("std-created.txt").unwrap(),
+            b"from std write"
+        );
+        assert_eq!(root.read_file("os-created.txt").unwrap(), b"from os write");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
     fn task_driver_fd_api_preserves_stdio_order_and_close() {
         let table = TaskTable::new();
         let runner = runner();

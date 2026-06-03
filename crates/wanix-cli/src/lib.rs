@@ -523,6 +523,25 @@ print(std.loadFile("input.txt"));
     }
 
     #[test]
+    fn qjs_command_writes_script_sibling_with_quickjs_std_write_file() {
+        let script = write_temp_script(
+            "std-write-demo.js",
+            r#"
+import * as std from "qjs:std";
+
+std.writeFile("created.txt", "hello from std write");
+print(std.loadFile("created.txt"));
+"#,
+        );
+
+        let output = run(["qjs".into(), script.clone().into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"hello from std write\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_reports_failure_and_preserves_stdout() {
         let script = write_temp_script(
             "boom.js",

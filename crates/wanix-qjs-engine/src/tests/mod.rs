@@ -17,6 +17,7 @@ mod runtime_values;
 mod scalar_values;
 mod snapshot_validation;
 mod stdlib;
+mod stdlib_files;
 
 // Tests that need a different wasm path should load an explicit module
 // instead of using this process-wide QUICKJS_WASM cache.
