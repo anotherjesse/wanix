@@ -1,4 +1,4 @@
-# ADR 0013: Preview 1 Regular File Rights Projection
+# ADR 0013: Preview 1 File Rights Projection
 
 ## Status
 
@@ -18,16 +18,23 @@ required every requested base right to be a regular-file right when the resolved
 path was a regular file. That protected the trust boundary, but it also rejected
 harmless directory rights that are not meaningful on the opened file descriptor.
 
+The same shape appears on Wanix service files. QuickJS `qjs:os.open` asks for
+seek/tell/stat rights even when opening write-only `#task/<id>/cmd`,
+`#task/<id>/env`, `#task/<id>/dir`, or `#task/<id>/ctl` handles. Those service
+files can enforce writes without supporting every requested libc file right.
+
 ## Decision
 
 Keep rejecting unknown Preview 1 rights. When a `path_open` request resolves to
-a regular file, project the requested base rights onto Wanix-supported
-regular-file rights before opening and before reporting `fdstat`.
+a file handle, project the requested base rights onto rights the opened handle
+actually supports before reporting `fdstat`.
 
-The effective regular-file fd only grants rights Wanix can enforce:
-`FD_READ`, `FD_WRITE`, `FD_SEEK`, `FD_TELL`, and `FD_FILESTAT_GET`. Directory
-path rights requested by libc are accepted only as part of the raw open request;
-they are not granted to the regular-file fd.
+The effective file fd only grants rights Wanix can enforce: `FD_READ`,
+`FD_WRITE`, `FD_SEEK`, `FD_TELL`, and `FD_FILESTAT_GET`. Requested directory
+path rights are accepted only as part of the raw open request; they are not
+granted to the opened file fd. Projection must preserve the requested read or
+write mode, so a read open still requires effective `FD_READ` and a write open
+still requires effective `FD_WRITE`.
 
 Directory opens keep their existing stricter behavior: requested directory base
 and inheriting rights must be directory-capable and parent-authorized.
@@ -38,6 +45,11 @@ Guest JavaScript can now read and write Wanix namespace files through QuickJS
 libc APIs such as `std.loadFile(...)`, `std.writeFile(...)`, and
 `os.open`/`os.read`/`os.write` without giving QuickJS its own process or
 filesystem identity.
+
+Guest JavaScript can also write Wanix task service files through `qjs:os`
+without granting service handles fake seek/tell behavior. `std.writeFile(...)`
+still remains inappropriate for service fields because it requests
+create/truncate semantics that `#task` files do not have.
 
 The engine crate remains Wanix-agnostic. It forwards guest ABI calls to a live
 `QuickJsWasiHost`; the `wanix-qjs` adapter converts those calls into

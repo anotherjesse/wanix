@@ -53,6 +53,13 @@ driver into a task table.
   argv. `scriptArgs[0]` is the program name and later entries are script
   arguments; the interim `Wanix.args()` helper remains args-only for
   compatibility until that API can be retired.
+- A parent `qjs` task may allocate and start a child `qjs` task by using
+  Wanix-backed WASI calls against `#task/new/qjs` and `#task/<id>/cmd`,
+  `env`, `dir`, `ctl`, and `exit`. The child still gets Wanix task identity,
+  namespace, argv/env/cwd, and exit state from `wanix-task`; QuickJS only
+  executes the task driver. Child tasks do not inherit parent stdio fds yet, so
+  the current synchronous proof observes child output through ordinary namespace
+  files and child status through `#task/<id>/exit`.
 - The synchronous process demo comes before richer lifecycle work such as async
   event loops, signals, cancellation, and snapshot/restore.
 - A useful demo should show JavaScript reading `#task/self/id`, using stdio,

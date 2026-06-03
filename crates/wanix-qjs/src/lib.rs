@@ -1653,6 +1653,123 @@ print("id", std.loadFile("#task/self/id").trim());
     }
 
     #[test]
+    fn task_driver_quickjs_os_starts_child_task_through_task_service() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+function stringFromBytes(bytes, count) {
+  return Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+}
+
+function bytesFromString(text) {
+  return new Uint8Array(Array.from(text).map((char) => char.charCodeAt(0)));
+}
+
+function readServiceText(path) {
+  const fd = os.open(path, os.O_RDONLY);
+  if (fd < 0) {
+    throw new Error("open " + path + ": " + fd);
+  }
+  const chunks = [];
+  const bytes = new Uint8Array(64);
+  while (true) {
+    const count = os.read(fd, bytes.buffer, 0, bytes.length);
+    if (count < 0) {
+      throw new Error("read " + path + ": " + count);
+    }
+    if (count === 0) {
+      break;
+    }
+    chunks.push(stringFromBytes(bytes, count));
+    if (count < bytes.length) {
+      break;
+    }
+  }
+  os.close(fd);
+  return chunks.join("");
+}
+
+function writeServiceText(path, text) {
+  const fd = os.open(path, os.O_WRONLY);
+  if (fd < 0) {
+    throw new Error("open " + path + ": " + fd);
+  }
+  const bytes = bytesFromString(text);
+  const count = os.write(fd, bytes.buffer, 0, bytes.length);
+  os.close(fd);
+  if (count !== bytes.length) {
+    throw new Error("short write " + path + ": " + count + "/" + bytes.length);
+  }
+}
+
+const child = readServiceText("#task/new/qjs").trim();
+writeServiceText("#task/" + child + "/cmd", "child.js alpha beta\n");
+writeServiceText("#task/" + child + "/env", "MODE=child\n");
+writeServiceText("#task/" + child + "/dir", ".\n");
+writeServiceText("#task/" + child + "/ctl", "start\n");
+
+std.out.puts("child " + child + " exit " + readServiceText("#task/" + child + "/exit").trim() + "\n");
+std.out.puts("result " + std.loadFile("child-result.txt") + "\n");
+"##,
+        )
+        .unwrap();
+        root.write_file(
+            "child.js",
+            br##"
+import * as std from "qjs:std";
+
+std.writeFile(
+  "child-result.txt",
+  "id " + std.loadFile("#task/self/id").trim()
+    + " args " + scriptArgs.join("|")
+    + " mode " + std.getenv("MODE")
+);
+std.exit(5);
+"##,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"child 2 exit 5\nresult id 2 args child.js|alpha|beta mode child\n"
+        );
+        assert_eq!(
+            root.read_file("child-result.txt").unwrap(),
+            b"id 2 args child.js|alpha|beta mode child"
+        );
+        assert_eq!(task.exit(), "0");
+        assert_eq!(table.get(TaskId::new(2)).unwrap().exit(), "5");
+    }
+
+    #[test]
     fn task_driver_quickjs_std_and_os_write_wanix_namespace_files() {
         let table = TaskTable::new();
         let runner = runner();

@@ -202,6 +202,30 @@ fn task_new_allocates_child_and_clones_parent_namespace() {
 }
 
 #[test]
+fn task_new_file_is_seekable_for_wasi_libc_reads() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let root = table.allocate_root("qjs").unwrap();
+    let taskfs = table.filesystem_for(root.id());
+    let mut new_qjs = taskfs
+        .open(
+            &NormalizedPath::new("new/qjs").unwrap(),
+            OpenOptions::read(),
+        )
+        .unwrap();
+
+    assert!(new_qjs.is_seekable());
+    assert_eq!(new_qjs.tell().unwrap(), 0);
+    let mut buf = [0; 8];
+    assert_eq!(new_qjs.read(&mut buf).unwrap(), 2);
+    assert_eq!(&buf[..2], b"2\n");
+    assert_eq!(new_qjs.tell().unwrap(), 2);
+    assert_eq!(new_qjs.seek(FileSeekFrom::Start(0)).unwrap(), 0);
+    assert_eq!(new_qjs.read(&mut buf).unwrap(), 2);
+    assert_eq!(&buf[..2], b"2\n");
+}
+
+#[test]
 fn task_field_files_round_trip() {
     let table = TaskTable::new();
     table.register_noop_driver("qjs").unwrap();

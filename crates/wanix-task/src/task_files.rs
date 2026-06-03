@@ -212,6 +212,20 @@ impl File for NewTaskFile {
     fn metadata(&self) -> FsResult<Metadata> {
         Ok(file_metadata(0, 0o555))
     }
+
+    fn seek(&mut self, from: FileSeekFrom) -> FsResult<u64> {
+        let len = self.data.as_ref().map_or(0, Vec::len);
+        self.offset = seek_offset(self.offset, len, from)?;
+        Ok(self.offset as u64)
+    }
+
+    fn tell(&self) -> FsResult<u64> {
+        Ok(self.offset as u64)
+    }
+
+    fn is_seekable(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]

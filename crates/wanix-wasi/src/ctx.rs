@@ -240,8 +240,10 @@ impl WasiCtx {
             .map_err(Errno::from)?;
         let supported_rights = open_file_rights(options.read, options.write, file.is_seekable());
         let rights_base = if let Some(request) = request {
-            let file_rights_base = request.file_rights_base();
-            if !supported_rights.contains(file_rights_base) {
+            let file_rights_base = request.file_rights_base().intersection(supported_rights);
+            if (options.read && !file_rights_base.contains(WasiRights::FD_READ))
+                || (options.write && !file_rights_base.contains(WasiRights::FD_WRITE))
+            {
                 return Err(Errno::Notcapable);
             }
             file_rights_base

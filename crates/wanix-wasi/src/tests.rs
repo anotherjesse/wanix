@@ -844,6 +844,44 @@ fn preview1_path_open_projects_libc_rights_for_rooted_service_paths() {
 }
 
 #[test]
+fn preview1_path_open_projects_libc_write_rights_for_task_service_files() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let mut ctx = WasiCtx::new(WasiConfig::new(task.namespace()));
+    let libc_write_rights = WasiRights::FD_SEEK
+        | WasiRights::FD_TELL
+        | WasiRights::FD_WRITE
+        | WasiRights::PATH_CREATE_FILE
+        | WasiRights::PATH_OPEN
+        | WasiRights::PATH_FILESTAT_GET
+        | WasiRights::PATH_FILESTAT_SET_SIZE
+        | WasiRights::FD_FILESTAT_GET;
+    let libc_inheriting_rights = libc_write_rights | WasiRights::FD_READ | WasiRights::FD_READDIR;
+
+    let fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "#task/self/cmd",
+            0,
+            libc_write_rights,
+            libc_inheriting_rights,
+            0,
+        )
+        .unwrap();
+    let fdstat = ctx.fd_fdstat_get(fd).unwrap();
+
+    assert_eq!(fdstat.file_type(), WasiFileType::RegularFile);
+    assert_eq!(
+        fdstat.rights_base(),
+        WasiRights::FD_WRITE | WasiRights::FD_FILESTAT_GET
+    );
+    assert_eq!(ctx.fd_write(fd, b"child.js\n").unwrap(), 9);
+    assert_eq!(ctx.fd_seek(fd, 0, WasiWhence::Set), Err(Errno::Notcapable));
+    assert_eq!(task.cmd(), "child.js");
+}
+
+#[test]
 fn preview1_path_open_projects_libc_regular_file_write_rights() {
     let root = fixture(&[("created.txt", b"older longer content")]);
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));

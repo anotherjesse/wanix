@@ -34,6 +34,11 @@ QuickJS stdlib calls such as `std.loadFile("#task/self/id")` can reach Wanix
 task identity through the live WASI provider instead of the interim `Wanix`
 host object.
 
+Dynamic service files such as `#task/new/qjs` should be read through
+`qjs:os.open`/`os.read` rather than `std.loadFile(...)`, because their metadata
+size is not the same thing as the bytes produced by the first read. Service
+field writes should likewise use `qjs:os.open` without create/truncate flags.
+
 This preserves the existing Wanix meaning of `#task` across host APIs and WASI
 imports. It also means Wanix task-service paths are intentionally outside the
 cwd remapping applied to ordinary files.
