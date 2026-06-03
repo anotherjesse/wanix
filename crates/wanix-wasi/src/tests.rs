@@ -729,6 +729,48 @@ fn preview1_path_open_preserves_reduced_file_rights() {
 }
 
 #[test]
+fn preview1_path_open_projects_libc_regular_file_rights() {
+    let root = fixture(&[("data.txt", b"data")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let libc_read_rights = WasiRights::FD_READ
+        | WasiRights::FD_SEEK
+        | WasiRights::FD_TELL
+        | WasiRights::PATH_CREATE_FILE
+        | WasiRights::PATH_OPEN
+        | WasiRights::FD_READDIR
+        | WasiRights::PATH_FILESTAT_GET
+        | WasiRights::PATH_FILESTAT_SET_SIZE
+        | WasiRights::FD_FILESTAT_GET;
+    let libc_inheriting_rights = libc_read_rights | WasiRights::FD_WRITE;
+
+    let fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "data.txt",
+            0,
+            libc_read_rights,
+            libc_inheriting_rights,
+            0,
+        )
+        .unwrap();
+    let fdstat = ctx.fd_fdstat_get(fd).unwrap();
+
+    assert_eq!(fdstat.file_type(), WasiFileType::RegularFile);
+    assert_eq!(
+        fdstat.rights_base(),
+        WasiRights::FD_READ
+            | WasiRights::FD_SEEK
+            | WasiRights::FD_TELL
+            | WasiRights::FD_FILESTAT_GET
+    );
+    assert_eq!(fdstat.rights_inheriting(), WasiRights::NONE);
+    let mut buf = [0; 8];
+    let count = ctx.fd_read(fd, &mut buf).unwrap();
+    assert_eq!(&buf[..count], b"data");
+    assert_eq!(ctx.fd_write(fd, b"nope"), Err(Errno::Notcapable));
+}
+
+#[test]
 fn preview1_path_open_preserves_reduced_directory_rights() {
     let root = fixture(&[("dir/file.txt", b"data")]);
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));

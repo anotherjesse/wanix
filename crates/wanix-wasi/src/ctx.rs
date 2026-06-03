@@ -173,11 +173,6 @@ impl WasiCtx {
             return Err(Errno::Notcapable);
         }
         let request = WasiPathOpen::from_preview1(oflags, rights_base, rights_inheriting, fdflags)?;
-        if !parent_rights_inheriting.contains(request.rights_base())
-            || !parent_rights_inheriting.contains(request.rights_inheriting())
-        {
-            return Err(Errno::Notcapable);
-        }
         let resolved = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_OPEN)?;
         self.open_resolved_path(
             resolved,
@@ -212,6 +207,12 @@ impl WasiCtx {
             if !WasiRights::DIRECTORY_BASE.contains(rights_base) {
                 return Err(Errno::Notcapable);
             }
+            if let Some(request) = request
+                && (!parent_rights_inheriting.contains(request.rights_base())
+                    || !parent_rights_inheriting.contains(request.rights_inheriting()))
+            {
+                return Err(Errno::Notcapable);
+            }
             return Ok(self.insert_handle(Handle::Directory {
                 path: resolved,
                 rights_base,
@@ -228,7 +229,8 @@ impl WasiCtx {
             return Err(Errno::Notcapable);
         }
         if let Some(request) = request
-            && !requested_file_rights.contains(request.rights_base())
+            && (!requested_file_rights.contains(request.file_rights_base())
+                || !parent_rights_inheriting.contains(request.file_rights_base()))
         {
             return Err(Errno::Notcapable);
         }
@@ -238,10 +240,11 @@ impl WasiCtx {
             .map_err(Errno::from)?;
         let supported_rights = open_file_rights(options.read, options.write, file.is_seekable());
         let rights_base = if let Some(request) = request {
-            if !supported_rights.contains(request.rights_base()) {
+            let file_rights_base = request.file_rights_base();
+            if !supported_rights.contains(file_rights_base) {
                 return Err(Errno::Notcapable);
             }
-            request.rights_base()
+            file_rights_base
         } else {
             supported_rights.intersection(parent_rights_inheriting)
         };

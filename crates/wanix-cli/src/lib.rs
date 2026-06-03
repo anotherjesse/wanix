@@ -504,6 +504,25 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_command_reads_script_sibling_with_quickjs_std_load_file() {
+        let script = write_temp_script(
+            "std-read-demo.js",
+            r#"
+import * as std from "qjs:std";
+
+print(std.loadFile("input.txt"));
+"#,
+        );
+        fs::write(script.parent().unwrap().join("input.txt"), "hello std file").unwrap();
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"hello std file\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_reports_failure_and_preserves_stdout() {
         let script = write_temp_script(
             "boom.js",

@@ -421,6 +421,10 @@ impl WasiPathOpen {
     pub const fn rights_inheriting(self) -> WasiRights {
         self.rights_inheriting
     }
+
+    pub(crate) const fn file_rights_base(self) -> WasiRights {
+        self.rights_base.intersection(WasiRights::OPEN_FILE_BASE)
+    }
 }
 
 impl From<WasiOpenOptions> for wanix_fs::OpenOptions {

@@ -103,6 +103,9 @@ cargo test --workspace --locked
 - [ADR 0012](docs/adrs/0012-quickjs-libc-std-fixture.md): The checked-in
   QuickJS fixture initializes `qjs:std`/`qjs:os` so guest JavaScript can reach
   Wanix-backed WASI stdio.
+- [ADR 0013](docs/adrs/0013-preview1-regular-file-rights-projection.md):
+  Broad libc regular-file open requests are projected to the Wanix-enforced
+  file rights reported on the opened fd.
 
 ## Cycle Rules
 

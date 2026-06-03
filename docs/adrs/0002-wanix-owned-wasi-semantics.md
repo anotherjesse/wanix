@@ -34,9 +34,10 @@ does not depend upward on `wanix-task`.
   fdstat file types/rights, and numeric errno codes without depending on
   Wasmtime guest memory. Engine-specific import providers translate those typed
   results and byte-layout encoders into guest ABI structs.
-- Engine-specific providers also use `wanix-wasi` helpers for Preview 1
-  filestat layout and supported `path_open` flag/rights conversion. Unsupported
-  Preview 1 modes remain explicit errors until Wanix owns their semantics.
+- Engine-specific providers translate guest-memory ABI records into typed host
+  calls. Runtime adapters such as `wanix-qjs` convert those calls into
+  `wanix-wasi` path/fd operations. Unsupported Preview 1 modes remain explicit
+  errors until Wanix owns their semantics.
 - Preview 1 `path_open` requests preserve reduced base and inheriting rights on
   opened file and directory fds. `fdstat` and later fd/path operations report
   and enforce those effective rights instead of re-advertising broader defaults.

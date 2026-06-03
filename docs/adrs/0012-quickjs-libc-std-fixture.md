@@ -57,6 +57,6 @@ Changing the fixture changes the module SHA-256 used by snapshot identity
 validation. Snapshots produced by the older non-libc fixture are expected to be
 rejected by the new module, preserving the exact-build snapshot contract.
 
-This does not finish filesystem access through QuickJS stdlib. APIs such as
-`std.loadFile(...)` and `os.open(...)` still need a follow-up semantic pass so
-libc path flags and rights map cleanly into `wanix_wasi::WasiCtx`.
+ADR 0013 adds the first filesystem read semantic pass for `std.loadFile(...)`
+and `os.open(...)`/`os.read(...)`. Filesystem writes, directory-specific open
+modes, fd flag mutation, and richer libc compatibility remain follow-up work.
