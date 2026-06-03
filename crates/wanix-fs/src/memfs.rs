@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use crate::{
-    DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
+    DirEntry, File, FileSeekFrom, FileSystem, FileType, FsError, FsResult, Metadata,
+    NormalizedPath, OpenOptions,
 };
 
 /// In-memory filesystem used by the first Rust Wanix tests and demos.
@@ -271,6 +272,35 @@ impl File for MemFile {
         node.data[self.offset..end].copy_from_slice(buf);
         self.offset = end;
         Ok(buf.len())
+    }
+
+    fn seek(&mut self, from: FileSeekFrom) -> FsResult<u64> {
+        let nodes = self
+            .nodes
+            .read()
+            .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
+        let node = nodes.get(&self.path).ok_or(FsError::NotFound)?;
+        if node.kind == FileType::Directory {
+            return Err(FsError::IsDirectory);
+        }
+        let current = i128::try_from(self.offset).map_err(|_| FsError::InvalidOffset)?;
+        let end = i128::try_from(node.data.len()).map_err(|_| FsError::InvalidOffset)?;
+        let next = match from {
+            FileSeekFrom::Start(offset) => i128::from(offset),
+            FileSeekFrom::Current(offset) => current + i128::from(offset),
+            FileSeekFrom::End(offset) => end + i128::from(offset),
+        };
+        let next = usize::try_from(next).map_err(|_| FsError::InvalidOffset)?;
+        self.offset = next;
+        u64::try_from(next).map_err(|_| FsError::InvalidOffset)
+    }
+
+    fn tell(&self) -> FsResult<u64> {
+        u64::try_from(self.offset).map_err(|_| FsError::InvalidOffset)
+    }
+
+    fn is_seekable(&self) -> bool {
+        true
     }
 
     fn metadata(&self) -> FsResult<Metadata> {

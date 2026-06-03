@@ -1,5 +1,16 @@
 use crate::{DirEntry, FsError, FsResult, Metadata, NormalizedPath};
 
+/// File seek origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileSeekFrom {
+    /// Seek to an absolute byte offset from the beginning of the file.
+    Start(u64),
+    /// Seek relative to the current file offset.
+    Current(i64),
+    /// Seek relative to the current end of file.
+    End(i64),
+}
+
 /// Open options used by filesystem implementations.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OpenOptions {
@@ -50,6 +61,31 @@ pub trait File: Send {
     /// Returns a filesystem error when the file cannot be written.
     fn write(&mut self, _buf: &[u8]) -> FsResult<usize> {
         Err(FsError::NotSupported)
+    }
+
+    /// Seeks to a new file offset and returns the resulting absolute offset.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the file cannot seek or the requested
+    /// offset is invalid.
+    fn seek(&mut self, _from: FileSeekFrom) -> FsResult<u64> {
+        Err(FsError::NotSupported)
+    }
+
+    /// Returns the current file offset.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the file cannot report its offset.
+    fn tell(&self) -> FsResult<u64> {
+        Err(FsError::NotSupported)
+    }
+
+    /// Returns whether this handle supports seek/tell operations.
+    #[must_use]
+    fn is_seekable(&self) -> bool {
+        false
     }
 
     /// Returns file metadata.

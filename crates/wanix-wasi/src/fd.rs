@@ -95,8 +95,13 @@ impl WasiRights {
     pub const FD_FILESTAT_GET: Self = Self(1 << 21);
 
     /// Rights inheritable by files opened from a directory.
-    pub const OPEN_FILE_BASE: Self =
-        Self(Self::FD_READ.0 | Self::FD_WRITE.0 | Self::FD_FILESTAT_GET.0);
+    pub const OPEN_FILE_BASE: Self = Self(
+        Self::FD_READ.0
+            | Self::FD_SEEK.0
+            | Self::FD_TELL.0
+            | Self::FD_WRITE.0
+            | Self::FD_FILESTAT_GET.0,
+    );
 
     /// Rights for directory fds that can resolve namespace paths.
     pub const DIRECTORY_BASE: Self = Self(

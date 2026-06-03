@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use wanix_fs::{DirEntry, File, FileSystem, FileType, FsError, NormalizedPath, OpenOptions};
+use wanix_fs::{
+    DirEntry, File, FileSeekFrom, FileSystem, FileType, FsError, NormalizedPath, OpenOptions,
+};
 use wanix_vfs::Namespace;
 
 use crate::{
@@ -204,7 +206,7 @@ impl WasiCtx {
         match self.fds.get(&fd).ok_or(Errno::Badf)? {
             Handle::Stdio { file } => Ok(WasiFdStat::new(
                 WasiFileType::CharacterDevice,
-                attached_file_rights(file),
+                attached_file_rights(file)?,
                 WasiRights::NONE,
             )),
             Handle::Preopen { .. } | Handle::Directory { .. } => Ok(WasiFdStat::new(
@@ -212,21 +214,54 @@ impl WasiCtx {
                 WasiRights::DIRECTORY_BASE,
                 WasiRights::DIRECTORY_INHERITING,
             )),
-            Handle::File { read, write, .. } => Ok(WasiFdStat::new(
+            Handle::File {
+                file, read, write, ..
+            } => Ok(WasiFdStat::new(
                 WasiFileType::RegularFile,
-                open_file_rights(*read, *write),
+                open_file_rights(*read, *write, file.is_seekable()),
                 WasiRights::NONE,
             )),
         }
     }
 
     /// Seeks an fd offset.
-    ///
-    /// Wanix files do not yet expose seek/tell behavior, so this pins the
-    /// Preview 1 import policy while preserving bad-fd validation.
-    pub fn fd_seek(&mut self, fd: WasiFd, _offset: i64, _whence: WasiWhence) -> Result<u64, Errno> {
-        self.fds.get(&fd).ok_or(Errno::Badf)?;
-        Err(Errno::Nosys)
+    pub fn fd_seek(&mut self, fd: WasiFd, offset: i64, whence: WasiWhence) -> Result<u64, Errno> {
+        match self.fds.get_mut(&fd).ok_or(Errno::Badf)? {
+            Handle::Stdio { file } => {
+                if !file.is_seekable().map_err(Errno::from)? {
+                    return Err(Errno::Notcapable);
+                }
+                let from = file_seek_from(offset, whence)?;
+                file.seek(from).map_err(Errno::from)
+            }
+            Handle::File { file, .. } => {
+                if !file.is_seekable() {
+                    return Err(Errno::Notcapable);
+                }
+                let from = file_seek_from(offset, whence)?;
+                file.seek(from).map_err(Errno::from)
+            }
+            Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Notcapable),
+        }
+    }
+
+    /// Returns the current fd offset.
+    pub fn fd_tell(&self, fd: WasiFd) -> Result<u64, Errno> {
+        match self.fds.get(&fd).ok_or(Errno::Badf)? {
+            Handle::Stdio { file } => {
+                if !file.is_seekable().map_err(Errno::from)? {
+                    return Err(Errno::Notcapable);
+                }
+                file.tell().map_err(Errno::from)
+            }
+            Handle::File { file, .. } => {
+                if !file.is_seekable() {
+                    return Err(Errno::Notcapable);
+                }
+                file.tell().map_err(Errno::from)
+            }
+            Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Notcapable),
+        }
     }
 
     /// Returns stat data for a namespace path relative to `dirfd`.
@@ -306,7 +341,7 @@ impl WasiWhence {
     }
 }
 
-fn attached_file_rights(file: &WasiFile) -> WasiRights {
+fn attached_file_rights(file: &WasiFile) -> Result<WasiRights, Errno> {
     let mut rights = WasiRights::FD_FILESTAT_GET;
     if file.can_read() {
         rights |= WasiRights::FD_READ;
@@ -314,10 +349,13 @@ fn attached_file_rights(file: &WasiFile) -> WasiRights {
     if file.can_write() {
         rights |= WasiRights::FD_WRITE;
     }
-    rights
+    if file.is_seekable().map_err(Errno::from)? {
+        rights |= WasiRights::FD_SEEK | WasiRights::FD_TELL;
+    }
+    Ok(rights)
 }
 
-fn open_file_rights(read: bool, write: bool) -> WasiRights {
+fn open_file_rights(read: bool, write: bool, seekable: bool) -> WasiRights {
     let mut rights = WasiRights::FD_FILESTAT_GET;
     if read {
         rights |= WasiRights::FD_READ;
@@ -325,7 +363,21 @@ fn open_file_rights(read: bool, write: bool) -> WasiRights {
     if write {
         rights |= WasiRights::FD_WRITE;
     }
+    if seekable {
+        rights |= WasiRights::FD_SEEK | WasiRights::FD_TELL;
+    }
     rights
+}
+
+fn file_seek_from(offset: i64, whence: WasiWhence) -> Result<FileSeekFrom, Errno> {
+    match whence {
+        WasiWhence::Set => {
+            let offset = u64::try_from(offset).map_err(|_| Errno::Inval)?;
+            Ok(FileSeekFrom::Start(offset))
+        }
+        WasiWhence::Cur => Ok(FileSeekFrom::Current(offset)),
+        WasiWhence::End => Ok(FileSeekFrom::End(offset)),
+    }
 }
 
 impl WasiCtx {

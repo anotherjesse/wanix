@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use wanix_fs::{File, FsError, FsResult, Metadata, NormalizedPath};
+use wanix_fs::{File, FileSeekFrom, FsError, FsResult, Metadata, NormalizedPath};
 use wanix_vfs::Namespace;
 
 use crate::{WasiFd, WasiFileAccess};
@@ -97,6 +97,27 @@ impl WasiFile {
             .lock()
             .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
             .write(buf)
+    }
+
+    pub(crate) fn seek(&self, from: FileSeekFrom) -> FsResult<u64> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
+            .seek(from)
+    }
+
+    pub(crate) fn tell(&self) -> FsResult<u64> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
+            .tell()
+    }
+
+    pub(crate) fn is_seekable(&self) -> FsResult<bool> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))
+            .map(|file| file.is_seekable())
     }
 
     pub(crate) fn metadata(&self) -> FsResult<Metadata> {

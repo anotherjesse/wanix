@@ -205,11 +205,15 @@ fn configured_standard_fds_read_write_and_remain_non_closeable() {
     assert_eq!(stdin_stat.file_type(), WasiFileType::CharacterDevice);
     assert!(stdin_stat.rights_base().contains(WasiRights::FD_READ));
     assert!(!stdin_stat.rights_base().contains(WasiRights::FD_WRITE));
+    assert!(stdin_stat.rights_base().contains(WasiRights::FD_SEEK));
+    assert!(stdin_stat.rights_base().contains(WasiRights::FD_TELL));
     assert_eq!(stdin_stat.rights_inheriting(), WasiRights::NONE);
     let stdout_stat = ctx.fd_fdstat_get(WasiFd::STDOUT).unwrap();
     assert_eq!(stdout_stat.file_type(), WasiFileType::CharacterDevice);
     assert!(stdout_stat.rights_base().contains(WasiRights::FD_WRITE));
     assert!(!stdout_stat.rights_base().contains(WasiRights::FD_READ));
+    assert!(stdout_stat.rights_base().contains(WasiRights::FD_SEEK));
+    assert!(stdout_stat.rights_base().contains(WasiRights::FD_TELL));
     let file_fd = ctx
         .path_open(WasiFd::ROOT, "hello.txt", WasiOpenOptions::read())
         .unwrap();
@@ -420,8 +424,8 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
             .rights_inheriting()
             .contains(WasiRights::FD_READDIR)
     );
-    assert!(!root_stat.rights_inheriting().contains(WasiRights::FD_SEEK));
-    assert!(!root_stat.rights_inheriting().contains(WasiRights::FD_TELL));
+    assert!(root_stat.rights_inheriting().contains(WasiRights::FD_SEEK));
+    assert!(root_stat.rights_inheriting().contains(WasiRights::FD_TELL));
 
     let read_fd = ctx
         .path_open(WasiFd::ROOT, "read.txt", WasiOpenOptions::read())
@@ -430,6 +434,8 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
     assert_eq!(read_stat.file_type(), WasiFileType::RegularFile);
     assert!(read_stat.rights_base().contains(WasiRights::FD_READ));
     assert!(!read_stat.rights_base().contains(WasiRights::FD_WRITE));
+    assert!(read_stat.rights_base().contains(WasiRights::FD_SEEK));
+    assert!(read_stat.rights_base().contains(WasiRights::FD_TELL));
     let read_stat_bytes = read_stat.to_preview1_bytes();
     assert_eq!(
         read_stat_bytes[0],
@@ -459,13 +465,15 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
     let write_stat = ctx.fd_fdstat_get(write_fd).unwrap();
     assert!(write_stat.rights_base().contains(WasiRights::FD_WRITE));
     assert!(!write_stat.rights_base().contains(WasiRights::FD_READ));
+    assert!(write_stat.rights_base().contains(WasiRights::FD_SEEK));
+    assert!(write_stat.rights_base().contains(WasiRights::FD_TELL));
 
     assert_eq!(ctx.fd_fdstat_get(WasiFd::new(99)), Err(Errno::Badf));
     assert_eq!(ctx.fd_prestat_get(read_fd), Err(Errno::Badf));
 }
 
 #[test]
-fn fd_seek_is_explicitly_unsupported_until_files_are_seekable() {
+fn fd_seek_and_tell_use_seekable_file_handles() {
     let root = fixture(&[("hello.txt", b"hello")]);
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
     let fd = ctx
@@ -476,11 +484,30 @@ fn fd_seek_is_explicitly_unsupported_until_files_are_seekable() {
     assert_eq!(WasiWhence::from_preview1(1).unwrap(), WasiWhence::Cur);
     assert_eq!(WasiWhence::from_preview1(2).unwrap(), WasiWhence::End);
     assert_eq!(WasiWhence::from_preview1(3), Err(Errno::Inval));
-    assert_eq!(ctx.fd_seek(fd, 0, WasiWhence::Set), Err(Errno::Nosys));
+    assert_eq!(ctx.fd_tell(fd).unwrap(), 0);
+    assert_eq!(ctx.fd_seek(fd, 2, WasiWhence::Set).unwrap(), 2);
+    assert_eq!(ctx.fd_tell(fd).unwrap(), 2);
+    assert_eq!(ctx.fd_seek(fd, -1, WasiWhence::Cur).unwrap(), 1);
+    assert_eq!(ctx.fd_seek(fd, -1, WasiWhence::End).unwrap(), 4);
+    assert_eq!(ctx.fd_seek(fd, -1, WasiWhence::Set), Err(Errno::Inval));
+    assert_eq!(ctx.fd_seek(fd, -10, WasiWhence::Cur), Err(Errno::Inval));
     assert_eq!(
         ctx.fd_seek(WasiFd::new(99), 0, WasiWhence::Set),
         Err(Errno::Badf)
     );
+    assert_eq!(
+        ctx.fd_seek(WasiFd::new(99), -1, WasiWhence::Set),
+        Err(Errno::Badf)
+    );
+    assert_eq!(
+        ctx.fd_seek(WasiFd::ROOT, 0, WasiWhence::Set),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.fd_seek(WasiFd::ROOT, -1, WasiWhence::Set),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(ctx.fd_tell(WasiFd::ROOT), Err(Errno::Notcapable));
 }
 
 #[test]
@@ -532,6 +559,7 @@ fn errno_mapping_is_pinned_for_filesystem_errors() {
     assert_eq!(Errno::from(FsError::NotDirectory), Errno::Notdir);
     assert_eq!(Errno::from(FsError::IsDirectory), Errno::Isdir);
     assert_eq!(Errno::from(FsError::InvalidFd), Errno::Badf);
+    assert_eq!(Errno::from(FsError::InvalidOffset), Errno::Inval);
     assert_eq!(Errno::from(FsError::NotEmpty), Errno::Io);
     assert_eq!(Errno::from(FsError::Other("opaque".into())), Errno::Io);
 }

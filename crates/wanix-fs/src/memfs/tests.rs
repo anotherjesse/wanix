@@ -1,5 +1,5 @@
 use super::MemFs;
-use crate::{FileSystem, FileType, FsError, NormalizedPath, OpenOptions};
+use crate::{FileSeekFrom, FileSystem, FileType, FsError, NormalizedPath, OpenOptions};
 
 #[test]
 fn new_memfs_has_empty_root_directory() {
@@ -156,6 +156,48 @@ fn file_handles_have_independent_offsets_and_writes_persist_immediately() {
 
     second.write(b"!").unwrap();
     assert_eq!(fs.read_file("file.txt").unwrap(), b"heZZ!");
+}
+
+#[test]
+fn file_handles_support_seek_and_tell() {
+    let fs = MemFs::new();
+    fs.write_file("file.txt", b"abcdef").unwrap();
+    let path = NormalizedPath::new("file.txt").unwrap();
+    let mut file = fs.open(&path, OpenOptions::read_write()).unwrap();
+
+    assert!(file.is_seekable());
+    assert_eq!(file.tell().unwrap(), 0);
+    assert_eq!(file.seek(FileSeekFrom::Start(2)).unwrap(), 2);
+    assert_eq!(file.tell().unwrap(), 2);
+    assert_eq!(file.write(b"XY").unwrap(), 2);
+    assert_eq!(fs.read_file("file.txt").unwrap(), b"abXYef");
+    assert_eq!(file.seek(FileSeekFrom::Current(-3)).unwrap(), 1);
+
+    let mut buf = [0; 2];
+    assert_eq!(file.read(&mut buf).unwrap(), 2);
+    assert_eq!(&buf, b"bX");
+    assert_eq!(file.seek(FileSeekFrom::End(-1)).unwrap(), 5);
+    assert_eq!(file.seek(FileSeekFrom::End(2)).unwrap(), 8);
+    assert_eq!(file.write(b"!").unwrap(), 1);
+    assert_eq!(fs.read_file("file.txt").unwrap(), b"abXYef\0\0!");
+}
+
+#[test]
+fn file_seek_rejects_negative_offsets() {
+    let fs = MemFs::new();
+    fs.write_file("file.txt", b"abc").unwrap();
+    let path = NormalizedPath::new("file.txt").unwrap();
+    let mut file = fs.open(&path, OpenOptions::read()).unwrap();
+
+    assert_eq!(
+        file.seek(FileSeekFrom::Current(-1)),
+        Err(FsError::InvalidOffset)
+    );
+    assert_eq!(
+        file.seek(FileSeekFrom::End(-4)),
+        Err(FsError::InvalidOffset)
+    );
+    assert_eq!(file.tell().unwrap(), 0);
 }
 
 #[test]

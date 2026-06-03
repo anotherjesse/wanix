@@ -23,6 +23,8 @@ pub enum FsError {
     IsDirectory,
     /// The file descriptor is not open or is invalid.
     InvalidFd,
+    /// A file offset is invalid for the requested operation.
+    InvalidOffset,
     /// A directory removal failed because the directory has entries.
     NotEmpty,
     /// A descriptive fallback for errors that do not yet have a stable variant.
@@ -40,6 +42,7 @@ impl fmt::Display for FsError {
             Self::NotDirectory => f.write_str("not a directory"),
             Self::IsDirectory => f.write_str("is a directory"),
             Self::InvalidFd => f.write_str("invalid file descriptor"),
+            Self::InvalidOffset => f.write_str("invalid file offset"),
             Self::NotEmpty => f.write_str("directory not empty"),
             Self::Other(message) => f.write_str(message),
         }
