@@ -2,6 +2,7 @@
 
 mod p9_listen;
 mod p9_stdio;
+mod p9_ws;
 mod qjs_term;
 
 use std::collections::BTreeMap;
@@ -50,6 +51,7 @@ const USAGE: &str = concat!(
     "[--mount HOST=GUEST ...] <before.js> <after.js>\n",
     "       wanix-rust p9-stdio --root DIR\n",
     "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
+    "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust --help",
 );
 const QJS_GUEST_SCRIPT: &str = "main.js";
@@ -211,6 +213,9 @@ where
             p9_listen::parse_p9_listen_command(rest)?,
             &mut process_stderr,
         ),
+        [command, rest @ ..] if command == "p9-ws" => {
+            p9_ws::run_p9_ws_streaming(p9_ws::parse_p9_ws_command(rest)?, &mut process_stderr)
+        }
         _ => {
             let output = run_collected(args, &mut process_stdin)?;
             write_process_output(&mut process_stdout, "stdout", output.stdout())?;
@@ -251,6 +256,12 @@ fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<Cl
             let _ = p9_listen::parse_p9_listen_command(rest)?;
             Err(CliError::usage(
                 "p9-listen requires live process IO; use the wanix-rust binary",
+            ))
+        }
+        [command, rest @ ..] if command == "p9-ws" => {
+            let _ = p9_ws::parse_p9_ws_command(rest)?;
+            Err(CliError::usage(
+                "p9-ws requires live process IO; use the wanix-rust binary",
             ))
         }
         [command, ..] => Err(CliError::usage(format!(
@@ -1666,6 +1677,7 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-restore"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-stdio"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-listen"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-ws"));
         assert!(output.stderr().is_empty());
     }
 

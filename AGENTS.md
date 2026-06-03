@@ -87,18 +87,20 @@ line editing while still delivering complete lines to the guest task.
 resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
 can observe terminal resize broadcasts through live Wanix-backed fd readiness.
 
-The next 9P-facing demo target is wiring a native listener into serve/v86
-experiments so external clients can browse a Wanix namespace. The server core
-already negotiates 9P2000.L, attaches, walks, opens regular files and read-only
-directories, reads/writes regular files, lists directories with `Treaddir`,
-clunks fids, reports metadata with `Tgetattr`, and handles core mutation ops
-with `Tlcreate`, `Tmkdir`, `Trenameat`, and `Tunlinkat`; it also serves encoded
-request/response frames through a synchronous stream loop.
+The next 9P-facing demo target is wiring the native and browser listeners into
+serve/v86 experiments so external clients can browse a Wanix namespace. The
+server core already negotiates 9P2000.L, attaches, walks, opens regular files
+and read-only directories, reads/writes regular files, lists directories with
+`Treaddir`, clunks fids, reports metadata with `Tgetattr`, and handles core
+mutation ops with `Tlcreate`, `Tmkdir`, `Trenameat`, and `Tunlinkat`; it also
+serves encoded request/response frames through a synchronous stream loop.
 `wanix-rust p9-stdio --root DIR` exposes that server over process
 stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
 for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
 --addr 127.0.0.1:5640` exposes the same `LocalFs` export over a native TCP
-listener, and `--once` gives tests and scripted demos a one-connection exit.
+listener. `wanix-rust p9-ws --root DIR --addr 127.0.0.1:7654` exposes the same
+server over binary WebSocket frames for browser/v86 experiments. Both listener
+commands accept `--once` for tests and scripted demos.
 
 ## Code Quality Guardrails
 
@@ -313,6 +315,9 @@ cargo test --workspace --locked
 - [ADR 0066](docs/adrs/0066-9p-mutation-operations.md):
   `wanix-9p` maps `Tlcreate`, `Tmkdir`, `Trenameat`, and `Tunlinkat` onto the
   existing Wanix filesystem mutation traits.
+- [ADR 0067](docs/adrs/0067-browser-websocket-9p-bridge.md):
+  `wanix-rust p9-ws --root DIR --addr HOST:PORT` exposes the Rust 9P server
+  over binary WebSocket messages for browser/v86 experiments.
 
 ## Cycle Rules
 
