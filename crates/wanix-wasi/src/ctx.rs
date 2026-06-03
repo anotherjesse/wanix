@@ -432,6 +432,26 @@ impl WasiCtx {
         }
     }
 
+    /// Sets the size for an open regular-file fd.
+    pub fn fd_filestat_set_size(&self, fd: WasiFd, size: u64) -> Result<(), Errno> {
+        match self.fds.get(&fd).ok_or(Errno::Badf)? {
+            Handle::File {
+                file,
+                write,
+                rights_base,
+                ..
+            } => {
+                if !*write || !rights_base.contains(WasiRights::FD_FILESTAT_SET_SIZE) {
+                    return Err(Errno::Notcapable);
+                }
+                file.set_len_file(size).map_err(Errno::from)
+            }
+            Handle::Stdio { .. } | Handle::Preopen { .. } | Handle::Directory { .. } => {
+                Err(Errno::Notcapable)
+            }
+        }
+    }
+
     /// Returns prestat data for a preopened directory fd.
     pub fn fd_prestat_get(&self, fd: WasiFd) -> Result<WasiPrestat, Errno> {
         match self.fds.get(&fd).ok_or(Errno::Badf)? {
@@ -834,7 +854,7 @@ fn open_file_rights(read: bool, write: bool, seekable: bool) -> WasiRights {
         rights |= WasiRights::FD_READ;
     }
     if write {
-        rights |= WasiRights::FD_WRITE;
+        rights |= WasiRights::FD_WRITE | WasiRights::FD_FILESTAT_SET_SIZE;
     }
     if seekable {
         rights |= WasiRights::FD_SEEK | WasiRights::FD_TELL;

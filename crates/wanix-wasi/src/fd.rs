@@ -103,6 +103,8 @@ impl WasiRights {
     pub const PATH_FILESTAT_SET_TIMES: Self = Self(1 << 20);
     /// Stat this fd.
     pub const FD_FILESTAT_GET: Self = Self(1 << 21);
+    /// Set the size of this fd.
+    pub const FD_FILESTAT_SET_SIZE: Self = Self(1 << 22);
     /// Set access or modification times on this fd.
     pub const FD_FILESTAT_SET_TIMES: Self = Self(1 << 23);
     /// Remove a directory at a path relative to this fd.
@@ -117,6 +119,7 @@ impl WasiRights {
             | Self::FD_TELL.0
             | Self::FD_WRITE.0
             | Self::FD_FILESTAT_GET.0
+            | Self::FD_FILESTAT_SET_SIZE.0
             | Self::FD_FILESTAT_SET_TIMES.0,
     );
 

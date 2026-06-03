@@ -213,6 +213,26 @@ fn open_read_and_write_round_trip() {
 }
 
 #[test]
+fn file_set_len_resizes_without_moving_offset() {
+    let fs = MemFs::new();
+    fs.write_file("file.txt", b"hello").unwrap();
+    let path = NormalizedPath::new("file.txt").unwrap();
+
+    let mut file = fs.open(&path, OpenOptions::read_write()).unwrap();
+    assert_eq!(file.seek(FileSeekFrom::Start(2)).unwrap(), 2);
+    file.set_len(8).unwrap();
+    assert_eq!(file.tell().unwrap(), 2);
+    assert_eq!(fs.read_file("file.txt").unwrap(), b"hello\0\0\0");
+
+    file.set_len(3).unwrap();
+    assert_eq!(file.tell().unwrap(), 2);
+    assert_eq!(fs.read_file("file.txt").unwrap(), b"hel");
+
+    let mut read_only = fs.open(&path, OpenOptions::read()).unwrap();
+    assert_eq!(read_only.set_len(1), Err(FsError::PermissionDenied));
+}
+
+#[test]
 fn set_times_updates_file_metadata_deterministically() {
     let fs = MemFs::new();
     fs.write_file("file.txt", b"hello").unwrap();

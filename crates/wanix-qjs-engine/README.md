@@ -537,7 +537,8 @@ Working:
   1 fd/filesystem imports.
 - Live provider forwarding for argv/env, process exit, stdio/fd reads and
   writes, path open/stat/create/remove/rename, directory listing, append fdflag
-  mutation, explicit path/fd timestamp mutation, and timer-only `poll_oneoff`.
+  mutation, explicit path/fd timestamp mutation, fd size mutation, and
+  timer-only `poll_oneoff`.
 - Read-only virtual WASI files attached through `QuickJsHostConfig` as
   engine-only fixture support, exposed under a normalized root preopen without
   host path mounts.

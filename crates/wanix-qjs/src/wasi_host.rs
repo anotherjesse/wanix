@@ -175,6 +175,12 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
             .map_err(convert_errno)
     }
 
+    fn fd_filestat_set_size(&mut self, fd: u32, size: u64) -> Result<(), QuickJsWasiErrno> {
+        self.ctx
+            .fd_filestat_set_size(WasiFd::new(fd), size)
+            .map_err(convert_errno)
+    }
+
     fn path_filestat_get(
         &mut self,
         dirfd: u32,
@@ -471,6 +477,44 @@ mod tests {
                 2_000_000_000,
                 0,
             )
+        );
+    }
+
+    #[test]
+    fn adapter_fd_filestat_set_size_reaches_wanix_namespace() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        root.write_file("input.txt", b"from namespace").unwrap();
+        namespace
+            .bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+        let fd = host
+            .path_open(
+                3,
+                0,
+                b"input.txt",
+                0,
+                (WasiRights::FD_READ
+                    | WasiRights::FD_WRITE
+                    | WasiRights::FD_SEEK
+                    | WasiRights::FD_TELL
+                    | WasiRights::FD_FILESTAT_GET
+                    | WasiRights::FD_FILESTAT_SET_SIZE)
+                    .bits(),
+                0,
+                0,
+            )
+            .unwrap();
+
+        host.fd_seek(fd, 4, QuickJsWasiWhence::Set).unwrap();
+        host.fd_filestat_set_size(fd, 7).unwrap();
+
+        assert_eq!(host.fd_tell(fd).unwrap(), 4);
+        assert_eq!(root.read_file("input.txt").unwrap(), b"from na");
+        assert_eq!(
+            host.fd_filestat_get(fd).unwrap(),
+            QuickJsWasiFileStat::new_with_times(QuickJsWasiFileType::RegularFile, 7, 0, 0, 0)
         );
     }
 

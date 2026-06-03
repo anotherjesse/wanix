@@ -125,6 +125,11 @@ pub(super) fn define_imports(linker: &mut Linker<HostState>) -> anyhow::Result<(
     )?;
     linker.func_wrap(
         "wasi_snapshot_preview1",
+        "fd_filestat_set_size",
+        fd_filestat_set_size,
+    )?;
+    linker.func_wrap(
+        "wasi_snapshot_preview1",
         "path_create_directory",
         path_create_directory,
     )?;
@@ -359,6 +364,29 @@ fn fd_filestat_set_times(
     };
     if let Some(result) = with_wasi_host(&caller, fd, |host, fd| {
         host.fd_filestat_set_times(fd, atim.cast_unsigned(), mtim.cast_unsigned(), fstflags)
+    })? {
+        return Ok(match result {
+            Ok(()) => ERRNO_SUCCESS,
+            Err(errno) => errno.preview1_result(),
+        });
+    }
+    if wasi_stdio_fd(fd).is_some()
+        || caller.data().is_virtual_preopen_fd(fd)
+        || caller.data().virtual_file(fd).is_some()
+    {
+        Ok(ERRNO_NOSYS)
+    } else {
+        Ok(ERRNO_BADF)
+    }
+}
+
+fn fd_filestat_set_size(
+    caller: Caller<'_, HostState>,
+    fd: i32,
+    size: i64,
+) -> wasmtime::Result<i32> {
+    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| {
+        host.fd_filestat_set_size(fd, size.cast_unsigned())
     })? {
         return Ok(match result {
             Ok(()) => ERRNO_SUCCESS,

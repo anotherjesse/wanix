@@ -88,6 +88,18 @@ pub trait File: Send {
         false
     }
 
+    /// Sets the file length in bytes.
+    ///
+    /// Implementations should preserve the current file offset when possible,
+    /// matching `ftruncate`-style behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the handle cannot change file size.
+    fn set_len(&mut self, _len: u64) -> FsResult<()> {
+        Err(FsError::NotSupported)
+    }
+
     /// Returns file metadata.
     ///
     /// # Errors

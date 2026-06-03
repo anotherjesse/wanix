@@ -901,6 +901,52 @@ fn rights_are_enforced_on_open_fds() {
 }
 
 #[test]
+fn fd_filestat_set_size_updates_regular_files() {
+    let root = fixture(&[("file.txt", b"hello"), ("read.txt", b"read")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+
+    let fd = ctx
+        .path_open(
+            WasiFd::ROOT,
+            "file.txt",
+            WasiOpenOptions {
+                read: true,
+                write: true,
+                create: false,
+                truncate: false,
+                append: false,
+            },
+        )
+        .unwrap();
+    assert!(
+        ctx.fd_fdstat_get(fd)
+            .unwrap()
+            .rights_base()
+            .contains(WasiRights::FD_FILESTAT_SET_SIZE)
+    );
+
+    assert_eq!(ctx.fd_seek(fd, 4, WasiWhence::Set).unwrap(), 4);
+    ctx.fd_filestat_set_size(fd, 8).unwrap();
+    assert_eq!(ctx.fd_tell(fd).unwrap(), 4);
+    assert_eq!(root.read_file("file.txt").unwrap(), b"hello\0\0\0");
+    assert_eq!(ctx.fd_filestat_get(fd).unwrap().len(), 8);
+
+    ctx.fd_filestat_set_size(fd, 2).unwrap();
+    assert_eq!(ctx.fd_tell(fd).unwrap(), 4);
+    assert_eq!(root.read_file("file.txt").unwrap(), b"he");
+    assert_eq!(ctx.fd_filestat_get(fd).unwrap().len(), 2);
+
+    let read_fd = ctx
+        .path_open(WasiFd::ROOT, "read.txt", WasiOpenOptions::read())
+        .unwrap();
+    assert_eq!(ctx.fd_filestat_set_size(read_fd, 1), Err(Errno::Notcapable));
+    let dir_fd = ctx
+        .path_open(WasiFd::ROOT, ".", WasiOpenOptions::read())
+        .unwrap();
+    assert_eq!(ctx.fd_filestat_set_size(dir_fd, 1), Err(Errno::Notcapable));
+}
+
+#[test]
 fn directories_can_be_opened_and_read_but_not_written() {
     let root = fixture(&[("dir/file.txt", b"file")]);
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
@@ -1864,6 +1910,7 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiRights::PATH_FILESTAT_SET_SIZE.bits(), 1 << 19);
     assert_eq!(WasiRights::PATH_FILESTAT_SET_TIMES.bits(), 1 << 20);
     assert_eq!(WasiRights::FD_FILESTAT_GET.bits(), 1 << 21);
+    assert_eq!(WasiRights::FD_FILESTAT_SET_SIZE.bits(), 1 << 22);
     assert_eq!(WasiRights::FD_FILESTAT_SET_TIMES.bits(), 1 << 23);
     assert_eq!(WasiRights::PATH_REMOVE_DIRECTORY.bits(), 1 << 25);
     assert_eq!(WasiRights::PATH_UNLINK_FILE.bits(), 1 << 26);

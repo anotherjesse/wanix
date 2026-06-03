@@ -95,6 +95,11 @@ pub trait QuickJsWasiHost: Send {
         Err(QuickJsWasiErrno::Nosys)
     }
 
+    /// Sets the size for an open fd.
+    fn fd_filestat_set_size(&mut self, _fd: u32, _size: u64) -> Result<(), QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     /// Returns filestat metadata for `path` relative to `dirfd`.
     fn path_filestat_get(
         &mut self,

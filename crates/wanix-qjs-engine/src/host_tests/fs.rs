@@ -26,6 +26,7 @@ const RIGHT_PATH_RENAME_TARGET: i64 = 1 << 17;
 const RIGHT_PATH_FILESTAT_GET: i64 = 1 << 18;
 const RIGHT_PATH_FILESTAT_SET_TIMES: i64 = 1 << 20;
 const RIGHT_FD_FILESTAT_GET: i64 = 1 << 21;
+const RIGHT_FD_FILESTAT_SET_SIZE: i64 = 1 << 22;
 const RIGHT_FD_FILESTAT_SET_TIMES: i64 = 1 << 23;
 const RIGHT_PATH_REMOVE_DIRECTORY: i64 = 1 << 25;
 const READ_SEEK_STAT_RIGHTS: i64 =
@@ -47,6 +48,7 @@ const MAX_VIRTUAL_FILE_PATH_BYTES: usize = 4096;
 
 type PathOpenFunc = TypedFunc<(i32, i32, i32, i32, i32, i64, i64, i32, i32), i32>;
 type FdFilestatSetTimesFunc = TypedFunc<(i32, i64, i64, i32), i32>;
+type FdFilestatSetSizeFunc = TypedFunc<(i32, i64), i32>;
 type PathFilestatSetTimesFunc = TypedFunc<(i32, i32, i32, i32, i64, i64, i32), i32>;
 
 const VIRTUAL_FS_WAT: &str = r#"
@@ -64,6 +66,7 @@ const VIRTUAL_FS_WAT: &str = r#"
   (import "wasi_snapshot_preview1" "fd_fdstat_set_flags" (func $fd_fdstat_set_flags (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_filestat_get" (func $fd_filestat_get (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_filestat_set_times" (func $fd_filestat_set_times (param i32 i64 i64 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_filestat_set_size" (func $fd_filestat_set_size (param i32 i64) (result i32)))
   (import "wasi_snapshot_preview1" "path_filestat_get" (func $path_filestat_get (param i32 i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_filestat_set_times" (func $path_filestat_set_times (param i32 i32 i32 i32 i64 i64 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_create_directory" (func $path_create_directory (param i32 i32 i32) (result i32)))
@@ -101,6 +104,8 @@ const VIRTUAL_FS_WAT: &str = r#"
   (func (export "fd_filestat_set_times") (param i32 i64 i64 i32) (result i32)
     local.get 0 local.get 1 local.get 2 local.get 3
     call $fd_filestat_set_times)
+  (func (export "fd_filestat_set_size") (param i32 i64) (result i32)
+    local.get 0 local.get 1 call $fd_filestat_set_size)
   (func (export "path_filestat_get") (param i32 i32 i32 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 local.get 3 local.get 4
     call $path_filestat_get)
@@ -136,6 +141,7 @@ struct VirtualFsHarness {
     fd_fdstat_set_flags: TypedFunc<(i32, i32), i32>,
     fd_filestat_get: TypedFunc<(i32, i32), i32>,
     fd_filestat_set_times: FdFilestatSetTimesFunc,
+    fd_filestat_set_size: FdFilestatSetSizeFunc,
     path_filestat_get: TypedFunc<(i32, i32, i32, i32, i32), i32>,
     path_filestat_set_times: PathFilestatSetTimesFunc,
     path_create_directory: TypedFunc<(i32, i32, i32), i32>,
@@ -179,6 +185,7 @@ impl VirtualFsHarness {
             fd_fdstat_set_flags: instance.get_typed_func(&mut store, "fd_fdstat_set_flags")?,
             fd_filestat_get: instance.get_typed_func(&mut store, "fd_filestat_get")?,
             fd_filestat_set_times: instance.get_typed_func(&mut store, "fd_filestat_set_times")?,
+            fd_filestat_set_size: instance.get_typed_func(&mut store, "fd_filestat_set_size")?,
             path_filestat_get: instance.get_typed_func(&mut store, "path_filestat_get")?,
             path_filestat_set_times: instance
                 .get_typed_func(&mut store, "path_filestat_set_times")?,
@@ -356,6 +363,7 @@ impl QuickJsWasiHost for MetadataWasiHost {
                 | RIGHT_PATH_RENAME_SOURCE
                 | RIGHT_PATH_RENAME_TARGET
                 | RIGHT_PATH_FILESTAT_SET_TIMES
+                | RIGHT_FD_FILESTAT_SET_SIZE
                 | RIGHT_FD_FILESTAT_SET_TIMES
                 | RIGHT_PATH_REMOVE_DIRECTORY)
                 .cast_unsigned(),
@@ -387,6 +395,11 @@ impl QuickJsWasiHost for MetadataWasiHost {
         fstflags: u16,
     ) -> WasiHostResult<()> {
         self.record(format!("fd-set-times:{fd}:{atim}:{mtim}:{fstflags}"));
+        Ok(())
+    }
+
+    fn fd_filestat_set_size(&mut self, fd: u32, size: u64) -> WasiHostResult<()> {
+        self.record(format!("fd-set-size:{fd}:{size}"));
         Ok(())
     }
 
@@ -498,6 +511,27 @@ fn live_wasi_host_supplies_fd_filestat_set_times() -> Result<()> {
     assert_eq!(
         calls.lock().expect("test call lock").as_slice(),
         &["fd-set-times:44:1000:2000:5".to_owned()]
+    );
+    Ok(())
+}
+
+#[test]
+fn live_wasi_host_supplies_fd_filestat_set_size() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+
+    assert_eq!(
+        harness
+            .fd_filestat_set_size
+            .call(&mut harness.store, (44, 7))?,
+        ERRNO_SUCCESS
+    );
+
+    assert_eq!(
+        calls.lock().expect("test call lock").as_slice(),
+        &["fd-set-size:44:7".to_owned()]
     );
     Ok(())
 }
@@ -713,6 +747,7 @@ fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
             | RIGHT_PATH_RENAME_SOURCE
             | RIGHT_PATH_RENAME_TARGET
             | RIGHT_PATH_FILESTAT_SET_TIMES
+            | RIGHT_FD_FILESTAT_SET_SIZE
             | RIGHT_FD_FILESTAT_SET_TIMES
             | RIGHT_PATH_REMOVE_DIRECTORY)
             .cast_unsigned()
@@ -1351,6 +1386,33 @@ fn fd_filestat_set_times_is_unsupported_for_virtual_fs_fallback() -> Result<()> 
             .fd_filestat_set_times
             .call(&mut harness.store, (fd, 1_000, 2_000, 1 << 16))?,
         ERRNO_INVAL
+    );
+    Ok(())
+}
+
+#[test]
+fn fd_filestat_set_size_is_unsupported_for_virtual_fs_fallback() -> Result<()> {
+    let mut harness = VirtualFsHarness::new(virtual_fs_config()?)?;
+    assert_eq!(
+        harness
+            .fd_filestat_set_size
+            .call(&mut harness.store, (PREOPEN_ROOT_FD, 7))?,
+        ERRNO_NOSYS
+    );
+
+    assert_eq!(harness.open_path("app/config.txt", 64)?, ERRNO_SUCCESS);
+    let fd = i32::try_from(harness.read_u32(64)?).context("virtual fd should fit i32")?;
+    assert_eq!(
+        harness
+            .fd_filestat_set_size
+            .call(&mut harness.store, (fd, 7))?,
+        ERRNO_NOSYS
+    );
+    assert_eq!(
+        harness
+            .fd_filestat_set_size
+            .call(&mut harness.store, (99, 7))?,
+        ERRNO_BADF
     );
     Ok(())
 }

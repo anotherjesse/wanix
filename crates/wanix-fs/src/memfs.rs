@@ -456,6 +456,23 @@ impl File for MemFile {
         true
     }
 
+    fn set_len(&mut self, len: u64) -> FsResult<()> {
+        if !self.writable {
+            return Err(FsError::PermissionDenied);
+        }
+        let len = usize::try_from(len).map_err(|_| FsError::InvalidOffset)?;
+        let mut nodes = self
+            .nodes
+            .write()
+            .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
+        let node = nodes.get_mut(&self.path).ok_or(FsError::NotFound)?;
+        if node.kind == FileType::Directory {
+            return Err(FsError::IsDirectory);
+        }
+        node.data.resize(len, 0);
+        Ok(())
+    }
+
     fn metadata(&self) -> FsResult<Metadata> {
         let nodes = self
             .nodes

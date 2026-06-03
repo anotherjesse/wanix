@@ -299,6 +299,13 @@ impl File for LocalFile {
         true
     }
 
+    fn set_len(&mut self, len: u64) -> FsResult<()> {
+        if !self.writable {
+            return Err(FsError::PermissionDenied);
+        }
+        self.file.set_len(len).map_err(map_io_error)
+    }
+
     fn metadata(&self) -> FsResult<Metadata> {
         self.file
             .metadata()
@@ -652,6 +659,29 @@ mod tests {
             fs.set_times(&path("missing.txt"), 1_000_000_000, 2_000_000_000),
             Err(FsError::NotFound)
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn localfs_file_set_len_updates_host_file() {
+        let root = temp_root();
+        fs::write(root.join("file.txt"), "hello").unwrap();
+        let fs = LocalFs::new(&root).unwrap();
+        let path = path("file.txt");
+
+        let mut file = fs.open(&path, OpenOptions::read_write()).unwrap();
+        assert_eq!(file.seek(FileSeekFrom::Start(4)).unwrap(), 4);
+        file.set_len(8).unwrap();
+        assert_eq!(file.tell().unwrap(), 4);
+        assert_eq!(fs::read(root.join("file.txt")).unwrap(), b"hello\0\0\0");
+
+        file.set_len(2).unwrap();
+        assert_eq!(file.tell().unwrap(), 4);
+        assert_eq!(fs::read(root.join("file.txt")).unwrap(), b"he");
+
+        let mut read_only = fs.open(&path, OpenOptions::read()).unwrap();
+        assert_eq!(read_only.set_len(1), Err(FsError::PermissionDenied));
 
         fs::remove_dir_all(root).unwrap();
     }

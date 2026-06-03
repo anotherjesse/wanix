@@ -164,6 +164,9 @@ cargo test --workspace --locked
 - [ADR 0032](docs/adrs/0032-wasi-directory-listing-through-quickjs.md):
   `qjs:os.readdir(...)` reaches Wanix-owned directory listing through live WASI
   providers and libc-style directory rights.
+- [ADR 0033](docs/adrs/0033-wasi-fd-filestat-set-size.md):
+  `fd_filestat_set_size` resizes open Wanix-backed regular files through live
+  WASI providers while QuickJS truncate/ftruncate demos remain future work.
 
 ## Cycle Rules
 
@@ -182,6 +185,6 @@ cycle before starting the next one.
 - Consider moving remaining Wasmtime mechanics out of `wanix-qjs` and into
   `wanix-qjs-engine`, then split large `wanix-qjs`, `wanix-cli`, and
   `wanix-wasi` modules before adding broad new behavior.
-- Do not treat file-size mutation as a QuickJS-visible truncate demo until the
-  fixture exposes `truncate` or `ftruncate`; Preview 1 has
-  `fd_filestat_set_size`, while `PATH_FILESTAT_SET_SIZE` is a rights bit.
+- Do not treat `fd_filestat_set_size` as a QuickJS-visible truncate demo until
+  the fixture exposes `truncate` or `ftruncate`; Preview 1 has no separate
+  `path_filestat_set_size` import, only the `PATH_FILESTAT_SET_SIZE` rights bit.

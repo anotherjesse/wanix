@@ -160,6 +160,13 @@ impl WasiFile {
             .metadata()
     }
 
+    pub(crate) fn set_len_file(&self, len: u64) -> FsResult<()> {
+        self.file
+            .lock()
+            .map_err(|_| FsError::Other("WASI fd file lock poisoned".to_owned()))?
+            .set_len(len)
+    }
+
     fn access(&self) -> FsResult<WasiFileAccess> {
         self.access
             .lock()
@@ -197,6 +204,13 @@ impl File for WasiFile {
 
     fn is_seekable(&self) -> bool {
         self.is_seekable_file().unwrap_or(false)
+    }
+
+    fn set_len(&mut self, len: u64) -> FsResult<()> {
+        if !self.can_write() {
+            return Err(FsError::PermissionDenied);
+        }
+        self.set_len_file(len)
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
