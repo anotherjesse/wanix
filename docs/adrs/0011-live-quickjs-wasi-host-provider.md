@@ -53,9 +53,9 @@ Wasmtime instance is dropped; a WASI process exit is terminal host state rather
 than a normal JavaScript exception to clean up, resume, or snapshot. Broader
 calls can use the same trait as the fixture exposes more WASI surface.
 
-The old read-only virtual filesystem remains a fallback for simple engine and
-namespace demos. Wanix-backed task/config paths should prefer the live provider
-and no longer need to flatten or reject additional Wanix preopens.
+The old read-only virtual filesystem remains engine-only fixture support.
+Wanix-backed task/config paths use the live provider and no longer flatten,
+copy, or reject additional Wanix preopens for a virtual projection bridge.
 
 Snapshot restore reattaches deterministic `QuickJsHostConfig` and live WASI
 providers only through explicit restore options. The provider remains outside

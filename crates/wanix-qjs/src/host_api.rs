@@ -82,13 +82,6 @@ fn define_output_callback_inner(
         .map_err(qjs_error)
 }
 
-pub(crate) fn define_wanix_namespace_api(
-    runtime: &mut QuickJsRuntime,
-    namespace: impl FileSystem + Clone + 'static,
-) -> FsResult<()> {
-    define_wanix_host_api(runtime, namespace, WanixTaskContext::default(), None, None)
-}
-
 pub(crate) fn define_wanix_host_api(
     runtime: &mut QuickJsRuntime,
     namespace: impl FileSystem + Clone + 'static,

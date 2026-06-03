@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use rust_wasi_quickjs::{
     QuickJsCreateOptions, QuickJsHostConfig, QuickJsModule, QuickJsRestoreOptions, QuickJsRuntime,
 };
-use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath};
+use wanix_fs::{FsError, FsResult, NormalizedPath};
 use wanix_task::{Fd, Task, TaskSpec, quote_cmd_argv};
 use wanix_wasi::WasiConfig;
 use wasmtime::Engine;
@@ -24,7 +24,6 @@ mod host_api;
 mod task_context;
 mod task_runtime;
 mod task_stdio;
-mod virtual_wasi;
 mod wasi_host;
 
 pub use driver::QuickJsTaskDriver;
@@ -33,12 +32,10 @@ pub use task_runtime::QuickJsTaskRuntime;
 use fd_api::define_fd_output_callback;
 use host_api::{
     define_output_callback, define_output_callback_with_exit_state, define_wanix_host_api,
-    define_wanix_module_loader, define_wanix_namespace_api, qjs_error, read_namespace_file,
-    take_buffer,
+    define_wanix_module_loader, qjs_error, read_namespace_file, take_buffer,
 };
 use task_context::{WanixExitState, WanixTaskContext};
 use task_stdio::task_wasi_config;
-use virtual_wasi::with_namespace_read_only_files;
 use wasi_host::WanixQuickJsWasiHost;
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
@@ -165,30 +162,11 @@ impl QuickJsRunner {
             .map_err(|failure| failure.error)
     }
 
-    /// Runs JavaScript source with access to a Wanix namespace host API.
-    ///
-    /// # Errors
-    ///
-    /// Returns a filesystem error when QuickJS setup, namespace callbacks, or
-    /// JavaScript evaluation fails.
-    pub fn run_source_with_namespace(
-        &self,
-        source: &str,
-        namespace: impl FileSystem + Clone + 'static,
-    ) -> FsResult<RunOutput> {
-        let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
-        self.run_source_with_setup(source, create_options_with_config(config), move |runtime| {
-            define_wanix_module_loader(runtime, namespace.clone())?;
-            define_wanix_namespace_api(runtime, namespace)
-        })
-        .map_err(|failure| failure.error)
-    }
-
     /// Runs JavaScript source with Wanix-backed QuickJS configuration.
     ///
-    /// Wanix-owned WASI settings are attached as a live host provider while the
-    /// interim writable `Wanix` host object remains available for behavior not
-    /// yet exercised by the bundled QuickJS WASI fixture.
+    /// Wanix-owned WASI settings are attached as a live host provider. ES module
+    /// source is evaluated as a module so guest code can import `qjs:std`,
+    /// `qjs:os`, or other Wanix namespace modules.
     ///
     /// # Errors
     ///
@@ -201,10 +179,21 @@ impl QuickJsRunner {
     ) -> FsResult<RunOutput> {
         let namespace = config.wasi().namespace().clone();
         let create_options = captured_stdio_options_with_wanix_wasi(config)?;
-        self.run_source_with_setup(source, create_options, move |runtime| {
-            define_wanix_module_loader(runtime, namespace.clone())?;
-            define_wanix_namespace_api(runtime, namespace)
-        })
+        let run_as_module = uses_module_syntax(source);
+        self.run_with_setup(
+            source,
+            create_options,
+            move |runtime| define_wanix_module_loader(runtime, namespace),
+            |runtime, source| {
+                if run_as_module {
+                    runtime
+                        .eval_module_discard(source, "wanix-source.mjs")
+                        .map_err(qjs_error)
+                } else {
+                    runtime.eval_discard(source).map_err(qjs_error)
+                }
+            },
+        )
         .map_err(|failure| failure.error)
     }
 
@@ -264,39 +253,6 @@ impl QuickJsRunner {
             .map_err(qjs_error)?;
         define_wanix_module_loader(&mut runtime, namespace)?;
         Ok(runtime)
-    }
-
-    /// Runs JavaScript as an ES module with access to a Wanix namespace.
-    ///
-    /// The namespace is copied into QuickJS's read-only WASI virtual filesystem
-    /// before execution. The interim `Wanix` host API is also installed so this
-    /// can coexist with the first vertical slice while WASI write support lands.
-    ///
-    /// # Errors
-    ///
-    /// Returns a filesystem error when namespace projection, QuickJS setup, or
-    /// JavaScript module evaluation fails.
-    pub fn run_module_with_namespace(
-        &self,
-        source: &str,
-        filename: &str,
-        namespace: impl FileSystem + Clone + 'static,
-    ) -> FsResult<RunOutput> {
-        let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
-        self.run_with_setup(
-            source,
-            create_options_with_config(config),
-            move |runtime| {
-                define_wanix_module_loader(runtime, namespace.clone())?;
-                define_wanix_namespace_api(runtime, namespace)
-            },
-            |runtime, source| {
-                runtime
-                    .eval_module_discard(source, filename)
-                    .map_err(qjs_error)
-            },
-        )
-        .map_err(|failure| failure.error)
     }
 
     fn run_source_with_setup(
@@ -737,36 +693,6 @@ mod tests {
     }
 
     #[test]
-    fn runner_exposes_wanix_namespace_to_javascript() {
-        let namespace = wanix_vfs::Namespace::new();
-        let root = std::sync::Arc::new(MemFs::new());
-        root.write_file("input.txt", b"from wanix").unwrap();
-        let mut namespace = namespace;
-        namespace
-            .bind(root.clone(), ".", ".", BindOptions::default())
-            .unwrap();
-
-        let output = runner()
-            .run_source_with_namespace(
-                r#"
-const text = Wanix.readText("input.txt");
-Wanix.writeText("output.txt", text + " / qjs");
-print(Wanix.readText("output.txt"));
-print("exit api", typeof Wanix.exit);
-print("fd api", typeof Wanix.open);
-"#,
-                namespace,
-            )
-            .unwrap();
-
-        assert_eq!(
-            output.stdout(),
-            b"from wanix / qjs\nexit api undefined\nfd api undefined\n"
-        );
-        assert_eq!(read_file(&*root, "output.txt"), b"from wanix / qjs");
-    }
-
-    #[test]
     fn runner_uses_quickjs_wanix_config_for_namespace_access() {
         let mut namespace = wanix_vfs::Namespace::new();
         let root = std::sync::Arc::new(MemFs::new());
@@ -779,15 +705,16 @@ print("fd api", typeof Wanix.open);
         let output = runner()
             .run_source_with_wanix_config(
                 r#"
-const text = Wanix.readText("input.txt");
-Wanix.writeText("output.txt", text + " / qjs");
-print(Wanix.readText("output.txt"));
+import * as std from "qjs:std";
+
+const text = std.loadFile("input.txt");
+std.writeFile("output.txt", text + " / qjs");
 "#,
                 config,
             )
             .unwrap();
 
-        assert_eq!(output.stdout(), b"from config / qjs\n");
+        assert!(output.stdout().is_empty());
         assert_eq!(read_file(&*root, "output.txt"), b"from config / qjs");
     }
 
@@ -807,13 +734,16 @@ print(Wanix.readText("output.txt"));
         let output = runner()
             .run_source_with_wanix_config(
                 r#"
-print(Wanix.readText("input.txt"));
+import * as std from "qjs:std";
+
+std.writeFile("observed.txt", std.loadFile("input.txt"));
 "#,
                 config,
             )
             .unwrap();
 
-        assert_eq!(output.stdout(), b"from config\n");
+        assert!(output.stdout().is_empty());
+        assert_eq!(read_file(&*root, "observed.txt"), b"from config");
     }
 
     #[test]
@@ -1199,19 +1129,24 @@ print(Wanix.readText("input.txt"));
             .bind(root, ".", ".", BindOptions::default())
             .unwrap();
 
-        let output = runner()
-            .run_module_with_namespace(
+        let config = QuickJsWanixConfig::new(WasiConfig::new(namespace));
+        let mut runtime = runner().create_runtime_with_wanix_config(config).unwrap();
+
+        runtime
+            .eval_module_discard(
                 r#"
 import { message } from "./lib.js";
 
-print(message);
+globalThis.loadedMessage = message;
 "#,
                 "main.js",
-                namespace,
             )
             .unwrap();
 
-        assert_eq!(output.stdout(), b"from namespace modules\n");
+        assert_eq!(
+            runtime.eval_string("globalThis.loadedMessage").unwrap(),
+            "from namespace modules"
+        );
     }
 
     #[test]

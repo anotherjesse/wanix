@@ -1,8 +1,8 @@
-# ADR 0008: QuickJS Namespace Modules and Virtual WASI Projection
+# ADR 0008: QuickJS Namespace Modules and Superseded Virtual WASI Projection
 
 ## Status
 
-Accepted
+Superseded by ADR 0011 and live Wanix-backed WASI runtime paths.
 
 ## Context
 
@@ -20,14 +20,16 @@ yet issue file-read WASI calls directly. ADR 0012 later enabled
 the task namespace. Relative module specifiers such as `./lib.js` are normalized
 against the importing module path and loaded as Wanix files.
 
-At runtime setup, `wanix-qjs` also projects the root
-`wanix_wasi::WasiConfig` preopen into the prototype's read-only virtual WASI
-configuration. The qjs-facing configuration is `QuickJsWanixConfig` so the
-copied-file adapter is named as a Wanix policy boundary, not as a durable
-QuickJS process or fd model. Additional Wanix preopens are rejected instead of
-flattened because the prototype only exposes one copied virtual root. This is
-groundwork for future `qjs:std` file reads, not the final dynamic Wanix WASI
-implementation.
+The old runtime setup also projected the root `wanix_wasi::WasiConfig` preopen
+into the prototype's read-only virtual WASI configuration. That bridge was
+temporary groundwork for future `qjs:std` file reads, not the final dynamic
+Wanix WASI implementation.
+
+After ADR 0011, `wanix-qjs` runtime paths attach a live
+`QuickJsWasiHost` backed by `wanix_wasi::WasiCtx` instead of copying namespace
+files into `QuickJsHostConfig`. Engine-level read-only virtual files remain
+available only as `wanix-qjs-engine` fixture/support behavior; Wanix qjs task
+and runner paths should use live WASI.
 
 ## Consequences
 
@@ -35,12 +37,8 @@ implementation.
   Chrome.
 - The CLI can copy a host script directory into a fresh Wanix namespace and run
   scripts with ordinary relative imports.
-- The virtual WASI projection is read-only, stale after runtime creation, and
-  copies visible files into memory up front.
-- The projection rejects non-root/multiple preopens; live Wanix-backed WASI
-  imports are required before QuickJS can observe real preopen fd semantics.
-- The projection is centralized at the `QuickJsWanixConfig` /
-  `wanix_wasi::WasiConfig` boundary, which is the replacement point for custom
-  Wanix-owned WASI imports.
-- `qjs:std` filesystem reads remain a follow-up before guest JS can read Wanix
-  files through actual QuickJS WASI file APIs.
+- The virtual WASI projection was removed from `wanix-qjs` runtime paths.
+- `qjs:std`/`qjs:os` filesystem calls now reach Wanix namespace and fd
+  semantics through live WASI providers.
+- Engine-level read-only virtual files remain useful for engine tests and
+  deterministic fixture support, but they are no longer a Wanix runtime bridge.

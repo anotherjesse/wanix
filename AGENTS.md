@@ -89,8 +89,8 @@ cargo test --workspace --locked
   checks enumerate Wanix crates while sibling prototypes remain path
   dependencies.
 - [ADR 0008](docs/adrs/0008-quickjs-namespace-modules-and-virtual-wasi-projection.md):
-  QuickJS ES modules load from Wanix namespaces while read-only virtual
-  projection remains an interim namespace-demo path.
+  QuickJS ES modules load from Wanix namespaces; the old read-only virtual
+  projection bridge is superseded by live Wanix-backed WASI.
 - [ADR 0009](docs/adrs/0009-quickjs-tasks-use-wanix-process-semantics.md):
   QuickJS is the execution engine inside `qjs` Wanix tasks, not a separate
   process model.
