@@ -91,13 +91,13 @@ impl WasiCtx {
         options: WasiOpenOptions,
     ) -> Result<WasiFd, Errno> {
         let resolved = self.resolve_path(dirfd, path.as_ref())?;
-        if let Ok(metadata) = self.namespace.metadata(&resolved) {
-            if metadata.file_type() == FileType::Directory {
-                if options.write || options.create || options.truncate {
-                    return Err(Errno::Isdir);
-                }
-                return Ok(self.insert_handle(Handle::Directory { path: resolved }));
+        if let Ok(metadata) = self.namespace.metadata(&resolved)
+            && metadata.file_type() == FileType::Directory
+        {
+            if options.write || options.create || options.truncate {
+                return Err(Errno::Isdir);
             }
+            return Ok(self.insert_handle(Handle::Directory { path: resolved }));
         }
 
         let file = self

@@ -34,7 +34,7 @@ wanix-fs
   -> wanix-task
 
 wanix-wasi -> wanix-fs + wanix-vfs
-wanix-qjs  -> wanix-wasi
+wanix-qjs  -> wanix-task + wanix-wasi + rust-wasi-quickjs
 wanix-cli  -> runtime crates for orchestration
 ```
 
@@ -62,7 +62,7 @@ boundary clearer.
 Required checks before a cycle commit:
 
 ```sh
-cargo fmt --all --check
+cargo fmt --package wanix-cli --package wanix-fs --package wanix-qjs --package wanix-task --package wanix-vfs --package wanix-wasi --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 ```
@@ -79,6 +79,11 @@ cargo test --workspace --locked
   is a migration oracle, not a structure to copy blindly.
 - [ADR 0005](docs/adrs/0005-crate-boundaries-and-dependency-graph.md): Crate
   boundaries keep core Wanix contracts independent from Wasmtime and QuickJS.
+- [ADR 0006](docs/adrs/0006-interim-quickjs-wanix-host-api.md): QuickJS gets a
+  narrow temporary `Wanix` host API until Wanix-backed WASI imports are wired.
+- [ADR 0007](docs/adrs/0007-workspace-local-rust-quality-gate.md): Formatting
+  checks enumerate Wanix crates while sibling prototypes remain path
+  dependencies.
 
 ## Cycle Rules
 
