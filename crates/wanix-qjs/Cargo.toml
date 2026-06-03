@@ -10,6 +10,7 @@ version.workspace = true
 [dependencies]
 anyhow = "1"
 rust_wasi_quickjs = { path = "../../../rust-wasi-quickjs" }
+serde_json = "1"
 wanix-fs = { path = "../wanix-fs" }
 wanix-task = { path = "../wanix-task" }
 wanix-wasi = { path = "../wanix-wasi" }

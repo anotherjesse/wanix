@@ -5,6 +5,7 @@
 //! the namespace, fds, host callbacks, module loading policy, and snapshot
 //! reattachment policy.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -22,8 +23,8 @@ mod virtual_wasi;
 pub use driver::QuickJsTaskDriver;
 
 use host_api::{
-    define_output_callback, define_wanix_module_loader, define_wanix_namespace_api, qjs_error,
-    read_namespace_file, take_buffer,
+    WanixTaskContext, define_output_callback, define_wanix_host_api, define_wanix_module_loader,
+    define_wanix_namespace_api, qjs_error, read_namespace_file, take_buffer,
 };
 use virtual_wasi::with_namespace_read_only_files;
 
@@ -243,22 +244,26 @@ impl QuickJsRunner {
     /// Returns a filesystem error when the command is missing, the script cannot
     /// be read, QuickJS fails, or task fd writes fail.
     pub fn run_task(&self, task: &Task) -> FsResult<RunOutput> {
-        let script_path = task_script_path(task)?;
+        let command = task_command(task)?;
+        let script_path = command.program.clone();
+        let script_filename = script_path.to_string();
         let namespace = task.namespace();
         let source = read_namespace_file(&namespace, &script_path)?;
         let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
         let run_as_module = uses_module_syntax(&source);
+        let context =
+            WanixTaskContext::new(command.raw, command.args, task_env_map(task), task.dir());
         match self.run_with_setup(
             &source,
             Some(config),
             move |runtime| {
                 define_wanix_module_loader(runtime, namespace.clone())?;
-                define_wanix_namespace_api(runtime, namespace)
+                define_wanix_host_api(runtime, namespace, context)
             },
             |runtime, source| {
                 if run_as_module {
                     runtime
-                        .eval_module_discard(source, script_path.as_str())
+                        .eval_module_discard(source, &script_filename)
                         .map_err(qjs_error)
                 } else {
                     runtime.eval_discard(source).map_err(qjs_error)
@@ -305,13 +310,45 @@ fn uses_module_syntax(source: &str) -> bool {
     })
 }
 
-fn task_script_path(task: &Task) -> FsResult<NormalizedPath> {
-    let cmd = task.cmd();
-    let script = cmd
-        .split_whitespace()
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskCommand {
+    raw: String,
+    program: NormalizedPath,
+    args: Vec<String>,
+}
+
+fn task_command(task: &Task) -> FsResult<TaskCommand> {
+    let raw = task.cmd();
+    let mut parts = raw.split_whitespace();
+    let script = parts
         .next()
         .ok_or_else(|| FsError::Other("qjs task cmd is empty".to_owned()))?;
-    NormalizedPath::new(script)
+    let program = resolve_from_cwd(&task.dir(), &NormalizedPath::new(script)?)?;
+    let args = parts.map(str::to_owned).collect();
+    Ok(TaskCommand { raw, program, args })
+}
+
+fn resolve_from_cwd(cwd: &NormalizedPath, path: &NormalizedPath) -> FsResult<NormalizedPath> {
+    if cwd.as_str() == "." {
+        return Ok(path.clone());
+    }
+    if path.as_str() == "." {
+        return Ok(cwd.clone());
+    }
+    NormalizedPath::new(format!("{cwd}/{path}"))
+}
+
+fn task_env_map(task: &Task) -> BTreeMap<String, String> {
+    task.env()
+        .into_iter()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            if key.is_empty() {
+                return None;
+            }
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect()
 }
 
 fn write_task_output(task: &Task, output: &RunOutput) -> FsResult<()> {
@@ -333,7 +370,7 @@ mod tests {
         wasi_contract_purpose,
     };
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
-    use wanix_task::{Fd, TaskTable};
+    use wanix_task::{Fd, Task, TaskDriver, TaskId, TaskSpec, TaskTable};
     use wanix_vfs::BindOptions;
     use wanix_wasi::WasiConfig;
 
@@ -523,7 +560,8 @@ print(message);
         .unwrap();
         let stdout = std::sync::Arc::new(MemFs::new());
         stdout.write_file("out", b"").unwrap();
-        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
         task.insert_fd(
             Fd::STDOUT,
             stdout
@@ -541,6 +579,75 @@ print(message);
 
         assert_eq!(read_file(&*stdout, "out"), b"loaded as Wanix module\n");
         assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_exposes_wanix_task_context_to_javascript() {
+        let table = TaskTable::new();
+        let runner = std::sync::Arc::new(runner());
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "app/main.js",
+            br##"
+print("cmd", Wanix.cmd());
+print("cwd", Wanix.cwd());
+print("args", Wanix.args().join("|"));
+print("env", Wanix.env("MODE"), Wanix.env().EMPTY === "", String(Wanix.env("MISSING")));
+const source = Wanix.readText("main.js");
+Wanix.writeText("out.txt", "cwd write");
+print("source", source.includes("Wanix.readText"));
+print("id", Wanix.readText("#task/self/id").trim());
+"##,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js alpha beta").unwrap();
+        task.set_env_lines("MODE=test\nEMPTY=\nBROKEN\nMODE=override")
+            .unwrap();
+        task.set_dir("app").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"cmd main.js alpha beta\ncwd app\nargs alpha|beta\nenv override true undefined\nsource true\nid 1\n"
+        );
+        assert_eq!(read_file(&*root, "app/out.txt"), b"cwd write");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_check_uses_the_first_command_word() {
+        let driver = QuickJsTaskDriver::new(std::sync::Arc::new(runner()));
+        let task = Task::new(
+            TaskId::new(1),
+            TaskSpec::new("main.js").unwrap(),
+            wanix_vfs::Namespace::new(),
+        );
+
+        task.set_cmd("main.js\t--flag").unwrap();
+        assert!(driver.check(&task));
+
+        task.set_cmd("notes.txt main.js").unwrap();
+        assert!(!driver.check(&task));
     }
 
     #[test]

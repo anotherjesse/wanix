@@ -27,7 +27,10 @@ impl QuickJsTaskDriver {
 
 impl TaskDriver for QuickJsTaskDriver {
     fn check(&self, task: &Task) -> bool {
-        task.cmd().ends_with(".js") || task.cmd().contains(".js ")
+        task.cmd()
+            .split_whitespace()
+            .next()
+            .is_some_and(|program| program.ends_with(".js"))
     }
 
     fn start(&self, task: &Task) -> FsResult<()> {
