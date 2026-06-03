@@ -45,6 +45,7 @@ const VIRTUAL_FS_WAT: &str = r#"
   (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_readdir" (func $fd_readdir (param i32 i32 i32 i64 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_seek" (func $fd_seek (param i32 i64 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_tell" (func $fd_tell (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_close" (func $fd_close (param i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_fdstat_get" (func $fd_fdstat_get (param i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_filestat_get" (func $fd_filestat_get (param i32 i32) (result i32)))
@@ -65,6 +66,8 @@ const VIRTUAL_FS_WAT: &str = r#"
     call $fd_readdir)
   (func (export "fd_seek") (param i32 i64 i32 i32) (result i32)
     local.get 0 local.get 1 local.get 2 local.get 3 call $fd_seek)
+  (func (export "fd_tell") (param i32 i32) (result i32)
+    local.get 0 local.get 1 call $fd_tell)
   (func (export "fd_close") (param i32) (result i32)
     local.get 0 call $fd_close)
   (func (export "fd_fdstat_get") (param i32 i32) (result i32)
@@ -86,6 +89,7 @@ struct VirtualFsHarness {
     fd_read: TypedFunc<(i32, i32, i32, i32), i32>,
     fd_readdir: TypedFunc<(i32, i32, i32, i64, i32), i32>,
     fd_seek: TypedFunc<(i32, i64, i32, i32), i32>,
+    fd_tell: TypedFunc<(i32, i32), i32>,
     fd_close: TypedFunc<i32, i32>,
     fd_fdstat_get: TypedFunc<(i32, i32), i32>,
     fd_filestat_get: TypedFunc<(i32, i32), i32>,
@@ -120,6 +124,7 @@ impl VirtualFsHarness {
             fd_read: instance.get_typed_func(&mut store, "fd_read")?,
             fd_readdir: instance.get_typed_func(&mut store, "fd_readdir")?,
             fd_seek: instance.get_typed_func(&mut store, "fd_seek")?,
+            fd_tell: instance.get_typed_func(&mut store, "fd_tell")?,
             fd_close: instance.get_typed_func(&mut store, "fd_close")?,
             fd_fdstat_get: instance.get_typed_func(&mut store, "fd_fdstat_get")?,
             fd_filestat_get: instance.get_typed_func(&mut store, "fd_filestat_get")?,
@@ -264,6 +269,11 @@ impl QuickJsWasiHost for MetadataWasiHost {
         Ok(123)
     }
 
+    fn fd_tell(&mut self, fd: u32) -> WasiHostResult<u64> {
+        self.record(format!("tell:{fd}"));
+        Ok(77)
+    }
+
     fn fd_close(&mut self, fd: u32) -> WasiHostResult<()> {
         self.record(format!("close:{fd}"));
         Ok(())
@@ -337,7 +347,7 @@ fn live_wasi_host_supplies_readdir_entries() -> Result<()> {
 }
 
 #[test]
-fn live_wasi_host_supplies_prestat_fdstat_seek_and_close() -> Result<()> {
+fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
     let host = MetadataWasiHost::default();
     let calls = Arc::clone(&host.calls);
     let mut harness =
@@ -376,6 +386,12 @@ fn live_wasi_host_supplies_prestat_fdstat_seek_and_close() -> Result<()> {
     );
     assert_eq!(harness.read_u64(128)?, 123);
 
+    assert_eq!(
+        harness.fd_tell.call(&mut harness.store, (5, 136))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u64(136)?, 77);
+
     assert_eq!(harness.fd_close.call(&mut harness.store, 5)?, ERRNO_SUCCESS);
     assert_eq!(
         calls.lock().expect("test call lock").as_slice(),
@@ -384,6 +400,7 @@ fn live_wasi_host_supplies_prestat_fdstat_seek_and_close() -> Result<()> {
             "prestat:9".to_owned(),
             "fdstat:9".to_owned(),
             "seek:5:7:Set".to_owned(),
+            "tell:5".to_owned(),
             "close:5".to_owned(),
         ]
     );
@@ -488,6 +505,11 @@ fn virtual_file_open_read_seek_and_close_round_trip() -> Result<()> {
     assert_eq!(harness.open_path("app/config.txt", 96)?, ERRNO_SUCCESS);
     let fd = i32::try_from(harness.read_u32(96)?).context("fd should fit i32")?;
     assert_eq!(fd, FIRST_FILE_FD);
+    assert_eq!(
+        harness.fd_tell.call(&mut harness.store, (fd, 88))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u64(88)?, 0);
 
     harness.write_iov(300, 500, 5)?;
     harness.write_iov(300 + WASI_IOV_SIZE, 600, 8)?;
@@ -498,9 +520,19 @@ fn virtual_file_open_read_seek_and_close_round_trip() -> Result<()> {
     assert_eq!(harness.read_u32(72)?, 13);
     assert_eq!(harness.read_bytes(500, 5)?, b"hello");
     assert_eq!(harness.read_bytes(600, 8)?, b" virtual");
+    assert_eq!(
+        harness.fd_tell.call(&mut harness.store, (fd, 88))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u64(88)?, 13);
 
     assert_eq!(
         harness.fd_seek.call(&mut harness.store, (fd, 6, 0, 88))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u64(88)?, 6);
+    assert_eq!(
+        harness.fd_tell.call(&mut harness.store, (fd, 88))?,
         ERRNO_SUCCESS
     );
     assert_eq!(harness.read_u64(88)?, 6);
@@ -853,6 +885,10 @@ fn virtual_file_rights_are_not_silently_upgraded() -> Result<()> {
     );
     assert_eq!(
         harness.fd_seek.call(&mut harness.store, (fd, 0, 0, 88))?,
+        ERRNO_NOTCAPABLE
+    );
+    assert_eq!(
+        harness.fd_tell.call(&mut harness.store, (fd, 88))?,
         ERRNO_NOTCAPABLE
     );
     assert_eq!(

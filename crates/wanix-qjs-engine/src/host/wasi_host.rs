@@ -56,6 +56,11 @@ pub trait QuickJsWasiHost: Send {
         whence: QuickJsWasiWhence,
     ) -> Result<u64, QuickJsWasiErrno>;
 
+    /// Returns the current offset for an open fd.
+    fn fd_tell(&mut self, _fd: u32) -> Result<u64, QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     /// Closes an open fd.
     fn fd_close(&mut self, fd: u32) -> Result<(), QuickJsWasiErrno>;
 

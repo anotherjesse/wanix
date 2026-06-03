@@ -69,6 +69,7 @@ pub(super) fn define_imports(linker: &mut Linker<HostState>) -> anyhow::Result<(
     linker.func_wrap("wasi_snapshot_preview1", "fd_read", fd_read)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_readdir", fd_readdir)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_seek", fd_seek)?;
+    linker.func_wrap("wasi_snapshot_preview1", "fd_tell", fd_tell)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_close", fd_close)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_fdstat_get", fd_fdstat_get)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_filestat_get", fd_filestat_get)?;
@@ -540,6 +541,38 @@ fn fd_seek(
     if let Some(file) = caller.data_mut().virtual_file_mut(fd) {
         file.offset = next;
     }
+    Ok(ERRNO_SUCCESS)
+}
+
+fn fd_tell(mut caller: Caller<'_, HostState>, fd: i32, result_ptr: i32) -> wasmtime::Result<i32> {
+    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| host.fd_tell(fd))? {
+        let current = match result {
+            Ok(current) => current,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        let memory = caller_memory(&caller)?;
+        memory.write(
+            &mut caller,
+            guest_offset(result_ptr),
+            &current.to_le_bytes(),
+        )?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
+    let (current, rights_base) = match caller.data().virtual_file(fd) {
+        Some(file) => (file.offset, file.rights_base),
+        None => return Ok(ERRNO_BADF),
+    };
+    if rights_base & RIGHT_FD_TELL == 0 {
+        return Ok(ERRNO_NOTCAPABLE);
+    }
+
+    let memory = caller_memory(&caller)?;
+    memory.write(
+        &mut caller,
+        guest_offset(result_ptr),
+        &current.to_le_bytes(),
+    )?;
     Ok(ERRNO_SUCCESS)
 }
 

@@ -126,6 +126,10 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
             .map_err(convert_errno)
     }
 
+    fn fd_tell(&mut self, fd: u32) -> Result<u64, QuickJsWasiErrno> {
+        self.ctx.fd_tell(WasiFd::new(fd)).map_err(convert_errno)
+    }
+
     fn fd_close(&mut self, fd: u32) -> Result<(), QuickJsWasiErrno> {
         self.ctx.fd_close(WasiFd::new(fd)).map_err(convert_errno)
     }
@@ -279,19 +283,28 @@ mod tests {
         );
 
         let fd = host
-            .path_open(3, 0, b"input.txt", 0, WasiRights::FD_READ.bits(), 0, 0)
+            .path_open(
+                3,
+                0,
+                b"input.txt",
+                0,
+                (WasiRights::FD_READ | WasiRights::FD_TELL).bits(),
+                0,
+                0,
+            )
             .unwrap();
         assert_eq!(
             host.fd_fdstat_get(fd).unwrap(),
             QuickJsWasiFdStat::new(
                 QuickJsWasiFileType::RegularFile,
-                WasiRights::FD_READ.bits(),
+                (WasiRights::FD_READ | WasiRights::FD_TELL).bits(),
                 0
             )
         );
         let mut buf = [0; 32];
         let count = host.fd_read(fd, &mut buf).unwrap();
         assert_eq!(&buf[..count], b"from namespace");
+        assert_eq!(host.fd_tell(fd).unwrap(), 14);
         host.fd_close(fd).unwrap();
     }
 
