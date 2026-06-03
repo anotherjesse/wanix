@@ -83,6 +83,8 @@ impl WasiRights {
     pub const FD_TELL: Self = Self(1 << 5);
     /// Write to an fd.
     pub const FD_WRITE: Self = Self(1 << 6);
+    /// Create a directory at a path relative to this fd.
+    pub const PATH_CREATE_DIRECTORY: Self = Self(1 << 9);
     /// Create a file at a path relative to this fd.
     pub const PATH_CREATE_FILE: Self = Self(1 << 10);
     /// Open a path relative to this fd.
@@ -109,7 +111,8 @@ impl WasiRights {
 
     /// Rights for directory fds that can resolve namespace paths.
     pub const DIRECTORY_BASE: Self = Self(
-        Self::PATH_CREATE_FILE.0
+        Self::PATH_CREATE_DIRECTORY.0
+            | Self::PATH_CREATE_FILE.0
             | Self::PATH_OPEN.0
             | Self::FD_READDIR.0
             | Self::PATH_FILESTAT_GET.0

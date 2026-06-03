@@ -58,6 +58,40 @@ fn remove_file_removes_only_files() {
 }
 
 #[test]
+fn create_dir_creates_one_directory_with_existing_directory_parent() {
+    let fs = MemFs::new();
+    fs.create_dir_all("parent").unwrap();
+    let child = NormalizedPath::new("parent/child").unwrap();
+
+    fs.create_dir(&child).unwrap();
+
+    assert_eq!(
+        fs.metadata(&child).unwrap().file_type(),
+        FileType::Directory
+    );
+    assert_eq!(
+        fs.read_dir(&NormalizedPath::new("parent").unwrap())
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(fs.create_dir(&child), Err(FsError::AlreadyExists));
+    assert_eq!(
+        fs.create_dir(&NormalizedPath::new("missing/child").unwrap()),
+        Err(FsError::NotFound)
+    );
+    fs.write_file("file.txt", b"file").unwrap();
+    assert_eq!(
+        fs.create_dir(&NormalizedPath::new("file.txt/child").unwrap()),
+        Err(FsError::NotDirectory)
+    );
+    assert_eq!(
+        fs.create_dir(&NormalizedPath::new(".").unwrap()),
+        Err(FsError::AlreadyExists)
+    );
+}
+
+#[test]
 fn open_read_and_write_round_trip() {
     let fs = MemFs::new();
     fs.write_file("file.txt", b"hello").unwrap();

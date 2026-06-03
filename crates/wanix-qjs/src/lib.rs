@@ -680,7 +680,7 @@ mod tests {
         wasi_contract_purpose,
     };
     use crate::task_stdio::task_wasi_config;
-    use wanix_fs::{FileSystem, FsError, MemFs, NormalizedPath, OpenOptions};
+    use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
     use wanix_task::{Fd, Task, TaskDriver, TaskId, TaskSpec, TaskTable};
     use wanix_vfs::{BindOptions, Namespace};
     use wanix_wasi::{Errno, WasiConfig, WasiCtx, WasiFd, WasiOpenOptions};
@@ -2384,6 +2384,60 @@ print("keep", std.loadFile("keep.txt"));
             Err(FsError::NotFound)
         );
         assert_eq!(root.read_file("keep.txt").unwrap(), b"keep me");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_quickjs_os_creates_wanix_namespace_directories() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+print("mkdir result", JSON.stringify(os.mkdir("made", 0o777)));
+std.writeFile("made/file.txt", "inside made");
+print("made file", std.loadFile("made/file.txt"));
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"mkdir result 0\nmade file inside made\n"
+        );
+        assert_eq!(
+            root.metadata(&NormalizedPath::new("made").unwrap())
+                .unwrap()
+                .file_type(),
+            FileType::Directory
+        );
+        assert_eq!(root.read_file("made/file.txt").unwrap(), b"inside made");
         assert_eq!(task.exit(), "0");
     }
 

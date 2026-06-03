@@ -170,6 +170,13 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
             .map_err(convert_errno)
     }
 
+    fn path_create_directory(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
+        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
+        self.ctx
+            .path_create_directory(WasiFd::new(dirfd), path)
+            .map_err(convert_errno)
+    }
+
     fn path_unlink_file(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
         let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
         self.ctx
@@ -382,6 +389,30 @@ mod tests {
         assert_eq!(
             host.path_unlink_file(3, b"remove.txt"),
             Err(QuickJsWasiErrno::Noent)
+        );
+    }
+
+    #[test]
+    fn adapter_path_create_directory_reaches_wanix_namespace() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        root.create_dir_all("parent").unwrap();
+        namespace
+            .bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        host.path_create_directory(3, b"parent/newdir").unwrap();
+
+        assert_eq!(
+            root.metadata(&NormalizedPath::new("parent/newdir").unwrap())
+                .unwrap()
+                .file_type(),
+            wanix_fs::FileType::Directory
+        );
+        assert_eq!(
+            host.path_create_directory(3, b"parent/newdir"),
+            Err(QuickJsWasiErrno::Exist)
         );
     }
 

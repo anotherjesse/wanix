@@ -146,6 +146,19 @@ impl FileSystem for LocalFs {
         Ok(entries)
     }
 
+    fn create_dir(&self, path: &NormalizedPath) -> FsResult<()> {
+        if path.as_str() == "." {
+            return Err(FsError::AlreadyExists);
+        }
+        let host_path = self.raw_host_path(path);
+        let parent = host_path.parent().ok_or(FsError::AlreadyExists)?;
+        let parent = fs::canonicalize(parent).map_err(map_io_error)?;
+        if !parent.starts_with(&*self.root) {
+            return Err(FsError::PermissionDenied);
+        }
+        fs::create_dir(host_path).map_err(map_io_error)
+    }
+
     fn remove_file(&self, path: &NormalizedPath) -> FsResult<()> {
         let host_path = self.raw_host_path(path);
         let metadata = fs::symlink_metadata(&host_path).map_err(map_io_error)?;
@@ -346,6 +359,36 @@ mod tests {
         assert_eq!(
             fs.remove_file(&NormalizedPath::new("dir").unwrap()),
             Err(FsError::IsDirectory)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn localfs_create_dir_creates_one_directory_inside_root() {
+        let root = temp_root();
+        fs::write(root.join("file.txt"), "hello host").unwrap();
+        fs::create_dir(root.join("parent")).unwrap();
+        let fs = LocalFs::new(&root).unwrap();
+
+        fs.create_dir(&NormalizedPath::new("parent/child").unwrap())
+            .unwrap();
+
+        assert!(root.join("parent/child").is_dir());
+        assert_eq!(
+            fs.create_dir(&NormalizedPath::new("parent/child").unwrap()),
+            Err(FsError::AlreadyExists)
+        );
+        assert_eq!(
+            fs.create_dir(&NormalizedPath::new("missing/child").unwrap()),
+            Err(FsError::NotFound)
+        );
+        assert_eq!(
+            fs.create_dir(&NormalizedPath::new("file.txt/child").unwrap()),
+            Err(FsError::NotDirectory)
+        );
+        assert_eq!(
+            fs.create_dir(&NormalizedPath::new(".").unwrap()),
+            Err(FsError::AlreadyExists)
         );
         fs::remove_dir_all(root).unwrap();
     }

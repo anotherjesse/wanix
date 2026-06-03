@@ -2284,6 +2284,44 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_command_creates_directories_through_quickjs_os() {
+        let script = write_temp_script(
+            "mkdir-demo.js",
+            r#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.out.puts("mkdir " + os.mkdir("made", 0o777) + "\n");
+std.writeFile("made/file.txt", "from mkdir");
+std.out.puts(std.loadFile("made/file.txt") + "\n");
+std.out.flush();
+"#,
+        );
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"mkdir 0\nfrom mkdir\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_example_mkdir_demo_creates_directories_through_quickjs_os() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-mkdir-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"mkdir: 0\nmessage: hello from a created directory\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_attaches_stdin_as_wanix_task_fd_zero() {
         let script = write_temp_script(
             "stdin-demo.js",

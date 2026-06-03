@@ -258,6 +258,25 @@ impl FileSystem for Namespace {
             .collect())
     }
 
+    fn create_dir(&self, path: &NormalizedPath) -> FsResult<()> {
+        let mut saw_not_directory = false;
+        for target in self.resolve_candidates(path) {
+            match target.filesystem.create_dir(&target.path) {
+                Ok(()) => return Ok(()),
+                Err(FsError::NotDirectory) => saw_not_directory = true,
+                Err(FsError::NotFound) => {}
+                Err(err) => return Err(err),
+            }
+        }
+        if saw_not_directory {
+            return Err(FsError::NotDirectory);
+        }
+        if self.has_synthetic_children(path) {
+            return Err(FsError::AlreadyExists);
+        }
+        Err(FsError::NotFound)
+    }
+
     fn remove_file(&self, path: &NormalizedPath) -> FsResult<()> {
         let mut saw_directory = false;
         for target in self.resolve_candidates(path) {

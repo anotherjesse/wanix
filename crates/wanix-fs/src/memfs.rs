@@ -220,6 +220,27 @@ impl FileSystem for MemFs {
             .collect()
     }
 
+    fn create_dir(&self, path: &NormalizedPath) -> FsResult<()> {
+        if path.as_str() == "." {
+            return Err(FsError::AlreadyExists);
+        }
+        let mut nodes = self
+            .nodes
+            .write()
+            .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
+        if nodes.contains_key(path) {
+            return Err(FsError::AlreadyExists);
+        }
+        let parent = path.parent().ok_or(FsError::AlreadyExists)?;
+        match nodes.get(&parent) {
+            Some(node) if node.kind == FileType::Directory => {}
+            Some(_) => return Err(FsError::NotDirectory),
+            None => return Err(FsError::NotFound),
+        }
+        nodes.insert(path.clone(), Node::dir(0o755));
+        Ok(())
+    }
+
     fn remove_file(&self, path: &NormalizedPath) -> FsResult<()> {
         let mut nodes = self
             .nodes

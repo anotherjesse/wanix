@@ -387,6 +387,81 @@ fn path_unlink_file_removes_namespace_files() {
 }
 
 #[test]
+fn path_create_directory_creates_namespace_directories() {
+    let root = fixture(&[("parent/file.txt", b"file")]);
+    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+
+    ctx.path_create_directory(WasiFd::ROOT, "parent/newdir")
+        .unwrap();
+
+    assert_eq!(
+        root.metadata(&NormalizedPath::new("parent/newdir").unwrap())
+            .unwrap()
+            .file_type(),
+        FileType::Directory
+    );
+    assert_eq!(
+        ctx.path_create_directory(WasiFd::ROOT, "parent/newdir"),
+        Err(Errno::Exist)
+    );
+    assert_eq!(
+        ctx.path_create_directory(WasiFd::ROOT, "missing/newdir"),
+        Err(Errno::Noent)
+    );
+    assert_eq!(
+        ctx.path_create_directory(WasiFd::ROOT, "parent/file.txt/child"),
+        Err(Errno::Notdir)
+    );
+    assert_eq!(
+        ctx.path_create_directory(WasiFd::ROOT, "."),
+        Err(Errno::Exist)
+    );
+}
+
+#[test]
+fn path_create_directory_respects_root_preopen_source() {
+    let root = fixture(&[("app/existing.txt", b"file")]);
+    let ctx = WasiCtx::new(
+        WasiConfig::new(namespace_with_root(root.clone()))
+            .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
+    );
+
+    ctx.path_create_directory(WasiFd::ROOT, "newdir").unwrap();
+
+    assert_eq!(
+        root.metadata(&NormalizedPath::new("app/newdir").unwrap())
+            .unwrap()
+            .file_type(),
+        FileType::Directory
+    );
+    assert_eq!(
+        root.metadata(&NormalizedPath::new("newdir").unwrap()),
+        Err(FsError::NotFound)
+    );
+}
+
+#[test]
+fn path_create_directory_requires_directory_right() {
+    let root = fixture(&[("dir/file.txt", b"file")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let dir_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "dir",
+            0,
+            WasiRights::PATH_OPEN,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(
+        ctx.path_create_directory(dir_fd, "newdir"),
+        Err(Errno::Notcapable)
+    );
+}
+
+#[test]
 fn rights_are_enforced_on_open_fds() {
     let root = fixture(&[("read.txt", b"read"), ("write.txt", b"")]);
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
@@ -562,6 +637,11 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
         root_stat
             .rights_base()
             .contains(WasiRights::FD_FILESTAT_GET)
+    );
+    assert!(
+        root_stat
+            .rights_base()
+            .contains(WasiRights::PATH_CREATE_DIRECTORY)
     );
     assert!(
         root_stat
@@ -1182,6 +1262,7 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiFileType::Directory.preview1_code(), 3);
     assert_eq!(WasiFileType::RegularFile.preview1_code(), 4);
     assert_eq!(WasiFileType::SymbolicLink.preview1_code(), 7);
+    assert_eq!(WasiRights::PATH_CREATE_DIRECTORY.bits(), 1 << 9);
     assert_eq!(WasiRights::PATH_CREATE_FILE.bits(), 1 << 10);
     assert_eq!(WasiRights::PATH_OPEN.bits(), 1 << 13);
     assert_eq!(WasiRights::FD_READDIR.bits(), 1 << 14);

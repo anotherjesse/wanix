@@ -87,6 +87,11 @@ pub trait QuickJsWasiHost: Send {
         path: &[u8],
     ) -> Result<QuickJsWasiFileStat, QuickJsWasiErrno>;
 
+    /// Creates a directory at `path` relative to `dirfd`.
+    fn path_create_directory(&mut self, _dirfd: u32, _path: &[u8]) -> Result<(), QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     /// Removes a non-directory file at `path` relative to `dirfd`.
     fn path_unlink_file(&mut self, _dirfd: u32, _path: &[u8]) -> Result<(), QuickJsWasiErrno> {
         Err(QuickJsWasiErrno::Nosys)

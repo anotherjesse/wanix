@@ -470,6 +470,12 @@ impl WasiCtx {
         self.stat_path(&path)
     }
 
+    /// Creates a namespace directory at a path relative to `dirfd`.
+    pub fn path_create_directory(&self, dirfd: WasiFd, path: impl AsRef<str>) -> Result<(), Errno> {
+        let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_CREATE_DIRECTORY)?;
+        self.namespace.create_dir(&path).map_err(Errno::from)
+    }
+
     /// Removes a namespace file at a path relative to `dirfd`.
     pub fn path_unlink_file(&self, dirfd: WasiFd, path: impl AsRef<str>) -> Result<(), Errno> {
         let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_UNLINK_FILE)?;

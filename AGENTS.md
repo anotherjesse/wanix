@@ -139,6 +139,9 @@ cargo test --workspace --locked
 - [ADR 0024](docs/adrs/0024-persistent-qjs-snapshot-cli.md): `qjs-snapshot`
   and `qjs-resume` persist QuickJS VM images while Wanix host resources are
   reattached per invocation.
+- [ADR 0025](docs/adrs/0025-wasi-directory-create-through-wanix-namespaces.md):
+  `qjs:os.mkdir(...)` reaches Wanix-owned `PATH_CREATE_DIRECTORY` semantics
+  through namespaces and live WASI providers.
 
 ## Cycle Rules
 

@@ -225,6 +225,53 @@ fn namespace_clones_are_isolated_but_share_backing_filesystems() {
 }
 
 #[test]
+fn create_dir_routes_to_resolved_backing_filesystem() {
+    let root = fixture(&[("mnt/existing.txt", b"file")]);
+    let mut ns = Namespace::new();
+    ns.bind(root.clone(), "mnt", "app", BindOptions::default())
+        .unwrap();
+
+    ns.create_dir(&NormalizedPath::new("app/newdir").unwrap())
+        .unwrap();
+
+    assert_eq!(
+        root.metadata(&NormalizedPath::new("mnt/newdir").unwrap())
+            .unwrap()
+            .file_type(),
+        FileType::Directory
+    );
+    assert_eq!(
+        ns.create_dir(&NormalizedPath::new("app/newdir").unwrap()),
+        Err(FsError::AlreadyExists)
+    );
+    assert_eq!(
+        ns.create_dir(&NormalizedPath::new("app/missing/child").unwrap()),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        ns.create_dir(&NormalizedPath::new("app/existing.txt/child").unwrap()),
+        Err(FsError::NotDirectory)
+    );
+}
+
+#[test]
+fn create_dir_reports_synthetic_namespace_directories_as_existing() {
+    let fs = fixture(&[("file.txt", b"content")]);
+    let mut ns = Namespace::new();
+    ns.bind(fs, "file.txt", "a/b/file.txt", BindOptions::default())
+        .unwrap();
+
+    assert_eq!(
+        ns.create_dir(&NormalizedPath::new("a").unwrap()),
+        Err(FsError::AlreadyExists)
+    );
+    assert_eq!(
+        ns.create_dir(&NormalizedPath::new("a/c").unwrap()),
+        Err(FsError::NotFound)
+    );
+}
+
+#[test]
 fn read_dir_unions_direct_and_subpath_bindings() {
     let fs1 = fixture(&[
         ("file1.txt", b"content1"),
