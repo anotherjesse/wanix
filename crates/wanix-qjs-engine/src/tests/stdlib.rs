@@ -2,6 +2,85 @@ use super::*;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 
+type WasiHostResult<T> = std::result::Result<T, QuickJsWasiErrno>;
+type RecordedWrites = Arc<Mutex<Vec<(u32, Vec<u8>)>>>;
+
+#[derive(Default)]
+struct ExitWasiHost {
+    exits: Arc<Mutex<Vec<u32>>>,
+    writes: RecordedWrites,
+}
+
+impl QuickJsWasiHost for ExitWasiHost {
+    fn proc_exit(&mut self, code: u32) -> WasiHostResult<()> {
+        self.exits.lock().expect("test exit lock").push(code);
+        Ok(())
+    }
+
+    fn fd_prestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiPrestat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_open(
+        &mut self,
+        _dirfd: u32,
+        _dirflags: u32,
+        _path: &[u8],
+        _oflags: u16,
+        _rights_base: u64,
+        _rights_inheriting: u64,
+        _fdflags: u16,
+    ) -> WasiHostResult<u32> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_read(&mut self, _fd: u32, _buf: &mut [u8]) -> WasiHostResult<usize> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_readdir(&mut self, _fd: u32) -> WasiHostResult<Vec<QuickJsWasiDirEntry>> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_write(&mut self, fd: u32, buf: &[u8]) -> WasiHostResult<usize> {
+        self.writes
+            .lock()
+            .expect("test writes lock")
+            .push((fd, buf.to_vec()));
+        Ok(buf.len())
+    }
+
+    fn fd_seek(
+        &mut self,
+        _fd: u32,
+        _offset: i64,
+        _whence: QuickJsWasiWhence,
+    ) -> WasiHostResult<u64> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_close(&mut self, _fd: u32) -> WasiHostResult<()> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_fdstat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFdStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_filestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFileStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_filestat_get(
+        &mut self,
+        _dirfd: u32,
+        _flags: u32,
+        _path: &[u8],
+    ) -> WasiHostResult<QuickJsWasiFileStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+}
+
 #[test]
 fn fixture_exposes_quickjs_std_and_os_modules() -> Result<()> {
     let (engine, module) = quickjs_fixture()?;
@@ -38,6 +117,43 @@ fn quickjs_std_stdout_uses_wasi_capture() -> Result<()> {
     )?;
 
     assert_eq!(vm.take_captured_stdout(), b"via qjs std\n");
+    Ok(())
+}
+
+#[test]
+fn quickjs_std_exit_uses_live_wasi_host_proc_exit() -> Result<()> {
+    let (_engine, module) = quickjs_fixture()?;
+    let host = ExitWasiHost::default();
+    let exits = Arc::clone(&host.exits);
+    let writes = Arc::clone(&host.writes);
+    let mut vm =
+        module.create_runtime_with_options(QuickJsCreateOptions::new().with_wasi_host(host))?;
+
+    let err = vm
+        .eval_module_discard(
+            r#"
+            import * as std from "qjs:std";
+            std.exit(7);
+            globalThis.afterStdExit = true;
+            "#,
+            "stdlib-exit.mjs",
+        )
+        .expect_err("std.exit should trap through proc_exit");
+
+    let message = format!("{err:#}");
+    assert!(message.contains("WASI proc_exit(7)"), "{message}");
+    assert_eq!(*exits.lock().expect("test exit lock"), [7]);
+    let snapshot_err = vm
+        .snapshot()
+        .expect_err("process-exited runtime should not snapshot");
+    assert!(
+        snapshot_err
+            .to_string()
+            .contains("cannot snapshot after WASI proc_exit"),
+        "{snapshot_err}"
+    );
+    drop(vm);
+    assert!(writes.lock().expect("test writes lock").is_empty());
     Ok(())
 }
 

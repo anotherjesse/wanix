@@ -601,6 +601,30 @@ console.error("stderr after exit");
     }
 
     #[test]
+    fn qjs_command_uses_exit_status_requested_by_quickjs_std() {
+        let script = write_temp_script(
+            "std-exit.js",
+            r#"
+import * as std from "qjs:std";
+
+std.out.puts("before std exit\n");
+std.out.flush();
+std.err.puts("stderr before std exit\n");
+std.err.flush();
+std.exit(9);
+std.out.puts("after std exit\n");
+std.err.puts("stderr after std exit\n");
+"#,
+        );
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 9);
+        assert_eq!(output.stdout(), b"before std exit\n");
+        assert_eq!(output.stderr(), b"stderr before std exit\n");
+    }
+
+    #[test]
     fn qjs_command_runs_fd_demo_through_wanix_task_fds() {
         let script = write_temp_script(
             "fd-demo.js",

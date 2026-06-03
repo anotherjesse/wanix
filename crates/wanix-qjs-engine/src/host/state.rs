@@ -27,6 +27,7 @@ pub(crate) struct HostState {
     promise_rejection_handler: Option<PromiseRejectionHandler>,
     promise_rejection_handler_depth: usize,
     wasi_host: Option<QuickJsWasiHostHandle>,
+    process_exited: bool,
     virtual_file_fds: BTreeMap<i32, VirtualFileHandle>,
     next_virtual_file_fd: i32,
 }
@@ -55,6 +56,7 @@ impl HostState {
             promise_rejection_handler: None,
             promise_rejection_handler_depth: 0,
             wasi_host,
+            process_exited: false,
             virtual_file_fds: BTreeMap::new(),
             next_virtual_file_fd: FIRST_VIRTUAL_FILE_FD,
         }
@@ -86,6 +88,14 @@ impl HostState {
 
     pub(super) fn wasi_host(&self) -> Option<QuickJsWasiHostHandle> {
         self.wasi_host.as_ref().map(Arc::clone)
+    }
+
+    pub(crate) fn mark_process_exited(&mut self) {
+        self.process_exited = true;
+    }
+
+    pub(crate) fn process_exited(&self) -> bool {
+        self.process_exited
     }
 
     pub(super) fn memory(&self) -> Option<Memory> {

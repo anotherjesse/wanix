@@ -287,6 +287,9 @@ fn call_qjs_init2(
 impl Drop for QuickJsRuntime {
     fn drop(&mut self) {
         // Drop cannot surface guest cleanup errors, so runtime destruction is best-effort.
+        if self.store.data().process_exited() {
+            return;
+        }
         let _ = self.qjs_destroy.call(&mut self.store, ());
     }
 }

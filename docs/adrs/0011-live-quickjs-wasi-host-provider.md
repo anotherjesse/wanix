@@ -47,8 +47,11 @@ QuickJS-NG `qjs:std` stdio plus process, metadata, path, directory, argv, and
 env imports in synthetic WAT tests. `proc_exit` is treated as live process
 state: the engine forwards it to the provider and then traps to honor the
 non-returning WASI import shape, while Wanix decides how that exit request
-updates task metadata. Broader calls can use the same trait as the fixture
-exposes more WASI surface.
+updates task metadata. After the provider accepts `proc_exit`, the engine marks
+the runtime as process-exited and skips ordinary QuickJS teardown when the
+Wasmtime instance is dropped; a WASI process exit is terminal host state rather
+than a normal JavaScript exception to clean up, resume, or snapshot. Broader
+calls can use the same trait as the fixture exposes more WASI surface.
 
 The old read-only virtual filesystem remains a fallback for simple engine and
 namespace demos. Wanix-backed task/config paths should prefer the live provider

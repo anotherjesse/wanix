@@ -55,7 +55,7 @@ fn environ_get(
     )
 }
 
-fn proc_exit(caller: Caller<'_, HostState>, code: i32) -> wasmtime::Result<()> {
+fn proc_exit(mut caller: Caller<'_, HostState>, code: i32) -> wasmtime::Result<()> {
     let code = code as u32;
     let Some(host) = caller.data().wasi_host() else {
         return Err(wasmtime::Error::msg(format!(
@@ -66,7 +66,11 @@ fn proc_exit(caller: Caller<'_, HostState>, code: i32) -> wasmtime::Result<()> {
         .lock()
         .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
     match host.proc_exit(code) {
-        Ok(()) => Err(wasmtime::Error::msg(format!("WASI proc_exit({code})"))),
+        Ok(()) => {
+            drop(host);
+            caller.data_mut().mark_process_exited();
+            Err(wasmtime::Error::msg(format!("WASI proc_exit({code})")))
+        }
         Err(errno) => Err(wasmtime::Error::msg(format!(
             "WASI proc_exit({code}) failed: {errno:?}"
         ))),

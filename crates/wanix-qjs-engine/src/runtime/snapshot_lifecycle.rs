@@ -128,6 +128,9 @@ impl QuickJsRuntime {
     /// read, the linear memory copy cannot be allocated, or the metadata is
     /// structurally invalid.
     pub fn snapshot(&mut self) -> Result<Snapshot> {
+        if self.store.data().process_exited() {
+            bail!("cannot snapshot after WASI proc_exit");
+        }
         if self.store.data().host_callback_depth() != 0 {
             bail!("cannot snapshot while a host callback is active");
         }

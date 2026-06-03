@@ -1256,6 +1256,66 @@ try {
     }
 
     #[test]
+    fn task_driver_maps_quickjs_std_exit_to_task_status() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+
+std.out.puts("before std exit\n");
+std.out.flush();
+std.err.puts("stderr before std exit\n");
+std.err.flush();
+std.exit(7);
+std.out.puts("after std exit\n");
+std.err.puts("stderr after std exit\n");
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        let stderr = std::sync::Arc::new(MemFs::new());
+        stderr.write_file("err", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.insert_fd(
+            Fd::STDERR,
+            stderr
+                .open(
+                    &NormalizedPath::new("err").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("err").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(read_file(&*stdout, "out"), b"before std exit\n");
+        assert_eq!(read_file(&*stderr, "err"), b"stderr before std exit\n");
+        assert_eq!(task.exit(), "7");
+    }
+
+    #[test]
     fn task_driver_exposes_wanix_owned_fd_table_to_javascript() {
         let table = TaskTable::new();
         let runner = runner();
