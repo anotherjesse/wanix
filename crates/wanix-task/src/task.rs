@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use wanix_fs::{File, FileSystem, FsError, FsResult, Metadata, NormalizedPath, OpenOptions};
 use wanix_vfs::{BindOptions, Namespace};
 
+use crate::cmd::parse_cmd_argv;
 use crate::{Fd, FdTable};
 
 /// Stable task identifier.
@@ -75,6 +76,7 @@ struct TaskState {
     kind: String,
     spec: TaskSpec,
     cmd: String,
+    cmd_argv: Option<Vec<String>>,
     env: Vec<String>,
     dir: NormalizedPath,
     exit: String,
@@ -91,6 +93,7 @@ impl fmt::Debug for Task {
                 .field("parent", &state.parent)
                 .field("kind", &state.kind)
                 .field("cmd", &state.cmd)
+                .field("cmd_argv", &state.cmd_argv)
                 .field("dir", &state.dir)
                 .field("exit", &state.exit)
                 .field("fds", &state.fds)
@@ -109,6 +112,7 @@ impl Task {
             parent: None,
             kind: "manual".to_owned(),
             cmd: String::new(),
+            cmd_argv: None,
             env: Vec::new(),
             dir: spec.cwd.clone(),
             exit: String::new(),
@@ -130,6 +134,7 @@ impl Task {
             kind: kind.into(),
             spec: TaskSpec::unset(),
             cmd: String::new(),
+            cmd_argv: None,
             env: Vec::new(),
             dir: NormalizedPath::new(".").expect("root path is valid"),
             exit: String::new(),
@@ -226,10 +231,20 @@ impl Task {
 
     /// Sets the raw command text.
     pub fn set_cmd(&self, cmd: impl Into<String>) -> FsResult<()> {
+        let cmd = cmd.into();
+        let cmd_argv = parse_cmd_argv(&cmd)?;
         self.write_state(|state| {
-            state.cmd = cmd.into();
+            state.cmd = cmd;
+            state.cmd_argv = cmd_argv;
             Ok(())
         })
+    }
+
+    /// Returns the parsed command arguments from the raw `cmd` task field.
+    #[must_use]
+    pub fn cmd_argv(&self) -> Option<Vec<String>> {
+        self.read_state(|state| state.cmd_argv.clone())
+            .expect("task state lock should be readable")
     }
 
     /// Returns the raw environment lines.

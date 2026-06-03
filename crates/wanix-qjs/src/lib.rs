@@ -574,16 +574,17 @@ fn task_command(task: &Task) -> FsResult<TaskCommand> {
     }
 
     let cwd = task.dir();
-    let mut parts = raw.split_whitespace();
-    let script = parts
-        .next()
+    let argv = task
+        .cmd_argv()
+        .ok_or_else(|| FsError::Other("qjs task cmd is empty".to_owned()))?;
+    let (script, args) = argv
+        .split_first()
         .ok_or_else(|| FsError::Other("qjs task cmd is empty".to_owned()))?;
     let program = resolve_from_cwd(&cwd, &NormalizedPath::new(script)?)?;
-    let args = parts.map(str::to_owned).collect();
     Ok(TaskCommand {
         raw,
         program,
-        args,
+        args: args.to_vec(),
         cwd,
     })
 }
@@ -595,7 +596,7 @@ pub(crate) fn task_wasi_argv(task: &Task) -> Vec<String> {
             .chain(spec.args)
             .collect();
     }
-    task.cmd().split_whitespace().map(str::to_owned).collect()
+    task.cmd_argv().unwrap_or_default()
 }
 
 pub(crate) fn task_wasi_env(task: &Task) -> Vec<String> {
@@ -623,7 +624,8 @@ pub(crate) fn task_program_for_check(task: &Task) -> Option<String> {
     if task_spec_is_set(&spec) {
         return Some(spec.program.to_string());
     }
-    task.cmd().split_whitespace().next().map(str::to_owned)
+    task.cmd_argv()
+        .and_then(|argv| argv.first().map(ToOwned::to_owned))
 }
 
 fn task_spec_is_set(spec: &TaskSpec) -> bool {
@@ -952,6 +954,33 @@ print(Wanix.readText("input.txt"));
         assert_eq!(ctx.env(), ["EMPTY=", "MODE=test"]);
         assert_eq!(super::task_env_map(&task)["MODE"], "test");
         assert!(!super::task_env_map(&task).contains_key("RAW"));
+    }
+
+    #[test]
+    fn raw_task_cmd_preserves_quoted_qjs_program_args() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("app/main.js", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.set_cmd("main.js alpha 'two words' '' plain\\ arg")
+            .unwrap();
+        task.set_env_lines("MODE=test\nEMPTY=").unwrap();
+        task.set_dir("app").unwrap();
+
+        let command = super::task_command(&task).unwrap();
+        let ctx = WasiCtx::new(task_wasi_config(&task));
+
+        assert_eq!(command.raw, "main.js alpha 'two words' '' plain\\ arg");
+        assert_eq!(command.program.as_str(), "app/main.js");
+        assert_eq!(command.args, ["alpha", "two words", "", "plain arg"]);
+        assert_eq!(
+            ctx.args(),
+            ["main.js", "alpha", "two words", "", "plain arg"]
+        );
+        assert_eq!(ctx.env(), ["MODE=test", "EMPTY="]);
+        assert_eq!(super::task_env_map(&task)["MODE"], "test");
     }
 
     #[test]
@@ -1883,7 +1912,7 @@ function writeServiceText(path, text) {
 const parent = readServiceText("#task/self/id").trim();
 const child = readServiceText("#task/new/qjs").trim();
 Wanix.writeText("child-stdin.txt", "stdin from parent\n");
-writeServiceText("#task/" + child + "/cmd", "child.js alpha beta\n");
+writeServiceText("#task/" + child + "/cmd", "child.js alpha 'two words' '' beta\n");
 writeServiceText("#task/" + child + "/env", "MODE=child\n");
 writeServiceText("#task/" + child + "/dir", ".\n");
 writeServiceText("#task/" + child + "/ctl", "bind child-stdin.txt fd/0\n");
@@ -1959,7 +1988,7 @@ std.exit(5);
 
         assert_eq!(
             read_file(&*stdout, "out"),
-            b"parent 1\nchild 2\nid 2 args child.js|alpha|beta mode child stdin stdin from parent\nchild exit 5\n"
+            b"parent 1\nchild 2\nid 2 args child.js|alpha|two words||beta mode child stdin stdin from parent\nchild exit 5\n"
         );
         assert_eq!(read_file(&*stderr, "err"), b"stderr mode child\n");
         assert_eq!(task.exit(), "0");

@@ -109,6 +109,9 @@ cargo test --workspace --locked
 - [ADR 0014](docs/adrs/0014-wasi-service-paths-root-relative.md):
   WASI paths beginning with `#task` stay rooted at the Wanix task service root
   even when the ordinary root preopen maps to a task cwd.
+- [ADR 0015](docs/adrs/0015-task-cmd-shell-argv-format.md): `#task/cmd`
+  writes use a shell-quoted argv format so file-controlled tasks preserve
+  spaces, quotes, and empty arguments.
 
 ## Cycle Rules
 

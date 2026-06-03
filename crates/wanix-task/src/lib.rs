@@ -3,6 +3,7 @@
 //! This crate owns task allocation through `#task/new/*`, task metadata files,
 //! fd tables, driver selection, and per-task namespaces.
 
+mod cmd;
 mod driver;
 mod fd;
 mod table;

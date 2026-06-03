@@ -39,7 +39,7 @@ function writeServiceText(path, text) {
 const parent = readServiceText("#task/self/id").trim();
 const child = readServiceText("#task/new/qjs").trim();
 Wanix.writeText("child-stdin.txt", "stdin from parent\n");
-writeServiceText("#task/" + child + "/cmd", "qjs-task-spawn-child.js alpha beta\n");
+writeServiceText("#task/" + child + "/cmd", "qjs-task-spawn-child.js alpha 'two words' '' beta\n");
 writeServiceText("#task/" + child + "/env", "MODE=spawned\n");
 writeServiceText("#task/" + child + "/dir", ".\n");
 writeServiceText("#task/" + child + "/ctl", "bind child-stdin.txt fd/0\n");

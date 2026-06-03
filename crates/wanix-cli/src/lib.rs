@@ -666,7 +666,7 @@ function writeServiceText(path, text) {
 const parent = readServiceText("#task/self/id").trim();
 const child = readServiceText("#task/new/qjs").trim();
 Wanix.writeText("child-stdin.txt", "stdin from parent\n");
-writeServiceText("#task/" + child + "/cmd", "spawn-child.js alpha beta\n");
+writeServiceText("#task/" + child + "/cmd", "spawn-child.js alpha 'two words' '' beta\n");
 writeServiceText("#task/" + child + "/env", "MODE=child\n");
 writeServiceText("#task/" + child + "/dir", ".\n");
 writeServiceText("#task/" + child + "/ctl", "bind child-stdin.txt fd/0\n");
@@ -713,7 +713,7 @@ std.exit(5);
         assert_eq!(output.exit_code(), 0);
         assert_eq!(
             output.stdout(),
-            b"parent 1\nchild 2\nid 2 args spawn-child.js|alpha|beta mode child stdin stdin from parent\nchild exit 5\n"
+            b"parent 1\nchild 2\nid 2 args spawn-child.js|alpha|two words||beta mode child stdin stdin from parent\nchild exit 5\n"
         );
         assert_eq!(output.stderr(), b"stderr mode child\n");
     }

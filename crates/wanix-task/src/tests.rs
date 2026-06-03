@@ -259,6 +259,54 @@ fn task_field_files_round_trip() {
 }
 
 #[test]
+fn task_cmd_file_parses_shell_quoted_argv_without_replacing_raw_text() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    write_file(
+        &taskfs,
+        "self/cmd",
+        br#"script.js 'two words' '' 'quote'"'"'test' plain\ arg
+"#,
+    );
+
+    assert_eq!(
+        read_file(&taskfs, "self/cmd"),
+        "script.js 'two words' '' 'quote'\"'\"'test' plain\\ arg\n"
+    );
+    assert_eq!(
+        task.cmd_argv().unwrap(),
+        ["script.js", "two words", "", "quote'test", "plain arg"]
+    );
+}
+
+#[test]
+fn task_cmd_file_rejects_unclosed_quotes() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    let err = taskfs
+        .open(
+            &NormalizedPath::new("self/cmd").unwrap(),
+            OpenOptions {
+                write: true,
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap()
+        .write(b"script.js 'unterminated")
+        .unwrap_err();
+
+    assert!(err.to_string().contains("unterminated quote"));
+    assert_eq!(task.cmd(), "");
+    assert_eq!(task.cmd_argv(), None);
+}
+
+#[test]
 fn taskfs_open_flags_are_capabilities() {
     let table = TaskTable::new();
     table.register_noop_driver("qjs").unwrap();
