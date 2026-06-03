@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use super::{CRATE_PURPOSE, Errno, Preopen, WasiConfig, WasiCtx, WasiFd, WasiOpenOptions};
+use super::{
+    CRATE_PURPOSE, Errno, Preopen, WasiConfig, WasiCtx, WasiFd, WasiFileType, WasiOpenOptions,
+    WasiRights, WasiWhence,
+};
 use wanix_fs::{FileSystem, FileType, FsError, MemFs, NormalizedPath, OpenOptions};
 use wanix_task::TaskTable;
 use wanix_vfs::{BindOptions, Namespace};
@@ -47,8 +50,20 @@ fn root_preopen_stats_and_lists_namespace() {
     let root = fixture(&[("hello.txt", b"hello"), ("dir/nested.txt", b"nested")]);
     let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
 
+    let prestat = ctx.fd_prestat_get(WasiFd::ROOT).unwrap();
+    assert_eq!(prestat.dir_name(), "/");
+    assert_eq!(prestat.dir_name_len(), 1);
+    assert_eq!(prestat.to_preview1_bytes(), [0, 0, 0, 0, 1, 0, 0, 0]);
+    let mut preopen_name = [0; 1];
+    assert_eq!(
+        ctx.fd_prestat_dir_name(WasiFd::ROOT, &mut preopen_name)
+            .unwrap(),
+        1
+    );
+    assert_eq!(&preopen_name, b"/");
     let stat = ctx.fd_filestat_get(WasiFd::ROOT).unwrap();
     assert_eq!(stat.file_type(), FileType::Directory);
+    assert_eq!(stat.wasi_file_type(), WasiFileType::Directory);
     assert_eq!(
         ctx.fd_read_dir(WasiFd::ROOT)
             .unwrap()
@@ -83,6 +98,20 @@ fn multiple_preopens_are_validated_and_shift_dynamic_fds() {
 
     assert_eq!(fd.get(), 5);
     assert_eq!(&buf[..count], b"inner");
+    assert_eq!(
+        ctx.fd_prestat_get(WasiFd::new(4)).unwrap().dir_name(),
+        "/mnt"
+    );
+    let mut name = [0; 4];
+    assert_eq!(
+        ctx.fd_prestat_dir_name(WasiFd::new(4), &mut name).unwrap(),
+        4
+    );
+    assert_eq!(&name, b"/mnt");
+    assert_eq!(
+        ctx.fd_prestat_dir_name(WasiFd::new(4), &mut [0; 3]),
+        Err(Errno::Inval)
+    );
     assert_eq!(ctx.fd_close(WasiFd::new(4)), Err(Errno::Badf));
 }
 
@@ -172,6 +201,15 @@ fn configured_standard_fds_read_write_and_remain_non_closeable() {
         ctx.fd_filestat_get(WasiFd::STDOUT).unwrap().file_type(),
         FileType::File
     );
+    let stdin_stat = ctx.fd_fdstat_get(WasiFd::STDIN).unwrap();
+    assert_eq!(stdin_stat.file_type(), WasiFileType::CharacterDevice);
+    assert!(stdin_stat.rights_base().contains(WasiRights::FD_READ));
+    assert!(!stdin_stat.rights_base().contains(WasiRights::FD_WRITE));
+    assert_eq!(stdin_stat.rights_inheriting(), WasiRights::NONE);
+    let stdout_stat = ctx.fd_fdstat_get(WasiFd::STDOUT).unwrap();
+    assert_eq!(stdout_stat.file_type(), WasiFileType::CharacterDevice);
+    assert!(stdout_stat.rights_base().contains(WasiRights::FD_WRITE));
+    assert!(!stdout_stat.rights_base().contains(WasiRights::FD_READ));
     let file_fd = ctx
         .path_open(WasiFd::ROOT, "hello.txt", WasiOpenOptions::read())
         .unwrap();
@@ -221,6 +259,11 @@ fn writes_and_creates_flow_back_to_namespace() {
             .len(),
         7
     );
+    let fdstat = ctx.fd_fdstat_get(fd).unwrap();
+    assert_eq!(fdstat.file_type(), WasiFileType::RegularFile);
+    assert!(fdstat.rights_base().contains(WasiRights::FD_WRITE));
+    assert!(!fdstat.rights_base().contains(WasiRights::FD_READ));
+    assert_eq!(fdstat.rights_inheriting(), WasiRights::NONE);
 }
 
 #[test]
@@ -264,6 +307,15 @@ fn directories_can_be_opened_and_read_but_not_written() {
             .map(|entry| entry.name().to_owned())
             .collect::<Vec<_>>(),
         ["file.txt"]
+    );
+    let fdstat = ctx.fd_fdstat_get(dir_fd).unwrap();
+    assert_eq!(fdstat.file_type(), WasiFileType::Directory);
+    assert!(fdstat.rights_base().contains(WasiRights::PATH_OPEN));
+    assert!(fdstat.rights_base().contains(WasiRights::FD_READDIR));
+    assert!(
+        fdstat
+            .rights_inheriting()
+            .contains(WasiRights::FD_FILESTAT_GET)
     );
     assert_eq!(ctx.fd_write(dir_fd, b"nope"), Err(Errno::Isdir));
     assert_eq!(
@@ -328,6 +380,110 @@ fn close_only_accepts_dynamic_fds() {
 }
 
 #[test]
+fn fdstat_reports_preopen_and_regular_file_rights() {
+    let root = fixture(&[("read.txt", b"read"), ("write.txt", b"")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+
+    let root_stat = ctx.fd_fdstat_get(WasiFd::ROOT).unwrap();
+    assert_eq!(root_stat.file_type(), WasiFileType::Directory);
+    assert!(root_stat.rights_base().contains(WasiRights::PATH_OPEN));
+    assert!(
+        root_stat
+            .rights_base()
+            .contains(WasiRights::PATH_FILESTAT_GET)
+    );
+    assert!(
+        root_stat
+            .rights_base()
+            .contains(WasiRights::FD_FILESTAT_GET)
+    );
+    assert!(
+        root_stat
+            .rights_base()
+            .contains(WasiRights::PATH_CREATE_FILE)
+    );
+    assert!(
+        root_stat
+            .rights_base()
+            .contains(WasiRights::PATH_FILESTAT_SET_SIZE)
+    );
+    assert!(root_stat.rights_base().contains(WasiRights::FD_READDIR));
+    assert!(root_stat.rights_inheriting().contains(WasiRights::FD_READ));
+    assert!(root_stat.rights_inheriting().contains(WasiRights::FD_WRITE));
+    assert!(
+        root_stat
+            .rights_inheriting()
+            .contains(WasiRights::PATH_OPEN)
+    );
+    assert!(
+        root_stat
+            .rights_inheriting()
+            .contains(WasiRights::FD_READDIR)
+    );
+    assert!(!root_stat.rights_inheriting().contains(WasiRights::FD_SEEK));
+    assert!(!root_stat.rights_inheriting().contains(WasiRights::FD_TELL));
+
+    let read_fd = ctx
+        .path_open(WasiFd::ROOT, "read.txt", WasiOpenOptions::read())
+        .unwrap();
+    let read_stat = ctx.fd_fdstat_get(read_fd).unwrap();
+    assert_eq!(read_stat.file_type(), WasiFileType::RegularFile);
+    assert!(read_stat.rights_base().contains(WasiRights::FD_READ));
+    assert!(!read_stat.rights_base().contains(WasiRights::FD_WRITE));
+    let read_stat_bytes = read_stat.to_preview1_bytes();
+    assert_eq!(
+        read_stat_bytes[0],
+        WasiFileType::RegularFile.preview1_code()
+    );
+    assert_eq!(
+        u64::from_le_bytes(read_stat_bytes[8..16].try_into().unwrap()),
+        read_stat.rights_base().bits()
+    );
+    assert_eq!(
+        u64::from_le_bytes(read_stat_bytes[16..24].try_into().unwrap()),
+        0
+    );
+
+    let write_fd = ctx
+        .path_open(
+            WasiFd::ROOT,
+            "write.txt",
+            WasiOpenOptions {
+                read: false,
+                write: true,
+                create: false,
+                truncate: false,
+            },
+        )
+        .unwrap();
+    let write_stat = ctx.fd_fdstat_get(write_fd).unwrap();
+    assert!(write_stat.rights_base().contains(WasiRights::FD_WRITE));
+    assert!(!write_stat.rights_base().contains(WasiRights::FD_READ));
+
+    assert_eq!(ctx.fd_fdstat_get(WasiFd::new(99)), Err(Errno::Badf));
+    assert_eq!(ctx.fd_prestat_get(read_fd), Err(Errno::Badf));
+}
+
+#[test]
+fn fd_seek_is_explicitly_unsupported_until_files_are_seekable() {
+    let root = fixture(&[("hello.txt", b"hello")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let fd = ctx
+        .path_open(WasiFd::ROOT, "hello.txt", WasiOpenOptions::read())
+        .unwrap();
+
+    assert_eq!(WasiWhence::from_preview1(0).unwrap(), WasiWhence::Set);
+    assert_eq!(WasiWhence::from_preview1(1).unwrap(), WasiWhence::Cur);
+    assert_eq!(WasiWhence::from_preview1(2).unwrap(), WasiWhence::End);
+    assert_eq!(WasiWhence::from_preview1(3), Err(Errno::Inval));
+    assert_eq!(ctx.fd_seek(fd, 0, WasiWhence::Set), Err(Errno::Nosys));
+    assert_eq!(
+        ctx.fd_seek(WasiFd::new(99), 0, WasiWhence::Set),
+        Err(Errno::Badf)
+    );
+}
+
+#[test]
 fn path_errors_map_to_wasi_errno() {
     let root = fixture(&[]);
     let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
@@ -378,4 +534,31 @@ fn errno_mapping_is_pinned_for_filesystem_errors() {
     assert_eq!(Errno::from(FsError::InvalidFd), Errno::Badf);
     assert_eq!(Errno::from(FsError::NotEmpty), Errno::Io);
     assert_eq!(Errno::from(FsError::Other("opaque".into())), Errno::Io);
+}
+
+#[test]
+fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
+    assert_eq!(Errno::Success.preview1_code(), 0);
+    assert_eq!(Errno::Success.preview1_result(), 0);
+    assert_eq!(Errno::Badf.preview1_code(), 8);
+    assert_eq!(Errno::Exist.preview1_code(), 20);
+    assert_eq!(Errno::Inval.preview1_code(), 28);
+    assert_eq!(Errno::Io.preview1_code(), 29);
+    assert_eq!(Errno::Isdir.preview1_code(), 31);
+    assert_eq!(Errno::Nametoolong.preview1_code(), 37);
+    assert_eq!(Errno::Noent.preview1_code(), 44);
+    assert_eq!(Errno::Nosys.preview1_code(), 52);
+    assert_eq!(Errno::Notdir.preview1_code(), 54);
+    assert_eq!(Errno::Notcapable.preview1_code(), 76);
+
+    assert_eq!(WasiFileType::Unknown.preview1_code(), 0);
+    assert_eq!(WasiFileType::CharacterDevice.preview1_code(), 2);
+    assert_eq!(WasiFileType::Directory.preview1_code(), 3);
+    assert_eq!(WasiFileType::RegularFile.preview1_code(), 4);
+    assert_eq!(WasiFileType::SymbolicLink.preview1_code(), 7);
+    assert_eq!(WasiRights::PATH_CREATE_FILE.bits(), 1 << 10);
+    assert_eq!(WasiRights::PATH_OPEN.bits(), 1 << 13);
+    assert_eq!(WasiRights::FD_READDIR.bits(), 1 << 14);
+    assert_eq!(WasiRights::PATH_FILESTAT_SET_SIZE.bits(), 1 << 19);
+    assert_eq!(WasiRights::FD_FILESTAT_GET.bits(), 1 << 21);
 }

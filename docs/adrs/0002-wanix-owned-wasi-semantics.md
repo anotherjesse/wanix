@@ -30,6 +30,15 @@ does not depend upward on `wanix-task`.
   local filesystem adapter.
 - Stdio defaults to closed; fd 0/1/2 become available only when the composition
   layer attaches explicit Wanix file handles.
+- `wanix-wasi` exposes typed Preview 1 import metadata such as preopen names,
+  fdstat file types/rights, and numeric errno codes without depending on
+  Wasmtime guest memory. Engine-specific import providers translate those typed
+  results and byte-layout encoders into guest ABI structs.
+- Directory fdstat rights should describe the operations Wanix already allows:
+  directory reads, recursive path opens, file creation, and truncation during
+  path open. Directory fds inherit both regular-file and child-directory rights.
+- `fd_seek` returns `nosys` for valid fds until Wanix file handles grow a
+  seek/tell contract; bad fds are still reported as `badf`.
 - Early WASI support can start narrow and read-only, but the API boundary should
   be designed for full Wanix filesystem behavior.
 - `wanix-wasi` depends on `wanix-fs` and `wanix-vfs`; task-fd attachment is

@@ -97,3 +97,11 @@ Prefer the highest-leverage externally visible capability or demo outcome.
 Use cleanup only when it unblocks that outcome, protects a trust boundary,
 preserves compatibility, or fixes a major review finding. Commit each completed
 cycle before starting the next one.
+
+## Queued Follow-ups
+
+- If QuickJS-heavy tests become too slow, add a test-only
+  `OnceLock<Result<Arc<QuickJsRunner>, String>>` fixture in `wanix-qjs`, adjust
+  qjs task-driver tests to clone the cached runner, and consider a similar
+  injection seam for `wanix-cli` qjs tests. Keep production runner caching out
+  of scope unless it becomes an intentional runtime decision.

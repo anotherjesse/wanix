@@ -4,7 +4,10 @@ use std::fmt;
 use wanix_fs::{DirEntry, File, FileSystem, FileType, FsError, NormalizedPath, OpenOptions};
 use wanix_vfs::Namespace;
 
-use crate::{Errno, FileStat, WasiConfig, WasiFd, WasiFile, WasiOpenOptions};
+use crate::{
+    Errno, FileStat, WasiConfig, WasiFd, WasiFdStat, WasiFile, WasiFileType, WasiOpenOptions,
+    WasiPrestat, WasiRights,
+};
 
 const FIRST_PREOPEN_FD: u32 = 3;
 const MAX_WASI_PATH_BYTES: usize = 4096;
@@ -175,6 +178,57 @@ impl WasiCtx {
         }
     }
 
+    /// Returns prestat data for a preopened directory fd.
+    pub fn fd_prestat_get(&self, fd: WasiFd) -> Result<WasiPrestat, Errno> {
+        match self.fds.get(&fd).ok_or(Errno::Badf)? {
+            Handle::Preopen { path } => Ok(WasiPrestat::from_path(path)),
+            Handle::Stdio { .. } | Handle::Directory { .. } | Handle::File { .. } => {
+                Err(Errno::Badf)
+            }
+        }
+    }
+
+    /// Copies the preopened directory name into `dst`.
+    pub fn fd_prestat_dir_name(&self, fd: WasiFd, dst: &mut [u8]) -> Result<usize, Errno> {
+        let prestat = self.fd_prestat_get(fd)?;
+        let name = prestat.dir_name().as_bytes();
+        if dst.len() < name.len() {
+            return Err(Errno::Inval);
+        }
+        dst[..name.len()].copy_from_slice(name);
+        Ok(name.len())
+    }
+
+    /// Returns fdstat data for an open fd.
+    pub fn fd_fdstat_get(&self, fd: WasiFd) -> Result<WasiFdStat, Errno> {
+        match self.fds.get(&fd).ok_or(Errno::Badf)? {
+            Handle::Stdio { file } => Ok(WasiFdStat::new(
+                WasiFileType::CharacterDevice,
+                attached_file_rights(file),
+                WasiRights::NONE,
+            )),
+            Handle::Preopen { .. } | Handle::Directory { .. } => Ok(WasiFdStat::new(
+                WasiFileType::Directory,
+                WasiRights::DIRECTORY_BASE,
+                WasiRights::DIRECTORY_INHERITING,
+            )),
+            Handle::File { read, write, .. } => Ok(WasiFdStat::new(
+                WasiFileType::RegularFile,
+                open_file_rights(*read, *write),
+                WasiRights::NONE,
+            )),
+        }
+    }
+
+    /// Seeks an fd offset.
+    ///
+    /// Wanix files do not yet expose seek/tell behavior, so this pins the
+    /// Preview 1 import policy while preserving bad-fd validation.
+    pub fn fd_seek(&mut self, fd: WasiFd, _offset: i64, _whence: WasiWhence) -> Result<u64, Errno> {
+        self.fds.get(&fd).ok_or(Errno::Badf)?;
+        Err(Errno::Nosys)
+    }
+
     /// Returns stat data for a namespace path relative to `dirfd`.
     pub fn path_filestat_get(
         &self,
@@ -227,6 +281,51 @@ impl WasiCtx {
             .map(FileStat::new)
             .map_err(Errno::from)
     }
+}
+
+/// WASI Preview 1 seek origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WasiWhence {
+    /// Seek relative to the start.
+    Set,
+    /// Seek relative to the current offset.
+    Cur,
+    /// Seek relative to the end.
+    End,
+}
+
+impl WasiWhence {
+    /// Converts a WASI Preview 1 whence code into a typed value.
+    pub fn from_preview1(code: i32) -> Result<Self, Errno> {
+        match code {
+            0 => Ok(Self::Set),
+            1 => Ok(Self::Cur),
+            2 => Ok(Self::End),
+            _ => Err(Errno::Inval),
+        }
+    }
+}
+
+fn attached_file_rights(file: &WasiFile) -> WasiRights {
+    let mut rights = WasiRights::FD_FILESTAT_GET;
+    if file.can_read() {
+        rights |= WasiRights::FD_READ;
+    }
+    if file.can_write() {
+        rights |= WasiRights::FD_WRITE;
+    }
+    rights
+}
+
+fn open_file_rights(read: bool, write: bool) -> WasiRights {
+    let mut rights = WasiRights::FD_FILESTAT_GET;
+    if read {
+        rights |= WasiRights::FD_READ;
+    }
+    if write {
+        rights |= WasiRights::FD_WRITE;
+    }
+    rights
 }
 
 impl WasiCtx {

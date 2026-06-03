@@ -14,9 +14,12 @@ mod fd;
 mod tests;
 
 pub use config::{Preopen, WasiConfig, WasiFile};
-pub use ctx::WasiCtx;
+pub use ctx::{WasiCtx, WasiWhence};
 pub use error::Errno;
-pub use fd::{FileStat, WasiFd, WasiFileAccess, WasiOpenOptions};
+pub use fd::{
+    FileStat, WasiFd, WasiFdStat, WasiFileAccess, WasiFileType, WasiOpenOptions, WasiPrestat,
+    WasiRights,
+};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix-backed wasi imports";

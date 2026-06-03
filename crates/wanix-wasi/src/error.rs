@@ -27,6 +27,32 @@ pub enum Errno {
     Io,
 }
 
+impl Errno {
+    /// Returns the WASI Preview 1 numeric errno code.
+    #[must_use]
+    pub const fn preview1_code(self) -> u16 {
+        match self {
+            Self::Success => 0,
+            Self::Badf => 8,
+            Self::Inval => 28,
+            Self::Io => 29,
+            Self::Isdir => 31,
+            Self::Nametoolong => 37,
+            Self::Noent => 44,
+            Self::Nosys => 52,
+            Self::Notdir => 54,
+            Self::Exist => 20,
+            Self::Notcapable => 76,
+        }
+    }
+
+    /// Returns the WASI Preview 1 numeric errno code as an import result.
+    #[must_use]
+    pub const fn preview1_result(self) -> i32 {
+        self.preview1_code() as i32
+    }
+}
+
 impl From<&FsError> for Errno {
     fn from(error: &FsError) -> Self {
         match error {
