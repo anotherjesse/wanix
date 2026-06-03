@@ -57,6 +57,12 @@ pub const P9_TGETATTR: u8 = 24;
 /// 9P2000.L `Rgetattr` message type.
 pub const P9_RGETATTR: u8 = 25;
 
+/// 9P2000.L `Tsetattr` message type.
+pub const P9_TSETATTR: u8 = 26;
+
+/// 9P2000.L `Rsetattr` message type.
+pub const P9_RSETATTR: u8 = 27;
+
 /// 9P2000.L `Treaddir` message type.
 pub const P9_TREADDIR: u8 = 40;
 
@@ -129,6 +135,33 @@ pub const P9_TCLUNK: u8 = 120;
 /// 9P `Rclunk` message type.
 pub const P9_RCLUNK: u8 = 121;
 
+/// 9P2000.L `Tsetattr` permissions-valid bit.
+pub const P9_SETATTR_PERMISSIONS: u32 = 0x0000_0001;
+
+/// 9P2000.L `Tsetattr` uid-valid bit.
+pub const P9_SETATTR_UID: u32 = 0x0000_0002;
+
+/// 9P2000.L `Tsetattr` gid-valid bit.
+pub const P9_SETATTR_GID: u32 = 0x0000_0004;
+
+/// 9P2000.L `Tsetattr` size-valid bit.
+pub const P9_SETATTR_SIZE: u32 = 0x0000_0008;
+
+/// 9P2000.L `Tsetattr` access-time-valid bit.
+pub const P9_SETATTR_ATIME: u32 = 0x0000_0010;
+
+/// 9P2000.L `Tsetattr` modification-time-valid bit.
+pub const P9_SETATTR_MTIME: u32 = 0x0000_0020;
+
+/// 9P2000.L `Tsetattr` metadata-change-time-valid bit.
+pub const P9_SETATTR_CTIME: u32 = 0x0000_0040;
+
+/// 9P2000.L `Tsetattr` access time is explicit rather than server current time.
+pub const P9_SETATTR_ATIME_NOT_SYSTEM_TIME: u32 = 0x0000_0080;
+
+/// 9P2000.L `Tsetattr` modification time is explicit rather than server current time.
+pub const P9_SETATTR_MTIME_NOT_SYSTEM_TIME: u32 = 0x0000_0100;
+
 /// Returns a stable name for message types the Rust port currently identifies.
 #[must_use]
 pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
@@ -146,6 +179,8 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RREADLINK => Some("Rreadlink"),
         P9_TGETATTR => Some("Tgetattr"),
         P9_RGETATTR => Some("Rgetattr"),
+        P9_TSETATTR => Some("Tsetattr"),
+        P9_RSETATTR => Some("Rsetattr"),
         P9_TREADDIR => Some("Treaddir"),
         P9_RREADDIR => Some("Rreaddir"),
         P9_TFSYNC => Some("Tfsync"),
@@ -668,6 +703,38 @@ pub struct P9Attr {
     pub data_version: u64,
 }
 
+/// 9P2000.L attribute values carried by `Tsetattr`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct P9SetAttr {
+    /// POSIX permission bits requested by `P9_SETATTR_PERMISSIONS`.
+    pub permissions: u32,
+    /// Numeric owner user id requested by `P9_SETATTR_UID`.
+    pub uid: u32,
+    /// Numeric owner group id requested by `P9_SETATTR_GID`.
+    pub gid: u32,
+    /// File size requested by `P9_SETATTR_SIZE`.
+    pub size: u64,
+    /// Explicit access time seconds.
+    pub atime_seconds: u64,
+    /// Explicit access time nanoseconds.
+    pub atime_nanoseconds: u64,
+    /// Explicit modification time seconds.
+    pub mtime_seconds: u64,
+    /// Explicit modification time nanoseconds.
+    pub mtime_nanoseconds: u64,
+}
+
+/// Decoded payload for `Tsetattr`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9SetAttrRequest {
+    /// Fid whose attributes should change.
+    pub fid: u32,
+    /// Raw 9P2000.L setattr valid mask.
+    pub valid: u32,
+    /// Requested attribute values.
+    pub attr: P9SetAttr,
+}
+
 /// Decoded payload for `Tread`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct P9Read {
@@ -986,6 +1053,22 @@ pub fn p9_rgetattr(tag: u16, attr: &P9Attr) -> P9Frame {
     let mut payload = Vec::with_capacity(153);
     push_attr(&mut payload, attr);
     P9Frame::new(P9_RGETATTR, tag, payload)
+}
+
+/// Builds a `Tsetattr` frame.
+#[must_use]
+pub fn p9_tsetattr(tag: u16, fid: u32, valid: u32, attr: &P9SetAttr) -> P9Frame {
+    let mut payload = Vec::with_capacity(60);
+    push_u32(&mut payload, fid);
+    push_u32(&mut payload, valid);
+    push_set_attr(&mut payload, attr);
+    P9Frame::new(P9_TSETATTR, tag, payload)
+}
+
+/// Builds an `Rsetattr` frame.
+#[must_use]
+pub fn p9_rsetattr(tag: u16) -> P9Frame {
+    P9Frame::new(P9_RSETATTR, tag, Vec::new())
 }
 
 /// Builds a `Treaddir` frame.
@@ -1477,6 +1560,33 @@ pub fn p9_decode_rgetattr(frame: &P9Frame) -> Result<P9Attr, P9Error> {
     Ok(attr)
 }
 
+/// Decodes a `Tsetattr` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tsetattr` or the payload is
+/// malformed.
+pub fn p9_decode_tsetattr(frame: &P9Frame) -> Result<P9SetAttrRequest, P9Error> {
+    expect_message_type(frame, P9_TSETATTR)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    let valid = cursor.read_u32()?;
+    let attr = cursor.read_set_attr()?;
+    cursor.finish()?;
+    Ok(P9SetAttrRequest { fid, valid, attr })
+}
+
+/// Decodes an `Rsetattr` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rsetattr` or the payload is not
+/// empty.
+pub fn p9_decode_rsetattr(frame: &P9Frame) -> Result<(), P9Error> {
+    expect_message_type(frame, P9_RSETATTR)?;
+    PayloadCursor::new(frame.payload()).finish()
+}
+
 /// Decodes a `Treaddir` frame payload.
 ///
 /// # Errors
@@ -1797,6 +1907,17 @@ fn push_attr(out: &mut Vec<u8>, attr: &P9Attr) {
     push_u64(out, attr.data_version);
 }
 
+fn push_set_attr(out: &mut Vec<u8>, attr: &P9SetAttr) {
+    push_u32(out, attr.permissions);
+    push_u32(out, attr.uid);
+    push_u32(out, attr.gid);
+    push_u64(out, attr.size);
+    push_u64(out, attr.atime_seconds);
+    push_u64(out, attr.atime_nanoseconds);
+    push_u64(out, attr.mtime_seconds);
+    push_u64(out, attr.mtime_nanoseconds);
+}
+
 fn push_dir_entry(out: &mut Vec<u8>, entry: &P9DirEntry) -> Result<(), P9Error> {
     push_qid(out, entry.qid);
     push_u64(out, entry.offset);
@@ -1942,6 +2063,27 @@ impl<'a> PayloadCursor<'a> {
             btime_nanoseconds,
             generation,
             data_version,
+        })
+    }
+
+    fn read_set_attr(&mut self) -> Result<P9SetAttr, P9Error> {
+        let permissions = self.read_u32()?;
+        let uid = self.read_u32()?;
+        let gid = self.read_u32()?;
+        let size = self.read_u64()?;
+        let atime_seconds = self.read_u64()?;
+        let atime_nanoseconds = self.read_u64()?;
+        let mtime_seconds = self.read_u64()?;
+        let mtime_nanoseconds = self.read_u64()?;
+        Ok(P9SetAttr {
+            permissions,
+            uid,
+            gid,
+            size,
+            atime_seconds,
+            atime_nanoseconds,
+            mtime_seconds,
+            mtime_nanoseconds,
         })
     }
 
@@ -2142,6 +2284,8 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RREADLINK), Some("Rreadlink"));
         assert_eq!(p9_message_type_name(P9_TGETATTR), Some("Tgetattr"));
         assert_eq!(p9_message_type_name(P9_RGETATTR), Some("Rgetattr"));
+        assert_eq!(p9_message_type_name(P9_TSETATTR), Some("Tsetattr"));
+        assert_eq!(p9_message_type_name(P9_RSETATTR), Some("Rsetattr"));
         assert_eq!(p9_message_type_name(P9_TREADDIR), Some("Treaddir"));
         assert_eq!(p9_message_type_name(P9_RREADDIR), Some("Rreaddir"));
         assert_eq!(p9_message_type_name(P9_TFSYNC), Some("Tfsync"));
@@ -2416,6 +2560,40 @@ mod tests {
             p9_decode_rgetattr(&P9Frame::decode(&response).unwrap()).unwrap(),
             attr
         );
+    }
+
+    #[test]
+    fn setattr_round_trips_fixed_9p2000_l_payload() {
+        let attr = P9SetAttr {
+            permissions: 0o600,
+            uid: 1000,
+            gid: 1001,
+            size: 44,
+            atime_seconds: 5,
+            atime_nanoseconds: 6,
+            mtime_seconds: 7,
+            mtime_nanoseconds: 8,
+        };
+        let valid = P9_SETATTR_PERMISSIONS
+            | P9_SETATTR_SIZE
+            | P9_SETATTR_ATIME
+            | P9_SETATTR_ATIME_NOT_SYSTEM_TIME
+            | P9_SETATTR_MTIME
+            | P9_SETATTR_MTIME_NOT_SYSTEM_TIME;
+        let frame = p9_tsetattr(12, 77, valid, &attr).encode().unwrap();
+        assert_eq!(&frame[..4], &67_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_tsetattr(&P9Frame::decode(&frame).unwrap()).unwrap(),
+            P9SetAttrRequest {
+                fid: 77,
+                valid,
+                attr
+            }
+        );
+
+        let response = p9_rsetattr(12).encode().unwrap();
+        assert_eq!(&response[..4], &7_u32.to_le_bytes());
+        p9_decode_rsetattr(&P9Frame::decode(&response).unwrap()).unwrap();
     }
 
     #[test]

@@ -10,22 +10,26 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use wanix_fs::{
     File, FileSeekFrom, FileSystem, FileType, FsError, Metadata, MetadataLookup, NormalizedPath,
     OpenOptions,
 };
 use wanix_protocol::{
-    P9_TATTACH, P9_TCLUNK, P9_TFLUSH, P9_TFSYNC, P9_TGETATTR, P9_TLCREATE, P9_TLOPEN, P9_TMKDIR,
-    P9_TREAD, P9_TREADDIR, P9_TREADLINK, P9_TRENAMEAT, P9_TSTATFS, P9_TSYMLINK, P9_TUNLINKAT,
-    P9_TVERSION, P9_TWALK, P9_TWRITE, P9_VERSION_9P2000_L, P9Attr, P9DirEntry, P9Error, P9Frame,
-    P9FsStat, P9Qid, P9Version, p9_decode_tattach, p9_decode_tclunk, p9_decode_tflush,
-    p9_decode_tfsync, p9_decode_tgetattr, p9_decode_tlcreate, p9_decode_tlopen, p9_decode_tmkdir,
-    p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink, p9_decode_trenameat,
-    p9_decode_tstatfs, p9_decode_tsymlink, p9_decode_tunlinkat, p9_decode_tversion,
-    p9_decode_twalk, p9_decode_twrite, p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rflush,
-    p9_rfsync, p9_rgetattr, p9_rlcreate, p9_rlerror, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir,
-    p9_rreadlink, p9_rrenameat, p9_rstatfs, p9_rsymlink, p9_runlinkat, p9_rversion, p9_rwalk,
+    P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_CTIME, P9_SETATTR_GID,
+    P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
+    P9_SETATTR_UID, P9_TATTACH, P9_TCLUNK, P9_TFLUSH, P9_TFSYNC, P9_TGETATTR, P9_TLCREATE,
+    P9_TLOPEN, P9_TMKDIR, P9_TREAD, P9_TREADDIR, P9_TREADLINK, P9_TRENAMEAT, P9_TSETATTR,
+    P9_TSTATFS, P9_TSYMLINK, P9_TUNLINKAT, P9_TVERSION, P9_TWALK, P9_TWRITE, P9_VERSION_9P2000_L,
+    P9Attr, P9DirEntry, P9Error, P9Frame, P9FsStat, P9Qid, P9SetAttr, P9Version, p9_decode_tattach,
+    p9_decode_tclunk, p9_decode_tflush, p9_decode_tfsync, p9_decode_tgetattr, p9_decode_tlcreate,
+    p9_decode_tlopen, p9_decode_tmkdir, p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink,
+    p9_decode_trenameat, p9_decode_tsetattr, p9_decode_tstatfs, p9_decode_tsymlink,
+    p9_decode_tunlinkat, p9_decode_tversion, p9_decode_twalk, p9_decode_twrite,
+    p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rflush, p9_rfsync, p9_rgetattr,
+    p9_rlcreate, p9_rlerror, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir, p9_rreadlink,
+    p9_rrenameat, p9_rsetattr, p9_rstatfs, p9_rsymlink, p9_runlinkat, p9_rversion, p9_rwalk,
     p9_rwrite,
 };
 
@@ -56,6 +60,19 @@ const O_RDWR: u32 = 0o2;
 const O_CREAT: u32 = 0o100;
 const O_TRUNC: u32 = 0o1000;
 const AT_REMOVEDIR: u32 = 0x200;
+
+const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+const P9_SETATTR_KNOWN_MASK: u32 = P9_SETATTR_PERMISSIONS
+    | P9_SETATTR_UID
+    | P9_SETATTR_GID
+    | P9_SETATTR_SIZE
+    | P9_SETATTR_ATIME
+    | P9_SETATTR_MTIME
+    | P9_SETATTR_CTIME
+    | P9_SETATTR_ATIME_NOT_SYSTEM_TIME
+    | P9_SETATTR_MTIME_NOT_SYSTEM_TIME;
+const P9_SETATTR_UNSUPPORTED_MASK: u32 =
+    P9_SETATTR_PERMISSIONS | P9_SETATTR_UID | P9_SETATTR_GID | P9_SETATTR_CTIME;
 
 const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
@@ -141,6 +158,7 @@ impl P9Server {
             P9_TSYMLINK => self.handle_symlink(frame),
             P9_TREADLINK => self.handle_readlink(frame),
             P9_TGETATTR => self.handle_getattr(frame),
+            P9_TSETATTR => self.handle_setattr(frame),
             P9_TREADDIR => self.handle_readdir(frame),
             P9_TFSYNC => self.handle_fsync(frame),
             P9_TREAD => self.handle_read(frame),
@@ -319,6 +337,34 @@ impl P9Server {
         Ok(p9_rgetattr(frame.tag(), &attr))
     }
 
+    fn handle_setattr(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let setattr = p9_decode_tsetattr(frame)?;
+        let Some(path) = self.fids.get(&setattr.fid).map(|entry| entry.path.clone()) else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        if setattr.valid & !P9_SETATTR_KNOWN_MASK != 0 {
+            return Ok(p9_rlerror(frame.tag(), EINVAL));
+        }
+        if setattr.valid & P9_SETATTR_UNSUPPORTED_MASK != 0 {
+            return Ok(p9_rlerror(frame.tag(), EOPNOTSUPP));
+        }
+        if let Err(error) = validate_setattr_times(setattr.valid, &setattr.attr) {
+            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
+        }
+
+        if setattr.valid & P9_SETATTR_SIZE != 0
+            && let Err(error) = self.set_file_size(&path, setattr.attr.size)
+        {
+            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
+        }
+        if setattr.valid & (P9_SETATTR_ATIME | P9_SETATTR_MTIME) != 0
+            && let Err(error) = self.set_file_times(&path, setattr.valid, &setattr.attr)
+        {
+            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
+        }
+        Ok(p9_rsetattr(frame.tag()))
+    }
+
     fn handle_readdir(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let read = p9_decode_treaddir(frame)?;
         let Some(path) = self.fids.get(&read.fid).map(|entry| entry.path.clone()) else {
@@ -492,6 +538,79 @@ impl P9Server {
         self.root
             .metadata_with_lookup(path, MetadataLookup::NoFollow)
     }
+
+    fn set_file_size(&self, path: &NormalizedPath, size: u64) -> Result<(), FsError> {
+        let mut file = self.root.open(
+            path,
+            OpenOptions {
+                write: true,
+                ..OpenOptions::default()
+            },
+        )?;
+        file.set_len(size)
+    }
+
+    fn set_file_times(
+        &self,
+        path: &NormalizedPath,
+        valid: u32,
+        attr: &P9SetAttr,
+    ) -> Result<(), FsError> {
+        let metadata = self.root.metadata(path)?;
+        let now = if requests_system_time(valid) {
+            Some(current_unix_time_ns()?)
+        } else {
+            None
+        };
+        let accessed_time_ns = if valid & P9_SETATTR_ATIME == 0 {
+            metadata.accessed_time_ns()
+        } else if valid & P9_SETATTR_ATIME_NOT_SYSTEM_TIME != 0 {
+            unix_time_ns(attr.atime_seconds, attr.atime_nanoseconds)?
+        } else {
+            now.expect("system access time was requested")
+        };
+        let modified_time_ns = if valid & P9_SETATTR_MTIME == 0 {
+            metadata.modified_time_ns()
+        } else if valid & P9_SETATTR_MTIME_NOT_SYSTEM_TIME != 0 {
+            unix_time_ns(attr.mtime_seconds, attr.mtime_nanoseconds)?
+        } else {
+            now.expect("system modification time was requested")
+        };
+        self.root
+            .set_times(path, accessed_time_ns, modified_time_ns)
+    }
+}
+
+fn validate_setattr_times(valid: u32, attr: &P9SetAttr) -> Result<(), FsError> {
+    if valid & P9_SETATTR_ATIME != 0 && valid & P9_SETATTR_ATIME_NOT_SYSTEM_TIME != 0 {
+        unix_time_ns(attr.atime_seconds, attr.atime_nanoseconds)?;
+    }
+    if valid & P9_SETATTR_MTIME != 0 && valid & P9_SETATTR_MTIME_NOT_SYSTEM_TIME != 0 {
+        unix_time_ns(attr.mtime_seconds, attr.mtime_nanoseconds)?;
+    }
+    Ok(())
+}
+
+fn requests_system_time(valid: u32) -> bool {
+    valid & P9_SETATTR_ATIME != 0 && valid & P9_SETATTR_ATIME_NOT_SYSTEM_TIME == 0
+        || valid & P9_SETATTR_MTIME != 0 && valid & P9_SETATTR_MTIME_NOT_SYSTEM_TIME == 0
+}
+
+fn unix_time_ns(seconds: u64, nanoseconds: u64) -> Result<u64, FsError> {
+    if nanoseconds >= NANOSECONDS_PER_SECOND {
+        return Err(FsError::InvalidTime);
+    }
+    seconds
+        .checked_mul(NANOSECONDS_PER_SECOND)
+        .and_then(|base| base.checked_add(nanoseconds))
+        .ok_or(FsError::InvalidTime)
+}
+
+fn current_unix_time_ns() -> Result<u64, FsError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| FsError::InvalidTime)?;
+    u64::try_from(duration.as_nanos()).map_err(|_| FsError::InvalidTime)
 }
 
 fn join_walk_component(
@@ -628,15 +747,17 @@ mod tests {
     use wanix_fs::{LocalFs, MemFs};
     use wanix_protocol::{
         P9_RATTACH, P9_RFLUSH, P9_RFSYNC, P9_RGETATTR, P9_RLCREATE, P9_RLERROR, P9_RLOPEN,
-        P9_RMKDIR, P9_RREAD, P9_RREADDIR, P9_RREADLINK, P9_RRENAMEAT, P9_RSTATFS, P9_RSYMLINK,
-        P9_RUNLINKAT, P9_RVERSION, P9_RWALK, P9_RWRITE, P9DirEntry, p9_decode_rflush,
+        P9_RMKDIR, P9_RREAD, P9_RREADDIR, P9_RREADLINK, P9_RRENAMEAT, P9_RSETATTR, P9_RSTATFS,
+        P9_RSYMLINK, P9_RUNLINKAT, P9_RVERSION, P9_RWALK, P9_RWRITE, P9_SETATTR_ATIME,
+        P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME,
+        P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE, P9DirEntry, P9SetAttr, p9_decode_rflush,
         p9_decode_rfsync, p9_decode_rgetattr, p9_decode_rlcreate, p9_decode_rlerror,
         p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread, p9_decode_rreaddir,
-        p9_decode_rreadlink, p9_decode_rstatfs, p9_decode_rsymlink, p9_decode_rversion,
-        p9_decode_rwalk, p9_decode_rwrite, p9_dir_entry_encoded_len, p9_tattach, p9_tclunk,
-        p9_tflush, p9_tfsync, p9_tgetattr, p9_tlcreate, p9_tlopen, p9_tmkdir, p9_tread,
-        p9_treaddir, p9_treadlink, p9_trenameat, p9_tstatfs, p9_tsymlink, p9_tunlinkat,
-        p9_tversion, p9_twalk, p9_twrite,
+        p9_decode_rreadlink, p9_decode_rsetattr, p9_decode_rstatfs, p9_decode_rsymlink,
+        p9_decode_rversion, p9_decode_rwalk, p9_decode_rwrite, p9_dir_entry_encoded_len,
+        p9_tattach, p9_tclunk, p9_tflush, p9_tfsync, p9_tgetattr, p9_tlcreate, p9_tlopen,
+        p9_tmkdir, p9_tread, p9_treaddir, p9_treadlink, p9_trenameat, p9_tsetattr, p9_tstatfs,
+        p9_tsymlink, p9_tunlinkat, p9_tversion, p9_twalk, p9_twrite,
     };
 
     use super::*;
@@ -1079,6 +1200,129 @@ mod tests {
 
         assert_eq!(response.message_type(), P9_RLERROR);
         assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+    }
+
+    #[test]
+    fn setattr_size_and_explicit_times_mutate_file() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("resize.txt", b"abcdef").unwrap();
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["resize.txt"]);
+        let attr = P9SetAttr {
+            size: 3,
+            atime_seconds: 4,
+            atime_nanoseconds: 5,
+            mtime_seconds: 6,
+            mtime_nanoseconds: 7,
+            ..P9SetAttr::default()
+        };
+        let valid = P9_SETATTR_SIZE
+            | P9_SETATTR_ATIME
+            | P9_SETATTR_ATIME_NOT_SYSTEM_TIME
+            | P9_SETATTR_MTIME
+            | P9_SETATTR_MTIME_NOT_SYSTEM_TIME;
+        let response = server
+            .handle_frame(&p9_tsetattr(3, 2, valid, &attr))
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RSETATTR);
+        p9_decode_rsetattr(&response).unwrap();
+        assert_eq!(fs.read_file("resize.txt").unwrap(), b"abc");
+        let metadata = fs
+            .metadata(&NormalizedPath::new("resize.txt").unwrap())
+            .unwrap();
+        assert_eq!(metadata.accessed_time_ns(), 4_000_000_005);
+        assert_eq!(metadata.modified_time_ns(), 6_000_000_007);
+    }
+
+    #[test]
+    fn setattr_size_mutates_host_backed_file() {
+        let root = temp_dir("wanix-9p-setattr-size");
+        fs::write(root.join("host.txt"), b"abcdef").unwrap();
+        let local = Arc::new(LocalFs::new(&root).unwrap());
+        let root_fs: Arc<dyn FileSystem> = local;
+        let mut server = P9Server::new(root_fs);
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["host.txt"]);
+        let attr = P9SetAttr {
+            size: 2,
+            ..P9SetAttr::default()
+        };
+        let response = server
+            .handle_frame(&p9_tsetattr(3, 2, P9_SETATTR_SIZE, &attr))
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RSETATTR);
+        assert_eq!(fs::read(root.join("host.txt")).unwrap(), b"ab");
+    }
+
+    #[test]
+    fn setattr_unknown_fid_returns_bad_fd() {
+        let mut server = server(Arc::new(MemFs::new()));
+
+        let response = server
+            .handle_frame(&p9_tsetattr(1, 99, 0, &P9SetAttr::default()))
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+    }
+
+    #[test]
+    fn setattr_invalid_time_does_not_partially_resize() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("time.txt", b"abcdef").unwrap();
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["time.txt"]);
+        let attr = P9SetAttr {
+            size: 3,
+            atime_nanoseconds: NANOSECONDS_PER_SECOND,
+            ..P9SetAttr::default()
+        };
+        let response = server
+            .handle_frame(&p9_tsetattr(
+                3,
+                2,
+                P9_SETATTR_SIZE | P9_SETATTR_ATIME | P9_SETATTR_ATIME_NOT_SYSTEM_TIME,
+                &attr,
+            ))
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EINVAL);
+        assert_eq!(fs.read_file("time.txt").unwrap(), b"abcdef");
+    }
+
+    #[test]
+    fn setattr_unsupported_permissions_do_not_partially_resize() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("mode.txt", b"abcdef").unwrap();
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["mode.txt"]);
+        let attr = P9SetAttr {
+            permissions: 0o600,
+            size: 3,
+            ..P9SetAttr::default()
+        };
+        let response = server
+            .handle_frame(&p9_tsetattr(
+                3,
+                2,
+                P9_SETATTR_PERMISSIONS | P9_SETATTR_SIZE,
+                &attr,
+            ))
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EOPNOTSUPP);
+        assert_eq!(fs.read_file("mode.txt").unwrap(), b"abcdef");
     }
 
     #[test]
