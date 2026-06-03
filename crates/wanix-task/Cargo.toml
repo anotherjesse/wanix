@@ -1,0 +1,19 @@
+[package]
+name = "wanix-task"
+description = "Task model, task filesystem, and driver registry for the Rust-native Wanix port."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+wanix-fs = { path = "../wanix-fs" }
+wanix-vfs = { path = "../wanix-vfs" }
+
+[lib]
+name = "wanix_task"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

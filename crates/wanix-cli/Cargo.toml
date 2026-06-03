@@ -1,0 +1,22 @@
+[package]
+name = "wanix-cli"
+description = "Native CLI and demos for the Rust-native Wanix port."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+wanix-fs = { path = "../wanix-fs" }
+wanix-qjs = { path = "../wanix-qjs" }
+wanix-task = { path = "../wanix-task" }
+wanix-vfs = { path = "../wanix-vfs" }
+wanix-wasi = { path = "../wanix-wasi" }
+
+[[bin]]
+name = "wanix-rust"
+path = "src/main.rs"
+
+[lints]
+workspace = true

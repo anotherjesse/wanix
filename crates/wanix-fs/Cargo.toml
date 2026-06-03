@@ -1,0 +1,15 @@
+[package]
+name = "wanix-fs"
+description = "Filesystem contracts for the Rust-native Wanix port."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "wanix_fs"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

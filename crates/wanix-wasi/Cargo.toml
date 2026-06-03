@@ -1,0 +1,19 @@
+[package]
+name = "wanix-wasi"
+description = "WASI Preview 1 imports backed by Wanix namespaces and task fds."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+wanix-fs = { path = "../wanix-fs" }
+wanix-vfs = { path = "../wanix-vfs" }
+
+[lib]
+name = "wanix_wasi"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

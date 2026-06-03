@@ -1,0 +1,18 @@
+[package]
+name = "wanix-qjs"
+description = "QuickJS/WASI task driver for Rust-native Wanix."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+wanix-wasi = { path = "../wanix-wasi" }
+
+[lib]
+name = "wanix_qjs"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
