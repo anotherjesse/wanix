@@ -1712,19 +1712,17 @@ function writeServiceText(path, text) {
   }
 }
 
+const parent = readServiceText("#task/self/id").trim();
 const child = readServiceText("#task/new/qjs").trim();
-Wanix.writeText("child-stdout.txt", "");
-Wanix.writeText("child-stderr.txt", "");
 writeServiceText("#task/" + child + "/cmd", "child.js alpha beta\n");
 writeServiceText("#task/" + child + "/env", "MODE=child\n");
 writeServiceText("#task/" + child + "/dir", ".\n");
-writeServiceText("#task/" + child + "/ctl", "bind child-stdout.txt fd/1\n");
-writeServiceText("#task/" + child + "/ctl", "bind child-stderr.txt #task/" + child + "/fd/2\n");
+writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/1 fd/1\n");
+writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/2 fd/2\n");
+print("parent " + parent);
+print("child " + child);
 writeServiceText("#task/" + child + "/ctl", "start\n");
-
-print("child " + child + " exit " + readServiceText("#task/" + child + "/exit").trim());
-print("stdout " + std.loadFile("child-stdout.txt").trimEnd());
-print("stderr " + std.loadFile("child-stderr.txt").trimEnd());
+print("child exit " + readServiceText("#task/" + child + "/exit").trim());
 "##,
         )
         .unwrap();
@@ -1748,6 +1746,8 @@ std.exit(5);
         .unwrap();
         let stdout = std::sync::Arc::new(MemFs::new());
         stdout.write_file("out", b"").unwrap();
+        let stderr = std::sync::Arc::new(MemFs::new());
+        stderr.write_file("err", b"").unwrap();
         task.bind(root.clone(), ".", ".", BindOptions::default())
             .unwrap();
         task.insert_fd(
@@ -1761,22 +1761,26 @@ std.exit(5);
             NormalizedPath::new("out").unwrap(),
         )
         .unwrap();
+        task.insert_fd(
+            Fd::STDERR,
+            stderr
+                .open(
+                    &NormalizedPath::new("err").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("err").unwrap(),
+        )
+        .unwrap();
         task.set_cmd("main.js").unwrap();
 
         table.start(task.id()).unwrap();
 
         assert_eq!(
             read_file(&*stdout, "out"),
-            b"child 2 exit 5\nstdout id 2 args child.js|alpha|beta mode child\nstderr stderr mode child\n"
+            b"parent 1\nchild 2\nid 2 args child.js|alpha|beta mode child\nchild exit 5\n"
         );
-        assert_eq!(
-            root.read_file("child-stdout.txt").unwrap(),
-            b"id 2 args child.js|alpha|beta mode child\n"
-        );
-        assert_eq!(
-            root.read_file("child-stderr.txt").unwrap(),
-            b"stderr mode child\n"
-        );
+        assert_eq!(read_file(&*stderr, "err"), b"stderr mode child\n");
         assert_eq!(task.exit(), "0");
         assert_eq!(table.get(TaskId::new(2)).unwrap().exit(), "5");
     }

@@ -663,19 +663,17 @@ function writeServiceText(path, text) {
   }
 }
 
+const parent = readServiceText("#task/self/id").trim();
 const child = readServiceText("#task/new/qjs").trim();
-Wanix.writeText("child-stdout.txt", "");
-Wanix.writeText("child-stderr.txt", "");
 writeServiceText("#task/" + child + "/cmd", "spawn-child.js alpha beta\n");
 writeServiceText("#task/" + child + "/env", "MODE=child\n");
 writeServiceText("#task/" + child + "/dir", ".\n");
-writeServiceText("#task/" + child + "/ctl", "bind child-stdout.txt fd/1\n");
-writeServiceText("#task/" + child + "/ctl", "bind child-stderr.txt fd/2\n");
+writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/1 fd/1\n");
+writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/2 fd/2\n");
+print("parent " + parent);
+print("child " + child);
 writeServiceText("#task/" + child + "/ctl", "start\n");
-
-print("child " + child + " exit " + readServiceText("#task/" + child + "/exit").trim());
-print("stdout " + std.loadFile("child-stdout.txt").trimEnd());
-print("stderr " + std.loadFile("child-stderr.txt").trimEnd());
+print("child exit " + readServiceText("#task/" + child + "/exit").trim());
 "##,
         );
         fs::write(
@@ -702,9 +700,9 @@ std.exit(5);
         assert_eq!(output.exit_code(), 0);
         assert_eq!(
             output.stdout(),
-            b"child 2 exit 5\nstdout id 2 args spawn-child.js|alpha|beta mode child\nstderr stderr mode child\n"
+            b"parent 1\nchild 2\nid 2 args spawn-child.js|alpha|beta mode child\nchild exit 5\n"
         );
-        assert!(output.stderr().is_empty());
+        assert_eq!(output.stderr(), b"stderr mode child\n");
     }
 
     #[test]
