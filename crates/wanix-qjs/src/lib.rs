@@ -20,6 +20,7 @@ mod driver;
 mod fd_api;
 mod host_api;
 mod task_context;
+mod task_stdio;
 mod virtual_wasi;
 
 pub use driver::QuickJsTaskDriver;
@@ -31,6 +32,7 @@ use host_api::{
     take_buffer,
 };
 use task_context::{WanixExitState, WanixTaskContext};
+use task_stdio::task_wasi_config;
 use virtual_wasi::{with_namespace_read_only_files, with_wanix_wasi_read_only_projection};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
@@ -321,7 +323,7 @@ impl QuickJsRunner {
         let script_filename = script_path.to_string();
         let namespace = task.namespace();
         let source = read_namespace_file(&namespace, &script_path)?;
-        let host = QuickJsWanixConfig::new(WasiConfig::new(namespace.clone()));
+        let host = QuickJsWanixConfig::new(task_wasi_config(task));
         let config = host.quickjs_read_only_projection(captured_stdio_config())?;
         let run_as_module = uses_module_syntax(&source);
         let exit_state = WanixExitState::default();
@@ -483,10 +485,11 @@ mod tests {
         CRATE_PURPOSE, FIRST_DEMO_TARGET, QuickJsRunner, QuickJsTaskDriver, QuickJsWanixConfig,
         wasi_contract_purpose,
     };
+    use crate::task_stdio::task_wasi_config;
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
     use wanix_task::{Fd, Task, TaskDriver, TaskId, TaskSpec, TaskTable};
     use wanix_vfs::BindOptions;
-    use wanix_wasi::WasiConfig;
+    use wanix_wasi::{Errno, WasiConfig, WasiCtx, WasiFd, WasiOpenOptions};
 
     fn prototype_wasm() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -589,6 +592,197 @@ print(Wanix.readText("output.txt"));
 
         assert_eq!(output.stdout(), b"from config / qjs\n");
         assert_eq!(read_file(&*root, "output.txt"), b"from config / qjs");
+    }
+
+    #[test]
+    fn task_wasi_config_attaches_open_task_standard_fds() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("data.txt", b"from namespace").unwrap();
+        let stdin = std::sync::Arc::new(MemFs::new());
+        stdin.write_file("stdin", b"input").unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("stdout", b"").unwrap();
+        let stderr = std::sync::Arc::new(MemFs::new());
+        stderr.write_file("stderr", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDIN,
+            stdin
+                .open(&NormalizedPath::new("stdin").unwrap(), OpenOptions::read())
+                .unwrap(),
+            NormalizedPath::new("stdin").unwrap(),
+        )
+        .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("stdout").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("stdout").unwrap(),
+        )
+        .unwrap();
+        task.insert_fd(
+            Fd::STDERR,
+            stderr
+                .open(
+                    &NormalizedPath::new("stderr").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("stderr").unwrap(),
+        )
+        .unwrap();
+
+        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        assert_eq!(
+            task_wasi_config(&task).stdio_fds(),
+            vec![WasiFd::STDIN, WasiFd::STDOUT, WasiFd::STDERR]
+        );
+        let mut buf = [0; 16];
+        let count = ctx.fd_read(WasiFd::STDIN, &mut buf).unwrap();
+        assert_eq!(&buf[..count], b"input");
+        assert_eq!(ctx.fd_write(WasiFd::STDIN, b"nope"), Err(Errno::Notcapable));
+        assert_eq!(
+            ctx.fd_read(WasiFd::STDOUT, &mut [0; 1]),
+            Err(Errno::Notcapable)
+        );
+        assert_eq!(
+            ctx.fd_read(WasiFd::STDERR, &mut [0; 1]),
+            Err(Errno::Notcapable)
+        );
+        assert_eq!(ctx.fd_write(WasiFd::STDOUT, b"out").unwrap(), 3);
+        assert_eq!(ctx.fd_write(WasiFd::STDERR, b"err").unwrap(), 3);
+        let fd = ctx
+            .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
+            .unwrap();
+
+        assert_eq!(fd.get(), 4);
+        assert_eq!(stdout.read_file("stdout").unwrap(), b"out");
+        assert_eq!(stderr.read_file("stderr").unwrap(), b"err");
+        assert_eq!(ctx.fd_close(WasiFd::STDOUT), Err(Errno::Badf));
+    }
+
+    #[test]
+    fn task_wasi_config_leaves_unopened_standard_fds_closed() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("data.txt", b"from namespace").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+
+        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+
+        assert!(task_wasi_config(&task).stdio_fds().is_empty());
+        assert_eq!(ctx.fd_read(WasiFd::STDIN, &mut [0; 1]), Err(Errno::Badf));
+        assert_eq!(ctx.fd_write(WasiFd::STDOUT, b"out"), Err(Errno::Badf));
+        let fd = ctx
+            .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
+            .unwrap();
+        assert_eq!(fd.get(), 4);
+    }
+
+    #[test]
+    fn task_wasi_config_ignores_non_standard_task_fds() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("data.txt", b"from namespace").unwrap();
+        let fd3 = std::sync::Arc::new(MemFs::new());
+        fd3.write_file("fd3", b"task fd three").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::new(3),
+            fd3.open(&NormalizedPath::new("fd3").unwrap(), OpenOptions::read())
+                .unwrap(),
+            NormalizedPath::new("fd3").unwrap(),
+        )
+        .unwrap();
+
+        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+
+        assert!(task_wasi_config(&task).stdio_fds().is_empty());
+        assert_eq!(ctx.fd_read(WasiFd::ROOT, &mut [0; 4]), Err(Errno::Isdir));
+        let fd = ctx
+            .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
+            .unwrap();
+        assert_eq!(fd, WasiFd::new(4));
+    }
+
+    #[test]
+    fn task_wasi_config_tracks_live_task_standard_fd_state() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("stdout", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("stdout").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("stdout").unwrap(),
+        )
+        .unwrap();
+
+        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        task.close_fd(Fd::STDOUT).unwrap();
+
+        assert_eq!(ctx.fd_write(WasiFd::STDOUT, b"after"), Err(Errno::Badf));
+        assert_eq!(stdout.read_file("stdout").unwrap(), b"");
+    }
+
+    #[test]
+    fn task_wasi_config_tracks_live_task_standard_fd_replacement() {
+        let table = TaskTable::new();
+        table.register_noop_driver("qjs").unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        let old_stdout = std::sync::Arc::new(MemFs::new());
+        old_stdout.write_file("old", b"").unwrap();
+        let new_stdout = std::sync::Arc::new(MemFs::new());
+        new_stdout.write_file("new", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            old_stdout
+                .open(
+                    &NormalizedPath::new("old").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("old").unwrap(),
+        )
+        .unwrap();
+
+        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        task.insert_fd(
+            Fd::STDOUT,
+            new_stdout
+                .open(
+                    &NormalizedPath::new("new").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("new").unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(ctx.fd_write(WasiFd::STDOUT, b"after").unwrap(), 5);
+        assert_eq!(old_stdout.read_file("old").unwrap(), b"");
+        assert_eq!(new_stdout.read_file("new").unwrap(), b"after");
     }
 
     #[test]

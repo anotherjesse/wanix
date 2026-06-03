@@ -40,6 +40,12 @@ driver into a task table.
   than exposing the projection as an independent process model. The projection
   accepts only the root preopen so extra preopen/fd semantics cannot be
   accidentally flattened.
+- `wanix-qjs` attaches open task stdio fds to `QuickJsWanixConfig` through
+  private `wanix_fs::File` proxy handles. That keeps `wanix-wasi` generic while
+  preserving Wanix task fd ownership for the future live WASI import path.
+- The qjs stdio proxies are live views by Wanix task fd number. Closing a task
+  stdio fd affects the WASI attachment, while WASI `fd_close` still rejects
+  stdio fds so lifecycle remains owned by Wanix task/fd APIs.
 - The synchronous process demo comes before richer lifecycle work such as async
   event loops, signals, cancellation, and snapshot/restore.
 - A useful demo should show JavaScript reading `#task/self/id`, using stdio,
