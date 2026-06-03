@@ -165,7 +165,7 @@ cargo test --workspace --locked
   providers and libc-style directory rights.
 - [ADR 0033](docs/adrs/0033-wasi-fd-filestat-set-size.md):
   `fd_filestat_set_size` resizes open Wanix-backed regular files through live
-  WASI providers while QuickJS truncate/ftruncate demos remain future work.
+  WASI providers; ADR 0039 later exposes it through QuickJS truncate helpers.
 - [ADR 0034](docs/adrs/0034-wasi-timestamp-now-clock-policy.md):
   WASI `ATIM_NOW`/`MTIM_NOW` timestamp updates use the deterministic clock value
   carried by `WasiConfig`.
@@ -181,6 +181,9 @@ cargo test --workspace --locked
 - [ADR 0038](docs/adrs/0038-quickjs-wasi-symlink-stdlib-fixture.md):
   QuickJS `qjs:os.lstat`, `readlink`, and `symlink` reach live Wanix-backed
   WASI providers without enabling QuickJS process APIs.
+- [ADR 0039](docs/adrs/0039-quickjs-wasi-truncate-stdlib-fixture.md):
+  QuickJS `qjs:os.truncate` and `ftruncate` reach Wanix-backed
+  `fd_filestat_set_size` through live WASI providers.
 
 ## Cycle Rules
 
@@ -196,6 +199,3 @@ cycle before starting the next one.
   intentional runtime decision.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
-- Do not treat `fd_filestat_set_size` as a QuickJS-visible truncate demo until
-  the fixture exposes `truncate` or `ftruncate`; Preview 1 has no separate
-  `path_filestat_set_size` import, only the `PATH_FILESTAT_SET_SIZE` rights bit.

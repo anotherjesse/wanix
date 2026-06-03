@@ -2561,6 +2561,22 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_example_truncate_demo_resizes_wanix_namespace_file() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-truncate-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"ftruncate: 0\nsmall: abc\ntruncate: 0\nlen: 5\ncodes: 97,98,99,0,0\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_attaches_stdin_as_wanix_task_fd_zero() {
         let script = write_temp_script(
             "stdin-demo.js",

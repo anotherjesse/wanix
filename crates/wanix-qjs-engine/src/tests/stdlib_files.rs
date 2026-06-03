@@ -7,6 +7,8 @@ const OFLAGS_CREATE_TRUNCATE: u16 = 9;
 const OFLAGS_DIRECTORY: u16 = 2;
 const FDFLAGS_NONBLOCK: u16 = 4;
 const PATH_LOOKUP_SYMLINK_FOLLOW: u32 = 1;
+const FD_WRITE_RIGHT: u64 = 1 << 6;
+const FD_FILESTAT_SET_SIZE_RIGHT: u64 = 1 << 22;
 const LIBC_REGULAR_FILE_READ_RIGHTS: u64 = (1 << 1)
     | (1 << 2)
     | (1 << 5)
@@ -16,10 +18,18 @@ const LIBC_REGULAR_FILE_READ_RIGHTS: u64 = (1 << 1)
     | (1 << 18)
     | (1 << 19)
     | (1 << 21);
-const LIBC_REGULAR_FILE_WRITE_RIGHTS: u64 =
-    (1 << 2) | (1 << 5) | (1 << 6) | (1 << 10) | (1 << 13) | (1 << 18) | (1 << 19) | (1 << 21);
+const LIBC_REGULAR_FILE_WRITE_RIGHTS: u64 = (1 << 2)
+    | (1 << 5)
+    | FD_WRITE_RIGHT
+    | (1 << 10)
+    | (1 << 13)
+    | (1 << 18)
+    | (1 << 19)
+    | (1 << 21);
 const LIBC_REGULAR_FILE_INHERITING_RIGHTS: u64 = LIBC_REGULAR_FILE_READ_RIGHTS | (1 << 6);
-const FILE_RIGHTS_READ_WRITE_SEEK_STAT: u64 = (1 << 1) | (1 << 2) | (1 << 5) | (1 << 6) | (1 << 21);
+const FILE_RIGHTS_READ_WRITE_SEEK_STAT: u64 =
+    (1 << 1) | (1 << 2) | (1 << 5) | FD_WRITE_RIGHT | (1 << 21);
+const FILE_FDSTAT_RIGHTS: u64 = FILE_RIGHTS_READ_WRITE_SEEK_STAT | FD_FILESTAT_SET_SIZE_RIGHT;
 const DIRECTORY_RIGHTS_BASE: u64 =
     (1 << 10) | (1 << 13) | (1 << 14) | (1 << 18) | (1 << 19) | (1 << 21);
 const DIRECTORY_RIGHTS_INHERITING: u64 = DIRECTORY_RIGHTS_BASE | FILE_RIGHTS_READ_WRITE_SEEK_STAT;
@@ -286,11 +296,17 @@ impl QuickJsWasiHost for LiveFileHost {
             fd => {
                 let open = self.open.get(&fd).ok_or(QuickJsWasiErrno::Badf)?;
                 match open.kind {
-                    OpenKind::File => Ok(QuickJsWasiFdStat::new(
-                        QuickJsWasiFileType::RegularFile,
-                        open.rights_base & FILE_RIGHTS_READ_WRITE_SEEK_STAT,
-                        0,
-                    )),
+                    OpenKind::File => {
+                        let mut rights_base = open.rights_base & FILE_FDSTAT_RIGHTS;
+                        if open.rights_base & FD_WRITE_RIGHT != 0 {
+                            rights_base |= FD_FILESTAT_SET_SIZE_RIGHT;
+                        }
+                        Ok(QuickJsWasiFdStat::new(
+                            QuickJsWasiFileType::RegularFile,
+                            rights_base,
+                            0,
+                        ))
+                    }
                     OpenKind::Directory => Ok(QuickJsWasiFdStat::new(
                         QuickJsWasiFileType::Directory,
                         DIRECTORY_RIGHTS_BASE,
@@ -312,6 +328,28 @@ impl QuickJsWasiHost for LiveFileHost {
         }
         let files = self.files.lock().expect("test files lock");
         file_stat(files.get(&open.path).ok_or(QuickJsWasiErrno::Noent)?)
+    }
+
+    fn fd_filestat_set_size(
+        &mut self,
+        fd: u32,
+        size: u64,
+    ) -> std::result::Result<(), QuickJsWasiErrno> {
+        self.record(format!("set_size:{fd}:{size}"));
+        let open = self.open.get(&fd).ok_or(QuickJsWasiErrno::Badf)?;
+        if open.kind != OpenKind::File {
+            return Err(QuickJsWasiErrno::Notcapable);
+        }
+        if open.rights_base & (FD_FILESTAT_SET_SIZE_RIGHT | FD_WRITE_RIGHT) == 0 {
+            return Err(QuickJsWasiErrno::Notcapable);
+        }
+        let mut files = self.files.lock().expect("test files lock");
+        let bytes = files.get_mut(&open.path).ok_or(QuickJsWasiErrno::Noent)?;
+        bytes.resize(
+            usize::try_from(size).map_err(|_| QuickJsWasiErrno::Inval)?,
+            0,
+        );
+        Ok(())
     }
 
     fn path_filestat_get(
@@ -689,6 +727,52 @@ fn quickjs_os_symlink_readlink_and_lstat_use_live_wasi_host() -> Result<()> {
     assert!(calls.iter().any(|call| call == "readlink:3:link.txt"));
     assert!(calls.iter().any(|call| call == "pathstat:3:0:link.txt"));
     assert!(calls.iter().any(|call| call == "pathstat:3:1:link.txt"));
+    Ok(())
+}
+
+#[test]
+fn quickjs_os_truncate_and_ftruncate_use_live_wasi_host() -> Result<()> {
+    let (_engine, module) = quickjs_fixture()?;
+    let host = LiveFileHost::with_file("resize.txt", b"abcdef".to_vec());
+    let calls = host.calls();
+    let files = host.files();
+    let options = QuickJsCreateOptions::new().with_wasi_host(host);
+    let mut vm = module.create_runtime_with_options(options)?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+
+        const fd = os.open("resize.txt", os.O_RDWR);
+        const shrinkErr = os.ftruncate(fd, 3);
+        const [, shrinkStatErr] = os.stat("resize.txt");
+        const shrinkSize = os.stat("resize.txt")[0].size;
+        os.close(fd);
+
+        const growErr = os.truncate("resize.txt", 5);
+        const [growStat, growStatErr] = os.stat("resize.txt");
+
+        globalThis.truncateSummary = [
+          fd >= 0,
+          shrinkErr,
+          shrinkStatErr,
+          shrinkSize,
+          growErr,
+          growStatErr,
+          growStat.size,
+        ].join("|");
+        "#,
+        "stdlib-truncate.mjs",
+    )?;
+
+    assert_eq!(vm.eval_string("truncateSummary")?, "true|0|0|3|0|0|5");
+    assert_eq!(
+        files.lock().expect("test files lock").get("resize.txt"),
+        Some(&b"abc\0\0".to_vec())
+    );
+    let calls = calls.lock().expect("test call lock");
+    assert!(calls.iter().any(|call| call == "set_size:4:3"));
+    assert!(calls.iter().any(|call| call == "set_size:5:5"));
     Ok(())
 }
 

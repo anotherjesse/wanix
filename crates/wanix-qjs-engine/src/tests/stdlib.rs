@@ -127,6 +127,8 @@ fn fixture_exposes_quickjs_std_and_os_modules() -> Result<()> {
         globalThis.qjsOsLstat = typeof os.lstat;
         globalThis.qjsOsReadlink = typeof os.readlink;
         globalThis.qjsOsSymlink = typeof os.symlink;
+        globalThis.qjsOsFtruncate = typeof os.ftruncate;
+        globalThis.qjsOsTruncate = typeof os.truncate;
         "#,
         "stdlib-modules.mjs",
     )?;
@@ -136,6 +138,8 @@ fn fixture_exposes_quickjs_std_and_os_modules() -> Result<()> {
     assert_eq!(vm.eval_string("qjsOsLstat")?, "function");
     assert_eq!(vm.eval_string("qjsOsReadlink")?, "function");
     assert_eq!(vm.eval_string("qjsOsSymlink")?, "function");
+    assert_eq!(vm.eval_string("qjsOsFtruncate")?, "function");
+    assert_eq!(vm.eval_string("qjsOsTruncate")?, "function");
     Ok(())
 }
 

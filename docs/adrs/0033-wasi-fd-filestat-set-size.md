@@ -11,10 +11,10 @@ Wanix already supports create/truncate-at-open behavior, but there was no
 post-open file length operation in the filesystem contract or live WASI
 provider path.
 
-This is different from a QuickJS-visible `truncate` demo. The bundled QuickJS
-fixture does not currently expose `truncate` or `ftruncate`, so this cycle
-implements the Wanix-owned syscall boundary and keeps JavaScript demo claims
-limited to existing `qjs:std`/`qjs:os` capabilities.
+This was initially different from a QuickJS-visible `truncate` demo. At the
+time of this ADR, the bundled QuickJS fixture did not expose `truncate` or
+`ftruncate`, so this cycle implemented the Wanix-owned syscall boundary and kept
+JavaScript demo claims limited to existing `qjs:std`/`qjs:os` capabilities.
 
 ## Decision
 
@@ -37,5 +37,5 @@ Wasmtime-hosted WASI guests can now resize open Wanix-backed regular files
 through live providers. The `wanix-qjs` adapter forwards the syscall to
 `WasiCtx`, keeping Wanix task/fd/namespace semantics outside the engine crate.
 
-Guest JavaScript truncate/ftruncate demos remain future work until the bundled
-QuickJS fixture exposes an API that reaches this Preview 1 import.
+ADR 0039 later exposes `qjs:os.truncate` and `qjs:os.ftruncate`, making this
+Preview 1 import directly reachable from guest JavaScript.

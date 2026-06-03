@@ -2409,6 +2409,65 @@ print("load", std.loadFile("link.txt"));
     }
 
     #[test]
+    fn task_driver_quickjs_os_truncate_and_ftruncate_resize_wanix_files() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.writeFile("resize.txt", "abcdef");
+
+const fd = os.open("resize.txt", os.O_RDWR);
+print("ftruncate", os.ftruncate(fd, 3));
+os.close(fd);
+print("small", std.loadFile("resize.txt"));
+
+print("truncate", os.truncate("resize.txt", 5));
+const fd2 = os.open("resize.txt", os.O_RDONLY);
+const bytes = new Uint8Array(8);
+const n = os.read(fd2, bytes.buffer, 0, bytes.length);
+os.close(fd2);
+print("len", n);
+print("codes", Array.from(bytes.slice(0, n)).join(","));
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"ftruncate 0\nsmall abc\ntruncate 0\nlen 5\ncodes 97,98,99,0,0\n"
+        );
+        assert_eq!(root.read_file("resize.txt").unwrap(), b"abc\0\0");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
     fn task_driver_quickjs_append_mode_writes_at_end_of_wanix_files() {
         let table = TaskTable::new();
         let runner = runner();
