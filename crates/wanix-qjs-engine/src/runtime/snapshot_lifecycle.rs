@@ -58,7 +58,7 @@ impl QuickJsRuntime {
     ) -> Result<Self> {
         snapshot.validate_for(module)?;
 
-        let mut vm = Self::instantiate(module.engine(), module, config)?.vm;
+        let mut vm = Self::instantiate(module.engine(), module, config, None)?.vm;
 
         let needed_pages = snapshot_memory_page_count(snapshot.memory.len())?;
         let current_pages = vm.memory.size(&vm.store);

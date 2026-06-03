@@ -1,5 +1,5 @@
 use super::QuickJsRuntime;
-use crate::host::{HostState, define_env_imports, define_wasi_imports};
+use crate::host::{HostState, QuickJsWasiHostHandle, define_env_imports, define_wasi_imports};
 use crate::{QuickJsHostConfig, QuickJsModule};
 use anyhow::{Result, anyhow};
 use wasmtime::error::Context as _;
@@ -17,12 +17,13 @@ impl QuickJsRuntime {
         engine: &Engine,
         module: &QuickJsModule,
         config: QuickJsHostConfig,
+        wasi_host: Option<QuickJsWasiHostHandle>,
     ) -> Result<InstantiatedRuntime> {
         let mut linker = Linker::<HostState>::new(engine);
         define_env_imports(&mut linker)?;
         define_wasi_imports(&mut linker)?;
 
-        let mut store = Store::new(engine, HostState::new(config));
+        let mut store = Store::new(engine, HostState::new_with_wasi_host(config, wasi_host));
         let instance = linker
             .instantiate(&mut store, module.wasmtime_module())
             .context("failed to instantiate QuickJS WASM module")?;

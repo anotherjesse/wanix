@@ -12,6 +12,7 @@ mod guest_memory;
 mod module_loader;
 mod promise_rejection;
 mod state;
+mod wasi_host;
 
 pub(crate) use callback::{HostCallbackEntry, HostCallbackMode, scalar_host_callback};
 pub use callback::{QuickJsCallbackValue, QuickJsCopiedValue, QuickJsHostValue, QuickJsValue};
@@ -20,6 +21,11 @@ pub(crate) use module_loader::{ModuleLoadCallback, ModuleLoader, ModuleNormalize
 pub(crate) use promise_rejection::PromiseRejectionHandler;
 pub use promise_rejection::QuickJsPromiseRejection;
 pub(crate) use state::HostState;
+pub(crate) use wasi_host::QuickJsWasiHostHandle;
+pub use wasi_host::{
+    QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType, QuickJsWasiHost,
+    QuickJsWasiPrestat, QuickJsWasiWhence,
+};
 
 const ERRNO_SUCCESS: i32 = 0;
 const ERRNO_BADF: i32 = 8;

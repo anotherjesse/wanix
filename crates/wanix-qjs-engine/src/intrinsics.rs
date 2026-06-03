@@ -1,4 +1,9 @@
+use std::fmt;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
+use std::sync::{Arc, Mutex};
+
+use crate::QuickJsWasiHost;
+use crate::host::QuickJsWasiHostHandle;
 
 /// QuickJS intrinsic flags used when creating a fresh runtime.
 ///
@@ -133,10 +138,21 @@ impl Not for QuickJsIntrinsics {
 /// snapshot bypasses QuickJS initialization and resumes the already-created
 /// context stored in the snapshot, so restore APIs continue to accept only the
 /// Rust host configuration that should be reattached.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Default)]
 pub struct QuickJsCreateOptions {
     host_config: crate::QuickJsHostConfig,
     intrinsics: Option<QuickJsIntrinsics>,
+    wasi_host: Option<QuickJsWasiHostHandle>,
+}
+
+impl fmt::Debug for QuickJsCreateOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QuickJsCreateOptions")
+            .field("host_config", &self.host_config)
+            .field("intrinsics", &self.intrinsics)
+            .field("has_wasi_host", &self.wasi_host.is_some())
+            .finish()
+    }
 }
 
 impl QuickJsCreateOptions {
@@ -164,6 +180,17 @@ impl QuickJsCreateOptions {
         self
     }
 
+    /// Attaches a live host-owned WASI filesystem implementation.
+    ///
+    /// The provider is runtime host state, not deterministic host config. It is
+    /// used by Preview 1 filesystem imports for this fresh runtime and is not
+    /// serialized into snapshots.
+    #[must_use]
+    pub fn with_wasi_host(mut self, host: impl QuickJsWasiHost + 'static) -> Self {
+        self.wasi_host = Some(Arc::new(Mutex::new(Box::new(host))));
+        self
+    }
+
     /// Returns the host import configuration for this fresh runtime.
     #[must_use]
     pub fn host_config(&self) -> &crate::QuickJsHostConfig {
@@ -176,7 +203,13 @@ impl QuickJsCreateOptions {
         self.intrinsics
     }
 
-    pub(crate) fn into_parts(self) -> (crate::QuickJsHostConfig, Option<QuickJsIntrinsics>) {
-        (self.host_config, self.intrinsics)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        crate::QuickJsHostConfig,
+        Option<QuickJsIntrinsics>,
+        Option<QuickJsWasiHostHandle>,
+    ) {
+        (self.host_config, self.intrinsics, self.wasi_host)
     }
 }

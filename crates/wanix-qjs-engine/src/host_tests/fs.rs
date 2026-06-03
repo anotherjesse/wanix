@@ -1,4 +1,9 @@
 use super::*;
+use crate::host::{
+    QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType, QuickJsWasiHost,
+    QuickJsWasiPrestat, QuickJsWasiWhence,
+};
+use std::sync::{Arc, Mutex};
 use wasmtime::{Engine, Linker, Module, Store, TypedFunc};
 
 const ERRNO_SUCCESS: i32 = 0;
@@ -21,6 +26,7 @@ const READ_SEEK_STAT_RIGHTS: i64 =
 const PREOPEN_ROOT_FD: i32 = 3;
 const FIRST_FILE_FD: i32 = 4;
 const WASI_IOV_SIZE: usize = 8;
+const WHENCE_SET: i32 = 0;
 const FILETYPE_CHARACTER_DEVICE: u8 = 2;
 const FILETYPE_DIRECTORY: u8 = 3;
 const FILETYPE_REGULAR_FILE: u8 = 4;
@@ -82,11 +88,19 @@ struct VirtualFsHarness {
 
 impl VirtualFsHarness {
     fn new(config: QuickJsHostConfig) -> Result<Self> {
+        Self::new_with_wasi_host(config, None)
+    }
+
+    fn new_with_wasi_host(
+        config: QuickJsHostConfig,
+        wasi_host: Option<Box<dyn QuickJsWasiHost>>,
+    ) -> Result<Self> {
         let engine = Engine::default();
         let module = Module::new(&engine, VIRTUAL_FS_WAT)?;
         let mut linker = Linker::<HostState>::new(&engine);
         define_wasi_imports(&mut linker)?;
-        let mut store = Store::new(&engine, HostState::new(config));
+        let wasi_host = wasi_host.map(|host| Arc::new(Mutex::new(host)));
+        let mut store = Store::new(&engine, HostState::new_with_wasi_host(config, wasi_host));
         let instance = linker.instantiate(&mut store, &module)?;
         let memory = instance
             .get_memory(&mut store, "memory")
@@ -188,6 +202,133 @@ fn virtual_fs_config() -> Result<QuickJsHostConfig> {
     QuickJsHostConfig::new()
         .with_read_only_virtual_file("/app/config.txt", b"hello virtual fs")?
         .with_read_only_virtual_file("/app/empty.txt", b"")
+}
+
+type WasiHostResult<T> = std::result::Result<T, QuickJsWasiErrno>;
+
+#[derive(Clone, Default)]
+struct MetadataWasiHost {
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl MetadataWasiHost {
+    fn record(&self, call: impl Into<String>) {
+        self.calls.lock().expect("test call lock").push(call.into());
+    }
+}
+
+impl QuickJsWasiHost for MetadataWasiHost {
+    fn fd_prestat_get(&mut self, fd: u32) -> WasiHostResult<QuickJsWasiPrestat> {
+        self.record(format!("prestat:{fd}"));
+        Ok(QuickJsWasiPrestat::new("/mnt"))
+    }
+
+    fn path_open(
+        &mut self,
+        _dirfd: u32,
+        _dirflags: u32,
+        _path: &[u8],
+        _oflags: u16,
+        _rights_base: u64,
+        _rights_inheriting: u64,
+        _fdflags: u16,
+    ) -> WasiHostResult<u32> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_read(&mut self, _fd: u32, _buf: &mut [u8]) -> WasiHostResult<usize> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_write(&mut self, _fd: u32, _buf: &[u8]) -> WasiHostResult<usize> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_seek(&mut self, fd: u32, offset: i64, whence: QuickJsWasiWhence) -> WasiHostResult<u64> {
+        self.record(format!("seek:{fd}:{offset}:{whence:?}"));
+        Ok(123)
+    }
+
+    fn fd_close(&mut self, fd: u32) -> WasiHostResult<()> {
+        self.record(format!("close:{fd}"));
+        Ok(())
+    }
+
+    fn fd_fdstat_get(&mut self, fd: u32) -> WasiHostResult<QuickJsWasiFdStat> {
+        self.record(format!("fdstat:{fd}"));
+        Ok(QuickJsWasiFdStat::new(
+            QuickJsWasiFileType::Directory,
+            RIGHT_PATH_OPEN.cast_unsigned(),
+            READ_SEEK_STAT_RIGHTS.cast_unsigned(),
+        ))
+    }
+
+    fn fd_filestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFileStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_filestat_get(
+        &mut self,
+        _dirfd: u32,
+        _flags: u32,
+        _path: &[u8],
+    ) -> WasiHostResult<QuickJsWasiFileStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+}
+
+#[test]
+fn live_wasi_host_supplies_prestat_fdstat_seek_and_close() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+
+    assert_eq!(
+        harness.fd_prestat_get.call(&mut harness.store, (9, 64))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u32(68)?, 4);
+
+    assert_eq!(
+        harness
+            .fd_prestat_dir_name
+            .call(&mut harness.store, (9, 80, 4))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_bytes(80, 4)?, b"/mnt");
+
+    assert_eq!(
+        harness.fd_fdstat_get.call(&mut harness.store, (9, 96))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u8(96)?, FILETYPE_DIRECTORY);
+    assert_eq!(harness.read_u64(104)?, RIGHT_PATH_OPEN.cast_unsigned());
+    assert_eq!(
+        harness.read_u64(112)?,
+        READ_SEEK_STAT_RIGHTS.cast_unsigned()
+    );
+
+    assert_eq!(
+        harness
+            .fd_seek
+            .call(&mut harness.store, (5, 7, WHENCE_SET, 128))?,
+        ERRNO_SUCCESS
+    );
+    assert_eq!(harness.read_u64(128)?, 123);
+
+    assert_eq!(harness.fd_close.call(&mut harness.store, 5)?, ERRNO_SUCCESS);
+    assert_eq!(
+        calls.lock().expect("test call lock").as_slice(),
+        &[
+            "prestat:9".to_owned(),
+            "prestat:9".to_owned(),
+            "fdstat:9".to_owned(),
+            "seek:5:7:Set".to_owned(),
+            "close:5".to_owned(),
+        ]
+    );
+    Ok(())
 }
 
 #[test]

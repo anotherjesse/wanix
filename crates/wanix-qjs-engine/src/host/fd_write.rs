@@ -19,6 +19,10 @@ pub(super) fn define_import(linker: &mut Linker<HostState>) -> anyhow::Result<()
          iovs_len: i32,
          nwritten_ptr: i32|
          -> wasmtime::Result<i32> {
+            if caller.data().wasi_host().is_some() {
+                return fd_write_with_wasi_host(caller, fd, iovs_ptr, iovs_len, nwritten_ptr);
+            }
+
             let Some(fd) = wasi_stdio_fd(fd) else {
                 return Ok(ERRNO_BADF);
             };
@@ -41,6 +45,71 @@ pub(super) fn define_import(linker: &mut Linker<HostState>) -> anyhow::Result<()
         },
     )?;
     Ok(())
+}
+
+fn fd_write_with_wasi_host(
+    mut caller: Caller<'_, HostState>,
+    fd: i32,
+    iovs_ptr: i32,
+    iovs_len: i32,
+    nwritten_ptr: i32,
+) -> wasmtime::Result<i32> {
+    let fd = match u32::try_from(fd) {
+        Ok(fd) => fd,
+        Err(_) => return Ok(ERRNO_BADF),
+    };
+    let memory = caller_memory(&caller)?;
+    let iovs_len = guest_len(iovs_len)?;
+    guest_range(&memory, &caller, guest_offset(nwritten_ptr), WASI_U32_SIZE)?;
+    preflight_fd_write_iovs(&memory, &caller, iovs_ptr, iovs_len)?;
+
+    let mut iovs = Vec::new();
+    iovs.try_reserve_exact(iovs_len)
+        .map_err(|_| wasmtime::Error::msg("fd_write iov allocation failed"))?;
+    for index in 0..iovs_len {
+        let iov = read_valid_fd_iov(&memory, &caller, iovs_ptr, index)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(iov.len)
+            .map_err(|_| wasmtime::Error::msg("fd_write buffer allocation failed"))?;
+        bytes.resize(iov.len, 0);
+        memory.read(&caller, iov.ptr, &mut bytes)?;
+        iovs.push(bytes);
+    }
+
+    let Some(host) = caller.data().wasi_host() else {
+        return Ok(ERRNO_BADF);
+    };
+    let mut host = host
+        .lock()
+        .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
+    let mut total_written = 0u32;
+    for bytes in &iovs {
+        let count = match host.fd_write(fd, bytes) {
+            Ok(count) => count,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        if count > bytes.len() {
+            return Err(wasmtime::Error::msg(
+                "QuickJS WASI host returned oversized fd_write count",
+            ));
+        }
+        total_written = checked_fd_write_total(
+            total_written,
+            u32::try_from(count)
+                .map_err(|_| wasmtime::Error::msg("fd_write byte count exceeds u32"))?,
+        )?;
+        if count < bytes.len() {
+            break;
+        }
+    }
+
+    memory.write(
+        &mut caller,
+        guest_offset(nwritten_ptr),
+        &total_written.to_le_bytes(),
+    )?;
+    Ok(ERRNO_SUCCESS)
 }
 
 #[derive(Debug)]

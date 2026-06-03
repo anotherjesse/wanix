@@ -89,14 +89,17 @@ cargo test --workspace --locked
   checks enumerate Wanix crates while sibling prototypes remain path
   dependencies.
 - [ADR 0008](docs/adrs/0008-quickjs-namespace-modules-and-virtual-wasi-projection.md):
-  QuickJS ES modules load from Wanix namespaces while read-only virtual WASI
-  projection waits on prototype `qjs:std` support.
+  QuickJS ES modules load from Wanix namespaces while read-only virtual
+  projection remains an interim namespace-demo path.
 - [ADR 0009](docs/adrs/0009-quickjs-tasks-use-wanix-process-semantics.md):
   QuickJS is the execution engine inside `qjs` Wanix tasks, not a separate
   process model.
 - [ADR 0010](docs/adrs/0010-workspace-local-quickjs-engine-crate.md):
   QuickJS/Wasmtime engine mechanics live in a Wanix workspace crate so Wanix can
   evolve the WASI boundary directly.
+- [ADR 0011](docs/adrs/0011-live-quickjs-wasi-host-provider.md): Live
+  QuickJS WASI hooks are runtime host state carried by create options, while
+  deterministic host config stays cloneable and comparable.
 
 ## Cycle Rules
 

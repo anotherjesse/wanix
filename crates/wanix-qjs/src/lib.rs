@@ -10,7 +10,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use rust_wasi_quickjs::{QuickJsHostConfig, QuickJsModule, QuickJsRuntime};
+use rust_wasi_quickjs::{QuickJsCreateOptions, QuickJsHostConfig, QuickJsModule, QuickJsRuntime};
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath};
 use wanix_task::{Fd, Task};
 use wanix_wasi::WasiConfig;
@@ -22,6 +22,7 @@ mod host_api;
 mod task_context;
 mod task_stdio;
 mod virtual_wasi;
+mod wasi_host;
 
 pub use driver::QuickJsTaskDriver;
 
@@ -33,7 +34,8 @@ use host_api::{
 };
 use task_context::{WanixExitState, WanixTaskContext};
 use task_stdio::task_wasi_config;
-use virtual_wasi::{with_namespace_read_only_files, with_wanix_wasi_read_only_projection};
+use virtual_wasi::with_namespace_read_only_files;
+use wasi_host::WanixQuickJsWasiHost;
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "quickjs wasi task driver";
@@ -59,13 +61,6 @@ impl QuickJsWanixConfig {
     #[must_use]
     pub fn wasi(&self) -> &WasiConfig {
         &self.wasi
-    }
-
-    fn quickjs_read_only_projection(
-        &self,
-        config: QuickJsHostConfig,
-    ) -> FsResult<QuickJsHostConfig> {
-        with_wanix_wasi_read_only_projection(config, &self.wasi)
     }
 }
 
@@ -138,7 +133,7 @@ impl QuickJsRunner {
     /// Returns a filesystem error when QuickJS creation, host callback setup,
     /// or JavaScript evaluation fails.
     pub fn run_source(&self, source: &str) -> FsResult<RunOutput> {
-        self.run_source_with_setup(source, None, |_| Ok(()))
+        self.run_source_with_setup(source, captured_stdio_options(), |_| Ok(()))
             .map_err(|failure| failure.error)
     }
 
@@ -154,7 +149,7 @@ impl QuickJsRunner {
         namespace: impl FileSystem + Clone + 'static,
     ) -> FsResult<RunOutput> {
         let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
-        self.run_source_with_setup(source, Some(config), move |runtime| {
+        self.run_source_with_setup(source, create_options_with_config(config), move |runtime| {
             define_wanix_module_loader(runtime, namespace.clone())?;
             define_wanix_namespace_api(runtime, namespace)
         })
@@ -163,25 +158,27 @@ impl QuickJsRunner {
 
     /// Runs JavaScript source with Wanix-backed QuickJS configuration.
     ///
-    /// Today this projects the root Wanix WASI preopen into the prototype's
-    /// read-only virtual WASI filesystem before installing the interim
-    /// writable `Wanix` host object. Extra Wanix preopens are rejected because
-    /// the prototype can only model a single copied virtual root. The projection
-    /// is intentionally a narrow adapter point for replacing the prototype
-    /// virtual filesystem with real Wanix-owned WASI imports.
+    /// Wanix-owned WASI settings are attached as a live host provider while the
+    /// interim writable `Wanix` host object remains available for behavior not
+    /// yet exercised by the bundled QuickJS WASI fixture.
     ///
     /// # Errors
     ///
-    /// Returns a filesystem error when WASI projection, QuickJS setup,
+    /// Returns a filesystem error when WASI host setup, QuickJS setup,
     /// namespace callbacks, or JavaScript evaluation fails.
     pub fn run_source_with_wanix_config(
         &self,
         source: &str,
         config: QuickJsWanixConfig,
     ) -> FsResult<RunOutput> {
-        let quickjs_config = config.quickjs_read_only_projection(captured_stdio_config())?;
+        let wasi_host = WanixQuickJsWasiHost::new(config.wasi().clone()).map_err(|err| {
+            FsError::Other(format!(
+                "failed to create Wanix-backed QuickJS WASI host: {err:?}"
+            ))
+        })?;
+        let create_options = captured_stdio_options().with_wasi_host(wasi_host);
         let namespace = config.wasi().namespace().clone();
-        self.run_source_with_setup(source, Some(quickjs_config), move |runtime| {
+        self.run_source_with_setup(source, create_options, move |runtime| {
             define_wanix_module_loader(runtime, namespace.clone())?;
             define_wanix_namespace_api(runtime, namespace)
         })
@@ -207,7 +204,7 @@ impl QuickJsRunner {
         let config = with_namespace_read_only_files(captured_stdio_config(), &namespace)?;
         self.run_with_setup(
             source,
-            Some(config),
+            create_options_with_config(config),
             move |runtime| {
                 define_wanix_module_loader(runtime, namespace.clone())?;
                 define_wanix_namespace_api(runtime, namespace)
@@ -224,10 +221,10 @@ impl QuickJsRunner {
     fn run_source_with_setup(
         &self,
         source: &str,
-        config: Option<QuickJsHostConfig>,
+        create_options: QuickJsCreateOptions,
         setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
     ) -> Result<RunOutput, RunFailure> {
-        self.run_with_setup(source, config, setup, |runtime, source| {
+        self.run_with_setup(source, create_options, setup, |runtime, source| {
             runtime.eval_discard(source).map_err(qjs_error)
         })
     }
@@ -235,17 +232,17 @@ impl QuickJsRunner {
     fn run_with_setup(
         &self,
         source: &str,
-        config: Option<QuickJsHostConfig>,
+        create_options: QuickJsCreateOptions,
         setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
         eval: impl FnOnce(&mut QuickJsRuntime, &str) -> FsResult<()>,
     ) -> Result<RunOutput, RunFailure> {
-        self.run_with_setup_control(source, config, None, None, setup, eval)
+        self.run_with_setup_control(source, create_options, None, None, setup, eval)
     }
 
     fn run_with_setup_control(
         &self,
         source: &str,
-        config: Option<QuickJsHostConfig>,
+        create_options: QuickJsCreateOptions,
         exit_state: Option<WanixExitState>,
         output_task: Option<Task>,
         setup: impl FnOnce(&mut QuickJsRuntime) -> FsResult<()>,
@@ -253,7 +250,7 @@ impl QuickJsRunner {
     ) -> Result<RunOutput, RunFailure> {
         let mut runtime = self
             .module
-            .create_runtime_with_host_config(config.unwrap_or_else(captured_stdio_config))
+            .create_runtime_with_options(create_options)
             .map_err(|err| RunFailure {
                 error: qjs_error(err),
                 output: RunOutput::empty(),
@@ -324,7 +321,12 @@ impl QuickJsRunner {
         let namespace = task.namespace();
         let source = read_namespace_file(&namespace, &script_path)?;
         let host = QuickJsWanixConfig::new(task_wasi_config(task));
-        let config = host.quickjs_read_only_projection(captured_stdio_config())?;
+        let wasi_host = WanixQuickJsWasiHost::new(host.wasi().clone()).map_err(|err| {
+            FsError::Other(format!(
+                "failed to create Wanix-backed QuickJS WASI host: {err:?}"
+            ))
+        })?;
+        let create_options = captured_stdio_options().with_wasi_host(wasi_host);
         let run_as_module = uses_module_syntax(&source);
         let exit_state = WanixExitState::default();
         let api_exit_state = exit_state.clone();
@@ -333,7 +335,7 @@ impl QuickJsRunner {
             WanixTaskContext::new(command.raw, command.args, task_env_map(task), task.dir());
         match self.run_with_setup_control(
             &source,
-            Some(config),
+            create_options,
             Some(exit_state.clone()),
             Some(task.clone()),
             move |runtime| {
@@ -392,6 +394,14 @@ fn captured_stdio_config() -> QuickJsHostConfig {
     QuickJsHostConfig::new()
         .with_stdout_capture(true)
         .with_stderr_capture(true)
+}
+
+fn captured_stdio_options() -> QuickJsCreateOptions {
+    create_options_with_config(captured_stdio_config())
+}
+
+fn create_options_with_config(config: QuickJsHostConfig) -> QuickJsCreateOptions {
+    QuickJsCreateOptions::new().with_host_config(config)
 }
 
 fn define_task_output_callback(
@@ -592,6 +602,31 @@ print(Wanix.readText("output.txt"));
 
         assert_eq!(output.stdout(), b"from config / qjs\n");
         assert_eq!(read_file(&*root, "output.txt"), b"from config / qjs");
+    }
+
+    #[test]
+    fn runner_wanix_config_uses_live_wasi_host_without_flattening_preopens() {
+        let mut namespace = wanix_vfs::Namespace::new();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file("input.txt", b"from config").unwrap();
+        root.write_file("mnt/extra.txt", b"from extra preopen")
+            .unwrap();
+        namespace
+            .bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        let config =
+            QuickJsWanixConfig::new(WasiConfig::new(namespace).with_preopen("mnt").unwrap());
+
+        let output = runner()
+            .run_source_with_wanix_config(
+                r#"
+print(Wanix.readText("input.txt"));
+"#,
+                config,
+            )
+            .unwrap();
+
+        assert_eq!(output.stdout(), b"from config\n");
     }
 
     #[test]

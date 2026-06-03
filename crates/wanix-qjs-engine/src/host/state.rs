@@ -4,11 +4,13 @@ use super::callback::{HostCallbackEntry, HostCallbackMode, QuickJsCopiedValue};
 use super::fs::{FIRST_VIRTUAL_FILE_FD, PREOPEN_ROOT_FD, VirtualFileHandle};
 use super::module_loader::ModuleLoader;
 use super::promise_rejection::QuickJsPromiseRejection;
+use super::wasi_host::QuickJsWasiHostHandle;
 use crate::allocation::try_copy_str;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
 use wasmtime::Memory;
 
 pub(crate) struct HostState {
@@ -24,12 +26,21 @@ pub(crate) struct HostState {
     interrupt_handler_depth: usize,
     promise_rejection_handler: Option<PromiseRejectionHandler>,
     promise_rejection_handler_depth: usize,
+    wasi_host: Option<QuickJsWasiHostHandle>,
     virtual_file_fds: BTreeMap<i32, VirtualFileHandle>,
     next_virtual_file_fd: i32,
 }
 
 impl HostState {
+    #[cfg(test)]
     pub(crate) fn new(config: QuickJsHostConfig) -> Self {
+        Self::new_with_wasi_host(config, None)
+    }
+
+    pub(crate) fn new_with_wasi_host(
+        config: QuickJsHostConfig,
+        wasi_host: Option<QuickJsWasiHostHandle>,
+    ) -> Self {
         Self {
             memory: None,
             config,
@@ -43,6 +54,7 @@ impl HostState {
             interrupt_handler_depth: 0,
             promise_rejection_handler: None,
             promise_rejection_handler_depth: 0,
+            wasi_host,
             virtual_file_fds: BTreeMap::new(),
             next_virtual_file_fd: FIRST_VIRTUAL_FILE_FD,
         }
@@ -70,6 +82,10 @@ impl HostState {
 
     pub(super) fn config(&self) -> &QuickJsHostConfig {
         &self.config
+    }
+
+    pub(super) fn wasi_host(&self) -> Option<QuickJsWasiHostHandle> {
+        self.wasi_host.as_ref().map(Arc::clone)
     }
 
     pub(super) fn memory(&self) -> Option<Memory> {

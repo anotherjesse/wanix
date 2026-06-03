@@ -199,8 +199,8 @@ impl QuickJsRuntime {
         module: &QuickJsModule,
         options: QuickJsCreateOptions,
     ) -> Result<Self> {
-        let (config, intrinsics) = options.into_parts();
-        let mut instantiated = Self::instantiate(module.engine(), module, config)?;
+        let (config, intrinsics, wasi_host) = options.into_parts();
+        let mut instantiated = Self::instantiate(module.engine(), module, config, wasi_host)?;
 
         instantiated
             .initialize

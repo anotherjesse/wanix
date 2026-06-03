@@ -61,7 +61,9 @@ pub use binary::{QuickJsBinaryValue, QuickJsTypedArrayKind};
 pub use bytecode::{QuickJsBytecode, QuickJsBytecodeCompileOptions};
 pub use host::{
     QuickJsCallbackValue, QuickJsCopiedValue, QuickJsHostConfig, QuickJsHostValue,
-    QuickJsPromiseRejection, QuickJsValue,
+    QuickJsPromiseRejection, QuickJsValue, QuickJsWasiErrno, QuickJsWasiFdStat,
+    QuickJsWasiFileStat, QuickJsWasiFileType, QuickJsWasiHost, QuickJsWasiPrestat,
+    QuickJsWasiWhence,
 };
 pub use intrinsics::{QuickJsCreateOptions, QuickJsIntrinsics};
 pub use memory::QuickJsMemoryUsage;

@@ -522,6 +522,8 @@ Working:
 - Versioned snapshot byte serialization/deserialization.
 - Explicit `QuickJsHostConfig` for deterministic clock, random, timezone, and
   optional stdio capture imports with per-stream byte limits.
+- Optional live `QuickJsWasiHost` providers attached through
+  `QuickJsCreateOptions` for runtime-owned Preview 1 fd/filesystem imports.
 - Read-only virtual WASI files attached through `QuickJsHostConfig`, exposed
   under a normalized root preopen without host path mounts.
 - Scalar Rust host callbacks exposed as JavaScript globals and reattached after

@@ -1,5 +1,6 @@
-use crate::host::{HostState, QuickJsHostConfig, define_wasi_imports};
+use crate::host::{HostState, QuickJsHostConfig, QuickJsWasiHost, define_wasi_imports};
 use anyhow::{Context, Result};
+use std::sync::{Arc, Mutex};
 use wasmtime::{Engine, Linker, Memory, Module, Store, TypedFunc};
 
 mod clock_time_get;
@@ -127,11 +128,19 @@ impl HostImportHarness {
 }
 
 fn host_import_harness(config: QuickJsHostConfig) -> Result<HostImportHarness> {
+    host_import_harness_with_wasi_host(config, None)
+}
+
+fn host_import_harness_with_wasi_host(
+    config: QuickJsHostConfig,
+    wasi_host: Option<Box<dyn QuickJsWasiHost>>,
+) -> Result<HostImportHarness> {
     let engine = Engine::default();
     let module = Module::new(&engine, HOST_IMPORT_WAT)?;
     let mut linker = Linker::<HostState>::new(&engine);
     define_wasi_imports(&mut linker)?;
-    let mut store = Store::new(&engine, HostState::new(config));
+    let wasi_host = wasi_host.map(|host| Arc::new(Mutex::new(host)));
+    let mut store = Store::new(&engine, HostState::new_with_wasi_host(config, wasi_host));
     let instance = linker.instantiate(&mut store, &module)?;
     let memory = instance
         .get_memory(&mut store, "memory")

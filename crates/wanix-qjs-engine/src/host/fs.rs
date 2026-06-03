@@ -4,6 +4,10 @@ use super::{
     ERRNO_BADF, ERRNO_INVAL, ERRNO_NAMETOOLONG, ERRNO_NOENT, ERRNO_NOSYS, ERRNO_NOTCAPABLE,
     ERRNO_SUCCESS, HostState, caller_memory, wasi_stdio_fd,
 };
+use super::{
+    QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiHost, QuickJsWasiPrestat,
+    QuickJsWasiWhence,
+};
 use crate::allocation::try_copy_bytes;
 use crate::guest::guest_offset;
 use std::sync::Arc;
@@ -75,6 +79,16 @@ fn fd_prestat_get(
     fd: i32,
     prestat_ptr: i32,
 ) -> wasmtime::Result<i32> {
+    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| host.fd_prestat_get(fd))? {
+        let prestat = match result {
+            Ok(prestat) => prestat,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        let memory = caller_memory(&caller)?;
+        write_prestat(&memory, &mut caller, prestat_ptr, &prestat)?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
     if !caller.data().is_virtual_preopen_fd(fd) {
         return Ok(ERRNO_BADF);
     }
@@ -91,6 +105,21 @@ fn fd_prestat_dir_name(
     path_ptr: i32,
     path_len: i32,
 ) -> wasmtime::Result<i32> {
+    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| host.fd_prestat_get(fd))? {
+        let prestat = match result {
+            Ok(prestat) => prestat,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        let path_len = guest_len(path_len)?;
+        let path = prestat.dir_name().as_bytes();
+        if path_len < path.len() {
+            return Ok(ERRNO_INVAL);
+        }
+        let memory = caller_memory(&caller)?;
+        memory.write(&mut caller, guest_offset(path_ptr), path)?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
     if !caller.data().is_virtual_preopen_fd(fd) {
         return Ok(ERRNO_BADF);
     }
@@ -116,6 +145,51 @@ fn path_open(
     fdflags: i32,
     opened_fd_ptr: i32,
 ) -> wasmtime::Result<i32> {
+    if caller.data().wasi_host().is_some() {
+        if unsupported_lookupflags(dirflags) {
+            return Ok(ERRNO_NOTCAPABLE);
+        }
+        let dirfd = match preview1_fd(dirfd) {
+            Ok(fd) => fd,
+            Err(errno) => return Ok(errno),
+        };
+        let oflags = match preview1_u16_flags(oflags) {
+            Ok(flags) => flags,
+            Err(errno) => return Ok(errno),
+        };
+        let fdflags = match preview1_u16_flags(fdflags) {
+            Ok(flags) => flags,
+            Err(errno) => return Ok(errno),
+        };
+        let memory = caller_memory(&caller)?;
+        guest_range(&memory, &caller, guest_offset(opened_fd_ptr), WASI_U32_SIZE)?;
+        let path_len = match checked_wasi_path_len(path_len)? {
+            Ok(path_len) => path_len,
+            Err(errno) => return Ok(errno),
+        };
+        let path = read_guest_path(&memory, &caller, path_ptr, path_len)?;
+        let Some(result) = with_wasi_host_u32(&caller, |host| {
+            host.path_open(
+                dirfd,
+                dirflags.cast_unsigned(),
+                &path,
+                oflags,
+                fs_rights_base.cast_unsigned(),
+                fs_rights_inheriting.cast_unsigned(),
+                fdflags,
+            )
+        })?
+        else {
+            return Ok(ERRNO_BADF);
+        };
+        let fd = match result {
+            Ok(fd) => fd,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        memory.write(&mut caller, guest_offset(opened_fd_ptr), &fd.to_le_bytes())?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
     if !caller.data().is_virtual_preopen_fd(dirfd) {
         return Ok(ERRNO_BADF);
     }
@@ -159,6 +233,16 @@ fn fd_filestat_get(
     fd: i32,
     stat_ptr: i32,
 ) -> wasmtime::Result<i32> {
+    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| host.fd_filestat_get(fd))? {
+        let stat = match result {
+            Ok(stat) => stat,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        let memory = caller_memory(&caller)?;
+        write_wasi_filestat(&memory, &mut caller, stat_ptr, stat)?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
     let (filetype, size) = if wasi_stdio_fd(fd).is_some() {
         (FILETYPE_CHARACTER_DEVICE, 0)
     } else if caller.data().is_virtual_preopen_fd(fd) {
@@ -187,6 +271,35 @@ fn path_filestat_get(
     path_len: i32,
     stat_ptr: i32,
 ) -> wasmtime::Result<i32> {
+    if caller.data().wasi_host().is_some() {
+        if unsupported_lookupflags(flags) {
+            return Ok(ERRNO_NOTCAPABLE);
+        }
+        let dirfd = match preview1_fd(dirfd) {
+            Ok(fd) => fd,
+            Err(errno) => return Ok(errno),
+        };
+        let memory = caller_memory(&caller)?;
+        guest_range(&memory, &caller, guest_offset(stat_ptr), FILESTAT_SIZE)?;
+        let path_len = match checked_wasi_path_len(path_len)? {
+            Ok(path_len) => path_len,
+            Err(errno) => return Ok(errno),
+        };
+        let path = read_guest_path(&memory, &caller, path_ptr, path_len)?;
+        let Some(result) = with_wasi_host_u32(&caller, |host| {
+            host.path_filestat_get(dirfd, flags.cast_unsigned(), &path)
+        })?
+        else {
+            return Ok(ERRNO_BADF);
+        };
+        let stat = match result {
+            Ok(stat) => stat,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        write_wasi_filestat(&memory, &mut caller, stat_ptr, stat)?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
     if !caller.data().is_virtual_preopen_fd(dirfd) {
         return Ok(ERRNO_BADF);
     }
@@ -226,6 +339,61 @@ fn fd_read(
     iovs_len: i32,
     nread_ptr: i32,
 ) -> wasmtime::Result<i32> {
+    if caller.data().wasi_host().is_some() {
+        let fd = match preview1_fd(fd) {
+            Ok(fd) => fd,
+            Err(errno) => return Ok(errno),
+        };
+        let memory = caller_memory(&caller)?;
+        let iovs_len = guest_len(iovs_len)?;
+        guest_range(&memory, &caller, guest_offset(nread_ptr), WASI_U32_SIZE)?;
+        preflight_fd_read_iovs(&memory, &caller, iovs_ptr, iovs_len)?;
+        let Some(host) = caller.data().wasi_host() else {
+            return Ok(ERRNO_BADF);
+        };
+        let mut host = host
+            .lock()
+            .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
+
+        let mut total_read = 0u32;
+        for index in 0..iovs_len {
+            let iov = read_valid_iov(&memory, &caller, iovs_ptr, index)?;
+            if iov.len == 0 {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(iov.len)
+                .map_err(|_| wasmtime::Error::msg("fd_read buffer allocation failed"))?;
+            bytes.resize(iov.len, 0);
+            let count = match host.fd_read(fd, &mut bytes) {
+                Ok(count) => count,
+                Err(errno) => return Ok(errno.preview1_result()),
+            };
+            if count > iov.len {
+                return Err(wasmtime::Error::msg(
+                    "QuickJS WASI host returned oversized fd_read count",
+                ));
+            }
+            memory.write(&mut caller, iov.ptr, &bytes[..count])?;
+            total_read = checked_wasi_size_add(
+                total_read,
+                u32::try_from(count)
+                    .map_err(|_| wasmtime::Error::msg("fd_read byte count exceeds u32"))?,
+            )?;
+            if count < iov.len {
+                break;
+            }
+        }
+
+        memory.write(
+            &mut caller,
+            guest_offset(nread_ptr),
+            &total_read.to_le_bytes(),
+        )?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
     let (bytes, offset, rights_base) = match caller.data().virtual_file(fd) {
         Some(file) => (Arc::clone(&file.bytes), file.offset, file.rights_base),
         None => return Ok(ERRNO_BADF),
@@ -280,6 +448,19 @@ fn fd_seek(
     whence: i32,
     result_ptr: i32,
 ) -> wasmtime::Result<i32> {
+    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| {
+        let whence = QuickJsWasiWhence::from_preview1(whence)?;
+        host.fd_seek(fd, offset, whence)
+    })? {
+        let next = match result {
+            Ok(next) => next,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        let memory = caller_memory(&caller)?;
+        memory.write(&mut caller, guest_offset(result_ptr), &next.to_le_bytes())?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
     let (current, len, rights_base) = match caller.data().virtual_file(fd) {
         Some(file) => (file.offset, file.bytes.len(), file.rights_base),
         None => return Ok(ERRNO_BADF),
@@ -310,13 +491,20 @@ fn fd_seek(
     Ok(ERRNO_SUCCESS)
 }
 
-fn fd_close(mut caller: Caller<'_, HostState>, fd: i32) -> i32 {
+fn fd_close(mut caller: Caller<'_, HostState>, fd: i32) -> wasmtime::Result<i32> {
+    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| host.fd_close(fd))? {
+        return Ok(match result {
+            Ok(()) => ERRNO_SUCCESS,
+            Err(errno) => errno.preview1_result(),
+        });
+    }
+
     if caller.data_mut().close_virtual_file(fd) {
-        ERRNO_SUCCESS
+        Ok(ERRNO_SUCCESS)
     } else if fd == 1 || fd == 2 || caller.data().is_virtual_preopen_fd(fd) {
-        ERRNO_NOSYS
+        Ok(ERRNO_NOSYS)
     } else {
-        ERRNO_BADF
+        Ok(ERRNO_BADF)
     }
 }
 
@@ -325,6 +513,16 @@ fn fd_fdstat_get(
     fd: i32,
     stat_ptr: i32,
 ) -> wasmtime::Result<i32> {
+    if let Some(result) = with_wasi_host(&caller, fd, |host, fd| host.fd_fdstat_get(fd))? {
+        let stat = match result {
+            Ok(stat) => stat,
+            Err(errno) => return Ok(errno.preview1_result()),
+        };
+        let memory = caller_memory(&caller)?;
+        write_wasi_fdstat(&memory, &mut caller, stat_ptr, stat)?;
+        return Ok(ERRNO_SUCCESS);
+    }
+
     let (filetype, rights_base, rights_inheriting) = if wasi_stdio_fd(fd).is_some() {
         (FILETYPE_CHARACTER_DEVICE, 0, 0)
     } else if caller.data().is_virtual_preopen_fd(fd) {
@@ -422,6 +620,47 @@ fn write_filestat(
     Ok(memory.write(caller, guest_offset(stat_ptr), &stat)?)
 }
 
+fn write_prestat(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    prestat_ptr: i32,
+    prestat: &QuickJsWasiPrestat,
+) -> wasmtime::Result<()> {
+    let len = u32::try_from(prestat.dir_name().len())
+        .map_err(|_| wasmtime::Error::msg("WASI preopen name length exceeds u32"))?;
+    let mut bytes = [0u8; PRESTAT_SIZE];
+    bytes[4..8].copy_from_slice(&len.to_le_bytes());
+    Ok(memory.write(caller, guest_offset(prestat_ptr), &bytes)?)
+}
+
+fn write_wasi_fdstat(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    stat_ptr: i32,
+    stat: QuickJsWasiFdStat,
+) -> wasmtime::Result<()> {
+    let mut bytes = [0u8; FDSTAT_SIZE];
+    bytes[0] = stat.file_type().preview1_code();
+    bytes[8..16].copy_from_slice(&stat.rights_base().to_le_bytes());
+    bytes[16..24].copy_from_slice(&stat.rights_inheriting().to_le_bytes());
+    Ok(memory.write(caller, guest_offset(stat_ptr), &bytes)?)
+}
+
+fn write_wasi_filestat(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    stat_ptr: i32,
+    stat: QuickJsWasiFileStat,
+) -> wasmtime::Result<()> {
+    write_filestat(
+        memory,
+        caller,
+        stat_ptr,
+        stat.file_type().preview1_code(),
+        stat.size(),
+    )
+}
+
 fn read_absolute_virtual_path(
     memory: &Memory,
     caller: &Caller<'_, HostState>,
@@ -439,6 +678,57 @@ fn read_absolute_virtual_path(
     Ok(absolute_virtual_path_from_open_path(&path))
 }
 
+fn with_wasi_host<T>(
+    caller: &Caller<'_, HostState>,
+    fd: i32,
+    call: impl FnOnce(&mut dyn QuickJsWasiHost, u32) -> Result<T, QuickJsWasiErrno>,
+) -> wasmtime::Result<Option<Result<T, QuickJsWasiErrno>>> {
+    let Some(host) = caller.data().wasi_host() else {
+        return Ok(None);
+    };
+    let fd = match preview1_fd(fd) {
+        Ok(fd) => fd,
+        Err(errno) => return Ok(Some(Err(preview1_errno(errno)))),
+    };
+    let mut host = host
+        .lock()
+        .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
+    Ok(Some(call(host.as_mut(), fd)))
+}
+
+fn with_wasi_host_u32<T>(
+    caller: &Caller<'_, HostState>,
+    call: impl FnOnce(&mut dyn QuickJsWasiHost) -> Result<T, QuickJsWasiErrno>,
+) -> wasmtime::Result<Option<Result<T, QuickJsWasiErrno>>> {
+    let Some(host) = caller.data().wasi_host() else {
+        return Ok(None);
+    };
+    let mut host = host
+        .lock()
+        .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
+    Ok(Some(call(host.as_mut())))
+}
+
+fn preview1_fd(fd: i32) -> Result<u32, i32> {
+    u32::try_from(fd).map_err(|_| ERRNO_BADF)
+}
+
+fn preview1_u16_flags(flags: i32) -> Result<u16, i32> {
+    u16::try_from(flags).map_err(|_| ERRNO_NOTCAPABLE)
+}
+
+fn preview1_errno(errno: i32) -> QuickJsWasiErrno {
+    match errno {
+        ERRNO_BADF => QuickJsWasiErrno::Badf,
+        ERRNO_INVAL => QuickJsWasiErrno::Inval,
+        ERRNO_NAMETOOLONG => QuickJsWasiErrno::Nametoolong,
+        ERRNO_NOENT => QuickJsWasiErrno::Noent,
+        ERRNO_NOSYS => QuickJsWasiErrno::Nosys,
+        ERRNO_NOTCAPABLE => QuickJsWasiErrno::Notcapable,
+        _ => QuickJsWasiErrno::Io,
+    }
+}
+
 fn read_guest_path(
     memory: &Memory,
     caller: &Caller<'_, HostState>,
@@ -448,6 +738,14 @@ fn read_guest_path(
     let range = guest_range(memory, caller, guest_offset(path_ptr), path_len)?;
     try_copy_bytes(&memory.data(caller)[range], "WASI path")
         .map_err(|err| wasmtime::Error::msg(format!("{err:#}")))
+}
+
+fn checked_wasi_path_len(path_len: i32) -> wasmtime::Result<Result<usize, i32>> {
+    let path_len = guest_len(path_len)?;
+    if path_len > MAX_VIRTUAL_FILE_PATH_BYTES {
+        return Ok(Err(ERRNO_NAMETOOLONG));
+    }
+    Ok(Ok(path_len))
 }
 
 fn absolute_virtual_path_from_open_path(path: &[u8]) -> Result<Vec<u8>, i32> {

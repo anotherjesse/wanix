@@ -1,6 +1,15 @@
 use super::*;
+use crate::host::{
+    QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiFileType,
+    QuickJsWasiPrestat, QuickJsWasiWhence,
+};
+use std::sync::{Arc, Mutex};
+
+type WasiHostResult<T> = std::result::Result<T, QuickJsWasiErrno>;
+type WriteLog = Arc<Mutex<Vec<(u32, Vec<u8>)>>>;
 
 const ERRNO_BADF: i32 = 8;
+const ERRNO_SUCCESS: i32 = 0;
 const NWRITTEN_SENTINEL: u32 = u32::MAX;
 const WASI_U32_SIZE: usize = 4;
 const WASI_IOV_SIZE: usize = 2 * WASI_U32_SIZE;
@@ -91,6 +100,100 @@ fn fd_write_captures_stdout_iovs_when_configured() -> Result<()> {
     let captured = harness.store.data_mut().take_captured_stdout();
     assert_eq!(captured, b"hello stdout");
     assert_captured_stdout(&harness, b"");
+    Ok(())
+}
+
+#[derive(Clone, Default)]
+struct RecordingWasiHost {
+    writes: WriteLog,
+}
+
+impl QuickJsWasiHost for RecordingWasiHost {
+    fn fd_prestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiPrestat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_open(
+        &mut self,
+        _dirfd: u32,
+        _dirflags: u32,
+        _path: &[u8],
+        _oflags: u16,
+        _rights_base: u64,
+        _rights_inheriting: u64,
+        _fdflags: u16,
+    ) -> WasiHostResult<u32> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_read(&mut self, _fd: u32, _buf: &mut [u8]) -> WasiHostResult<usize> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_write(&mut self, fd: u32, buf: &[u8]) -> WasiHostResult<usize> {
+        self.writes
+            .lock()
+            .expect("test writes lock")
+            .push((fd, buf.to_vec()));
+        Ok(buf.len())
+    }
+
+    fn fd_seek(
+        &mut self,
+        _fd: u32,
+        _offset: i64,
+        _whence: QuickJsWasiWhence,
+    ) -> WasiHostResult<u64> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_close(&mut self, _fd: u32) -> WasiHostResult<()> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_fdstat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFdStat> {
+        Ok(QuickJsWasiFdStat::new(
+            QuickJsWasiFileType::CharacterDevice,
+            1 << 6,
+            0,
+        ))
+    }
+
+    fn fd_filestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFileStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_filestat_get(
+        &mut self,
+        _dirfd: u32,
+        _flags: u32,
+        _path: &[u8],
+    ) -> WasiHostResult<QuickJsWasiFileStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+}
+
+#[test]
+fn fd_write_uses_live_wasi_host_when_configured() -> Result<()> {
+    let host = RecordingWasiHost::default();
+    let writes = Arc::clone(&host.writes);
+    let mut harness = host_import_harness_with_wasi_host(
+        QuickJsHostConfig::new().with_stdout_capture(true),
+        Some(Box::new(host)),
+    )?;
+
+    harness.memory.write(&mut harness.store, 100, b"one")?;
+    harness.memory.write(&mut harness.store, 200, b"two")?;
+    write_iov(&mut harness, 40, 100, 3)?;
+    write_iov(&mut harness, 48, 200, 3)?;
+
+    assert_eq!(harness.call_fd_write(1, 40, 2, 64)?, ERRNO_SUCCESS);
+    assert_eq!(read_u32(&harness, 64)?, 6);
+    assert!(harness.store.data().captured_stdout().is_empty());
+    assert_eq!(
+        writes.lock().expect("test writes lock").as_slice(),
+        &[(1, b"one".to_vec()), (1, b"two".to_vec())]
+    );
     Ok(())
 }
 
