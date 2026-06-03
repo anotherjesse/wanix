@@ -1,5 +1,6 @@
 use wanix_fs::{DirEntry, File, FileSeekFrom, FileType, FsError, FsResult, Metadata};
 
+use crate::cmd::parse_cmd_argv;
 use crate::{Fd, Task, TaskId, TaskTable};
 
 #[derive(Debug, Clone, Copy)]
@@ -170,13 +171,13 @@ impl File for ControlFile {
     }
 }
 
-enum ControlCommand<'a> {
+enum ControlCommand {
     Pending,
     Start,
-    Bind { source: &'a str, fd: Fd },
+    Bind { source: String, fd: Fd },
 }
 
-fn parse_control_command<'a>(task: &Task, command: &'a str) -> FsResult<ControlCommand<'a>> {
+fn parse_control_command(task: &Task, command: &str) -> FsResult<ControlCommand> {
     if command.is_empty() {
         return Ok(ControlCommand::Pending);
     }
@@ -188,17 +189,35 @@ fn parse_control_command<'a>(task: &Task, command: &'a str) -> FsResult<ControlC
         });
     }
 
-    let parts = command.split_whitespace().collect::<Vec<_>>();
-    if parts.is_empty() || ("bind".starts_with(parts[0]) && parts.len() < 3) {
+    let parts = match parse_cmd_argv(command) {
+        Ok(Some(parts)) => parts,
+        Ok(None) => return Ok(ControlCommand::Pending),
+        Err(FsError::Other(message))
+            if message.starts_with("unterminated ") && command_may_be_bind(command) =>
+        {
+            return Ok(ControlCommand::Pending);
+        }
+        Err(err) => return Err(err),
+    };
+    if parts.is_empty() || ("bind".starts_with(parts[0].as_str()) && parts.len() < 3) {
         return Ok(ControlCommand::Pending);
     }
-    if parts.len() == 3 && parts[0] == "bind" {
+    if let [command, source, destination] = parts.as_slice()
+        && command == "bind"
+    {
         return Ok(ControlCommand::Bind {
-            source: parts[1],
-            fd: control_fd_destination(task, parts[2])?,
+            source: source.clone(),
+            fd: control_fd_destination(task, destination)?,
         });
     }
     Err(FsError::NotSupported)
+}
+
+fn command_may_be_bind(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .next()
+        .is_some_and(|word| "bind".starts_with(word))
 }
 
 fn control_fd_destination(task: &Task, destination: &str) -> FsResult<Fd> {

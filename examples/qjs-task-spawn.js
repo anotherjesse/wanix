@@ -38,11 +38,11 @@ function writeServiceText(path, text) {
 
 const parent = readServiceText("#task/self/id").trim();
 const child = readServiceText("#task/new/qjs").trim();
-std.writeFile("child-stdin.txt", "stdin from parent\n");
+std.writeFile("child stdin.txt", "stdin from parent\n");
 writeServiceText("#task/" + child + "/cmd", "qjs-task-spawn-child.js alpha 'two words' '' beta\n");
 writeServiceText("#task/" + child + "/env", "MODE=spawned\n");
 writeServiceText("#task/" + child + "/dir", ".\n");
-writeServiceText("#task/" + child + "/ctl", "bind child-stdin.txt fd/0\n");
+writeServiceText("#task/" + child + "/ctl", "bind 'child stdin.txt' fd/0\n");
 writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/1 fd/1\n");
 writeServiceText("#task/" + child + "/ctl", "bind #task/" + parent + "/fd/2 fd/2\n");
 print("parent task: " + parent);

@@ -452,6 +452,25 @@ fn ctl_bind_installs_fd_from_task_namespace() {
 }
 
 #[test]
+fn ctl_bind_parses_shell_quoted_source_paths() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let root = Arc::new(MemFs::new());
+    root.write_file("child stdin.txt", b"input with spaces")
+        .unwrap();
+    task.bind(root.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    write_file(&taskfs, "self/ctl", b"bind 'child stdin.txt' fd/0\n");
+
+    assert_eq!(entry_names(&taskfs, "self/fd"), ["0"]);
+    assert_eq!(read_file(&taskfs, "self/fd/0"), "input with spaces");
+    assert_eq!(task.fd_path(Fd::STDIN).unwrap().as_str(), "child stdin.txt");
+}
+
+#[test]
 fn ctl_bind_accepts_self_addressed_fd_destinations() {
     let table = TaskTable::new();
     table.register_noop_driver("qjs").unwrap();
@@ -536,6 +555,15 @@ fn split_writes_accumulate_for_fields_and_ctl() {
     assert_eq!(task.fd_numbers(), [Fd::STDOUT]);
     write_file(&taskfs, "self/fd/1", b"split bind");
     assert_eq!(root.read_file("stdout").unwrap(), b"split bind");
+
+    root.write_file("child stdin.txt", b"split quoted bind")
+        .unwrap();
+    let mut ctl = open_write(&taskfs, "self/ctl");
+    ctl.write(b"bind 'child ").unwrap();
+    assert_eq!(task.fd_numbers(), [Fd::STDOUT]);
+    ctl.write(b"stdin.txt' fd/0\n").unwrap();
+    assert_eq!(task.fd_numbers(), [Fd::STDIN, Fd::STDOUT]);
+    assert_eq!(read_file(&taskfs, "self/fd/0"), "split quoted bind");
 }
 
 #[derive(Debug)]

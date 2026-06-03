@@ -121,6 +121,9 @@ cargo test --workspace --locked
 - [ADR 0018](docs/adrs/0018-qjs-restore-process-context-options.md):
   `qjs-restore` configures before and after task argv/env separately so restore
   demos expose the VM-versus-host-state boundary.
+- [ADR 0019](docs/adrs/0019-task-ctl-bind-shell-words.md): `#task/ctl bind`
+  operands use the same shell-word grammar as `#task/cmd`, preserving Wanix
+  paths with spaces when wiring fds.
 
 ## Cycle Rules
 
