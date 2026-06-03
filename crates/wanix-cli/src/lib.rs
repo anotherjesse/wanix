@@ -10,7 +10,7 @@ use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver};
 use wanix_task::{Fd, TaskTable};
 use wanix_vfs::BindOptions;
 
-const USAGE: &str = "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] <script.js> [-- arg ...]\n       wanix-rust --help";
+const USAGE: &str = "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] <script.js> [-- arg ...]\n       wanix-rust --help";
 const QJS_GUEST_SCRIPT: &str = "main.js";
 
 /// Captured native CLI output.
@@ -126,6 +126,7 @@ struct QjsCommand {
     args: Vec<String>,
     env: Vec<String>,
     cwd: NormalizedPath,
+    stdin: Option<Vec<u8>>,
 }
 
 fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
@@ -156,6 +157,16 @@ fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
     let guest_script = guest_path_in_cwd(&command.cwd, QJS_GUEST_SCRIPT)?;
     root.write_file(guest_script.as_str(), script.as_bytes())?;
     task.bind(root, ".", ".", BindOptions::default())?;
+
+    if let Some(stdin_bytes) = command.stdin {
+        let stdin = Arc::new(MemFs::new());
+        stdin.write_file("stdin", stdin_bytes)?;
+        task.insert_fd(
+            Fd::STDIN,
+            stdin.open(&NormalizedPath::new("stdin")?, OpenOptions::read())?,
+            NormalizedPath::new("stdin")?,
+        )?;
+    }
 
     let stdout = Arc::new(MemFs::new());
     stdout.write_file("stdout", b"")?;
@@ -193,6 +204,7 @@ fn run_qjs(command: QjsCommand) -> Result<CliOutput, CliError> {
 fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
     let mut env = Vec::new();
     let mut cwd = NormalizedPath::new(".")?;
+    let mut stdin = None;
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--env" {
@@ -210,6 +222,13 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
                 .get(i)
                 .ok_or_else(|| CliError::usage("qjs --cwd expects a Wanix path"))?;
             cwd = NormalizedPath::new(os_arg_to_string(value, "qjs --cwd")?)?;
+            i += 1;
+        } else if args[i] == "--stdin" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs --stdin expects text"))?;
+            stdin = Some(os_arg_to_string(value, "qjs --stdin")?.into_bytes());
             i += 1;
         } else if args[i] == "--" {
             i += 1;
@@ -243,6 +262,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
         args: js_args,
         env,
         cwd,
+        stdin,
     })
 }
 
@@ -497,6 +517,33 @@ print(Wanix.readText("fd-output.txt"));
     }
 
     #[test]
+    fn qjs_command_attaches_stdin_as_wanix_task_fd_zero() {
+        let script = write_temp_script(
+            "stdin-demo.js",
+            r##"
+print("stdin", Wanix.readFd(0, 1024));
+print("again", JSON.stringify(Wanix.readFd(0, 1024)));
+print("task", Wanix.readText("#task/self/id").trim());
+"##,
+        );
+
+        let output = run([
+            "qjs".into(),
+            "--stdin".into(),
+            "hello from fd0".into(),
+            script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"stdin hello from fd0\nagain \"\"\ntask 1\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_flows_env_cwd_and_args_from_wanix_task_state() {
         let script = write_temp_script(
             "context.js",
@@ -546,6 +593,10 @@ print("id", Wanix.readText("#task/self/id").trim());
         .unwrap_err();
         assert_eq!(env_error.exit_code(), 2);
         assert!(env_error.to_string().contains("KEY=VALUE"));
+
+        let stdin_error = run(["qjs", "--stdin"]).unwrap_err();
+        assert_eq!(stdin_error.exit_code(), 2);
+        assert!(stdin_error.to_string().contains("--stdin expects text"));
 
         let arg_error =
             run(["qjs".into(), script.into_os_string(), "two words".into()]).unwrap_err();
