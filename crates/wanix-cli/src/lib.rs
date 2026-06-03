@@ -1564,6 +1564,8 @@ mod tests {
     };
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    const P9_O_WRONLY: u32 = 0o1;
+    const P9_O_APPEND: u32 = 0o2000;
 
     struct MarkerCheckedStdin {
         marker: PathBuf,
@@ -1773,6 +1775,48 @@ mod tests {
         assert_eq!(p9_decode_rwrite(&frames[4]).unwrap(), 12);
         assert_eq!(p9_decode_rread(&frames[5]).unwrap(), b"stdio create");
         assert_eq!(fs::read(root.join("created.txt")).unwrap(), b"stdio create");
+    }
+
+    #[test]
+    fn p9_stdio_appends_through_open_append() {
+        let root = temp_dir("wanix-cli-p9-stdio-append");
+        fs::write(root.join("log.txt"), b"start").unwrap();
+        let input = request_stream([
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, P9_NOFID, "root", "", 0).unwrap(),
+            p9_twalk(3, 1, 2, &["log.txt"]).unwrap(),
+            p9_tlopen(4, 2, P9_O_WRONLY | P9_O_APPEND),
+            p9_twrite(5, 2, 0, b"-a").unwrap(),
+            p9_twrite(6, 2, 0, b"-b").unwrap(),
+        ]);
+
+        let output = run_with_process_stdin(
+            [
+                "p9-stdio".into(),
+                "--root".into(),
+                root.clone().into_os_string(),
+            ],
+            input.as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.stderr().is_empty());
+        let frames = decode_response_stream(output.stdout());
+        assert_eq!(
+            frame_types(&frames),
+            [
+                P9_RVERSION,
+                P9_RATTACH,
+                P9_RWALK,
+                P9_RLOPEN,
+                P9_RWRITE,
+                P9_RWRITE
+            ]
+        );
+        assert_eq!(p9_decode_rwrite(&frames[4]).unwrap(), 2);
+        assert_eq!(p9_decode_rwrite(&frames[5]).unwrap(), 2);
+        assert_eq!(fs::read(root.join("log.txt")).unwrap(), b"start-a-b");
     }
 
     #[test]

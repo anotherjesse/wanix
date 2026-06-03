@@ -60,6 +60,7 @@ const O_WRONLY: u32 = 0o1;
 const O_RDWR: u32 = 0o2;
 const O_CREAT: u32 = 0o100;
 const O_TRUNC: u32 = 0o1000;
+const O_APPEND: u32 = 0o2000;
 const AT_REMOVEDIR: u32 = 0x200;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
@@ -126,6 +127,7 @@ pub struct P9Server {
 struct FidEntry {
     path: NormalizedPath,
     file: Option<Box<dyn File>>,
+    append: bool,
 }
 
 impl P9Server {
@@ -195,7 +197,14 @@ impl P9Server {
             Ok(qid) => qid,
             Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         };
-        self.fids.insert(attach.fid, FidEntry { path, file: None });
+        self.fids.insert(
+            attach.fid,
+            FidEntry {
+                path,
+                file: None,
+                append: false,
+            },
+        );
         Ok(p9_rattach(frame.tag(), qid))
     }
 
@@ -229,7 +238,14 @@ impl P9Server {
                 Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
             }
         }
-        self.fids.insert(walk.newfid, FidEntry { path, file: None });
+        self.fids.insert(
+            walk.newfid,
+            FidEntry {
+                path,
+                file: None,
+                append: false,
+            },
+        );
         Ok(p9_rwalk(frame.tag(), &qids)?)
     }
 
@@ -243,7 +259,9 @@ impl P9Server {
             Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         };
         let qid = qid_for_metadata(&path, metadata.clone());
-        let file = if metadata.file_type() == FileType::Directory {
+        let is_directory = metadata.file_type() == FileType::Directory;
+        let append = !is_directory && open.flags & O_APPEND != 0;
+        let file = if is_directory {
             if open.flags & (O_ACCMODE | O_CREAT | O_TRUNC) != 0 {
                 return Ok(p9_rlerror(frame.tag(), EISDIR));
             }
@@ -258,6 +276,7 @@ impl P9Server {
             return Ok(p9_rlerror(frame.tag(), EBADF));
         };
         entry.file = file;
+        entry.append = append;
         Ok(p9_rlopen(
             frame.tag(),
             qid,
@@ -287,6 +306,7 @@ impl P9Server {
         };
         entry.path = path;
         entry.file = Some(file);
+        entry.append = create.flags & O_APPEND != 0;
         Ok(p9_rlcreate(
             frame.tag(),
             qid,
@@ -474,10 +494,16 @@ impl P9Server {
         let Some(entry) = self.fids.get_mut(&write.fid) else {
             return Ok(p9_rlerror(frame.tag(), EBADF));
         };
+        let append = entry.append;
         let Some(file) = entry.file.as_mut() else {
             return Ok(p9_rlerror(frame.tag(), EBADF));
         };
-        if let Err(error) = file.seek(FileSeekFrom::Start(write.offset)) {
+        let seek_from = if append {
+            FileSeekFrom::End(0)
+        } else {
+            FileSeekFrom::Start(write.offset)
+        };
+        if let Err(error) = file.seek(seek_from) {
             return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
         }
         let count = match file.write(&write.data) {
@@ -997,6 +1023,77 @@ mod tests {
         assert_eq!(response.message_type(), P9_RWRITE);
         assert_eq!(p9_decode_rwrite(&response).unwrap(), 4);
         assert_eq!(fs.read_file("out.txt").unwrap(), b"made");
+    }
+
+    #[test]
+    fn open_append_ignores_write_offsets_and_writes_at_end() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("log.txt", b"base").unwrap();
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["log.txt"]);
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(3, 2, O_WRONLY | O_APPEND))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+
+        let response = server
+            .handle_frame(&p9_twrite(4, 2, 0, b"-one").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+        assert_eq!(p9_decode_rwrite(&response).unwrap(), 4);
+
+        let response = server
+            .handle_frame(&p9_twrite(5, 2, 1, b"-two").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+        assert_eq!(p9_decode_rwrite(&response).unwrap(), 4);
+        assert_eq!(fs.read_file("log.txt").unwrap(), b"base-one-two");
+    }
+
+    #[test]
+    fn lcreate_append_sets_created_fid_append_mode() {
+        let fs = Arc::new(MemFs::new());
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        let response = server
+            .handle_frame(&p9_tlcreate(2, 1, "log.txt", O_WRONLY | O_APPEND, 0o100664, 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLCREATE);
+
+        let response = server
+            .handle_frame(&p9_twrite(3, 1, 0, b"first").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+        assert_eq!(p9_decode_rwrite(&response).unwrap(), 5);
+
+        let response = server
+            .handle_frame(&p9_twrite(4, 1, 0, b"second").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+        assert_eq!(p9_decode_rwrite(&response).unwrap(), 6);
+        assert_eq!(fs.read_file("log.txt").unwrap(), b"firstsecond");
+    }
+
+    #[test]
+    fn read_only_directory_open_tolerates_append_status_flag() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("hello.txt", b"hello").unwrap();
+        let mut server = server(fs);
+
+        attach_root(&mut server);
+        let response = server.handle_frame(&p9_tlopen(2, 1, O_APPEND)).unwrap();
+
+        assert_eq!(response.message_type(), P9_RLOPEN);
+        let response = server.handle_frame(&p9_treaddir(3, 1, 0, 4096)).unwrap();
+        assert_eq!(response.message_type(), P9_RREADDIR);
+        let entries = p9_decode_rreaddir(&response).unwrap();
+        assert_eq!(entries[0].name, "hello.txt");
     }
 
     #[test]
