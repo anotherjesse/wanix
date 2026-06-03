@@ -205,6 +205,9 @@ cargo test --workspace --locked
 - [ADR 0046](docs/adrs/0046-qjs-memory-limit-policy.md):
   Wanix `qjs` tasks can apply an explicit QuickJS heap memory limit while
   preserving default unlimited behavior.
+- [ADR 0047](docs/adrs/0047-snapshot-resume-memory-limit-reattachment.md):
+  `qjs-snapshot` and `qjs-resume` reattach QuickJS heap limits as host policy
+  instead of serializing them into VM snapshot files.
 
 ## Cycle Rules
 

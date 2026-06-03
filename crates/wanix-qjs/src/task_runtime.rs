@@ -111,6 +111,20 @@ impl QuickJsTaskRuntime {
             .map_err(qjs_error)
     }
 
+    /// Sets the QuickJS heap allocation limit for this attached task runtime.
+    ///
+    /// The limit is host policy, not serialized Wanix task state. Callers that
+    /// restore a VM image must reapply it to the restored runtime when they need
+    /// the same policy after restore.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error if the underlying QuickJS runtime cannot
+    /// apply the memory limit.
+    pub fn set_memory_limit(&mut self, bytes: u32) -> FsResult<()> {
+        self.runtime.set_memory_limit(bytes).map_err(qjs_error)
+    }
+
     /// Returns the requested Wanix process exit code, if JavaScript has exited.
     ///
     /// # Errors

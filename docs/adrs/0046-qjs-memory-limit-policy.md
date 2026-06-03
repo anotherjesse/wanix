@@ -24,11 +24,12 @@ When configured, the runner applies `QuickJsRuntime::set_memory_limit(bytes)`
 immediately after creating the QuickJS runtime and before evaluating the task
 script.
 
-`wanix-rust qjs` exposes this policy as `--memory-limit-bytes N`. The default is
-no QuickJS heap limit, preserving existing behavior. Allocation failures surface
-as normal QuickJS task failures: the driver records exit status `1`, preserves
-stdout/stderr emitted before the failure, and the CLI reports native exit status
-`1`.
+`wanix-rust qjs` exposes this policy as `--memory-limit-bytes N`. ADR 0047 later
+extends the same explicit policy to `qjs-snapshot` and `qjs-resume` as
+restore-time host reattachment. The default is no QuickJS heap limit, preserving
+existing behavior. Allocation failures surface as normal QuickJS task failures:
+the driver records exit status `1`, preserves stdout/stderr emitted before the
+failure, and the CLI reports native exit status `1`.
 
 The memory limit remains host policy. Restore paths that need the same policy
 must reapply it when creating or restoring a runtime, just as other host

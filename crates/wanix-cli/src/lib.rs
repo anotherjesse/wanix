@@ -21,10 +21,10 @@ const USAGE: &str = concat!(
     "[--interrupt-after N] [--memory-limit-bytes N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--stdin TEXT | --stdin-file PATH|-] [--mount HOST=GUEST ...] ",
+    "[--stdin TEXT | --stdin-file PATH|-] [--memory-limit-bytes N] [--mount HOST=GUEST ...] ",
     "--snapshot FILE <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-resume [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--stdin TEXT | --stdin-file PATH|-] [--mount HOST=GUEST ...] ",
+    "[--stdin TEXT | --stdin-file PATH|-] [--memory-limit-bytes N] [--mount HOST=GUEST ...] ",
     "--snapshot FILE <script.js> [-- arg ...]\n",
     "       wanix-rust qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
     "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
@@ -219,6 +219,7 @@ struct QjsSnapshotFileCommand {
     env: Vec<String>,
     cwd: NormalizedPath,
     stdin: Option<QjsStdin>,
+    memory_limit_bytes: Option<u32>,
     mounts: Vec<HostMount>,
 }
 
@@ -301,6 +302,7 @@ fn run_qjs_snapshot(
 
     let snapshot_result = (|| -> Result<(), CliError> {
         let mut runtime = runner.create_task_runtime(&task)?;
+        apply_qjs_task_runtime_memory_limit(&mut runtime, command.memory_limit_bytes)?;
         eval_qjs_source(&mut runtime, &script, &guest_script)?;
         ensure_snapshot_task_fds_closed(&task)?;
         let snapshot = runtime.snapshot_bytes()?;
@@ -358,6 +360,7 @@ fn run_qjs_resume(
 
     let resume_result = (|| -> Result<(), CliError> {
         let mut runtime = runner.restore_task_runtime_from_bytes(&task, &snapshot)?;
+        apply_qjs_task_runtime_memory_limit(&mut runtime, command.memory_limit_bytes)?;
         if let Err(error) = eval_qjs_source(&mut runtime, &script, &guest_script) {
             let _ = task.set_exit("1");
             return Err(error);
@@ -653,6 +656,7 @@ fn parse_qjs_snapshot_file_command(
     let mut cwd = NormalizedPath::new(".")?;
     let mut mounts = Vec::new();
     let mut stdin = None;
+    let mut memory_limit_bytes = None;
     let mut snapshot_path = None;
     let mut i = 0;
     while i < args.len() {
@@ -696,6 +700,18 @@ fn parse_qjs_snapshot_file_command(
                 QjsStdin::File(PathBuf::from(value))
             };
             set_qjs_stdin(&mut stdin, source, command)?;
+            i += 1;
+        } else if args[i] == "--memory-limit-bytes" {
+            i += 1;
+            let value = args.get(i).ok_or_else(|| {
+                CliError::usage(format!(
+                    "{command} --memory-limit-bytes expects a byte count"
+                ))
+            })?;
+            memory_limit_bytes = Some(parse_u32(
+                value,
+                &format!("{command} --memory-limit-bytes"),
+            )?);
             i += 1;
         } else if args[i] == "--mount" {
             i += 1;
@@ -751,6 +767,7 @@ fn parse_qjs_snapshot_file_command(
         env,
         cwd,
         stdin,
+        memory_limit_bytes,
         mounts,
     })
 }
@@ -1023,6 +1040,16 @@ fn ensure_snapshot_task_fds_closed(task: &Task) -> Result<(), CliError> {
         ),
         1,
     ))
+}
+
+fn apply_qjs_task_runtime_memory_limit(
+    runtime: &mut QuickJsTaskRuntime,
+    bytes: Option<u32>,
+) -> Result<(), CliError> {
+    if let Some(bytes) = bytes {
+        runtime.set_memory_limit(bytes)?;
+    }
+    Ok(())
 }
 
 fn eval_qjs_source(
@@ -2054,6 +2081,76 @@ std.exit(6);
             b"host after task 1"
         );
         fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn qjs_snapshot_memory_limit_stops_allocation_before_snapshot_file() {
+        let dir = temp_dir("wanix-cli-snapshot-memory-limit");
+        let snapshot = dir.join("quickjs.snapshot");
+
+        let output = run([
+            "qjs-snapshot".into(),
+            "--memory-limit-bytes".into(),
+            (1024 * 1024).to_string().into(),
+            "--snapshot".into(),
+            snapshot.clone().into_os_string(),
+            example_script("qjs-memory-limit-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 1);
+        assert_eq!(output.stdout(), b"before allocation\n");
+        let stderr = std::str::from_utf8(output.stderr()).unwrap();
+        assert!(stderr.contains("wanix-rust qjs-snapshot:"), "{stderr}");
+        assert!(stderr.contains("QuickJS exception"), "{stderr}");
+        assert!(
+            !snapshot.exists(),
+            "snapshot should not be written after memory-limit failure"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn qjs_resume_memory_limit_is_reattached_after_restore() {
+        let dir = temp_dir("wanix-cli-resume-memory-limit");
+        let snapshot = dir.join("quickjs.snapshot");
+        let before_script = write_temp_script(
+            "qjs-memory-limit-before.js",
+            r#"
+globalThis.snapshotReady = true;
+print("snapshotted");
+"#,
+        );
+
+        let before = run([
+            "qjs-snapshot".into(),
+            "--snapshot".into(),
+            snapshot.clone().into_os_string(),
+            before_script.into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(before.exit_code(), 0);
+        assert_eq!(before.stdout(), b"snapshotted\n");
+        assert!(before.stderr().is_empty());
+        assert!(fs::read(&snapshot).unwrap().len() > 1024);
+
+        let after = run([
+            "qjs-resume".into(),
+            "--memory-limit-bytes".into(),
+            (1024 * 1024).to_string().into(),
+            "--snapshot".into(),
+            snapshot.into_os_string(),
+            example_script("qjs-memory-limit-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(after.exit_code(), 1);
+        assert_eq!(after.stdout(), b"before allocation\n");
+        let stderr = std::str::from_utf8(after.stderr()).unwrap();
+        assert!(stderr.contains("wanix-rust qjs-resume:"), "{stderr}");
+        assert!(stderr.contains("QuickJS exception"), "{stderr}");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
