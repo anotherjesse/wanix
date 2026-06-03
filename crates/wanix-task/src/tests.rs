@@ -10,7 +10,9 @@ use wanix_fs::{
 };
 use wanix_vfs::BindOptions;
 
-use crate::{CRATE_PURPOSE, Fd, NoopDriver, Task, TaskDriver, TaskId, TaskSpec, TaskTable};
+use crate::{
+    CRATE_PURPOSE, Fd, NoopDriver, Task, TaskDriver, TaskId, TaskSpec, TaskTable, quote_cmd_argv,
+};
 
 fn read_file(fs: &dyn FileSystem, path: &str) -> String {
     let mut file = fs
@@ -279,6 +281,20 @@ fn task_cmd_file_parses_shell_quoted_argv_without_replacing_raw_text() {
     assert_eq!(
         task.cmd_argv().unwrap(),
         ["script.js", "two words", "", "quote'test", "plain arg"]
+    );
+}
+
+#[test]
+fn task_cmd_quote_helper_round_trips_through_parser() {
+    let command = quote_cmd_argv(["script.js", "two words", "", "quote'test", "plain\\arg"]);
+
+    assert_eq!(
+        command,
+        "script.js 'two words' '' 'quote'\"'\"'test' 'plain\\arg'"
+    );
+    assert_eq!(
+        crate::cmd::parse_cmd_argv(&command).unwrap().unwrap(),
+        ["script.js", "two words", "", "quote'test", "plain\\arg"]
     );
 }
 

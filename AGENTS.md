@@ -118,6 +118,9 @@ cargo test --workspace --locked
 - [ADR 0017](docs/adrs/0017-explicit-host-directory-qjs-mounts.md):
   Native qjs demos expose host files only through explicit rooted directory
   mounts into a Wanix namespace.
+- [ADR 0018](docs/adrs/0018-qjs-restore-process-context-options.md):
+  `qjs-restore` configures before and after task argv/env separately so restore
+  demos expose the VM-versus-host-state boundary.
 
 ## Cycle Rules
 

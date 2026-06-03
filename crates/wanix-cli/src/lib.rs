@@ -10,10 +10,17 @@ use std::sync::OnceLock;
 
 use wanix_fs::{FileSystem, FsError, LocalFs, MemFs, NormalizedPath, OpenOptions};
 use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
-use wanix_task::{Fd, Task, TaskSpec, TaskTable};
+use wanix_task::{Fd, Task, TaskSpec, TaskTable, quote_cmd_argv};
 use wanix_vfs::BindOptions;
 
-const USAGE: &str = "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] [--mount HOST=GUEST ...] <script.js> [-- arg ...]\n       wanix-rust qjs-restore [--cwd DIR] [--mount HOST=GUEST ...] <before.js> <after.js>\n       wanix-rust --help";
+const USAGE: &str = concat!(
+    "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT] ",
+    "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
+    "       wanix-rust qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
+    "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
+    "[--mount HOST=GUEST ...] <before.js> <after.js>\n",
+    "       wanix-rust --help",
+);
 const QJS_GUEST_SCRIPT: &str = "main.js";
 const QJS_RESTORE_BEFORE_SCRIPT: &str = "__wanix_restore/before/main.js";
 const QJS_RESTORE_AFTER_SCRIPT: &str = "__wanix_restore/after/main.js";
@@ -150,6 +157,10 @@ struct HostMount {
 struct QjsRestoreCommand {
     before_script_path: PathBuf,
     after_script_path: PathBuf,
+    before_args: Vec<String>,
+    after_args: Vec<String>,
+    before_env: Vec<String>,
+    after_env: Vec<String>,
     cwd: NormalizedPath,
     mounts: Vec<HostMount>,
 }
@@ -266,8 +277,8 @@ fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
     configure_qjs_task(
         &before_task,
         QJS_RESTORE_BEFORE_SCRIPT,
-        &[],
-        &[],
+        &command.before_args,
+        &command.before_env,
         &command.cwd,
     )?;
 
@@ -283,8 +294,8 @@ fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
         configure_qjs_task(
             &after_task,
             QJS_RESTORE_AFTER_SCRIPT,
-            &[],
-            &[],
+            &command.after_args,
+            &command.after_env,
             &command.cwd,
         )?;
         bind_child_output_to_parent(&after_task, &before_task)?;
@@ -326,7 +337,7 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
                 .get(i)
                 .ok_or_else(|| CliError::usage("qjs --env expects KEY=VALUE"))?;
             let value = os_arg_to_string(value, "qjs --env")?;
-            validate_env_line(&value)?;
+            validate_env_line(&value, "qjs --env")?;
             env.push(value);
             i += 1;
         } else if args[i] == "--cwd" {
@@ -408,6 +419,10 @@ fn parse_host_mount(value: &str, label: &str) -> Result<HostMount, CliError> {
 fn parse_qjs_restore_command(args: &[OsString]) -> Result<QjsRestoreCommand, CliError> {
     let mut cwd = NormalizedPath::new(".")?;
     let mut mounts = Vec::new();
+    let mut before_args = Vec::new();
+    let mut after_args = Vec::new();
+    let mut before_env = Vec::new();
+    let mut after_env = Vec::new();
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--cwd" {
@@ -416,6 +431,38 @@ fn parse_qjs_restore_command(args: &[OsString]) -> Result<QjsRestoreCommand, Cli
                 .get(i)
                 .ok_or_else(|| CliError::usage("qjs-restore --cwd expects a Wanix path"))?;
             cwd = NormalizedPath::new(os_arg_to_string(value, "qjs-restore --cwd")?)?;
+            i += 1;
+        } else if args[i] == "--before-env" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs-restore --before-env expects KEY=VALUE"))?;
+            let value = os_arg_to_string(value, "qjs-restore --before-env")?;
+            validate_env_line(&value, "qjs-restore --before-env")?;
+            before_env.push(value);
+            i += 1;
+        } else if args[i] == "--after-env" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs-restore --after-env expects KEY=VALUE"))?;
+            let value = os_arg_to_string(value, "qjs-restore --after-env")?;
+            validate_env_line(&value, "qjs-restore --after-env")?;
+            after_env.push(value);
+            i += 1;
+        } else if args[i] == "--before-arg" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs-restore --before-arg expects VALUE"))?;
+            before_args.push(os_arg_to_string(value, "qjs-restore --before-arg")?);
+            i += 1;
+        } else if args[i] == "--after-arg" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qjs-restore --after-arg expects VALUE"))?;
+            after_args.push(os_arg_to_string(value, "qjs-restore --after-arg")?);
             i += 1;
         } else if args[i] == "--mount" {
             i += 1;
@@ -457,6 +504,10 @@ fn parse_qjs_restore_command(args: &[OsString]) -> Result<QjsRestoreCommand, Cli
     Ok(QjsRestoreCommand {
         before_script_path,
         after_script_path,
+        before_args,
+        after_args,
+        before_env,
+        after_env,
         cwd,
         mounts,
     })
@@ -468,21 +519,18 @@ fn os_arg_to_string(arg: &OsString, label: &str) -> Result<String, CliError> {
         .map_err(|_| CliError::usage(format!("{label} must be valid UTF-8")))
 }
 
-fn validate_env_line(line: &str) -> Result<(), CliError> {
+fn validate_env_line(line: &str, label: &str) -> Result<(), CliError> {
     let Some((key, _value)) = line.split_once('=') else {
-        return Err(CliError::usage("qjs --env expects KEY=VALUE"));
+        return Err(CliError::usage(format!("{label} expects KEY=VALUE")));
     };
     if key.is_empty() || key.chars().any(char::is_whitespace) || line.contains('\n') {
-        return Err(CliError::usage("qjs --env expects KEY=VALUE"));
+        return Err(CliError::usage(format!("{label} expects KEY=VALUE")));
     }
     Ok(())
 }
 
 fn task_cmd(program: &str, args: &[String]) -> String {
-    std::iter::once(program)
-        .chain(args.iter().map(String::as_str))
-        .collect::<Vec<_>>()
-        .join(" ")
+    quote_cmd_argv(std::iter::once(program).chain(args.iter().map(String::as_str)))
 }
 
 fn qjs_task_spec(
@@ -1333,6 +1381,35 @@ print("opened task fd");
     }
 
     #[test]
+    fn qjs_restore_example_reattaches_after_process_context() {
+        let output = run([
+            "qjs-restore".into(),
+            "--before-env".into(),
+            "MODE=before".into(),
+            "--after-env".into(),
+            "MODE=after".into(),
+            "--before-arg".into(),
+            "prep".into(),
+            "--before-arg".into(),
+            "two words".into(),
+            "--after-arg".into(),
+            "resume".into(),
+            "--after-arg".into(),
+            "done value".into(),
+            example_script("qjs-restore-context-before.js").into_os_string(),
+            example_script("qjs-restore-context-after.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 6);
+        assert_eq!(
+            output.stdout(),
+            b"before task: 1\nbefore cmd: __wanix_restore/before/main.js prep 'two words'\nbefore argv: __wanix_restore/before/main.js|prep|two words\nbefore wasi env: before\nbefore wanix env: before\nafter task: 2\nafter cmd: __wanix_restore/after/main.js resume 'done value'\nafter argv: __wanix_restore/after/main.js|resume|done value\nafter wasi env: before\nafter wanix env: after\nsnapshot argv: __wanix_restore/before/main.js|prep|two words\nsnapshot env: before\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_restore_mounts_host_directory_into_reattached_task_namespace() {
         let host = temp_dir("wanix-cli-restore-mount");
         let before_script = write_temp_script(
@@ -1633,7 +1710,7 @@ print("id", Wanix.readText("#task/self/id").trim());
         assert_eq!(output.exit_code(), 0);
         assert_eq!(
             output.stdout(),
-            b"cmd main.js alpha two words beta\ncwd app\nargs alpha/two words/beta\nmode test\nall test\nsource true\ncreated made in cwd\nid 1\n"
+            b"cmd main.js alpha 'two words' beta\ncwd app\nargs alpha/two words/beta\nmode test\nall test\nsource true\ncreated made in cwd\nid 1\n"
         );
         assert!(output.stderr().is_empty());
     }

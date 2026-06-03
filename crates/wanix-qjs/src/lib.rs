@@ -14,7 +14,7 @@ use rust_wasi_quickjs::{
     QuickJsCreateOptions, QuickJsHostConfig, QuickJsModule, QuickJsRestoreOptions, QuickJsRuntime,
 };
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath};
-use wanix_task::{Fd, Task, TaskSpec};
+use wanix_task::{Fd, Task, TaskSpec, quote_cmd_argv};
 use wanix_wasi::WasiConfig;
 use wasmtime::Engine;
 
@@ -635,10 +635,7 @@ fn task_spec_is_set(spec: &TaskSpec) -> bool {
 }
 
 fn raw_command(program: &NormalizedPath, args: &[String]) -> String {
-    std::iter::once(program.as_str())
-        .chain(args.iter().map(String::as_str))
-        .collect::<Vec<_>>()
-        .join(" ")
+    quote_cmd_argv(std::iter::once(program.as_str()).chain(args.iter().map(String::as_str)))
 }
 
 fn resolve_from_cwd(cwd: &NormalizedPath, path: &NormalizedPath) -> FsResult<NormalizedPath> {

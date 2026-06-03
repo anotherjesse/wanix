@@ -14,6 +14,7 @@ mod task_fs;
 #[cfg(test)]
 mod tests;
 
+pub use cmd::quote_cmd_argv;
 pub use driver::{NoopDriver, TaskDriver};
 pub use fd::{Fd, FdTable, OpenFile};
 pub use table::TaskTable;
