@@ -1140,6 +1140,45 @@ std.exit(5);
     }
 
     #[test]
+    fn qjs_host_mount_example_starts_child_task_from_mounted_script() {
+        let host = temp_dir("wanix-cli-host-spawn");
+
+        let output = run([
+            "qjs".into(),
+            "--mount".into(),
+            format!("{}=host", host.display()).into(),
+            example_script("qjs-host-spawn.js").into_os_string(),
+        ])
+        .unwrap();
+
+        let child_output =
+            b"child task 2 args host/qjs-host-spawn-child.js|mounted|two words mode host-child";
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            [
+                b"parent task: 1\nchild task: 2\n".as_slice(),
+                child_output,
+                b"\nchild exit: 4\nhost child output: ".as_slice(),
+                child_output,
+                b"\n".as_slice()
+            ]
+            .concat()
+        );
+        assert!(output.stderr().is_empty());
+        assert_eq!(
+            fs::read(host.join("parent-output.txt")).unwrap(),
+            b"parent task 1"
+        );
+        assert_eq!(
+            fs::read(host.join("child-output.txt")).unwrap(),
+            child_output
+        );
+        assert!(host.join("qjs-host-spawn-child.js").exists());
+        fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
     fn qjs_restore_command_restores_vm_image_into_child_task() {
         let before_script = write_temp_script(
             "restore-before.js",

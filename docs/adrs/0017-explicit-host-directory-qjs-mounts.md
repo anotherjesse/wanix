@@ -45,6 +45,11 @@ mounted host directory is live namespace state cloned onto the restored Wanix
 task. This keeps host resources outside the snapshot bytes while making the
 reattachment visible through host filesystem writes.
 
+For task-spawn demos, child tasks allocated through `#task/new/qjs` clone the
+parent Wanix namespace, so explicit host mounts can provide both child program
+source and child-visible storage without giving QuickJS its own process or host
+filesystem policy.
+
 This is a native CLI composition feature, not a change to core task identity or
 QuickJS engine policy. Browser deployments and future persisted namespace
 formats must choose their own host-resource attachment policy instead of
