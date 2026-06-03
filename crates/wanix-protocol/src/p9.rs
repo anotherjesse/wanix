@@ -75,6 +75,18 @@ pub const P9_TFSYNC: u8 = 50;
 /// 9P2000.L `Rfsync` message type.
 pub const P9_RFSYNC: u8 = 51;
 
+/// 9P2000.L `Tlock` message type.
+pub const P9_TLOCK: u8 = 52;
+
+/// 9P2000.L `Rlock` message type.
+pub const P9_RLOCK: u8 = 53;
+
+/// 9P2000.L `Tgetlock` message type.
+pub const P9_TGETLOCK: u8 = 54;
+
+/// 9P2000.L `Rgetlock` message type.
+pub const P9_RGETLOCK: u8 = 55;
+
 /// 9P2000.L `Tmkdir` message type.
 pub const P9_TMKDIR: u8 = 72;
 
@@ -162,6 +174,27 @@ pub const P9_SETATTR_ATIME_NOT_SYSTEM_TIME: u32 = 0x0000_0080;
 /// 9P2000.L `Tsetattr` modification time is explicit rather than server current time.
 pub const P9_SETATTR_MTIME_NOT_SYSTEM_TIME: u32 = 0x0000_0100;
 
+/// 9P2000.L read-lock type.
+pub const P9_LOCK_TYPE_READ: u8 = 0;
+
+/// 9P2000.L write-lock type.
+pub const P9_LOCK_TYPE_WRITE: u8 = 1;
+
+/// 9P2000.L unlock/no-conflict type.
+pub const P9_LOCK_TYPE_UNLOCK: u8 = 2;
+
+/// 9P2000.L lock request succeeded.
+pub const P9_LOCK_STATUS_OK: u8 = 0;
+
+/// 9P2000.L lock request blocked.
+pub const P9_LOCK_STATUS_BLOCKED: u8 = 1;
+
+/// 9P2000.L lock request failed.
+pub const P9_LOCK_STATUS_ERROR: u8 = 2;
+
+/// 9P2000.L lock request is in grace period.
+pub const P9_LOCK_STATUS_GRACE: u8 = 3;
+
 /// Returns a stable name for message types the Rust port currently identifies.
 #[must_use]
 pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
@@ -185,6 +218,10 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RREADDIR => Some("Rreaddir"),
         P9_TFSYNC => Some("Tfsync"),
         P9_RFSYNC => Some("Rfsync"),
+        P9_TLOCK => Some("Tlock"),
+        P9_RLOCK => Some("Rlock"),
+        P9_TGETLOCK => Some("Tgetlock"),
+        P9_RGETLOCK => Some("Rgetlock"),
         P9_TMKDIR => Some("Tmkdir"),
         P9_RMKDIR => Some("Rmkdir"),
         P9_TRENAMEAT => Some("Trenameat"),
@@ -556,6 +593,41 @@ pub struct P9Flush {
     pub oldtag: u16,
 }
 
+/// 9P2000.L record-lock range fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9Lock {
+    /// Lock kind: read, write, or unlock.
+    pub lock_type: u8,
+    /// Starting byte offset for the lock range.
+    pub start: u64,
+    /// Number of bytes in the lock range.
+    pub length: u64,
+    /// Process id associated with the lock request.
+    pub proc_id: u32,
+    /// Client id string, usually the Linux v9fs client nodename.
+    pub client_id: String,
+}
+
+/// Decoded payload for `Tlock`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9LockRequest {
+    /// Fid to lock or unlock.
+    pub fid: u32,
+    /// 9P2000.L lock flags.
+    pub flags: u32,
+    /// Requested lock range.
+    pub lock: P9Lock,
+}
+
+/// Decoded payload for `Tgetlock`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9GetLockRequest {
+    /// Fid whose advisory-lock state should be queried.
+    pub fid: u32,
+    /// Requested lock range.
+    pub lock: P9Lock,
+}
+
 /// 9P2000.L filesystem stats returned by `Rstatfs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct P9FsStat {
@@ -861,6 +933,51 @@ pub fn p9_tfsync(tag: u16, fid: u32) -> P9Frame {
 #[must_use]
 pub fn p9_rfsync(tag: u16) -> P9Frame {
     P9Frame::new(P9_RFSYNC, tag, Vec::new())
+}
+
+/// Builds a `Tlock` frame.
+///
+/// # Errors
+///
+/// Returns an error when the client id cannot fit in a 9P string field.
+pub fn p9_tlock(tag: u16, fid: u32, flags: u32, lock: &P9Lock) -> Result<P9Frame, P9Error> {
+    let mut payload = Vec::new();
+    push_u32(&mut payload, fid);
+    payload.push(lock.lock_type);
+    push_u32(&mut payload, flags);
+    push_lock_range(&mut payload, lock)?;
+    Ok(P9Frame::new(P9_TLOCK, tag, payload))
+}
+
+/// Builds an `Rlock` frame.
+#[must_use]
+pub fn p9_rlock(tag: u16, status: u8) -> P9Frame {
+    P9Frame::new(P9_RLOCK, tag, vec![status])
+}
+
+/// Builds a `Tgetlock` frame.
+///
+/// # Errors
+///
+/// Returns an error when the client id cannot fit in a 9P string field.
+pub fn p9_tgetlock(tag: u16, fid: u32, lock: &P9Lock) -> Result<P9Frame, P9Error> {
+    let mut payload = Vec::new();
+    push_u32(&mut payload, fid);
+    payload.push(lock.lock_type);
+    push_lock_range(&mut payload, lock)?;
+    Ok(P9Frame::new(P9_TGETLOCK, tag, payload))
+}
+
+/// Builds an `Rgetlock` frame.
+///
+/// # Errors
+///
+/// Returns an error when the client id cannot fit in a 9P string field.
+pub fn p9_rgetlock(tag: u16, lock: &P9Lock) -> Result<P9Frame, P9Error> {
+    let mut payload = Vec::new();
+    payload.push(lock.lock_type);
+    push_lock_range(&mut payload, lock)?;
+    Ok(P9Frame::new(P9_RGETLOCK, tag, payload))
 }
 
 /// Builds a `Tattach` frame.
@@ -1303,6 +1420,68 @@ pub fn p9_decode_tfsync(frame: &P9Frame) -> Result<P9Fsync, P9Error> {
 pub fn p9_decode_rfsync(frame: &P9Frame) -> Result<(), P9Error> {
     expect_message_type(frame, P9_RFSYNC)?;
     PayloadCursor::new(frame.payload()).finish()
+}
+
+/// Decodes a `Tlock` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tlock` or the payload is
+/// malformed.
+pub fn p9_decode_tlock(frame: &P9Frame) -> Result<P9LockRequest, P9Error> {
+    expect_message_type(frame, P9_TLOCK)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    let lock_type = cursor.read_u8()?;
+    let flags = cursor.read_u32()?;
+    let lock = cursor.read_lock(lock_type)?;
+    cursor.finish()?;
+    Ok(P9LockRequest { fid, flags, lock })
+}
+
+/// Decodes an `Rlock` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rlock` or the payload is
+/// malformed.
+pub fn p9_decode_rlock(frame: &P9Frame) -> Result<u8, P9Error> {
+    expect_message_type(frame, P9_RLOCK)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let status = cursor.read_u8()?;
+    cursor.finish()?;
+    Ok(status)
+}
+
+/// Decodes a `Tgetlock` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tgetlock` or the payload is
+/// malformed.
+pub fn p9_decode_tgetlock(frame: &P9Frame) -> Result<P9GetLockRequest, P9Error> {
+    expect_message_type(frame, P9_TGETLOCK)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    let lock_type = cursor.read_u8()?;
+    let lock = cursor.read_lock(lock_type)?;
+    cursor.finish()?;
+    Ok(P9GetLockRequest { fid, lock })
+}
+
+/// Decodes an `Rgetlock` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rgetlock` or the payload is
+/// malformed.
+pub fn p9_decode_rgetlock(frame: &P9Frame) -> Result<P9Lock, P9Error> {
+    expect_message_type(frame, P9_RGETLOCK)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let lock_type = cursor.read_u8()?;
+    let lock = cursor.read_lock(lock_type)?;
+    cursor.finish()?;
+    Ok(lock)
 }
 
 /// Decodes a `Tattach` frame payload.
@@ -1918,6 +2097,14 @@ fn push_set_attr(out: &mut Vec<u8>, attr: &P9SetAttr) {
     push_u64(out, attr.mtime_nanoseconds);
 }
 
+fn push_lock_range(out: &mut Vec<u8>, lock: &P9Lock) -> Result<(), P9Error> {
+    push_u64(out, lock.start);
+    push_u64(out, lock.length);
+    push_u32(out, lock.proc_id);
+    push_string(out, &lock.client_id)?;
+    Ok(())
+}
+
 fn push_dir_entry(out: &mut Vec<u8>, entry: &P9DirEntry) -> Result<(), P9Error> {
     push_qid(out, entry.qid);
     push_u64(out, entry.offset);
@@ -2084,6 +2271,20 @@ impl<'a> PayloadCursor<'a> {
             atime_nanoseconds,
             mtime_seconds,
             mtime_nanoseconds,
+        })
+    }
+
+    fn read_lock(&mut self, lock_type: u8) -> Result<P9Lock, P9Error> {
+        let start = self.read_u64()?;
+        let length = self.read_u64()?;
+        let proc_id = self.read_u32()?;
+        let client_id = self.read_string()?;
+        Ok(P9Lock {
+            lock_type,
+            start,
+            length,
+            proc_id,
+            client_id,
         })
     }
 
@@ -2290,6 +2491,10 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RREADDIR), Some("Rreaddir"));
         assert_eq!(p9_message_type_name(P9_TFSYNC), Some("Tfsync"));
         assert_eq!(p9_message_type_name(P9_RFSYNC), Some("Rfsync"));
+        assert_eq!(p9_message_type_name(P9_TLOCK), Some("Tlock"));
+        assert_eq!(p9_message_type_name(P9_RLOCK), Some("Rlock"));
+        assert_eq!(p9_message_type_name(P9_TGETLOCK), Some("Tgetlock"));
+        assert_eq!(p9_message_type_name(P9_RGETLOCK), Some("Rgetlock"));
         assert_eq!(p9_message_type_name(P9_TMKDIR), Some("Tmkdir"));
         assert_eq!(p9_message_type_name(P9_RMKDIR), Some("Rmkdir"));
         assert_eq!(p9_message_type_name(P9_TRENAMEAT), Some("Trenameat"));
@@ -2367,6 +2572,72 @@ mod tests {
         assert_eq!(&response[..4], &7_u32.to_le_bytes());
         assert_eq!(response[4], P9_RFSYNC);
         p9_decode_rfsync(&P9Frame::decode(&response).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn lock_round_trips_status_response() {
+        let lock = P9Lock {
+            lock_type: P9_LOCK_TYPE_WRITE,
+            start: 11,
+            length: 22,
+            proc_id: 33,
+            client_id: "linux-node".to_owned(),
+        };
+        let frame = p9_tlock(5, 10, 1, &lock).unwrap().encode().unwrap();
+        assert_eq!(&frame[..4], &48_u32.to_le_bytes());
+        assert_eq!(frame[4], P9_TLOCK);
+        assert_eq!(
+            p9_decode_tlock(&P9Frame::decode(&frame).unwrap()).unwrap(),
+            P9LockRequest {
+                fid: 10,
+                flags: 1,
+                lock
+            }
+        );
+
+        let response = p9_rlock(5, P9_LOCK_STATUS_OK).encode().unwrap();
+        assert_eq!(&response[..4], &8_u32.to_le_bytes());
+        assert_eq!(response[4], P9_RLOCK);
+        assert_eq!(
+            p9_decode_rlock(&P9Frame::decode(&response).unwrap()).unwrap(),
+            P9_LOCK_STATUS_OK
+        );
+    }
+
+    #[test]
+    fn getlock_round_trips_no_conflict_payload() {
+        let request_lock = P9Lock {
+            lock_type: P9_LOCK_TYPE_READ,
+            start: 44,
+            length: 55,
+            proc_id: 66,
+            client_id: "client-a".to_owned(),
+        };
+        let frame = p9_tgetlock(6, 11, &request_lock).unwrap().encode().unwrap();
+        assert_eq!(&frame[..4], &42_u32.to_le_bytes());
+        assert_eq!(frame[4], P9_TGETLOCK);
+        assert_eq!(
+            p9_decode_tgetlock(&P9Frame::decode(&frame).unwrap()).unwrap(),
+            P9GetLockRequest {
+                fid: 11,
+                lock: request_lock
+            }
+        );
+
+        let response_lock = P9Lock {
+            lock_type: P9_LOCK_TYPE_UNLOCK,
+            start: 44,
+            length: 55,
+            proc_id: 0,
+            client_id: String::new(),
+        };
+        let response = p9_rgetlock(6, &response_lock).unwrap().encode().unwrap();
+        assert_eq!(&response[..4], &30_u32.to_le_bytes());
+        assert_eq!(response[4], P9_RGETLOCK);
+        assert_eq!(
+            p9_decode_rgetlock(&P9Frame::decode(&response).unwrap()).unwrap(),
+            response_lock
+        );
     }
 
     #[test]

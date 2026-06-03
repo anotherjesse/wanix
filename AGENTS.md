@@ -94,9 +94,10 @@ and read-only directories, reads/writes regular files, lists directories with
 `Treaddir`, clunks fids, reports no-follow metadata with `Tgetattr`, creates
 and reads symbolic links with `Tsymlink` and `Treadlink`, and handles core mount
 and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, `Trenameat`, and
-`Tunlinkat`, file size and timestamp mutation with `Tsetattr`, plus synchronous
-compatibility probes with `Tflush` and `Tfsync`; it also serves encoded
-request/response frames through a synchronous stream loop.
+`Tunlinkat`, file size and timestamp mutation with `Tsetattr`, advisory-lock
+compatibility probes with `Tlock`/`Tgetlock`, plus synchronous compatibility
+probes with `Tflush` and `Tfsync`; it also serves encoded request/response
+frames through a synchronous stream loop.
 `wanix-rust p9-stdio --root DIR` exposes that server over process
 stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
 for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
@@ -355,6 +356,9 @@ cargo test --workspace --locked
 - [ADR 0075](docs/adrs/0075-9p-setattr-size-times.md):
   `wanix-9p` supports the `Tsetattr` size and access/modification time subset
   while returning explicit unsupported errors for chmod/chown/ctime.
+- [ADR 0076](docs/adrs/0076-9p-lock-probe-compatibility.md):
+  `wanix-9p` answers `Tlock` and `Tgetlock` as compatibility probes without a
+  persistent advisory-lock manager.
 
 ## Cycle Rules
 

@@ -19,18 +19,19 @@ use wanix_fs::{
 use wanix_protocol::{
     P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_CTIME, P9_SETATTR_GID,
     P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
-    P9_SETATTR_UID, P9_TATTACH, P9_TCLUNK, P9_TFLUSH, P9_TFSYNC, P9_TGETATTR, P9_TLCREATE,
-    P9_TLOPEN, P9_TMKDIR, P9_TREAD, P9_TREADDIR, P9_TREADLINK, P9_TRENAMEAT, P9_TSETATTR,
-    P9_TSTATFS, P9_TSYMLINK, P9_TUNLINKAT, P9_TVERSION, P9_TWALK, P9_TWRITE, P9_VERSION_9P2000_L,
-    P9Attr, P9DirEntry, P9Error, P9Frame, P9FsStat, P9Qid, P9SetAttr, P9Version, p9_decode_tattach,
-    p9_decode_tclunk, p9_decode_tflush, p9_decode_tfsync, p9_decode_tgetattr, p9_decode_tlcreate,
-    p9_decode_tlopen, p9_decode_tmkdir, p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink,
+    P9_SETATTR_UID, P9_TATTACH, P9_TCLUNK, P9_TFLUSH, P9_TFSYNC, P9_TGETATTR, P9_TGETLOCK,
+    P9_TLCREATE, P9_TLOCK, P9_TLOPEN, P9_TMKDIR, P9_TREAD, P9_TREADDIR, P9_TREADLINK, P9_TRENAMEAT,
+    P9_TSETATTR, P9_TSTATFS, P9_TSYMLINK, P9_TUNLINKAT, P9_TVERSION, P9_TWALK, P9_TWRITE,
+    P9_VERSION_9P2000_L, P9Attr, P9DirEntry, P9Error, P9Frame, P9FsStat, P9Lock, P9Qid, P9SetAttr,
+    P9Version, p9_decode_tattach, p9_decode_tclunk, p9_decode_tflush, p9_decode_tfsync,
+    p9_decode_tgetattr, p9_decode_tgetlock, p9_decode_tlcreate, p9_decode_tlock, p9_decode_tlopen,
+    p9_decode_tmkdir, p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink,
     p9_decode_trenameat, p9_decode_tsetattr, p9_decode_tstatfs, p9_decode_tsymlink,
     p9_decode_tunlinkat, p9_decode_tversion, p9_decode_twalk, p9_decode_twrite,
     p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rflush, p9_rfsync, p9_rgetattr,
-    p9_rlcreate, p9_rlerror, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir, p9_rreadlink,
-    p9_rrenameat, p9_rsetattr, p9_rstatfs, p9_rsymlink, p9_runlinkat, p9_rversion, p9_rwalk,
-    p9_rwrite,
+    p9_rgetlock, p9_rlcreate, p9_rlerror, p9_rlock, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir,
+    p9_rreadlink, p9_rrenameat, p9_rsetattr, p9_rstatfs, p9_rsymlink, p9_runlinkat, p9_rversion,
+    p9_rwalk, p9_rwrite,
 };
 
 pub use transport::{P9TransportError, P9TransportStats};
@@ -85,6 +86,8 @@ const P9_MODE_LNK: u32 = 0o120000;
 const P9_DEFAULT_BLOCK_SIZE: u64 = 65_536;
 const P9_FS_MAGIC: u32 = 0x0102_1997;
 const P9_DEFAULT_NAME_LENGTH: u32 = 255;
+const P9_LOCK_TYPE_UNLOCK: u8 = wanix_protocol::P9_LOCK_TYPE_UNLOCK;
+const P9_LOCK_STATUS_OK: u8 = wanix_protocol::P9_LOCK_STATUS_OK;
 
 /// Error returned when a request is too malformed to turn into a 9P reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +164,8 @@ impl P9Server {
             P9_TSETATTR => self.handle_setattr(frame),
             P9_TREADDIR => self.handle_readdir(frame),
             P9_TFSYNC => self.handle_fsync(frame),
+            P9_TLOCK => self.handle_lock(frame),
+            P9_TGETLOCK => self.handle_getlock(frame),
             P9_TREAD => self.handle_read(frame),
             P9_TWRITE => self.handle_write(frame),
             P9_TMKDIR => self.handle_mkdir(frame),
@@ -415,6 +420,32 @@ impl P9Server {
         } else {
             Ok(p9_rlerror(frame.tag(), EBADF))
         }
+    }
+
+    fn handle_lock(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let lock = p9_decode_tlock(frame)?;
+        if self.fids.contains_key(&lock.fid) {
+            Ok(p9_rlock(frame.tag(), P9_LOCK_STATUS_OK))
+        } else {
+            Ok(p9_rlerror(frame.tag(), EBADF))
+        }
+    }
+
+    fn handle_getlock(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let getlock = p9_decode_tgetlock(frame)?;
+        if !self.fids.contains_key(&getlock.fid) {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        }
+        Ok(p9_rgetlock(
+            frame.tag(),
+            &P9Lock {
+                lock_type: P9_LOCK_TYPE_UNLOCK,
+                start: getlock.lock.start,
+                length: getlock.lock.length,
+                proc_id: 0,
+                client_id: String::new(),
+            },
+        )?)
     }
 
     fn handle_read(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -746,18 +777,20 @@ mod tests {
 
     use wanix_fs::{LocalFs, MemFs};
     use wanix_protocol::{
-        P9_RATTACH, P9_RFLUSH, P9_RFSYNC, P9_RGETATTR, P9_RLCREATE, P9_RLERROR, P9_RLOPEN,
-        P9_RMKDIR, P9_RREAD, P9_RREADDIR, P9_RREADLINK, P9_RRENAMEAT, P9_RSETATTR, P9_RSTATFS,
-        P9_RSYMLINK, P9_RUNLINKAT, P9_RVERSION, P9_RWALK, P9_RWRITE, P9_SETATTR_ATIME,
+        P9_LOCK_TYPE_READ, P9_LOCK_TYPE_WRITE, P9_RATTACH, P9_RFLUSH, P9_RFSYNC, P9_RGETATTR,
+        P9_RGETLOCK, P9_RLCREATE, P9_RLERROR, P9_RLOCK, P9_RLOPEN, P9_RMKDIR, P9_RREAD,
+        P9_RREADDIR, P9_RREADLINK, P9_RRENAMEAT, P9_RSETATTR, P9_RSTATFS, P9_RSYMLINK,
+        P9_RUNLINKAT, P9_RVERSION, P9_RWALK, P9_RWRITE, P9_SETATTR_ATIME,
         P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME,
-        P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE, P9DirEntry, P9SetAttr, p9_decode_rflush,
-        p9_decode_rfsync, p9_decode_rgetattr, p9_decode_rlcreate, p9_decode_rlerror,
-        p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread, p9_decode_rreaddir,
-        p9_decode_rreadlink, p9_decode_rsetattr, p9_decode_rstatfs, p9_decode_rsymlink,
-        p9_decode_rversion, p9_decode_rwalk, p9_decode_rwrite, p9_dir_entry_encoded_len,
-        p9_tattach, p9_tclunk, p9_tflush, p9_tfsync, p9_tgetattr, p9_tlcreate, p9_tlopen,
-        p9_tmkdir, p9_tread, p9_treaddir, p9_treadlink, p9_trenameat, p9_tsetattr, p9_tstatfs,
-        p9_tsymlink, p9_tunlinkat, p9_tversion, p9_twalk, p9_twrite,
+        P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE, P9DirEntry, P9Lock, P9SetAttr, p9_decode_rflush,
+        p9_decode_rfsync, p9_decode_rgetattr, p9_decode_rgetlock, p9_decode_rlcreate,
+        p9_decode_rlerror, p9_decode_rlock, p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread,
+        p9_decode_rreaddir, p9_decode_rreadlink, p9_decode_rsetattr, p9_decode_rstatfs,
+        p9_decode_rsymlink, p9_decode_rversion, p9_decode_rwalk, p9_decode_rwrite,
+        p9_dir_entry_encoded_len, p9_tattach, p9_tclunk, p9_tflush, p9_tfsync, p9_tgetattr,
+        p9_tgetlock, p9_tlcreate, p9_tlock, p9_tlopen, p9_tmkdir, p9_tread, p9_treaddir,
+        p9_treadlink, p9_trenameat, p9_tsetattr, p9_tstatfs, p9_tsymlink, p9_tunlinkat,
+        p9_tversion, p9_twalk, p9_twrite,
     };
 
     use super::*;
@@ -865,6 +898,79 @@ mod tests {
 
         let response = server.handle_frame(&p9_tfsync(3, 99)).unwrap();
 
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+    }
+
+    #[test]
+    fn lock_existing_fid_returns_ok_status() {
+        let mut server = server(Arc::new(MemFs::new()));
+
+        attach_root(&mut server);
+        let lock = P9Lock {
+            lock_type: P9_LOCK_TYPE_WRITE,
+            start: 0,
+            length: 100,
+            proc_id: 123,
+            client_id: "linux-client".to_owned(),
+        };
+        let response = server
+            .handle_frame(&p9_tlock(3, 1, 1, &lock).unwrap())
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RLOCK);
+        assert_eq!(p9_decode_rlock(&response).unwrap(), P9_LOCK_STATUS_OK);
+    }
+
+    #[test]
+    fn getlock_existing_fid_reports_no_conflict() {
+        let mut server = server(Arc::new(MemFs::new()));
+
+        attach_root(&mut server);
+        let lock = P9Lock {
+            lock_type: P9_LOCK_TYPE_READ,
+            start: 4,
+            length: 8,
+            proc_id: 456,
+            client_id: "linux-client".to_owned(),
+        };
+        let response = server
+            .handle_frame(&p9_tgetlock(3, 1, &lock).unwrap())
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RGETLOCK);
+        assert_eq!(
+            p9_decode_rgetlock(&response).unwrap(),
+            P9Lock {
+                lock_type: P9_LOCK_TYPE_UNLOCK,
+                start: 4,
+                length: 8,
+                proc_id: 0,
+                client_id: String::new()
+            }
+        );
+    }
+
+    #[test]
+    fn lock_unknown_fid_returns_bad_fd() {
+        let mut server = server(Arc::new(MemFs::new()));
+        let lock = P9Lock {
+            lock_type: P9_LOCK_TYPE_WRITE,
+            start: 0,
+            length: 1,
+            proc_id: 1,
+            client_id: "linux-client".to_owned(),
+        };
+
+        let response = server
+            .handle_frame(&p9_tlock(3, 99, 0, &lock).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+
+        let response = server
+            .handle_frame(&p9_tgetlock(4, 99, &lock).unwrap())
+            .unwrap();
         assert_eq!(response.message_type(), P9_RLERROR);
         assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
     }

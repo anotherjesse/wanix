@@ -1555,11 +1555,12 @@ mod tests {
 
     use super::{run, run_with_process_io, run_with_process_stdin};
     use wanix_protocol::{
-        P9_NOFID, P9_RATTACH, P9_RGETATTR, P9_RLCREATE, P9_RLOPEN, P9_RREAD, P9_RREADDIR,
-        P9_RVERSION, P9_RWALK, P9_RWRITE, P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer,
-        p9_decode_rgetattr, p9_decode_rread, p9_decode_rreaddir, p9_decode_rwrite, p9_tattach,
-        p9_tgetattr, p9_tlcreate, p9_tlopen, p9_tread, p9_treaddir, p9_tversion, p9_twalk,
-        p9_twrite,
+        P9_LOCK_STATUS_OK, P9_LOCK_TYPE_READ, P9_LOCK_TYPE_UNLOCK, P9_LOCK_TYPE_WRITE, P9_NOFID,
+        P9_RATTACH, P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLOCK, P9_RLOPEN, P9_RREAD,
+        P9_RREADDIR, P9_RVERSION, P9_RWALK, P9_RWRITE, P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer,
+        P9Lock, p9_decode_rgetattr, p9_decode_rgetlock, p9_decode_rlock, p9_decode_rread,
+        p9_decode_rreaddir, p9_decode_rwrite, p9_tattach, p9_tgetattr, p9_tgetlock, p9_tlcreate,
+        p9_tlock, p9_tlopen, p9_tread, p9_treaddir, p9_tversion, p9_twalk, p9_twrite,
     };
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -1772,6 +1773,56 @@ mod tests {
         assert_eq!(p9_decode_rwrite(&frames[4]).unwrap(), 12);
         assert_eq!(p9_decode_rread(&frames[5]).unwrap(), b"stdio create");
         assert_eq!(fs::read(root.join("created.txt")).unwrap(), b"stdio create");
+    }
+
+    #[test]
+    fn p9_stdio_answers_lock_probes_over_binary_stdio() {
+        let root = temp_dir("wanix-cli-p9-stdio-lock");
+        let write_lock = P9Lock {
+            lock_type: P9_LOCK_TYPE_WRITE,
+            start: 0,
+            length: 64,
+            proc_id: 77,
+            client_id: "linux-client".to_owned(),
+        };
+        let read_lock = P9Lock {
+            lock_type: P9_LOCK_TYPE_READ,
+            start: 4,
+            length: 8,
+            proc_id: 88,
+            client_id: "linux-client".to_owned(),
+        };
+        let input = request_stream([
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, P9_NOFID, "root", "", 0).unwrap(),
+            p9_tlock(3, 1, 0, &write_lock).unwrap(),
+            p9_tgetlock(4, 1, &read_lock).unwrap(),
+        ]);
+
+        let output = run_with_process_stdin(
+            ["p9-stdio".into(), "--root".into(), root.into_os_string()],
+            input.as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.stderr().is_empty());
+        let frames = decode_response_stream(output.stdout());
+        assert_eq!(
+            frame_types(&frames),
+            [P9_RVERSION, P9_RATTACH, P9_RLOCK, P9_RGETLOCK]
+        );
+        assert_eq!(p9_decode_rlock(&frames[2]).unwrap(), P9_LOCK_STATUS_OK);
+        assert_eq!(
+            p9_decode_rgetlock(&frames[3]).unwrap(),
+            P9Lock {
+                lock_type: P9_LOCK_TYPE_UNLOCK,
+                start: 4,
+                length: 8,
+                proc_id: 0,
+                client_id: String::new()
+            }
+        );
     }
 
     #[test]
