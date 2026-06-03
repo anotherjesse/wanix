@@ -1307,80 +1307,6 @@ print("id", Wanix.readText("#task/self/id").trim());
     }
 
     #[test]
-    fn task_driver_maps_wanix_exit_to_task_status() {
-        let table = TaskTable::new();
-        let runner = runner();
-        table
-            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
-            .unwrap();
-        let task = table.allocate_root("qjs").unwrap();
-        let root = std::sync::Arc::new(MemFs::new());
-        root.write_file(
-            "main.js",
-            br#"
-print("before exit");
-console.error("stderr before exit");
-Promise.resolve().then(() => print("after queued job"));
-try {
-  Wanix.exit(7);
-} catch (err) {
-  print("after exit");
-  console.error("stderr after exit");
-  Wanix.writeText("after.txt", "should not persist");
-  const fd = Wanix.open("fd-after.txt", "w+");
-  Wanix.writeFd(fd, "should not persist");
-  Wanix.closeFd(fd);
-  Promise.resolve().then(() => print("after job"));
-}
-"#,
-        )
-        .unwrap();
-        let stdout = std::sync::Arc::new(MemFs::new());
-        stdout.write_file("out", b"").unwrap();
-        let stderr = std::sync::Arc::new(MemFs::new());
-        stderr.write_file("err", b"").unwrap();
-        task.bind(root.clone(), ".", ".", BindOptions::default())
-            .unwrap();
-        task.insert_fd(
-            Fd::STDOUT,
-            stdout
-                .open(
-                    &NormalizedPath::new("out").unwrap(),
-                    OpenOptions::read_write(),
-                )
-                .unwrap(),
-            NormalizedPath::new("out").unwrap(),
-        )
-        .unwrap();
-        task.insert_fd(
-            Fd::STDERR,
-            stderr
-                .open(
-                    &NormalizedPath::new("err").unwrap(),
-                    OpenOptions::read_write(),
-                )
-                .unwrap(),
-            NormalizedPath::new("err").unwrap(),
-        )
-        .unwrap();
-        task.set_cmd("main.js").unwrap();
-
-        table.start(task.id()).unwrap();
-
-        assert_eq!(read_file(&*stdout, "out"), b"before exit\n");
-        assert_eq!(read_file(&*stderr, "err"), b"stderr before exit\n");
-        assert!(matches!(
-            root.read_file("after.txt"),
-            Err(wanix_fs::FsError::NotFound)
-        ));
-        assert!(matches!(
-            root.read_file("fd-after.txt"),
-            Err(wanix_fs::FsError::NotFound)
-        ));
-        assert_eq!(task.exit(), "7");
-    }
-
-    #[test]
     fn task_driver_maps_quickjs_std_exit_to_task_status() {
         let table = TaskTable::new();
         let runner = runner();
@@ -2042,7 +1968,7 @@ globalThis.openFd = os.open("input.txt", os.O_RDONLY);
     }
 
     #[test]
-    fn task_runtime_snapshot_rejects_after_wanix_exit() {
+    fn task_runtime_snapshot_rejects_after_wasi_exit() {
         let runner = runner();
         let table = TaskTable::new();
         table.register_noop_driver("qjs").unwrap();
@@ -2053,7 +1979,16 @@ globalThis.openFd = os.open("input.txt", os.O_RDONLY);
         task.set_cmd("main.js").unwrap();
         let mut runtime = runner.create_task_runtime(&task).unwrap();
 
-        runtime.eval_discard("Wanix.exit(5);").unwrap();
+        runtime
+            .eval_module_discard(
+                r#"
+import * as std from "qjs:std";
+
+std.exit(5);
+"#,
+                "main.js",
+            )
+            .unwrap();
         let err = runtime
             .snapshot_bytes()
             .expect_err("snapshot should reject exited Wanix task runtimes");
@@ -2877,25 +2812,6 @@ Wanix.readFd(fd, 1);
         assert_eq!(root.read_file("bad-fd.txt").unwrap(), b"caught");
         assert_eq!(root.read_file("bad-len.txt").unwrap(), b"caught");
         assert_eq!(root.read_file("split-utf8.txt").unwrap(), b"caught");
-        assert_eq!(task.exit(), "1");
-    }
-
-    #[test]
-    fn task_driver_rejects_invalid_wanix_exit_status() {
-        let table = TaskTable::new();
-        let runner = runner();
-        table
-            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
-            .unwrap();
-        let task = table.allocate_root("qjs").unwrap();
-        let root = std::sync::Arc::new(MemFs::new());
-        root.write_file("main.js", br#"Wanix.exit(999);"#).unwrap();
-        task.bind(root, ".", ".", BindOptions::default()).unwrap();
-        task.set_cmd("main.js").unwrap();
-
-        let err = table.start(task.id()).unwrap_err();
-
-        assert!(err.to_string().contains("Wanix.exit expects"));
         assert_eq!(task.exit(), "1");
     }
 

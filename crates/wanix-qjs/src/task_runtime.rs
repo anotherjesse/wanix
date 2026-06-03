@@ -61,8 +61,8 @@ impl QuickJsTaskRuntime {
     ///
     /// Pending jobs are drained with the same bounded policy as
     /// [`QuickJsRunner::run_task`]. If JavaScript requests process exit through
-    /// WASI `proc_exit` or `Wanix.exit`, the non-returning trap is treated as a
-    /// successful task exit request.
+    /// WASI `proc_exit`, the non-returning trap is treated as a successful task
+    /// exit request.
     ///
     /// # Errors
     ///
@@ -170,7 +170,7 @@ impl QuickJsRunner {
     ///
     /// This installs Wanix-backed WASI imports, task stdout/stderr callbacks,
     /// the namespace module loader, the interim `Wanix` task API, and an
-    /// interrupt handler for `Wanix.exit`. The task script is not evaluated by
+    /// interrupt handler for process exit. The task script is not evaluated by
     /// this method; callers can evaluate code, snapshot the VM, restore it with
     /// fresh task resources, and finally call [`QuickJsTaskRuntime::finish`].
     ///

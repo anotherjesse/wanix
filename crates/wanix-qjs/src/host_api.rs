@@ -28,12 +28,6 @@ const WANIX_HOST_API_PRELUDE: &str = r#"
     cwd: () => __wanix_cwd(),
     cmd: () => __wanix_cmd(),
   };
-  if (typeof __wanix_exit === "function") {
-    api.exit = (code = 0) => {
-      __wanix_exit(Number(code));
-      for (;;) {}
-    };
-  }
   if (typeof __wanix_open === "function") {
     api.open = (path, mode = "r") => __wanix_open(String(path), String(mode));
     api.readFd = (fd, len) => __wanix_read_fd(Number(fd), Number(len));
@@ -157,16 +151,6 @@ pub(crate) fn define_wanix_host_api(
             Ok(QuickJsHostValue::String(cwd.clone()))
         })
         .map_err(qjs_error)?;
-
-    if let Some(exit_state) = exit_state.clone() {
-        runtime
-            .define_global_host_function("__wanix_exit", move |args| {
-                let code = exit_code_arg(args)?;
-                exit_state.request_exit(code)?;
-                Ok(QuickJsHostValue::Undefined)
-            })
-            .map_err(qjs_error)?;
-    }
 
     if let Some(task) = task {
         define_wanix_fd_api(
@@ -351,17 +335,6 @@ fn no_args(args: &[QuickJsHostValue], function: &str) -> anyhow::Result<()> {
     } else {
         bail!("{function} expects no arguments")
     }
-}
-
-fn exit_code_arg(args: &[QuickJsHostValue]) -> anyhow::Result<i32> {
-    let code = match args {
-        [QuickJsHostValue::Number(value)] => *value,
-        _ => bail!("Wanix.exit expects one numeric status argument"),
-    };
-    if !code.is_finite() || code.fract() != 0.0 || !(0.0..=255.0).contains(&code) {
-        bail!("Wanix.exit expects an integer status in 0..=255");
-    }
-    Ok(code as i32)
 }
 
 pub(crate) fn exit_requested(exit_state: &Option<WanixExitState>) -> anyhow::Result<bool> {

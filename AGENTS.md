@@ -83,8 +83,9 @@ cargo test --workspace --locked
   is a migration oracle, not a structure to copy blindly.
 - [ADR 0005](docs/adrs/0005-crate-boundaries-and-dependency-graph.md): Crate
   boundaries keep core Wanix contracts independent from Wasmtime and QuickJS.
-- [ADR 0006](docs/adrs/0006-interim-quickjs-wanix-host-api.md): QuickJS gets a
-  narrow temporary `Wanix` host API until Wanix-backed WASI imports are wired.
+- [ADR 0006](docs/adrs/0006-interim-quickjs-wanix-host-api.md): The remaining
+  temporary `Wanix` host API is a legacy bridge being replaced by qjs std/os and
+  live Wanix-backed WASI.
 - [ADR 0007](docs/adrs/0007-workspace-local-rust-quality-gate.md): Formatting
   checks enumerate Wanix crates while sibling prototypes remain path
   dependencies.
