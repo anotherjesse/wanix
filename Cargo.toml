@@ -5,6 +5,7 @@ members = [
     "crates/wanix-qjs",
     "crates/wanix-qjs-engine",
     "crates/wanix-task",
+    "crates/wanix-term",
     "crates/wanix-vfs",
     "crates/wanix-wasi",
 ]

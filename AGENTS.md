@@ -17,6 +17,8 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
   fixtures, and explicit host-directory-backed filesystems for native demos.
 - `wanix-vfs`: Plan 9-style namespace binding and resolution.
 - `wanix-task`: task model, `#task`, fd table, and driver registry.
+- `wanix-term`: terminal device filesystem for `#term/new`,
+  `<id>/data`, `<id>/program`, and `<id>/winch`.
 - `wanix-wasi`: custom WASI Preview 1 imports backed by Wanix namespaces and
   task fds supplied by adapter configuration.
 - `wanix-qjs-engine`: Wasmtime-hosted QuickJS/WASI engine mechanics relocated
@@ -36,6 +38,7 @@ wanix-fs
   -> wanix-vfs
   -> wanix-task
 
+wanix-term -> wanix-fs
 wanix-wasi -> wanix-fs + wanix-vfs
 wanix-qjs-engine -> Wasmtime + QuickJS WASM fixture
 wanix-qjs  -> wanix-task + wanix-wasi + wanix-qjs-engine
@@ -66,7 +69,7 @@ boundary clearer.
 Required checks before a cycle commit:
 
 ```sh
-cargo fmt --package wanix-cli --package wanix-fs --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-vfs --package wanix-wasi --check
+cargo fmt --package wanix-cli --package wanix-fs --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-term --package wanix-vfs --package wanix-wasi --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 ```
@@ -215,6 +218,9 @@ cargo test --workspace --locked
   `qjs-snapshot` and `qjs-resume` reattach bounded future-timer and ready-IO
   budgets as host lifecycle policy instead of serializing them into VM
   snapshot files.
+- [ADR 0050](docs/adrs/0050-rust-terminal-device-foundation.md):
+  `wanix-term` implements the first Rust-native `#term` device contract for
+  terminal/program byte flow, id allocation, and resize-event broadcast.
 
 ## Cycle Rules
 

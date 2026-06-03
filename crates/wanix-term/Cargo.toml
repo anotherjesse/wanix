@@ -1,0 +1,22 @@
+[package]
+name = "wanix-term"
+description = "Terminal device filesystem for the Rust-native Wanix port."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+wanix-fs = { path = "../wanix-fs" }
+
+[dev-dependencies]
+wanix-task = { path = "../wanix-task" }
+wanix-vfs = { path = "../wanix-vfs" }
+
+[lib]
+name = "wanix_term"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

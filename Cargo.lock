@@ -992,6 +992,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wanix-term"
+version = "0.1.0"
+dependencies = [
+ "wanix-fs",
+ "wanix-task",
+ "wanix-vfs",
+]
+
+[[package]]
 name = "wanix-vfs"
 version = "0.1.0"
 dependencies = [
