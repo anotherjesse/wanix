@@ -21,6 +21,12 @@ pub const P9_HEADER_LEN: usize = 7;
 /// 9P `Rlerror` message type.
 pub const P9_RLERROR: u8 = 7;
 
+/// 9P2000.L `Tstatfs` message type.
+pub const P9_TSTATFS: u8 = 8;
+
+/// 9P2000.L `Rstatfs` message type.
+pub const P9_RSTATFS: u8 = 9;
+
 /// 9P2000.L `Tlopen` message type.
 pub const P9_TLOPEN: u8 = 12;
 
@@ -104,6 +110,8 @@ pub const P9_RCLUNK: u8 = 121;
 pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
     match message_type {
         P9_RLERROR => Some("Rlerror"),
+        P9_TSTATFS => Some("Tstatfs"),
+        P9_RSTATFS => Some("Rstatfs"),
         P9_TLOPEN => Some("Tlopen"),
         P9_RLOPEN => Some("Rlopen"),
         P9_TLCREATE => Some("Tlcreate"),
@@ -460,6 +468,36 @@ pub struct P9Lerror {
     pub ecode: u32,
 }
 
+/// Decoded payload for `Tstatfs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct P9StatFs {
+    /// Fid whose filesystem should be reported.
+    pub fid: u32,
+}
+
+/// 9P2000.L filesystem stats returned by `Rstatfs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct P9FsStat {
+    /// Filesystem type magic.
+    pub fs_type: u32,
+    /// Filesystem block size.
+    pub block_size: u32,
+    /// Total data blocks.
+    pub blocks: u64,
+    /// Free data blocks.
+    pub blocks_free: u64,
+    /// Free blocks available to unprivileged users.
+    pub blocks_available: u64,
+    /// Total file nodes.
+    pub files: u64,
+    /// Free file nodes.
+    pub files_free: u64,
+    /// Filesystem id.
+    pub fsid: u64,
+    /// Maximum filename length.
+    pub name_length: u32,
+}
+
 /// Decoded payload for `Tattach`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct P9Attach {
@@ -660,6 +698,22 @@ pub fn p9_rlerror(tag: u16, ecode: u32) -> P9Frame {
     let mut payload = Vec::with_capacity(4);
     push_u32(&mut payload, ecode);
     P9Frame::new(P9_RLERROR, tag, payload)
+}
+
+/// Builds a `Tstatfs` frame.
+#[must_use]
+pub fn p9_tstatfs(tag: u16, fid: u32) -> P9Frame {
+    let mut payload = Vec::with_capacity(4);
+    push_u32(&mut payload, fid);
+    P9Frame::new(P9_TSTATFS, tag, payload)
+}
+
+/// Builds an `Rstatfs` frame.
+#[must_use]
+pub fn p9_rstatfs(tag: u16, stat: P9FsStat) -> P9Frame {
+    let mut payload = Vec::with_capacity(60);
+    push_fs_stat(&mut payload, stat);
+    P9Frame::new(P9_RSTATFS, tag, payload)
 }
 
 /// Builds a `Tattach` frame.
@@ -972,6 +1026,34 @@ pub fn p9_decode_rlerror(frame: &P9Frame) -> Result<P9Lerror, P9Error> {
     let ecode = cursor.read_u32()?;
     cursor.finish()?;
     Ok(P9Lerror { ecode })
+}
+
+/// Decodes a `Tstatfs` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tstatfs` or the payload is
+/// malformed.
+pub fn p9_decode_tstatfs(frame: &P9Frame) -> Result<P9StatFs, P9Error> {
+    expect_message_type(frame, P9_TSTATFS)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok(P9StatFs { fid })
+}
+
+/// Decodes an `Rstatfs` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rstatfs` or the payload is
+/// malformed.
+pub fn p9_decode_rstatfs(frame: &P9Frame) -> Result<P9FsStat, P9Error> {
+    expect_message_type(frame, P9_RSTATFS)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let stat = cursor.read_fs_stat()?;
+    cursor.finish()?;
+    Ok(stat)
 }
 
 /// Decodes a `Tattach` frame payload.
@@ -1429,6 +1511,18 @@ fn push_qid(out: &mut Vec<u8>, qid: P9Qid) {
     push_u64(out, qid.path);
 }
 
+fn push_fs_stat(out: &mut Vec<u8>, stat: P9FsStat) {
+    push_u32(out, stat.fs_type);
+    push_u32(out, stat.block_size);
+    push_u64(out, stat.blocks);
+    push_u64(out, stat.blocks_free);
+    push_u64(out, stat.blocks_available);
+    push_u64(out, stat.files);
+    push_u64(out, stat.files_free);
+    push_u64(out, stat.fsid);
+    push_u32(out, stat.name_length);
+}
+
 fn push_attr(out: &mut Vec<u8>, attr: &P9Attr) {
     push_u64(out, attr.valid);
     push_qid(out, attr.qid);
@@ -1516,6 +1610,29 @@ impl<'a> PayloadCursor<'a> {
             qid_type,
             version,
             path,
+        })
+    }
+
+    fn read_fs_stat(&mut self) -> Result<P9FsStat, P9Error> {
+        let fs_type = self.read_u32()?;
+        let block_size = self.read_u32()?;
+        let blocks = self.read_u64()?;
+        let blocks_free = self.read_u64()?;
+        let blocks_available = self.read_u64()?;
+        let files = self.read_u64()?;
+        let files_free = self.read_u64()?;
+        let fsid = self.read_u64()?;
+        let name_length = self.read_u32()?;
+        Ok(P9FsStat {
+            fs_type,
+            block_size,
+            blocks,
+            blocks_free,
+            blocks_available,
+            files,
+            files_free,
+            fsid,
+            name_length,
         })
     }
 
@@ -1762,6 +1879,8 @@ mod tests {
     #[test]
     fn core_message_type_names_are_known() {
         assert_eq!(p9_message_type_name(P9_RLERROR), Some("Rlerror"));
+        assert_eq!(p9_message_type_name(P9_TSTATFS), Some("Tstatfs"));
+        assert_eq!(p9_message_type_name(P9_RSTATFS), Some("Rstatfs"));
         assert_eq!(p9_message_type_name(P9_TLOPEN), Some("Tlopen"));
         assert_eq!(p9_message_type_name(P9_RLOPEN), Some("Rlopen"));
         assert_eq!(p9_message_type_name(P9_TLCREATE), Some("Tlcreate"));
@@ -1798,6 +1917,36 @@ mod tests {
         assert_eq!(
             p9_decode_rlerror(&P9Frame::decode(&bytes).unwrap()).unwrap(),
             P9Lerror { ecode: 2 }
+        );
+    }
+
+    #[test]
+    fn statfs_round_trips_9p2000_l_payload() {
+        let frame = p9_tstatfs(4, 10).encode().unwrap();
+        assert_eq!(&frame[..4], &11_u32.to_le_bytes());
+        assert_eq!(frame[4], P9_TSTATFS);
+        assert_eq!(
+            p9_decode_tstatfs(&P9Frame::decode(&frame).unwrap()).unwrap(),
+            P9StatFs { fid: 10 }
+        );
+
+        let stat = P9FsStat {
+            fs_type: 0x0102_1997,
+            block_size: 4096,
+            blocks: 1,
+            blocks_free: 2,
+            blocks_available: 3,
+            files: 4,
+            files_free: 5,
+            fsid: 6,
+            name_length: 255,
+        };
+        let response = p9_rstatfs(4, stat).encode().unwrap();
+        assert_eq!(&response[..4], &67_u32.to_le_bytes());
+        assert_eq!(response[4], P9_RSTATFS);
+        assert_eq!(
+            p9_decode_rstatfs(&P9Frame::decode(&response).unwrap()).unwrap(),
+            stat
         );
     }
 

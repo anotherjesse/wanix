@@ -92,8 +92,9 @@ serve/v86 experiments so external clients can browse a Wanix namespace. The
 server core already negotiates 9P2000.L, attaches, walks, opens regular files
 and read-only directories, reads/writes regular files, lists directories with
 `Treaddir`, clunks fids, reports metadata with `Tgetattr`, and handles core
-mutation ops with `Tlcreate`, `Tmkdir`, `Trenameat`, and `Tunlinkat`; it also
-serves encoded request/response frames through a synchronous stream loop.
+mount and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, `Trenameat`, and
+`Tunlinkat`; it also serves encoded request/response frames through a
+synchronous stream loop.
 `wanix-rust p9-stdio --root DIR` exposes that server over process
 stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
 for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
@@ -340,6 +341,9 @@ cargo test --workspace --locked
 - [ADR 0071](docs/adrs/0071-rust-serve-discovery-document.md):
   Rust `serve` exposes `/.well-known/wanix.json` so browser/v86/VS Code clients
   can discover direct 9P and reserved Ethernet routes.
+- [ADR 0072](docs/adrs/0072-9p-statfs-mount-probe.md):
+  `wanix-9p` answers `Tstatfs` with conservative synthetic filesystem stats so
+  Linux/v86 clients can complete mount probes.
 
 ## Cycle Rules
 
