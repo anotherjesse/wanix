@@ -38,6 +38,6 @@ Guest JavaScript can use `qjs:std`, `qjs:os`, `scriptArgs`, `#task`, and
 `#term` while fd-based stdio flows through the terminal device.
 
 This is direct progress toward an interactive shell path, but it is not the
-shell itself. The next shell-facing step is to keep the runtime active while
-streaming native terminal input and terminal output instead of preloading stdin
-and draining a transcript after task completion.
+shell itself. Later cycles added post-eval input feeds and native output
+streaming; the remaining shell-facing step is to replace scripted feed sessions
+with a live native terminal input loop while the task runtime remains active.

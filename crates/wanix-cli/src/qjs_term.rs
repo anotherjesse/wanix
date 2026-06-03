@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use super::{
     CliError, CliOutput, QJS_GUEST_SCRIPT, QjsCommand, apply_qjs_task_runtime_limits,
     bind_host_mounts, configure_qjs_task, copy_script_directory, eval_qjs_source,
     guest_path_in_cwd, os_arg_to_string, parse_exit, parse_qjs_command_for, quickjs_runner,
-    read_file, read_qjs_stdin, read_utf8_script,
+    read_qjs_stdin, read_utf8_script, write_process_output,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +109,18 @@ pub(super) fn run_qjs_term(
     command: QjsTermCommand,
     process_stdin: &mut dyn Read,
 ) -> Result<CliOutput, CliError> {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let exit_code = run_qjs_term_streaming(command, process_stdin, &mut stdout, &mut stderr)?;
+    Ok(CliOutput::new(stdout, stderr, exit_code))
+}
+
+pub(super) fn run_qjs_term_streaming(
+    command: QjsTermCommand,
+    process_stdin: &mut dyn Read,
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
     let qjs_command = command.qjs;
     let feed_after_eval = command.feed_after_eval;
     let script_path = qjs_command.script_path.as_path();
@@ -157,13 +169,15 @@ pub(super) fn run_qjs_term(
         } else {
             0
         };
-        eval_qjs_source(
+        let eval_result = eval_qjs_source(
             &mut runtime,
             &script,
             &guest_script,
             qjs_command.event_loop_wait_budget,
             eval_ready_io_turns,
-        )?;
+        );
+        drain_terminal_output(&terminal, &terminal_id, process_stdout)?;
+        eval_result?;
         if !feed_after_eval.is_empty() {
             run_post_eval_feeds(
                 feed_after_eval,
@@ -172,13 +186,23 @@ pub(super) fn run_qjs_term(
                 &terminal_id,
                 &mut runtime,
                 qjs_command.ready_io_turns,
+                process_stdout,
             )?;
         }
-        runtime.finish()?;
+        let finish_result = runtime.finish();
+        drain_terminal_output(&terminal, &terminal_id, process_stdout)?;
+        finish_result?;
         Ok(())
     })();
 
-    finish_terminal_task_output(start_result, &task, &terminal, &terminal_id)
+    finish_terminal_task_output(
+        start_result,
+        &task,
+        &terminal,
+        &terminal_id,
+        process_stdout,
+        process_stderr,
+    )
 }
 
 fn run_post_eval_feeds(
@@ -188,6 +212,7 @@ fn run_post_eval_feeds(
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
     ready_io_turns: usize,
+    process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let mut current_batch = Vec::new();
     for feed in feeds {
@@ -222,6 +247,7 @@ fn run_post_eval_feeds(
                     runtime,
                     &mut current_batch,
                     ready_io_turns,
+                    process_stdout,
                 )?;
                 let bytes = std::fs::read(&path).map_err(|error| {
                     CliError::new(
@@ -239,6 +265,7 @@ fn run_post_eval_feeds(
                         runtime,
                         &[line],
                         ready_io_turns,
+                        process_stdout,
                     )?;
                 }
             }
@@ -249,6 +276,7 @@ fn run_post_eval_feeds(
                     runtime,
                     &mut current_batch,
                     ready_io_turns,
+                    process_stdout,
                 )?;
                 run_process_line_feed_session_after_eval(
                     process_stdin,
@@ -256,6 +284,7 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     ready_io_turns,
+                    process_stdout,
                 )?;
             }
         }
@@ -266,6 +295,7 @@ fn run_post_eval_feeds(
         runtime,
         &mut current_batch,
         ready_io_turns,
+        process_stdout,
     )
 }
 
@@ -290,6 +320,7 @@ fn run_process_line_feed_session_after_eval(
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
     ready_io_turns: usize,
+    process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let mut line = Vec::new();
     while read_process_line_after_eval(process_stdin, &mut line)? {
@@ -299,6 +330,7 @@ fn run_process_line_feed_session_after_eval(
             runtime,
             &[line.clone()],
             ready_io_turns,
+            process_stdout,
         )?;
     }
     Ok(())
@@ -333,12 +365,20 @@ fn flush_terminal_feed_batch(
     runtime: &mut QuickJsTaskRuntime,
     batch: &mut Vec<Vec<u8>>,
     ready_io_turns: usize,
+    process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     if batch.is_empty() {
         return Ok(());
     }
     let flushed = std::mem::take(batch);
-    feed_terminal_batch_and_pump(terminal, terminal_id, runtime, &flushed, ready_io_turns)
+    feed_terminal_batch_and_pump(
+        terminal,
+        terminal_id,
+        runtime,
+        &flushed,
+        ready_io_turns,
+        process_stdout,
+    )
 }
 
 fn feed_terminal_batch_and_pump(
@@ -347,12 +387,17 @@ fn feed_terminal_batch_and_pump(
     runtime: &mut QuickJsTaskRuntime,
     batch: &[Vec<u8>],
     ready_io_turns: usize,
+    process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
-    for chunk in batch {
-        feed_terminal_after_eval(terminal, terminal_id, chunk)?;
-    }
-    runtime.run_ready_io_turns(ready_io_turns)?;
-    Ok(())
+    let result = (|| -> Result<(), CliError> {
+        for chunk in batch {
+            feed_terminal_after_eval(terminal, terminal_id, chunk)?;
+        }
+        runtime.run_ready_io_turns(ready_io_turns)?;
+        Ok(())
+    })();
+    drain_terminal_output(terminal, terminal_id, process_stdout)?;
+    result
 }
 
 fn feed_terminal_after_eval(
@@ -406,15 +451,42 @@ fn finish_terminal_task_output(
     task: &Task,
     terminal: &TermDevice,
     terminal_id: &str,
-) -> Result<CliOutput, CliError> {
-    let stdout = read_file(terminal, &format!("{terminal_id}/data"))?;
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    drain_terminal_output(terminal, terminal_id, process_stdout)?;
     match result {
-        Ok(()) => Ok(CliOutput::new(stdout, Vec::new(), parse_exit(&task.exit()))),
-        Err(error) => Ok(CliOutput::new(
-            stdout,
-            format!("wanix-rust qjs-term: {error}\n").into_bytes(),
-            1,
-        )),
+        Ok(()) => Ok(parse_exit(&task.exit())),
+        Err(error) => {
+            write_process_output(
+                process_stderr,
+                "stderr",
+                format!("wanix-rust qjs-term: {error}\n").as_bytes(),
+            )?;
+            Ok(1)
+        }
+    }
+}
+
+fn drain_terminal_output(
+    terminal: &TermDevice,
+    terminal_id: &str,
+    process_stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    let mut data = terminal.open(
+        &NormalizedPath::new(format!("{terminal_id}/data"))?,
+        OpenOptions {
+            read: true,
+            ..OpenOptions::default()
+        },
+    )?;
+    let mut buf = [0; 1024];
+    loop {
+        let count = data.read(&mut buf)?;
+        if count == 0 {
+            return Ok(());
+        }
+        write_process_output(process_stdout, "stdout", &buf[..count])?;
     }
 }
 

@@ -45,7 +45,8 @@ The terminal CLI can now demonstrate input arriving after the script registers a
 read handler. The line-segmented feed mode gives tests and demos a deterministic
 scripted-session harness where separate input lines become separate terminal
 readiness events. Native stdin line feeds now run as a post-eval stream rather
-than as a preloaded transcript. This is not a native TTY output-streaming loop
-yet, but it proves the core lifecycle needed by one: create a qjs task runtime,
-evaluate setup code, feed terminal bytes later, and explicitly drive ready-fd
-handlers while Wanix task identity, namespace, and fds remain attached.
+than as a preloaded transcript. Together with ADR 0054's native output-drain
+path, this proves the core lifecycle needed by an interactive loop: create a qjs
+task runtime, evaluate setup code, emit output, feed terminal bytes later, and
+explicitly drive ready-fd handlers while Wanix task identity, namespace, and fds
+remain attached.

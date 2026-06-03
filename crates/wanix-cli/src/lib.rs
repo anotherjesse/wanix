@@ -5,7 +5,7 @@ mod qjs_term;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(test)]
@@ -152,22 +152,66 @@ where
     R: Read,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+    run_collected(args, &mut process_stdin)
+}
+
+/// Runs the native CLI command against supplied process IO streams.
+///
+/// Unlike [`run_with_process_stdin`], this lets commands that support live
+/// output write to the supplied stdout/stderr streams during execution. Commands
+/// without a streaming path still write their captured output before returning.
+///
+/// # Errors
+///
+/// Returns a CLI error when command execution fails before command-managed
+/// output is available, or when the supplied output streams cannot be written.
+pub fn run_with_process_io<I, S, R, W, E>(
+    args: I,
+    mut process_stdin: R,
+    mut process_stdout: W,
+    mut process_stderr: E,
+) -> Result<i32, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+    R: Read,
+    W: Write,
+    E: Write,
+{
+    let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+    match args.as_slice() {
+        [command, rest @ ..] if command == "qjs-term" => qjs_term::run_qjs_term_streaming(
+            qjs_term::parse_qjs_term_command(rest)?,
+            &mut process_stdin,
+            &mut process_stdout,
+            &mut process_stderr,
+        ),
+        _ => {
+            let output = run_collected(args, &mut process_stdin)?;
+            write_process_output(&mut process_stdout, "stdout", output.stdout())?;
+            write_process_output(&mut process_stderr, "stderr", output.stderr())?;
+            Ok(output.exit_code())
+        }
+    }
+}
+
+fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
     match args.as_slice() {
         [] => Ok(help_output()),
         [help] if help == "--help" || help == "-h" => Ok(help_output()),
         [command, rest @ ..] if command == "qjs" => {
-            run_qjs(parse_qjs_command(rest)?, &mut process_stdin)
+            run_qjs(parse_qjs_command(rest)?, process_stdin)
         }
         [command, rest @ ..] if command == "qjs-term" => {
-            qjs_term::run_qjs_term(qjs_term::parse_qjs_term_command(rest)?, &mut process_stdin)
+            qjs_term::run_qjs_term(qjs_term::parse_qjs_term_command(rest)?, process_stdin)
         }
         [command, rest @ ..] if command == "qjs-snapshot" => run_qjs_snapshot(
             parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?,
-            &mut process_stdin,
+            process_stdin,
         ),
         [command, rest @ ..] if command == "qjs-resume" => run_qjs_resume(
             parse_qjs_snapshot_file_command(rest, "qjs-resume")?,
-            &mut process_stdin,
+            process_stdin,
         ),
         [command, rest @ ..] if command == "qjs-restore" => {
             run_qjs_restore(parse_qjs_restore_command(rest)?)
@@ -177,6 +221,12 @@ where
             command.to_string_lossy()
         ))),
     }
+}
+
+fn write_process_output(output: &mut dyn Write, label: &str, bytes: &[u8]) -> Result<(), CliError> {
+    output
+        .write_all(bytes)
+        .map_err(|error| CliError::new(format!("failed to write process {label}: {error}"), 1))
 }
 
 fn help_output() -> CliOutput {
@@ -1346,11 +1396,11 @@ fn parse_exit(exit: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::{self, Read};
+    use std::io::{self, Read, Write};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{run, run_with_process_stdin};
+    use super::{run, run_with_process_io, run_with_process_stdin};
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1385,6 +1435,46 @@ mod tests {
             buf[..len].copy_from_slice(&self.bytes[self.offset..self.offset + len]);
             self.offset += len;
             Ok(len)
+        }
+    }
+
+    struct MarkerStdout {
+        marker: PathBuf,
+        marker_bytes: Vec<u8>,
+        needle: Vec<u8>,
+        bytes: Vec<u8>,
+    }
+
+    impl MarkerStdout {
+        fn new(marker: PathBuf, needle: impl Into<Vec<u8>>) -> Self {
+            Self {
+                marker,
+                marker_bytes: b"streamed".to_vec(),
+                needle: needle.into(),
+                bytes: Vec::new(),
+            }
+        }
+
+        fn bytes(&self) -> &[u8] {
+            &self.bytes
+        }
+    }
+
+    impl Write for MarkerStdout {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes.extend_from_slice(buf);
+            if self
+                .bytes
+                .windows(self.needle.len())
+                .any(|window| window == self.needle)
+            {
+                fs::write(&self.marker, &self.marker_bytes)?;
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
         }
     }
 
@@ -1720,6 +1810,35 @@ std.out.flush();
         assert_eq!(output.stdout(), b"armed\r\nstream streamed line\r\n");
         assert!(output.stderr().is_empty());
         assert_eq!(fs::read(marker).unwrap(), b"ready");
+        fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn qjs_term_streams_prompt_before_reading_native_stdin_line() {
+        let host = temp_dir("wanix-cli-term-streamed-output-order");
+        let marker = host.join("prompt-streamed.txt");
+        let mut stdout = MarkerStdout::new(marker.clone(), b"$ ");
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io(
+            [
+                "qjs-term".into(),
+                "--ready-io-turns".into(),
+                "1".into(),
+                "--feed-after-eval-lines".into(),
+                "-".into(),
+                example_script("qjs-term-shell-demo.js").into_os_string(),
+            ],
+            MarkerCheckedStdin::new(marker.clone(), b"exit\n"),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(stdout.bytes(), b"shell task: 1\r\n$ bye\r\n");
+        assert!(stderr.is_empty());
+        assert_eq!(fs::read(marker).unwrap(), b"streamed");
         fs::remove_dir_all(host).unwrap();
     }
 
