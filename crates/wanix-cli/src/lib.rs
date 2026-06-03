@@ -2346,6 +2346,21 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_example_async_timer_demo_runs_immediate_event_loop() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-async-timer-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        let stdout = std::str::from_utf8(output.stdout()).unwrap();
+        assert!(stdout.starts_with("sync\n"), "{stdout}");
+        assert!(stdout.contains("sleepAsync\n"), "{stdout}");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_updates_times_through_quickjs_os_utimes() {
         let script = write_temp_script(
             "utimes-demo.js",

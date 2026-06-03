@@ -60,7 +60,7 @@ impl QuickJsTaskRuntime {
 
     /// Evaluates JavaScript as a script under this task's Wanix process state.
     ///
-    /// Pending jobs are drained with the same bounded policy as
+    /// Immediate event-loop work is drained with the same bounded policy as
     /// [`QuickJsRunner::run_task`]. If JavaScript requests process exit through
     /// WASI `proc_exit`, the non-returning trap is treated as a successful task
     /// exit request.
@@ -134,7 +134,7 @@ impl QuickJsTaskRuntime {
 
     fn finish_eval(&mut self, result: FsResult<()>) -> FsResult<()> {
         match result {
-            Ok(()) => self.drain_pending_jobs_if_running(),
+            Ok(()) => self.drain_immediate_event_loop_if_running(),
             Err(error) => {
                 if self.exit_state.code()?.is_some() {
                     Ok(())
@@ -145,13 +145,13 @@ impl QuickJsTaskRuntime {
         }
     }
 
-    fn drain_pending_jobs_if_running(&mut self) -> FsResult<()> {
+    fn drain_immediate_event_loop_if_running(&mut self) -> FsResult<()> {
         if exit_requested(&Some(self.exit_state.clone()))? {
             return Ok(());
         }
         let result = self
             .runtime
-            .execute_pending_jobs_with_limit(1024)
+            .execute_immediate_event_loop_with_limit(1024)
             .map_err(qjs_error);
         match result {
             Ok(_) => Ok(()),

@@ -314,7 +314,7 @@ impl QuickJsRunner {
             eval(&mut runtime, source)?;
             if !exit_requested(&exit_state)? {
                 runtime
-                    .execute_pending_jobs_with_limit(1024)
+                    .execute_immediate_event_loop_with_limit(1024)
                     .map_err(qjs_error)?;
             }
             Ok(())
@@ -1685,6 +1685,54 @@ std.out.flush();
         table.start(task.id()).unwrap();
 
         assert_eq!(read_file(&*stdout, "out"), b"before sleep\nafter sleep\n");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_runs_zero_delay_quickjs_async_timers() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.out.puts("sync\n");
+os.sleepAsync(0).then(() => {
+  std.out.puts("sleepAsync\n");
+  std.out.flush();
+});
+std.out.flush();
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        let output = String::from_utf8(read_file(&*stdout, "out")).unwrap();
+        assert!(output.starts_with("sync\n"), "{output}");
+        assert!(output.contains("sleepAsync\n"), "{output}");
         assert_eq!(task.exit(), "0");
     }
 

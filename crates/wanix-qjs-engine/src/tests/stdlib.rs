@@ -163,7 +163,7 @@ fn quickjs_os_sleep_uses_timer_poll_oneoff() -> Result<()> {
 }
 
 #[test]
-fn quickjs_os_async_timers_remain_event_loop_work() -> Result<()> {
+fn quickjs_os_async_timers_need_event_loop_turns() -> Result<()> {
     let (engine, module) = quickjs_fixture()?;
     let mut vm = QuickJsRuntime::create(&engine, &module)?;
 
@@ -190,13 +190,65 @@ fn quickjs_os_async_timers_remain_event_loop_work() -> Result<()> {
         "stdlib-async-timers.mjs",
     )?;
 
-    let exports = vm.eval_string("timerExports")?;
+    assert_eq!(
+        vm.eval_string("timerExports")?,
+        "function,function,function"
+    );
     assert_eq!(
         vm.execute_pending_jobs_with_limit(4)?,
         0,
-        "async timer exports: {exports}"
+        "pending jobs alone should not complete async timers"
     );
     assert_eq!(vm.eval_string("String(asyncTimerFired)")?, "false");
+    Ok(())
+}
+
+#[test]
+fn quickjs_os_async_timers_run_on_immediate_event_loop_turns() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+        globalThis.timerEvents = [];
+        os.sleepAsync(0).then(() => {
+          globalThis.timerEvents.push("sleep");
+        });
+        "#,
+        "stdlib-immediate-timers.mjs",
+    )?;
+
+    assert_eq!(vm.eval_string("timerEvents.join(',')")?, "");
+    assert!(vm.execute_immediate_event_loop_with_limit(8)? > 0);
+    assert_eq!(vm.eval_string("timerEvents.join(',')")?, "sleep");
+    assert_eq!(vm.execute_event_loop_once()?, QuickJsEventLoopStatus::Idle);
+    Ok(())
+}
+
+#[test]
+fn quickjs_os_future_timer_reports_wait_without_blocking() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+        globalThis.futureTimerFired = false;
+        os.setTimeout(() => {
+          globalThis.futureTimerFired = true;
+        }, 50);
+        "#,
+        "stdlib-future-timer.mjs",
+    )?;
+
+    match vm.execute_event_loop_once()? {
+        QuickJsEventLoopStatus::Wait(delay) => {
+            assert!(delay.as_millis() <= 50, "delay was {delay:?}");
+        }
+        status => bail!("expected future timer wait status, got {status:?}"),
+    }
+    assert_eq!(vm.eval_string("String(futureTimerFired)")?, "false");
     Ok(())
 }
 

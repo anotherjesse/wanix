@@ -14,10 +14,10 @@ could not run outside Chrome even though they do not require Wanix filesystem,
 task identity, or fd policy.
 
 QuickJS-NG also has async timer-shaped APIs in some builds, such as
-`sleepAsync`, `setTimeout`, and `setInterval`. Those APIs need an event loop
-that can hold pending host timer state, wake the runtime later, and integrate
-with task cancellation and fd readiness. Draining the QuickJS microtask queue is
-not that event loop.
+`sleepAsync`, `setTimeout`, and `setInterval`. At the time of this ADR, those
+APIs needed an event loop that could hold pending host timer state, wake the
+runtime later, and integrate with task cancellation and fd readiness. Draining
+the QuickJS microtask queue alone was not that event loop.
 
 Full polling is broader than this need. At the time of this ADR, read/write fd
 readiness, async event loops, signals, cancellation, and integration with Wanix
@@ -46,8 +46,9 @@ JavaScript running on the bundled QuickJS/WASI fixture can call
 `qjs:os.sleep(...)` outside Chrome. Zero-delay sleeps are fast enough for tests;
 non-zero sleeps block the current host thread.
 
-This does not implement `sleepAsync`, `setTimeout`, `setInterval`, signal
-delivery, task cancellation, or a Wanix scheduler. Snapshot bytes remain
-QuickJS/Wasm memory only; pending async timer state is still out of scope.
-Engine tests pin that pending QuickJS jobs alone do not complete async timer
-work.
+This did not initially implement `sleepAsync`, `setTimeout`, `setInterval`,
+signal delivery, task cancellation, or a Wanix scheduler. ADR 0040 later adds
+bounded immediate event-loop turns for due async timers, while future
+timer wakeups and scheduler integration remain out of scope. Snapshot bytes
+remain QuickJS/Wasm memory only; pending async timer state is still out of
+scope for persisted task policy.

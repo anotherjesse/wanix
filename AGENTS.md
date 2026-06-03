@@ -184,6 +184,9 @@ cargo test --workspace --locked
 - [ADR 0039](docs/adrs/0039-quickjs-wasi-truncate-stdlib-fixture.md):
   QuickJS `qjs:os.truncate` and `ftruncate` reach Wanix-backed
   `fd_filestat_set_size` through live WASI providers.
+- [ADR 0040](docs/adrs/0040-quickjs-immediate-event-loop-turns.md):
+  QuickJS due async timers run through bounded immediate event-loop turns after
+  Wanix `qjs` task evaluation.
 
 ## Cycle Rules
 

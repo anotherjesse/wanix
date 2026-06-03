@@ -85,6 +85,8 @@ let mut runtime = module.create_runtime_with_host_config(create_config)?;
 runtime.eval_discard("globalThis.counter = 41; queueMicrotask(() => globalThis.counter += 1);")?;
 let jobs = runtime.execute_pending_jobs_with_limit(8)?;
 assert_eq!(jobs, 1);
+let turns = runtime.execute_immediate_event_loop_with_limit(8)?;
+assert_eq!(turns, 0);
 
 let bytes = runtime.snapshot()?.try_to_bytes()?;
 let restore_config = QuickJsHostConfig::new().with_clock_time_ns(1_800_000_000_000_000_000);

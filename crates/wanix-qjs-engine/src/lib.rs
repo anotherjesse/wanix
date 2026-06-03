@@ -68,7 +68,7 @@ pub use host::{
 pub use intrinsics::{QuickJsCreateOptions, QuickJsIntrinsics, QuickJsRestoreOptions};
 pub use memory::QuickJsMemoryUsage;
 pub use module::QuickJsModule;
-pub use runtime::QuickJsRuntime;
+pub use runtime::{QuickJsEventLoopStatus, QuickJsRuntime};
 pub use snapshot::{Snapshot, SnapshotMetadata};
 
 /// Checked-in QuickJS WebAssembly fixture used by Wanix workspace demos and tests.

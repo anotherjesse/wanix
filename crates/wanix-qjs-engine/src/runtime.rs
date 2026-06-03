@@ -11,6 +11,7 @@ type QjsCompileFunc = TypedFunc<(i32, i32, i32, i32, i32, i32), i32>;
 mod binary;
 mod bytecode;
 mod cleanup;
+mod event_loop;
 mod exception;
 mod guest_memory;
 mod host_callback;
@@ -21,6 +22,8 @@ mod promise_rejection;
 mod raw_value;
 mod snapshot_lifecycle;
 mod value;
+
+pub use event_loop::QuickJsEventLoopStatus;
 
 /// A live QuickJS runtime hosted inside a WASI WebAssembly instance.
 ///
@@ -87,6 +90,7 @@ pub struct QuickJsRuntime {
     qjs_free_value: TypedFunc<i32, ()>,
     qjs_is_job_pending: TypedFunc<(), i32>,
     qjs_execute_pending_job: TypedFunc<(), i32>,
+    js_std_loop_once: Option<TypedFunc<i32, i32>>,
     qjs_get_runtime_ptr: TypedFunc<(), i32>,
     qjs_get_context_ptr: TypedFunc<(), i32>,
     qjs_set_runtime_and_context: TypedFunc<(i32, i32), ()>,
