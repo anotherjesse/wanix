@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 
 type WasiHostResult<T> = std::result::Result<T, QuickJsWasiErrno>;
 type RecordedWrites = Arc<Mutex<Vec<(u32, Vec<u8>)>>>;
+const RIGHT_FD_READ: u64 = 1 << 1;
+const RIGHT_FD_WRITE: u64 = 1 << 6;
 
 #[derive(Default)]
 struct ExitWasiHost {
@@ -70,6 +72,112 @@ impl QuickJsWasiHost for ExitWasiHost {
 
     fn fd_fdstat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFdStat> {
         Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_filestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFileStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_filestat_get(
+        &mut self,
+        _dirfd: u32,
+        _flags: u32,
+        _path: &[u8],
+    ) -> WasiHostResult<QuickJsWasiFileStat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+}
+
+#[derive(Default)]
+struct ReadyFdWasiHost {
+    stdin: Arc<Mutex<Vec<u8>>>,
+    writes: RecordedWrites,
+}
+
+impl ReadyFdWasiHost {
+    fn with_stdin(bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            stdin: Arc::new(Mutex::new(bytes.into())),
+            writes: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn writes(&self) -> RecordedWrites {
+        Arc::clone(&self.writes)
+    }
+}
+
+impl QuickJsWasiHost for ReadyFdWasiHost {
+    fn fd_prestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiPrestat> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn path_open(
+        &mut self,
+        _dirfd: u32,
+        _dirflags: u32,
+        _path: &[u8],
+        _oflags: u16,
+        _rights_base: u64,
+        _rights_inheriting: u64,
+        _fdflags: u16,
+    ) -> WasiHostResult<u32> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_read(&mut self, fd: u32, buf: &mut [u8]) -> WasiHostResult<usize> {
+        if fd != 0 {
+            return Err(QuickJsWasiErrno::Badf);
+        }
+        let mut stdin = self.stdin.lock().expect("test stdin lock");
+        let count = buf.len().min(stdin.len());
+        buf[..count].copy_from_slice(&stdin[..count]);
+        stdin.drain(..count);
+        Ok(count)
+    }
+
+    fn fd_readdir(&mut self, _fd: u32) -> WasiHostResult<Vec<QuickJsWasiDirEntry>> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_write(&mut self, fd: u32, buf: &[u8]) -> WasiHostResult<usize> {
+        if fd != 1 {
+            return Err(QuickJsWasiErrno::Badf);
+        }
+        self.writes
+            .lock()
+            .expect("test writes lock")
+            .push((fd, buf.to_vec()));
+        Ok(buf.len())
+    }
+
+    fn fd_seek(
+        &mut self,
+        _fd: u32,
+        _offset: i64,
+        _whence: QuickJsWasiWhence,
+    ) -> WasiHostResult<u64> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_close(&mut self, _fd: u32) -> WasiHostResult<()> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
+    fn fd_fdstat_get(&mut self, fd: u32) -> WasiHostResult<QuickJsWasiFdStat> {
+        match fd {
+            0 => Ok(QuickJsWasiFdStat::new(
+                QuickJsWasiFileType::CharacterDevice,
+                RIGHT_FD_READ,
+                0,
+            )),
+            1 => Ok(QuickJsWasiFdStat::new(
+                QuickJsWasiFileType::CharacterDevice,
+                RIGHT_FD_WRITE,
+                0,
+            )),
+            _ => Err(QuickJsWasiErrno::Badf),
+        }
     }
 
     fn fd_filestat_get(&mut self, _fd: u32) -> WasiHostResult<QuickJsWasiFileStat> {
@@ -249,6 +357,54 @@ fn quickjs_os_future_timer_reports_wait_without_blocking() -> Result<()> {
         status => bail!("expected future timer wait status, got {status:?}"),
     }
     assert_eq!(vm.eval_string("String(futureTimerFired)")?, "false");
+    Ok(())
+}
+
+#[test]
+fn quickjs_os_fd_handlers_run_on_ready_io_event_loop_turns() -> Result<()> {
+    let (_engine, module) = quickjs_fixture()?;
+    let host = ReadyFdWasiHost::with_stdin(b"ready input".to_vec());
+    let writes = host.writes();
+    let mut vm =
+        module.create_runtime_with_options(QuickJsCreateOptions::new().with_wasi_host(host))?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+        import * as std from "qjs:std";
+
+        globalThis.fdHandlerEvents = [];
+        os.setReadHandler(0, () => {
+          const bytes = new Uint8Array(32);
+          const n = os.read(0, bytes.buffer, 0, bytes.length);
+          const text = Array.from(bytes.slice(0, n)).map((byte) => String.fromCharCode(byte)).join("");
+          globalThis.fdHandlerEvents.push("read:" + text);
+          os.setReadHandler(0, null);
+        });
+        os.setWriteHandler(1, () => {
+          std.out.puts("write handler\n");
+          std.out.flush();
+          globalThis.fdHandlerEvents.push("write");
+          os.setWriteHandler(1, null);
+        });
+        "#,
+        "stdlib-fd-handlers.mjs",
+    )?;
+
+    vm.execute_ready_io_event_loop_once()?;
+    vm.execute_ready_io_event_loop_once()?;
+
+    assert_eq!(
+        vm.eval_string("fdHandlerEvents.sort().join('|')")?,
+        "read:ready input|write"
+    );
+    assert!(
+        writes
+            .lock()
+            .expect("test writes lock")
+            .iter()
+            .any(|write| write == &(1, b"write handler\n".to_vec()))
+    );
     Ok(())
 }
 

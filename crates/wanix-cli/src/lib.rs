@@ -2361,6 +2361,21 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_example_fd_handler_demo_reads_ready_stdin() {
+        let output = run([
+            "qjs".into(),
+            "--stdin".into(),
+            "ready stdin".into(),
+            example_script("qjs-fd-handler-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"sync\nhandler: ready stdin\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_updates_times_through_quickjs_os_utimes() {
         let script = write_temp_script(
             "utimes-demo.js",

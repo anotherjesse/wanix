@@ -87,6 +87,7 @@ let jobs = runtime.execute_pending_jobs_with_limit(8)?;
 assert_eq!(jobs, 1);
 let turns = runtime.execute_immediate_event_loop_with_limit(8)?;
 assert_eq!(turns, 0);
+runtime.execute_ready_io_event_loop_once()?;
 
 let bytes = runtime.snapshot()?.try_to_bytes()?;
 let restore_config = QuickJsHostConfig::new().with_clock_time_ns(1_800_000_000_000_000_000);

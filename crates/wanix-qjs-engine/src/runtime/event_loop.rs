@@ -53,6 +53,43 @@ impl QuickJsRuntime {
         }
     }
 
+    /// Runs one nonblocking QuickJS standard-library fd readiness turn.
+    ///
+    /// This lets `qjs:os.setReadHandler` and `qjs:os.setWriteHandler` callbacks
+    /// observe fds that are immediately ready according to the WASI
+    /// `poll_oneoff` import. The call does not wait for future readiness.
+    ///
+    /// QuickJS's exported `js_std_poll_io` reports the same success code whether
+    /// no handler was ready or one handler ran successfully, so this method does
+    /// not report an idle/ready distinction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the QuickJS WASM module does not expose
+    /// `js_std_poll_io`, when the WASM call fails, or when a readiness callback
+    /// throws.
+    pub fn execute_ready_io_event_loop_once(&mut self) -> Result<()> {
+        let js_std_poll_io = self
+            .js_std_poll_io
+            .clone()
+            .ok_or_else(|| anyhow!("QuickJS WASM module does not export js_std_poll_io"))?;
+        let context = self
+            .qjs_get_context_ptr
+            .call(&mut self.store, ())
+            .context("failed to read QuickJS context pointer")?;
+        let status = js_std_poll_io
+            .call(&mut self.store, (context, 0))
+            .context("failed to run QuickJS ready-IO event loop turn")?;
+        match status {
+            0 => Ok(()),
+            -1 | -2 => bail!(
+                "QuickJS ready-IO event loop callback failed: {}",
+                self.take_exception_string()?
+            ),
+            other => bail!("QuickJS ready-IO event loop returned unexpected status {other}"),
+        }
+    }
+
     /// Runs immediate QuickJS event-loop turns until idle or waiting on a future timer.
     ///
     /// Returns the number of turns executed. This method deliberately does not

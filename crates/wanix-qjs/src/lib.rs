@@ -312,11 +312,7 @@ impl QuickJsRunner {
             setup(&mut runtime)?;
             runtime.eval_discard(CONSOLE_PRELUDE).map_err(qjs_error)?;
             eval(&mut runtime, source)?;
-            if !exit_requested(&exit_state)? {
-                runtime
-                    .execute_immediate_event_loop_with_limit(1024)
-                    .map_err(qjs_error)?;
-            }
+            drain_immediate_runtime_work(&mut runtime, &exit_state)?;
             Ok(())
         })();
 
@@ -483,6 +479,31 @@ fn exit_requested(exit_state: &Option<WanixExitState>) -> FsResult<bool> {
         Some(exit_state) => exit_state.code().map(|code| code.is_some()),
         None => Ok(false),
     }
+}
+
+fn drain_immediate_runtime_work(
+    runtime: &mut QuickJsRuntime,
+    exit_state: &Option<WanixExitState>,
+) -> FsResult<()> {
+    if exit_requested(exit_state)? {
+        return Ok(());
+    }
+    runtime
+        .execute_immediate_event_loop_with_limit(1024)
+        .map_err(qjs_error)?;
+    if exit_requested(exit_state)? {
+        return Ok(());
+    }
+    runtime
+        .execute_ready_io_event_loop_once()
+        .map_err(qjs_error)?;
+    if exit_requested(exit_state)? {
+        return Ok(());
+    }
+    runtime
+        .execute_immediate_event_loop_with_limit(1024)
+        .map_err(qjs_error)?;
+    Ok(())
 }
 
 fn uses_module_syntax(source: &str) -> bool {
@@ -1733,6 +1754,66 @@ std.out.flush();
         let output = String::from_utf8(read_file(&*stdout, "out")).unwrap();
         assert!(output.starts_with("sync\n"), "{output}");
         assert!(output.contains("sleepAsync\n"), "{output}");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
+    fn task_driver_runs_quickjs_read_handler_for_ready_stdin() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.out.puts("sync\n");
+os.setReadHandler(0, () => {
+  const bytes = new Uint8Array(64);
+  const n = os.read(0, bytes.buffer, 0, bytes.length);
+  const text = Array.from(bytes.slice(0, n)).map((byte) => String.fromCharCode(byte)).join("");
+  std.out.puts("handler " + text + "\n");
+  os.setReadHandler(0, null);
+  std.out.flush();
+});
+std.out.flush();
+"#,
+        )
+        .unwrap();
+        let stdin = std::sync::Arc::new(MemFs::new());
+        stdin.write_file("in", b"ready stdin").unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDIN,
+            stdin
+                .open(&NormalizedPath::new("in").unwrap(), OpenOptions::read())
+                .unwrap(),
+            NormalizedPath::new("in").unwrap(),
+        )
+        .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(read_file(&*stdout, "out"), b"sync\nhandler ready stdin\n");
         assert_eq!(task.exit(), "0");
     }
 

@@ -40,6 +40,8 @@ remains the ADR 0031 timer fallback.
 This moves Wanix toward a real event-loop substrate without adding a scheduler
 or blocking readiness model yet. Regular files, service files, and task stdio
 can be treated as immediately ready according to the live provider's fd rights.
+ADR 0041 later drives one nonblocking QuickJS `setReadHandler`/`setWriteHandler`
+turn through this readiness substrate after `qjs` task evaluation.
 
-Async timers, fd blocking, signal delivery, cancellation, and task scheduler
-wakeups remain future Wanix task lifecycle work.
+Fd blocking, repeated handler scheduling, signal delivery, cancellation, and
+task scheduler wakeups remain future Wanix task lifecycle work.

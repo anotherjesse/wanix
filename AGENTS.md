@@ -187,6 +187,9 @@ cargo test --workspace --locked
 - [ADR 0040](docs/adrs/0040-quickjs-immediate-event-loop-turns.md):
   QuickJS due async timers run through bounded immediate event-loop turns after
   Wanix `qjs` task evaluation.
+- [ADR 0041](docs/adrs/0041-quickjs-ready-fd-handler-turn.md):
+  QuickJS `setReadHandler`/`setWriteHandler` callbacks get one nonblocking
+  ready-fd turn after Wanix `qjs` task evaluation.
 
 ## Cycle Rules
 

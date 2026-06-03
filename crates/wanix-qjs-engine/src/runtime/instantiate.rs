@@ -130,6 +130,7 @@ impl QuickJsRuntime {
             qjs_is_job_pending: typed(&instance, &mut store, "qjs_is_job_pending")?,
             qjs_execute_pending_job: typed(&instance, &mut store, "qjs_execute_pending_job")?,
             js_std_loop_once: optional_typed(&instance, &mut store, "js_std_loop_once")?,
+            js_std_poll_io: optional_typed(&instance, &mut store, "js_std_poll_io")?,
             qjs_get_runtime_ptr: typed(&instance, &mut store, "qjs_get_runtime_ptr")?,
             qjs_get_context_ptr: typed(&instance, &mut store, "qjs_get_context_ptr")?,
             qjs_set_runtime_and_context: typed(

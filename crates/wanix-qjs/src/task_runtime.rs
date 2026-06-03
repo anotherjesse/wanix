@@ -12,7 +12,8 @@ use crate::task_stdio::task_wasi_config;
 use crate::wasi_host::WanixQuickJsWasiHost;
 use crate::{
     CONSOLE_PRELUDE, QuickJsRunner, captured_stdio_config_for_wasi, define_task_output_callback,
-    exit_requested, task_command, task_wasi_argv, wanix_wasi_host_error,
+    drain_immediate_runtime_work, exit_requested, task_command, task_wasi_argv,
+    wanix_wasi_host_error,
 };
 
 /// A live QuickJS runtime attached to a Wanix task.
@@ -149,10 +150,8 @@ impl QuickJsTaskRuntime {
         if exit_requested(&Some(self.exit_state.clone()))? {
             return Ok(());
         }
-        let result = self
-            .runtime
-            .execute_immediate_event_loop_with_limit(1024)
-            .map_err(qjs_error);
+        let result =
+            drain_immediate_runtime_work(&mut self.runtime, &Some(self.exit_state.clone()));
         match result {
             Ok(_) => Ok(()),
             Err(error) => {
