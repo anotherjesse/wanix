@@ -45,6 +45,8 @@ the browser-reachable 9P export on the same listener. This makes qemu/v86 and
 VS Code experiments a question of asset/routing/client policy rather than a
 missing transport.
 
-This ADR does not decide public auth, writable export exposure, vnet bridging,
-qemu/v86 bundle selection, HTTPS, or VS Code-specific routes. Those should be
-added deliberately once the clients are wired to this endpoint.
+ADR 0069 later reserves the well-known route surface and maps
+`/.well-known/export9p` to the same direct binary 9P WebSocket handler. This ADR
+does not decide public auth, writable export exposure, vnet bridging, qemu/v86
+bundle selection, HTTPS, or VS Code-specific routes. Those should be added
+deliberately once the clients are wired to this endpoint.

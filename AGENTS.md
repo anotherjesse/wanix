@@ -102,8 +102,11 @@ listener. `wanix-rust p9-ws --root DIR --addr 127.0.0.1:7654` exposes the same
 server over binary WebSocket frames for browser/v86 experiments. `wanix-rust
 serve --root DIR --addr 127.0.0.1:7654` serves static files with
 COOP/COEP/CORS headers and reuses the binary WebSocket 9P handler on the same
-listener, which is the first Rust-native serve shape for browser/v86/VS Code
-experiments. Listener commands accept `--once` for tests and scripted demos.
+listener, including the named `/.well-known/export9p` route, which is the first
+Rust-native serve shape for browser/v86/VS Code experiments. `/.well-known`
+routes are reserved for protocol endpoints; `/.well-known/ethernet` is
+explicitly unimplemented until the qemu/vnet bridge lands. Listener commands
+accept `--once` for tests and scripted demos.
 
 ## Code Quality Guardrails
 
@@ -324,6 +327,10 @@ cargo test --workspace --locked
 - [ADR 0068](docs/adrs/0068-rust-serve-http-websocket-9p.md):
   `wanix-rust serve --root DIR --addr HOST:PORT` combines static HTTP assets
   and binary WebSocket 9P export on one browser-facing listener.
+- [ADR 0069](docs/adrs/0069-serve-well-known-routing.md):
+  Rust `serve` reserves `/.well-known` protocol routes, maps
+  `/.well-known/export9p` to direct binary 9P, and leaves Ethernet/vnet
+  explicitly unimplemented.
 
 ## Cycle Rules
 
@@ -343,5 +350,5 @@ cycle before starting the next one.
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
-  integration, then wire qemu/v86 bundles, vnet, and VS Code routes onto the
-  Rust `serve` endpoint.
+  integration, then wire qemu/v86 bundles, `/.well-known/ethernet`, vnet, and
+  VS Code routes onto the Rust `serve` endpoint.

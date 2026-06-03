@@ -4,7 +4,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -172,6 +172,9 @@ fn serve_one_connection(
 fn serve_connection(roots: &ServeRoots, stream: TcpStream) -> Result<(), ServeConnectionError> {
     let request = peek_request_headers(&stream)?;
     if is_websocket_upgrade(&request) {
+        if let Some(response) = websocket_rejection_response(peek_request_target(&request)) {
+            return write_static_response(stream, response);
+        }
         let socket = accept(stream).map_err(|error| {
             ServeConnectionError::WebSocket(P9WsConnectionError::Handshake(error.to_string()))
         })?;
@@ -180,6 +183,15 @@ fn serve_connection(roots: &ServeRoots, stream: TcpStream) -> Result<(), ServeCo
     }
 
     serve_http_connection(&roots.static_root, stream)
+}
+
+fn peek_request_target(header_bytes: &[u8]) -> Option<&str> {
+    let header_end = header_end(header_bytes)?;
+    let header = std::str::from_utf8(&header_bytes[..header_end]).ok()?;
+    let request_line = header.lines().next()?;
+    let mut parts = request_line.split_whitespace();
+    parts.next()?;
+    parts.next()
 }
 
 fn peek_request_headers(stream: &TcpStream) -> io::Result<Vec<u8>> {
@@ -218,9 +230,18 @@ fn serve_http_connection(
 ) -> Result<(), ServeConnectionError> {
     let request = read_http_request(&mut stream)?;
     let response = match parse_http_request(&request) {
-        Ok(path) => read_static_response(static_root, &path),
+        Ok(path) => {
+            well_known_response(&path).unwrap_or_else(|| read_static_response(static_root, &path))
+        }
         Err(status) => StaticResponse::plain(status, status.reason()),
     };
+    write_static_response(stream, response)
+}
+
+fn write_static_response(
+    mut stream: TcpStream,
+    response: StaticResponse,
+) -> Result<(), ServeConnectionError> {
     stream.write_all(&response.encode())?;
     stream.flush()?;
     Ok(())
@@ -342,6 +363,44 @@ fn read_static_response(static_root: &Path, relative_path: &Path) -> StaticRespo
     }
 }
 
+fn websocket_rejection_response(raw_path: Option<&str>) -> Option<StaticResponse> {
+    let raw_path = raw_path?;
+    let path = raw_path.split_once('?').map_or(raw_path, |(path, _)| path);
+    if path == "/.well-known/export9p" {
+        return None;
+    }
+    if path == "/.well-known/ethernet" {
+        return Some(StaticResponse::plain(
+            HttpStatus::NotImplemented,
+            "ethernet websocket bridge is not implemented in rust serve",
+        ));
+    }
+    if path.starts_with("/.well-known/") {
+        return Some(StaticResponse::plain(HttpStatus::NotFound, "not found"));
+    }
+    None
+}
+
+fn well_known_response(relative_path: &Path) -> Option<StaticResponse> {
+    let mut components = relative_path.components();
+    match components.next() {
+        Some(Component::Normal(component)) if component == ".well-known" => {}
+        _ => return None,
+    }
+    match components.next() {
+        Some(Component::Normal(component)) if component == "export9p" => Some(
+            StaticResponse::plain(HttpStatus::BadRequest, "websocket upgrade required"),
+        ),
+        Some(Component::Normal(component)) if component == "ethernet" => {
+            Some(StaticResponse::plain(
+                HttpStatus::NotImplemented,
+                "ethernet websocket bridge is not implemented in rust serve",
+            ))
+        }
+        _ => Some(StaticResponse::plain(HttpStatus::NotFound, "not found")),
+    }
+}
+
 fn content_type(path: &Path) -> &'static str {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("html") => "text/html; charset=utf-8",
@@ -396,6 +455,7 @@ enum HttpStatus {
     Forbidden,
     NotFound,
     MethodNotAllowed,
+    NotImplemented,
 }
 
 impl HttpStatus {
@@ -406,6 +466,7 @@ impl HttpStatus {
             Self::Forbidden => "403 Forbidden",
             Self::NotFound => "404 Not Found",
             Self::MethodNotAllowed => "405 Method Not Allowed",
+            Self::NotImplemented => "501 Not Implemented",
         }
     }
 
@@ -416,6 +477,7 @@ impl HttpStatus {
             Self::Forbidden => "forbidden",
             Self::NotFound => "not found",
             Self::MethodNotAllowed => "method not allowed",
+            Self::NotImplemented => "not implemented",
         }
     }
 }
@@ -456,7 +518,7 @@ impl From<io::Error> for ServeConnectionError {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::{Read, Write};
+    use std::io::{self, Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -590,6 +652,135 @@ mod tests {
         assert_eq!(p9_decode_rread(&frames[5]).unwrap(), b"hello serve");
     }
 
+    #[test]
+    fn serve_once_exports_9p_on_well_known_export_path() {
+        let root = temp_dir("wanix-cli-serve-export9p");
+        fs::write(root.join("hello.txt"), b"hello export").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let mut socket = connect(format!("ws://{addr}/.well-known/export9p"))
+            .unwrap()
+            .0;
+        let requests = request_stream([
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
+            p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
+            p9_tgetattr(4, 2, u64::MAX),
+            p9_tlopen(5, 2, 0),
+            p9_tread(6, 2, 0, 12),
+        ]);
+        socket.send(Message::binary(requests)).unwrap();
+
+        let frames = read_binary_frames(&mut socket, 6);
+        socket.close(None).unwrap();
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            frame_types(&frames),
+            [
+                P9_RVERSION,
+                P9_RATTACH,
+                P9_RWALK,
+                P9_RGETATTR,
+                P9_RLOPEN,
+                P9_RREAD
+            ]
+        );
+        assert_eq!(p9_decode_rread(&frames[5]).unwrap(), b"hello export");
+    }
+
+    #[test]
+    fn serve_once_rejects_reserved_ethernet_websocket_path() {
+        let root = temp_dir("wanix-cli-serve-ethernet");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /.well-known/ethernet HTTP/1.1\r\n\
+              Host: localhost\r\n\
+              Connection: Upgrade\r\n\
+              Upgrade: websocket\r\n\
+              Sec-WebSocket-Version: 13\r\n\
+              Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+              \r\n",
+        );
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let response = String::from_utf8(response).unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 501 Not Implemented\r\n"),
+            "{response}"
+        );
+        assert!(
+            response.contains("ethernet websocket bridge is not implemented"),
+            "{response}"
+        );
+    }
+
+    #[test]
+    fn serve_http_keeps_well_known_routes_reserved() {
+        let root = temp_dir("wanix-cli-serve-well-known-http");
+        fs::create_dir(root.join(".well-known")).unwrap();
+        fs::write(root.join(".well-known").join("export9p"), b"not static").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /.well-known/export9p HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        );
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let response = String::from_utf8(response).unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "{response}"
+        );
+        assert!(
+            response.contains("websocket upgrade required"),
+            "{response}"
+        );
+        assert!(!response.contains("not static"), "{response}");
+    }
+
     fn read_binary_frames<S: Read + Write>(
         socket: &mut tungstenite::WebSocket<S>,
         count: usize,
@@ -613,6 +804,19 @@ mod tests {
 
     fn frame_types(frames: &[P9Frame]) -> Vec<u8> {
         frames.iter().map(P9Frame::message_type).collect()
+    }
+
+    fn http_request(addr: std::net::SocketAddr, request: &[u8]) -> Vec<u8> {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.write_all(request).unwrap();
+        let mut response = Vec::new();
+        match stream.read_to_end(&mut response) {
+            Ok(_) => {}
+            Err(error)
+                if error.kind() == io::ErrorKind::ConnectionReset && !response.is_empty() => {}
+            Err(error) => panic!("failed to read HTTP response: {error}"),
+        }
+        response
     }
 
     fn temp_dir(name: &str) -> PathBuf {
