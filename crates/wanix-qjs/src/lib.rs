@@ -1,9 +1,9 @@
 //! QuickJS/WASI task driver for Rust Wanix.
 //!
-//! This crate adapts the `rust-wasi-quickjs` prototype into a Wanix task
+//! This crate adapts the workspace QuickJS engine crate into a Wanix task
 //! driver. QuickJS runs inside a WASI reactor hosted by Wasmtime; Wanix supplies
-//! the namespace, fds, host callbacks, module loading policy, and snapshot
-//! reattachment policy.
+//! the namespace, fds, module loading policy, and snapshot reattachment policy
+//! through live WASI providers and task-owned host resources.
 
 use std::fmt;
 use std::path::Path;
@@ -1498,7 +1498,6 @@ const readStdin = () => {
 };
 
 const env = std.getenviron();
-std.out.puts("wanix " + typeof globalThis.Wanix + "\n");
 std.out.puts("argv " + scriptArgs.join("|") + "\n");
 std.out.puts("mode " + std.getenv("MODE") + "\n");
 std.out.puts("env " + env.MODE + " " + (env.EMPTY === "") + " " + String(env.MISSING) + "\n");
@@ -1544,7 +1543,7 @@ std.out.flush();
 
         assert_eq!(
             read_file(&*stdout, "out"),
-            b"wanix undefined\nargv main.js|alpha|beta\nmode test\nenv test true undefined\ntask 1\nstdin hello from fd0\nsource true\ncreated made via std cwd\n"
+            b"argv main.js|alpha|beta\nmode test\nenv test true undefined\ntask 1\nstdin hello from fd0\nsource true\ncreated made via std cwd\n"
         );
         assert_eq!(
             root.read_file("app/created.txt").unwrap(),
