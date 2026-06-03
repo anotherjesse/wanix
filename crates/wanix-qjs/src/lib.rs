@@ -2388,6 +2388,74 @@ print("keep", std.loadFile("keep.txt"));
     }
 
     #[test]
+    fn task_driver_quickjs_os_renames_wanix_namespace_paths() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.writeFile("old.txt", "rename me");
+print("rename result", JSON.stringify(os.rename("old.txt", "renamed.txt")));
+const oldFd = os.open("old.txt", os.O_RDONLY);
+if (oldFd >= 0) {
+  os.close(oldFd);
+}
+print("old missing", oldFd < 0);
+print("new", std.loadFile("renamed.txt"));
+
+os.mkdir("dir", 0o777);
+std.writeFile("dir/file.txt", "nested");
+os.mkdir("empty", 0o777);
+print("dir rename", JSON.stringify(os.rename("dir", "empty")));
+print("nested", std.loadFile("empty/file.txt"));
+"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+
+        assert_eq!(
+            read_file(&*stdout, "out"),
+            b"rename result 0\nold missing true\nnew rename me\ndir rename 0\nnested nested\n"
+        );
+        assert_eq!(
+            root.metadata(&NormalizedPath::new("old.txt").unwrap()),
+            Err(FsError::NotFound)
+        );
+        assert_eq!(root.read_file("renamed.txt").unwrap(), b"rename me");
+        assert_eq!(
+            root.metadata(&NormalizedPath::new("dir").unwrap()),
+            Err(FsError::NotFound)
+        );
+        assert_eq!(root.read_file("empty/file.txt").unwrap(), b"nested");
+        assert_eq!(task.exit(), "0");
+    }
+
+    #[test]
     fn task_driver_quickjs_os_creates_wanix_namespace_directories() {
         let table = TaskTable::new();
         let runner = runner();

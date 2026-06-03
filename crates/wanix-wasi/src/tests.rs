@@ -24,6 +24,10 @@ fn namespace_with_root(root: Arc<dyn FileSystem>) -> Namespace {
     namespace
 }
 
+fn path(value: &str) -> NormalizedPath {
+    NormalizedPath::new(value).unwrap()
+}
+
 #[test]
 fn purpose_is_declared() {
     assert!(!CRATE_PURPOSE.is_empty());
@@ -532,6 +536,121 @@ fn path_remove_directory_requires_directory_right() {
 
     assert_eq!(
         ctx.path_remove_directory(dir_fd, "empty"),
+        Err(Errno::Notcapable)
+    );
+}
+
+#[test]
+fn path_rename_renames_namespace_paths() {
+    let root = fixture(&[
+        ("old.txt", b"old"),
+        ("target.txt", b"target"),
+        ("dir/sub/file.txt", b"nested"),
+    ]);
+    root.create_dir_all("empty").unwrap();
+    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+
+    ctx.path_rename(WasiFd::ROOT, "old.txt", WasiFd::ROOT, "renamed.txt")
+        .unwrap();
+    assert_eq!(root.metadata(&path("old.txt")), Err(FsError::NotFound));
+    assert_eq!(root.read_file("renamed.txt").unwrap(), b"old");
+
+    ctx.path_rename(WasiFd::ROOT, "renamed.txt", WasiFd::ROOT, "target.txt")
+        .unwrap();
+    assert_eq!(root.read_file("target.txt").unwrap(), b"old");
+
+    ctx.path_rename(WasiFd::ROOT, "dir", WasiFd::ROOT, "empty")
+        .unwrap();
+    assert_eq!(root.metadata(&path("dir")), Err(FsError::NotFound));
+    assert_eq!(root.read_file("empty/sub/file.txt").unwrap(), b"nested");
+
+    assert_eq!(
+        ctx.path_rename(WasiFd::ROOT, "missing", WasiFd::ROOT, "missing"),
+        Err(Errno::Noent)
+    );
+    assert_eq!(
+        ctx.path_rename(WasiFd::ROOT, ".", WasiFd::ROOT, "root"),
+        Err(Errno::Notcapable)
+    );
+}
+
+#[test]
+fn path_rename_respects_root_preopen_source() {
+    let root = fixture(&[("app/old.txt", b"app"), ("old.txt", b"root")]);
+    let ctx = WasiCtx::new(
+        WasiConfig::new(namespace_with_root(root.clone()))
+            .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
+    );
+
+    ctx.path_rename(WasiFd::ROOT, "old.txt", WasiFd::ROOT, "renamed.txt")
+        .unwrap();
+
+    assert_eq!(root.metadata(&path("app/old.txt")), Err(FsError::NotFound));
+    assert_eq!(root.read_file("app/renamed.txt").unwrap(), b"app");
+    assert_eq!(root.read_file("old.txt").unwrap(), b"root");
+}
+
+#[test]
+fn path_rename_requires_source_and_target_directory_rights() {
+    let root = fixture(&[("src/old.txt", b"old")]);
+    root.create_dir_all("dst").unwrap();
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let source_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "src",
+            0,
+            WasiRights::PATH_RENAME_SOURCE,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+    let target_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "dst",
+            0,
+            WasiRights::PATH_RENAME_TARGET,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+
+    ctx.path_rename(source_fd, "old.txt", target_fd, "new.txt")
+        .unwrap();
+    assert_eq!(root.metadata(&path("src/old.txt")), Err(FsError::NotFound));
+    assert_eq!(root.read_file("dst/new.txt").unwrap(), b"old");
+
+    let root = fixture(&[("src/old.txt", b"old")]);
+    root.create_dir_all("dst").unwrap();
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let target_only_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "src",
+            0,
+            WasiRights::PATH_RENAME_TARGET,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+    let source_only_fd = ctx
+        .path_open_preview1(
+            WasiFd::ROOT,
+            "dst",
+            0,
+            WasiRights::PATH_RENAME_SOURCE,
+            WasiRights::NONE,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(
+        ctx.path_rename(target_only_fd, "old.txt", WasiFd::ROOT, "renamed.txt"),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.path_rename(WasiFd::ROOT, "src/old.txt", source_only_fd, "renamed.txt"),
         Err(Errno::Notcapable)
     );
 }
@@ -1347,10 +1466,16 @@ fn preview1_numeric_codes_are_pinned_for_import_wrappers() {
     assert_eq!(WasiRights::PATH_CREATE_FILE.bits(), 1 << 10);
     assert_eq!(WasiRights::PATH_OPEN.bits(), 1 << 13);
     assert_eq!(WasiRights::FD_READDIR.bits(), 1 << 14);
+    assert_eq!(WasiRights::PATH_RENAME_SOURCE.bits(), 1 << 16);
+    assert_eq!(WasiRights::PATH_RENAME_TARGET.bits(), 1 << 17);
     assert_eq!(WasiRights::PATH_FILESTAT_SET_SIZE.bits(), 1 << 19);
     assert_eq!(WasiRights::FD_FILESTAT_GET.bits(), 1 << 21);
     assert_eq!(WasiRights::PATH_REMOVE_DIRECTORY.bits(), 1 << 25);
     assert_eq!(WasiRights::PATH_UNLINK_FILE.bits(), 1 << 26);
+    assert!(
+        WasiRights::DIRECTORY_BASE.contains(WasiRights::PATH_RENAME_SOURCE)
+            && WasiRights::DIRECTORY_BASE.contains(WasiRights::PATH_RENAME_TARGET)
+    );
     assert_eq!(WasiOpenOptions::OFLAGS_CREATE, 1 << 0);
     assert_eq!(WasiOpenOptions::OFLAGS_DIRECTORY, 1 << 1);
     assert_eq!(WasiOpenOptions::OFLAGS_EXCLUSIVE, 1 << 2);

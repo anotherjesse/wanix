@@ -272,6 +272,74 @@ impl FileSystem for MemFs {
         nodes.remove(path);
         Ok(())
     }
+
+    fn rename(&self, old_path: &NormalizedPath, new_path: &NormalizedPath) -> FsResult<()> {
+        if old_path.as_str() == "." || new_path.as_str() == "." {
+            return Err(FsError::PermissionDenied);
+        }
+
+        let mut nodes = self
+            .nodes
+            .write()
+            .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
+        let old_node = nodes.get(old_path).cloned().ok_or(FsError::NotFound)?;
+        if old_path == new_path {
+            return Ok(());
+        }
+        if old_node.kind == FileType::Directory && is_descendant_path(new_path, old_path) {
+            return Err(FsError::PermissionDenied);
+        }
+        let new_parent = new_path.parent().ok_or(FsError::PermissionDenied)?;
+        match nodes.get(&new_parent) {
+            Some(node) if node.kind == FileType::Directory => {}
+            Some(_) => return Err(FsError::NotDirectory),
+            None => return Err(FsError::NotFound),
+        }
+
+        if let Some(new_node) = nodes.get(new_path) {
+            match (old_node.kind, new_node.kind) {
+                (FileType::Directory, FileType::Directory)
+                    if direct_children(&nodes, new_path).next().is_some() =>
+                {
+                    return Err(FsError::NotEmpty);
+                }
+                (FileType::Directory, FileType::Directory) => {}
+                (FileType::Directory, _) => return Err(FsError::NotDirectory),
+                (_, FileType::Directory) => return Err(FsError::IsDirectory),
+                _ => {}
+            }
+        }
+        nodes.remove(new_path);
+
+        if old_node.kind == FileType::Directory {
+            let moved = nodes
+                .iter()
+                .filter_map(|(path, node)| {
+                    if path == old_path || is_descendant_path(path, old_path) {
+                        let suffix = path
+                            .as_str()
+                            .strip_prefix(old_path.as_str())
+                            .expect("descendant path starts with old path");
+                        let next = NormalizedPath::new(format!("{new_path}{suffix}"))
+                            .expect("renamed memfs path remains normalized");
+                        Some((path.clone(), next, node.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            for (old, _, _) in &moved {
+                nodes.remove(old);
+            }
+            for (_, new, node) in moved {
+                nodes.insert(new, node);
+            }
+        } else {
+            nodes.remove(old_path);
+            nodes.insert(new_path.clone(), old_node);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -375,6 +443,12 @@ fn direct_children<'a>(
         }
         candidate.parent().as_ref() == Some(path)
     })
+}
+
+fn is_descendant_path(path: &NormalizedPath, ancestor: &NormalizedPath) -> bool {
+    path.as_str()
+        .strip_prefix(ancestor.as_str())
+        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 #[cfg(test)]

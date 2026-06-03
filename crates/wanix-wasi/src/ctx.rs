@@ -482,6 +482,23 @@ impl WasiCtx {
         self.namespace.remove_dir(&path).map_err(Errno::from)
     }
 
+    /// Renames a namespace path from one directory fd to another.
+    pub fn path_rename(
+        &self,
+        old_fd: WasiFd,
+        old_path: impl AsRef<str>,
+        new_fd: WasiFd,
+        new_path: impl AsRef<str>,
+    ) -> Result<(), Errno> {
+        let old_path =
+            self.resolve_path(old_fd, old_path.as_ref(), WasiRights::PATH_RENAME_SOURCE)?;
+        let new_path =
+            self.resolve_path(new_fd, new_path.as_ref(), WasiRights::PATH_RENAME_TARGET)?;
+        self.namespace
+            .rename(&old_path, &new_path)
+            .map_err(Errno::from)
+    }
+
     /// Removes a namespace file at a path relative to `dirfd`.
     pub fn path_unlink_file(&self, dirfd: WasiFd, path: impl AsRef<str>) -> Result<(), Errno> {
         let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_UNLINK_FILE)?;

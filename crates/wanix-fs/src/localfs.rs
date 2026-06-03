@@ -187,6 +187,54 @@ impl FileSystem for LocalFs {
         }
         fs::remove_dir(host_path).map_err(map_io_error)
     }
+
+    fn rename(&self, old_path: &NormalizedPath, new_path: &NormalizedPath) -> FsResult<()> {
+        if old_path.as_str() == "." || new_path.as_str() == "." {
+            return Err(FsError::PermissionDenied);
+        }
+
+        let old_host_path = self.raw_host_path(old_path);
+        let old_metadata = fs::symlink_metadata(&old_host_path).map_err(map_io_error)?;
+        let old_resolved = fs::canonicalize(&old_host_path).map_err(map_io_error)?;
+        if !old_resolved.starts_with(&*self.root) {
+            return Err(FsError::PermissionDenied);
+        }
+
+        let new_host_path = self.raw_host_path(new_path);
+        let new_parent = new_host_path.parent().ok_or(FsError::PermissionDenied)?;
+        let new_parent = fs::canonicalize(new_parent).map_err(map_io_error)?;
+        if !new_parent.starts_with(&*self.root) {
+            return Err(FsError::PermissionDenied);
+        }
+        match fs::symlink_metadata(&new_host_path) {
+            Ok(new_metadata) => {
+                let new_resolved = fs::canonicalize(&new_host_path).map_err(map_io_error)?;
+                if !new_resolved.starts_with(&*self.root) {
+                    return Err(FsError::PermissionDenied);
+                }
+                match (old_metadata.is_dir(), new_metadata.is_dir()) {
+                    (true, true) => {
+                        if fs::read_dir(&new_host_path)
+                            .map_err(map_io_error)?
+                            .next()
+                            .transpose()
+                            .map_err(map_io_error)?
+                            .is_some()
+                        {
+                            return Err(FsError::NotEmpty);
+                        }
+                    }
+                    (true, false) => return Err(FsError::NotDirectory),
+                    (false, true) => return Err(FsError::IsDirectory),
+                    (false, false) => {}
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(map_io_error(error)),
+        }
+
+        fs::rename(old_host_path, new_host_path).map_err(map_io_error)
+    }
 }
 
 #[derive(Debug)]
@@ -306,6 +354,10 @@ mod tests {
     };
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn path(value: &str) -> NormalizedPath {
+        NormalizedPath::new(value).unwrap()
+    }
 
     #[test]
     fn localfs_reads_lists_and_writes_inside_root() {
@@ -438,6 +490,58 @@ mod tests {
             fs.create_dir(&NormalizedPath::new(".").unwrap()),
             Err(FsError::AlreadyExists)
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn localfs_rename_moves_files_and_directory_subtrees_inside_root() {
+        let root = temp_root();
+        fs::write(root.join("old.txt"), "old").unwrap();
+        fs::write(root.join("target.txt"), "target").unwrap();
+        fs::create_dir_all(root.join("dir/sub")).unwrap();
+        fs::write(root.join("dir/sub/file.txt"), "nested").unwrap();
+        fs::create_dir(root.join("empty")).unwrap();
+        fs::write(root.join("file.txt"), "file").unwrap();
+        fs::create_dir(root.join("nonempty")).unwrap();
+        fs::write(root.join("nonempty/file.txt"), "busy").unwrap();
+        let fs = LocalFs::new(&root).unwrap();
+
+        fs.rename(&path("old.txt"), &path("renamed.txt")).unwrap();
+        assert!(!root.join("old.txt").exists());
+        assert_eq!(std::fs::read(root.join("renamed.txt")).unwrap(), b"old");
+
+        fs.rename(&path("renamed.txt"), &path("target.txt"))
+            .unwrap();
+        assert_eq!(std::fs::read(root.join("target.txt")).unwrap(), b"old");
+
+        fs.rename(&path("dir"), &path("empty")).unwrap();
+        assert!(!root.join("dir").exists());
+        assert_eq!(
+            std::fs::read(root.join("empty/sub/file.txt")).unwrap(),
+            b"nested"
+        );
+
+        assert_eq!(
+            fs.rename(&path("file.txt"), &path("empty")),
+            Err(FsError::IsDirectory)
+        );
+        assert_eq!(
+            fs.rename(&path("empty"), &path("file.txt")),
+            Err(FsError::NotDirectory)
+        );
+        assert_eq!(
+            fs.rename(&path("empty"), &path("nonempty")),
+            Err(FsError::NotEmpty)
+        );
+        assert_eq!(
+            fs.rename(&path("missing"), &path("missing")),
+            Err(FsError::NotFound)
+        );
+        assert_eq!(
+            fs.rename(&path("."), &path("root")),
+            Err(FsError::PermissionDenied)
+        );
+
         fs::remove_dir_all(root).unwrap();
     }
 

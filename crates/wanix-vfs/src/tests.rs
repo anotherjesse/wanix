@@ -42,6 +42,10 @@ fn entry_metadata(fs: &dyn FileSystem, path: &str, name: &str) -> Metadata {
         .unwrap()
 }
 
+fn path(value: &str) -> NormalizedPath {
+    NormalizedPath::new(value).unwrap()
+}
+
 #[test]
 fn purpose_is_declared() {
     assert!(!CRATE_PURPOSE.is_empty());
@@ -318,6 +322,79 @@ fn remove_dir_reports_synthetic_namespace_directories_as_not_empty() {
         ns.remove_dir(&NormalizedPath::new("a").unwrap()),
         Err(FsError::NotEmpty)
     );
+}
+
+#[test]
+fn rename_routes_to_same_backing_filesystem() {
+    let root = fixture(&[
+        ("mnt/old.txt", b"old"),
+        ("mnt/target.txt", b"target"),
+        ("mnt/dir/sub/file.txt", b"nested"),
+        ("mnt/nonempty/file.txt", b"busy"),
+    ]);
+    root.create_dir_all("mnt/empty").unwrap();
+    let mut ns = Namespace::new();
+    ns.bind(root.clone(), "mnt", "app", BindOptions::default())
+        .unwrap();
+
+    ns.rename(&path("app/old.txt"), &path("app/renamed.txt"))
+        .unwrap();
+    assert_eq!(root.metadata(&path("mnt/old.txt")), Err(FsError::NotFound));
+    assert_eq!(root.read_file("mnt/renamed.txt").unwrap(), b"old");
+
+    ns.rename(&path("app/renamed.txt"), &path("app/target.txt"))
+        .unwrap();
+    assert_eq!(root.read_file("mnt/target.txt").unwrap(), b"old");
+
+    ns.rename(&path("app/dir"), &path("app/empty")).unwrap();
+    assert_eq!(root.metadata(&path("mnt/dir")), Err(FsError::NotFound));
+    assert_eq!(root.read_file("mnt/empty/sub/file.txt").unwrap(), b"nested");
+
+    assert_eq!(
+        ns.rename(&path("app/missing"), &path("app/missing")),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        ns.rename(&path("app/empty"), &path("app/nonempty")),
+        Err(FsError::NotEmpty)
+    );
+}
+
+#[test]
+fn rename_rejects_synthetic_targets_and_cross_filesystem_moves() {
+    let fs = fixture(&[("old.txt", b"old"), ("synthetic.txt", b"synthetic")]);
+    let mut synthetic = Namespace::new();
+    synthetic
+        .bind(fs.clone(), "old.txt", "old.txt", BindOptions::default())
+        .unwrap();
+    synthetic
+        .bind(
+            fs,
+            "synthetic.txt",
+            "a/b/synthetic.txt",
+            BindOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        synthetic.rename(&path("old.txt"), &path("a")),
+        Err(FsError::AlreadyExists)
+    );
+
+    let left = fixture(&[("old.txt", b"old")]);
+    let right = fixture(&[("target.txt", b"target")]);
+    let mut ns = Namespace::new();
+    ns.bind(left.clone(), ".", "left", BindOptions::default())
+        .unwrap();
+    ns.bind(right.clone(), ".", "right", BindOptions::default())
+        .unwrap();
+
+    assert_eq!(
+        ns.rename(&path("left/old.txt"), &path("right/new.txt")),
+        Err(FsError::NotSupported)
+    );
+    assert_eq!(left.read_file("old.txt").unwrap(), b"old");
+    assert_eq!(right.metadata(&path("new.txt")), Err(FsError::NotFound));
 }
 
 #[test]

@@ -2284,6 +2284,49 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_command_renames_paths_through_quickjs_os() {
+        let script = write_temp_script(
+            "rename-demo.js",
+            r#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+std.writeFile("old.txt", "from rename");
+std.out.puts("rename " + os.rename("old.txt", "renamed.txt") + "\n");
+const probe = os.open("old.txt", os.O_RDONLY);
+if (probe >= 0) {
+  os.close(probe);
+}
+std.out.puts("old " + (probe < 0) + "\n");
+std.out.puts("new " + std.loadFile("renamed.txt") + "\n");
+std.out.flush();
+"#,
+        );
+
+        let output = run(["qjs".into(), script.into_os_string()]).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(output.stdout(), b"rename 0\nold true\nnew from rename\n");
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_example_rename_demo_renames_paths_through_quickjs_os() {
+        let output = run([
+            "qjs".into(),
+            example_script("qjs-rename-demo.js").into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"rename: 0\nold missing: true\nmessage: hello from rename\n"
+        );
+        assert!(output.stderr().is_empty());
+    }
+
+    #[test]
     fn qjs_command_creates_directories_through_quickjs_os() {
         let script = write_temp_script(
             "mkdir-demo.js",

@@ -145,4 +145,13 @@ pub trait FileSystem: Send + Sync {
     fn remove_dir(&self, _path: &NormalizedPath) -> FsResult<()> {
         Err(FsError::NotSupported)
     }
+
+    /// Renames one file or directory path to another path in this filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the path cannot be renamed.
+    fn rename(&self, _old_path: &NormalizedPath, _new_path: &NormalizedPath) -> FsResult<()> {
+        Err(FsError::NotSupported)
+    }
 }

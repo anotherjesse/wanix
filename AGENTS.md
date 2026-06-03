@@ -145,6 +145,9 @@ cargo test --workspace --locked
 - [ADR 0026](docs/adrs/0026-wasi-directory-remove-through-wanix-namespaces.md):
   `qjs:os.remove(...)` removes empty directories through Wanix-owned
   `PATH_REMOVE_DIRECTORY` semantics and live WASI providers.
+- [ADR 0027](docs/adrs/0027-wasi-rename-through-wanix-namespaces.md):
+  `qjs:os.rename(...)` reaches same-filesystem Wanix namespace rename through
+  live WASI providers.
 
 ## Cycle Rules
 

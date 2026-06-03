@@ -97,6 +97,17 @@ pub trait QuickJsWasiHost: Send {
         Err(QuickJsWasiErrno::Nosys)
     }
 
+    /// Renames `old_path` relative to `old_fd` to `new_path` relative to `new_fd`.
+    fn path_rename(
+        &mut self,
+        _old_fd: u32,
+        _old_path: &[u8],
+        _new_fd: u32,
+        _new_path: &[u8],
+    ) -> Result<(), QuickJsWasiErrno> {
+        Err(QuickJsWasiErrno::Nosys)
+    }
+
     /// Removes a non-directory file at `path` relative to `dirfd`.
     fn path_unlink_file(&mut self, _dirfd: u32, _path: &[u8]) -> Result<(), QuickJsWasiErrno> {
         Err(QuickJsWasiErrno::Nosys)

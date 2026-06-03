@@ -316,6 +316,47 @@ impl FileSystem for Namespace {
         }
         Err(FsError::NotFound)
     }
+
+    fn rename(&self, old_path: &NormalizedPath, new_path: &NormalizedPath) -> FsResult<()> {
+        if old_path.as_str() == "." || new_path.as_str() == "." {
+            return Err(FsError::PermissionDenied);
+        }
+
+        let new_candidates = self.resolve_candidates(new_path);
+        if new_candidates.is_empty() {
+            if self.has_synthetic_children(new_path) {
+                return Err(FsError::AlreadyExists);
+            }
+            return Err(FsError::NotFound);
+        }
+
+        let mut saw_not_directory = false;
+        for old_target in self.resolve_candidates(old_path) {
+            match old_target.filesystem.metadata(&old_target.path) {
+                Ok(_) => {
+                    for new_target in &new_candidates {
+                        if Arc::ptr_eq(&old_target.filesystem, &new_target.filesystem) {
+                            return old_target
+                                .filesystem
+                                .rename(&old_target.path, &new_target.path);
+                        }
+                    }
+                    return Err(FsError::NotSupported);
+                }
+                Err(FsError::NotDirectory) => saw_not_directory = true,
+                Err(FsError::NotFound) => {}
+                Err(err) => return Err(err),
+            }
+        }
+
+        if self.has_synthetic_children(old_path) {
+            return Err(FsError::NotSupported);
+        }
+        if saw_not_directory {
+            return Err(FsError::NotDirectory);
+        }
+        Err(FsError::NotFound)
+    }
 }
 
 struct ResolvedTarget {

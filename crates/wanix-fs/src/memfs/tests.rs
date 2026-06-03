@@ -1,6 +1,10 @@
 use super::MemFs;
 use crate::{FileSeekFrom, FileSystem, FileType, FsError, NormalizedPath, OpenOptions};
 
+fn path(value: &str) -> NormalizedPath {
+    NormalizedPath::new(value).unwrap()
+}
+
 #[test]
 fn new_memfs_has_empty_root_directory() {
     let fs = MemFs::new();
@@ -121,6 +125,72 @@ fn create_dir_creates_one_directory_with_existing_directory_parent() {
         fs.create_dir(&NormalizedPath::new(".").unwrap()),
         Err(FsError::AlreadyExists)
     );
+}
+
+#[test]
+fn rename_moves_files_and_directory_subtrees() {
+    let fs = MemFs::new();
+    fs.write_file("old.txt", b"old").unwrap();
+    fs.write_file("target.txt", b"target").unwrap();
+
+    fs.rename(&path("old.txt"), &path("renamed.txt")).unwrap();
+    assert_eq!(fs.metadata(&path("old.txt")), Err(FsError::NotFound));
+    assert_eq!(fs.read_file("renamed.txt").unwrap(), b"old");
+
+    fs.rename(&path("renamed.txt"), &path("target.txt"))
+        .unwrap();
+    assert_eq!(fs.read_file("target.txt").unwrap(), b"old");
+
+    fs.write_file("dir/sub/file.txt", b"nested").unwrap();
+    fs.create_dir_all("empty").unwrap();
+    fs.rename(&path("dir"), &path("empty")).unwrap();
+    assert_eq!(fs.metadata(&path("dir")), Err(FsError::NotFound));
+    assert_eq!(fs.read_file("empty/sub/file.txt").unwrap(), b"nested");
+}
+
+#[test]
+fn rename_rejects_missing_root_descendant_and_type_mismatches() {
+    let fs = MemFs::new();
+    fs.write_file("file.txt", b"file").unwrap();
+    fs.write_file("other.txt", b"other").unwrap();
+    fs.write_file("dir/nested.txt", b"nested").unwrap();
+    fs.create_dir_all("empty").unwrap();
+    fs.write_file("nonempty/file.txt", b"busy").unwrap();
+
+    assert_eq!(
+        fs.rename(&path("missing"), &path("missing")),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        fs.rename(&path("."), &path("root")),
+        Err(FsError::PermissionDenied)
+    );
+    assert_eq!(
+        fs.rename(&path("dir"), &path(".")),
+        Err(FsError::PermissionDenied)
+    );
+    assert_eq!(
+        fs.rename(&path("dir"), &path("dir/subdir")),
+        Err(FsError::PermissionDenied)
+    );
+    assert_eq!(
+        fs.rename(&path("file.txt"), &path("missing/child")),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        fs.rename(&path("file.txt"), &path("empty")),
+        Err(FsError::IsDirectory)
+    );
+    assert_eq!(
+        fs.rename(&path("dir"), &path("other.txt")),
+        Err(FsError::NotDirectory)
+    );
+    assert_eq!(
+        fs.rename(&path("dir"), &path("nonempty")),
+        Err(FsError::NotEmpty)
+    );
+    assert_eq!(fs.read_file("file.txt").unwrap(), b"file");
+    assert_eq!(fs.read_file("dir/nested.txt").unwrap(), b"nested");
 }
 
 #[test]

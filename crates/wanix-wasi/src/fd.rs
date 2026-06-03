@@ -91,6 +91,10 @@ impl WasiRights {
     pub const PATH_OPEN: Self = Self(1 << 13);
     /// Read directory entries from an fd.
     pub const FD_READDIR: Self = Self(1 << 14);
+    /// Rename a source path relative to this fd.
+    pub const PATH_RENAME_SOURCE: Self = Self(1 << 16);
+    /// Rename a target path relative to this fd.
+    pub const PATH_RENAME_TARGET: Self = Self(1 << 17);
     /// Stat a path relative to this fd.
     pub const PATH_FILESTAT_GET: Self = Self(1 << 18);
     /// Set the size of a path relative to this fd.
@@ -117,6 +121,8 @@ impl WasiRights {
             | Self::PATH_CREATE_FILE.0
             | Self::PATH_OPEN.0
             | Self::FD_READDIR.0
+            | Self::PATH_RENAME_SOURCE.0
+            | Self::PATH_RENAME_TARGET.0
             | Self::PATH_FILESTAT_GET.0
             | Self::PATH_FILESTAT_SET_SIZE.0
             | Self::FD_FILESTAT_GET.0

@@ -184,6 +184,20 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
             .map_err(convert_errno)
     }
 
+    fn path_rename(
+        &mut self,
+        old_fd: u32,
+        old_path: &[u8],
+        new_fd: u32,
+        new_path: &[u8],
+    ) -> Result<(), QuickJsWasiErrno> {
+        let old_path = std::str::from_utf8(old_path).map_err(|_| QuickJsWasiErrno::Inval)?;
+        let new_path = std::str::from_utf8(new_path).map_err(|_| QuickJsWasiErrno::Inval)?;
+        self.ctx
+            .path_rename(WasiFd::new(old_fd), old_path, WasiFd::new(new_fd), new_path)
+            .map_err(convert_errno)
+    }
+
     fn path_unlink_file(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
         let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
         self.ctx
@@ -444,6 +458,29 @@ mod tests {
         assert_eq!(
             host.path_remove_directory(3, b"nonempty"),
             Err(QuickJsWasiErrno::Notempty)
+        );
+    }
+
+    #[test]
+    fn adapter_path_rename_reaches_wanix_namespace() {
+        let mut namespace = Namespace::new();
+        let root = Arc::new(MemFs::new());
+        root.write_file("old.txt", b"old").unwrap();
+        namespace
+            .bind(root.clone(), ".", ".", BindOptions::default())
+            .unwrap();
+        let mut host = WanixQuickJsWasiHost::new(WasiConfig::new(namespace)).unwrap();
+
+        host.path_rename(3, b"old.txt", 3, b"renamed.txt").unwrap();
+
+        assert_eq!(
+            root.metadata(&NormalizedPath::new("old.txt").unwrap()),
+            Err(wanix_fs::FsError::NotFound)
+        );
+        assert_eq!(root.read_file("renamed.txt").unwrap(), b"old");
+        assert_eq!(
+            host.path_rename(3, b"missing.txt", 3, b"missing.txt"),
+            Err(QuickJsWasiErrno::Noent)
         );
     }
 
