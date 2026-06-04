@@ -242,8 +242,9 @@ pub(super) fn serve_websocket_connection(
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::fs;
-    use std::io::{Read, Write};
+    use std::io::{self, Read, Write};
     use std::net::TcpListener;
     use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -256,6 +257,54 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn p9_ws_connection_errors_have_stable_display_text() {
+        assert_eq!(
+            P9WsConnectionError::Handshake("bad key".to_owned()).to_string(),
+            "websocket handshake failed: bad key"
+        );
+        assert!(
+            P9WsConnectionError::WebSocket(WsError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "pipe closed"
+            )))
+            .to_string()
+            .starts_with("websocket I/O failed:"),
+        );
+        assert_eq!(
+            P9WsConnectionError::Protocol(P9Error::InvalidUtf8).to_string(),
+            "9P protocol error: 9P string is not valid UTF-8"
+        );
+        assert_eq!(
+            P9WsConnectionError::Server(wanix_9p::Wanix9pError::InvalidPath("../x".to_owned()))
+                .to_string(),
+            "9P server error: invalid 9P walk path: ../x"
+        );
+        assert_eq!(
+            P9WsConnectionError::TruncatedFrame { buffered_len: 7 }.to_string(),
+            "websocket closed with 7 buffered 9P bytes"
+        );
+    }
+
+    #[test]
+    fn p9_ws_connection_errors_report_sources_for_wrapped_errors() {
+        assert!(Error::source(&P9WsConnectionError::Handshake("bad key".to_owned())).is_none());
+        assert!(
+            Error::source(&P9WsConnectionError::WebSocket(WsError::Io(
+                io::Error::new(io::ErrorKind::BrokenPipe, "pipe closed")
+            )))
+            .is_some()
+        );
+        assert!(Error::source(&P9WsConnectionError::Protocol(P9Error::InvalidUtf8)).is_some());
+        assert!(
+            Error::source(&P9WsConnectionError::Server(
+                wanix_9p::Wanix9pError::InvalidPath("../x".to_owned())
+            ))
+            .is_some()
+        );
+        assert!(Error::source(&P9WsConnectionError::TruncatedFrame { buffered_len: 7 }).is_none());
+    }
 
     #[test]
     fn parse_p9_ws_requires_root_and_addr() {
