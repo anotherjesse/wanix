@@ -9,9 +9,12 @@
 //! Two tasks (a `qjs` task and a `wanix-wasm` task) that are built from the same
 //! `Namespace` share one filesystem — writes by one are visible to the other.
 
+use std::io::Write as _;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use wanix_fs::{File, FileType, FsResult, Metadata};
+use wanix_fs::{File, FileType, FsError, FsResult, LocalFs, Metadata};
+use wanix_vfs::{BindOptions, Namespace};
 use wanix_wasi::{WasiConfig, WasiCtx};
 use wasmtime::error::Context as _;
 use wasmtime::{Engine, Error, Linker, Module, Result, Store};
@@ -72,6 +75,74 @@ impl WasiRunner {
             },
         }
     }
+
+    /// Runs the module with sane defaults: `dir` preopened as the namespace root,
+    /// `argv` as the guest arguments, and stdout/stderr wired to the host process.
+    ///
+    /// This is the one-call path for embedders who just want to run a task in a
+    /// host directory without assembling a [`WasiConfig`] by hand.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `dir` cannot be opened, or the task fails to run.
+    pub fn run_in_dir<S: AsRef<str>>(&self, dir: impl AsRef<Path>, argv: &[S]) -> Result<i32> {
+        let mut namespace = Namespace::new();
+        let local = Arc::new(
+            LocalFs::new(dir.as_ref())
+                .map_err(|e| Error::msg(format!("cannot open {}: {e}", dir.as_ref().display())))?,
+        );
+        namespace
+            .bind(local, ".", ".", BindOptions::default())
+            .map_err(|e| Error::msg(format!("bind failed: {e}")))?;
+        let config = WasiConfig::new(namespace)
+            .with_args(argv.iter().map(|s| s.as_ref().to_owned()))
+            .with_stdout(host_stdout(), "stdout")
+            .with_stderr(host_stderr(), "stderr");
+        self.run(config)
+    }
+}
+
+/// A [`File`] that forwards writes to the host process stdout or stderr.
+///
+/// Hands an embedder the same "see the guest's output" default the CLI uses,
+/// without wiring up a [`CaptureFile`] and reading it back.
+struct HostStream {
+    stderr: bool,
+}
+
+impl File for HostStream {
+    fn read(&mut self, _buf: &mut [u8]) -> FsResult<usize> {
+        Ok(0)
+    }
+
+    fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
+        let written = if self.stderr {
+            std::io::stderr().write(buf)
+        } else {
+            std::io::stdout().write(buf)
+        };
+        written.map_err(|e| FsError::Other(e.to_string()))
+    }
+
+    fn write_ready(&self) -> FsResult<bool> {
+        Ok(true)
+    }
+
+    fn metadata(&self) -> FsResult<Metadata> {
+        Ok(Metadata::new(FileType::File, 0, 0o644))
+    }
+}
+
+/// A stdout sink that forwards to the host process stdout.
+#[must_use]
+pub fn host_stdout() -> Box<dyn File> {
+    Box::new(HostStream { stderr: false })
+}
+
+/// A stderr sink that forwards to the host process stderr.
+#[must_use]
+pub fn host_stderr() -> Box<dyn File> {
+    Box::new(HostStream { stderr: true })
 }
 
 /// An in-memory [`File`] that captures everything written to it.
@@ -151,6 +222,25 @@ mod tests {
             .with_stdout(Box::new(stdout.clone()), "stdout");
         let exit = runner.run(config).expect("rust wasm task ran");
         (exit, stdout.contents())
+    }
+
+    #[test]
+    fn run_in_dir_preopens_host_directory() {
+        let dir = std::env::temp_dir().join(format!("wanix-wasm-run-in-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("make temp dir");
+        std::fs::write(dir.join("in.txt"), b"hello").expect("write in.txt");
+
+        let runner = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+        // Guest reads /in.txt and writes /out.txt within the preopened host dir.
+        let exit = runner
+            .run_in_dir(&dir, &["guest", "/in.txt", "/out.txt"])
+            .expect("run_in_dir");
+        assert_eq!(exit, 0);
+
+        let out = std::fs::read_to_string(dir.join("out.txt")).expect("out.txt on host disk");
+        assert_eq!(out, "rust-wasm saw: hello");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -64,6 +64,15 @@ fn main() {
         println!("{:.10}", leibniz_pi(n));
         return;
     }
+    if args.get(1).map(String::as_str) == Some("--echo") {
+        // Proves --env and --stdin reach the guest through the runner.
+        use std::io::Read;
+        println!("env MSG={}", std::env::var("MSG").unwrap_or_default());
+        let mut s = String::new();
+        std::io::stdin().read_to_string(&mut s).ok();
+        println!("stdin={}", s.trim());
+        return;
+    }
 
     let input = args.get(1).cloned().unwrap_or_else(|| "/shared/in.txt".to_string());
     let output = args.get(2).cloned().unwrap_or_else(|| "/shared/out.txt".to_string());

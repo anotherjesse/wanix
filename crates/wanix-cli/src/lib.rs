@@ -560,7 +560,7 @@ struct QjsCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum QjsStdin {
+pub(crate) enum QjsStdin {
     Bytes(Vec<u8>),
     File(PathBuf),
     Process,
@@ -879,6 +879,65 @@ fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
     parse_qjs_command_for(args, "qjs")
 }
 
+/// Parses one invocation flag shared by `qjs` and `wasm` (`--env`, `--cwd`,
+/// `--stdin`, `--stdin-file`), advancing `i` past it.
+///
+/// Returns `true` if `args[*i]` was a shared flag (and consumes it); `false`
+/// without advancing otherwise, so the caller can handle command-specific flags
+/// or positional arguments.
+pub(crate) fn try_parse_common_flag(
+    args: &[OsString],
+    i: &mut usize,
+    command: &str,
+    env: &mut Vec<String>,
+    cwd: &mut NormalizedPath,
+    stdin: &mut Option<QjsStdin>,
+) -> Result<bool, CliError> {
+    if args[*i] == "--env" {
+        *i += 1;
+        let value = args
+            .get(*i)
+            .ok_or_else(|| CliError::usage(format!("{command} --env expects KEY=VALUE")))?;
+        let value = os_arg_to_string(value, &format!("{command} --env"))?;
+        validate_env_line(&value, &format!("{command} --env"))?;
+        env.push(value);
+        *i += 1;
+    } else if args[*i] == "--cwd" {
+        *i += 1;
+        let value = args
+            .get(*i)
+            .ok_or_else(|| CliError::usage(format!("{command} --cwd expects a Wanix path")))?;
+        *cwd = NormalizedPath::new(os_arg_to_string(value, &format!("{command} --cwd"))?)?;
+        *i += 1;
+    } else if args[*i] == "--stdin" {
+        *i += 1;
+        let value = args
+            .get(*i)
+            .ok_or_else(|| CliError::usage(format!("{command} --stdin expects text")))?;
+        set_qjs_stdin(
+            stdin,
+            QjsStdin::Bytes(os_arg_to_string(value, &format!("{command} --stdin"))?.into_bytes()),
+            command,
+        )?;
+        *i += 1;
+    } else if args[*i] == "--stdin-file" {
+        *i += 1;
+        let value = args
+            .get(*i)
+            .ok_or_else(|| CliError::usage(format!("{command} --stdin-file expects PATH or -")))?;
+        let source = if value == "-" {
+            QjsStdin::Process
+        } else {
+            QjsStdin::File(PathBuf::from(value))
+        };
+        set_qjs_stdin(stdin, source, command)?;
+        *i += 1;
+    } else {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 fn parse_qjs_command_for(args: &[OsString], command: &str) -> Result<QjsCommand, CliError> {
     let mut env = Vec::new();
     let mut cwd = NormalizedPath::new(".")?;
@@ -890,48 +949,10 @@ fn parse_qjs_command_for(args: &[OsString], command: &str) -> Result<QjsCommand,
     let mut mounts = Vec::new();
     let mut i = 0;
     while i < args.len() {
-        if args[i] == "--env" {
-            i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage(format!("{command} --env expects KEY=VALUE")))?;
-            let value = os_arg_to_string(value, &format!("{command} --env"))?;
-            validate_env_line(&value, &format!("{command} --env"))?;
-            env.push(value);
-            i += 1;
-        } else if args[i] == "--cwd" {
-            i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage(format!("{command} --cwd expects a Wanix path")))?;
-            cwd = NormalizedPath::new(os_arg_to_string(value, &format!("{command} --cwd"))?)?;
-            i += 1;
-        } else if args[i] == "--stdin" {
-            i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage(format!("{command} --stdin expects text")))?;
-            set_qjs_stdin(
-                &mut stdin,
-                QjsStdin::Bytes(
-                    os_arg_to_string(value, &format!("{command} --stdin"))?.into_bytes(),
-                ),
-                command,
-            )?;
-            i += 1;
-        } else if args[i] == "--stdin-file" {
-            i += 1;
-            let value = args.get(i).ok_or_else(|| {
-                CliError::usage(format!("{command} --stdin-file expects PATH or -"))
-            })?;
-            let source = if value == "-" {
-                QjsStdin::Process
-            } else {
-                QjsStdin::File(PathBuf::from(value))
-            };
-            set_qjs_stdin(&mut stdin, source, command)?;
-            i += 1;
-        } else if args[i] == "--event-loop-ms" {
+        if try_parse_common_flag(args, &mut i, command, &mut env, &mut cwd, &mut stdin)? {
+            continue;
+        }
+        if args[i] == "--event-loop-ms" {
             i += 1;
             let value = args.get(i).ok_or_else(|| {
                 CliError::usage(format!("{command} --event-loop-ms expects milliseconds"))
@@ -1027,7 +1048,7 @@ fn set_qjs_stdin(
     Ok(())
 }
 
-fn read_qjs_stdin(
+pub(crate) fn read_qjs_stdin(
     source: Option<QjsStdin>,
     process_stdin: &mut dyn Read,
 ) -> Result<Option<Vec<u8>>, CliError> {
