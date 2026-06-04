@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wanix Rust direct v86</title>
+  <style>
+    body { margin: 0; font: 14px system-ui, sans-serif; color: #f4f4f0; background: #171a1f; }
+    main { display: grid; grid-template-columns: minmax(280px, 420px) 1fr; min-height: 100vh; }
+    aside { padding: 20px; border-right: 1px solid #363b44; background: #20242b; }
+    #screen { min-height: 100vh; background: #080a0d; }
+    #screen canvas { display: block; max-width: 100%; }
+    #screen div { white-space: pre; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    #serial { min-height: 180px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    #boot-log, #rootfs { max-height: 180px; overflow: auto; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #11141a; padding: 12px; border: 1px solid #363b44; }
+    label { display: block; margin: 12px 0 4px; color: #c9d3e0; }
+    input, textarea { box-sizing: border-box; width: 100%; padding: 8px; color: #f4f4f0; background: #11141a; border: 1px solid #4b5563; }
+    button { margin-top: 14px; padding: 8px 12px; color: #11141a; background: #d8e8a2; border: 0; cursor: pointer; }
+    @media (max-width: 760px) { main { grid-template-columns: 1fr; } #screen { min-height: 55vh; } }
+  </style>
+</head>
+<body>
+  <main>
+    <aside>
+      <h1>Wanix Rust direct v86</h1>
+      <p id="status">Loading Wanix discovery...</p>
+      <label for="kernel">bzImage URL</label>
+      <input id="kernel" value="">
+      <label for="initrd">initrd URL</label>
+      <input id="initrd" value="">
+      <label for="cmdline">kernel command line</label>
+      <textarea id="cmdline" spellcheck="false"></textarea>
+      <button id="start" disabled>Start VM</button>
+      <pre id="config"></pre>
+      <label for="rootfs">rootfs handoff</label>
+      <button id="copy-qemu" disabled>Copy QEMU command</button>
+      <button id="copy-serve" disabled>Copy serve command</button>
+      <pre id="rootfs" aria-live="polite"></pre>
+      <pre id="boot-log" aria-live="polite"></pre>
+    </aside>
+    <div id="screen"><canvas></canvas><div></div></div>
+    <textarea id="serial" spellcheck="false" readonly></textarea>
+  </main>
+  <script type="module">
+    const DEFAULT_CMDLINE = __WANIX_DEFAULT_CMDLINE_JSON__;
+    const DEFAULT_KERNEL_URL = __WANIX_DEFAULT_KERNEL_URL_JSON__;
+    const DEFAULT_MEMORY_SIZE = __WANIX_DEFAULT_MEMORY_SIZE__;
+    const DEFAULT_VGA_MEMORY_SIZE = __WANIX_DEFAULT_VGA_MEMORY_SIZE__;
+
+    const status = document.querySelector("#status");
+    const start = document.querySelector("#start");
+    const configOutput = document.querySelector("#config");
+    const rootfsOutput = document.querySelector("#rootfs");
+    const copyQemu = document.querySelector("#copy-qemu");
+    const copyServe = document.querySelector("#copy-serve");
+    const bootLog = document.querySelector("#boot-log");
+    const kernel = document.querySelector("#kernel");
+    const initrd = document.querySelector("#initrd");
+    const cmdline = document.querySelector("#cmdline");
+    const hvc0 = document.querySelector("#serial");
+    const params = new URLSearchParams(location.search);
+    const hvc0Encoder = new TextEncoder();
+    const hvc0Decoder = new TextDecoder();
+    window.wanixV86BootLog = [];
+    let rootfsHandoffCommands = null;
+
+    function logBoot(message) {
+      window.wanixV86BootLog.push(message);
+      bootLog.textContent = window.wanixV86BootLog.join("\n") + "\n";
+      bootLog.scrollTop = bootLog.scrollHeight;
+    }
+
+    function setStatus(message) {
+      status.textContent = message;
+      window.wanixV86Status = message;
+      logBoot(message);
+    }
+    window.addEventListener("error", event => setStatus("direct-v86 setup failed: " + event.message));
+    window.addEventListener("unhandledrejection", event => setStatus("direct-v86 setup failed: " + (event.reason?.message || event.reason)));
+
+    const discovery = await fetch("/.well-known/wanix.json", { cache: "no-store" }).then(response => response.json());
+    const v86Assets = discovery.v86?.assets || {};
+    const v86Boot = discovery.v86?.boot || {};
+    void loadRootfsHandoff(discovery.routes?.rootfs || {});
+    const { V86 } = await import(v86Assets.module || "/v86/lib/libv86.mjs");
+    const proxyUrl = discovery.routes.p9.websocket;
+    kernel.value = v86Boot.kernel || DEFAULT_KERNEL_URL;
+    if (v86Boot.initrd) initrd.value = v86Boot.initrd;
+    if (params.get("kernel")) kernel.value = params.get("kernel");
+    if (params.get("bzimage")) kernel.value = params.get("bzimage");
+    if (params.get("initrd")) initrd.value = params.get("initrd");
+    cmdline.value = discovery.v86?.defaultCmdline || DEFAULT_CMDLINE;
+    if (params.get("cmdline")) cmdline.value = params.get("cmdline");
+    if (params.get("p9-msize")) cmdline.value = cmdline.value.replace(/(\bmsize=)\d+/, "$1" + params.get("p9-msize"));
+    if (params.get("append")) cmdline.value = [cmdline.value, params.get("append")].filter(Boolean).join(" ");
+    logBoot("9P proxy: " + proxyUrl);
+    if (v86Boot.ready) {
+      logBoot("Boot root ready: " + v86Boot.kernel + " with " + v86Boot.init);
+    } else if (Array.isArray(v86Boot.missing) && v86Boot.missing.length) {
+      logBoot("Boot root missing: " + v86Boot.missing.join(", "));
+    } else {
+      logBoot("Boot root readiness unknown");
+    }
+    setStatus("Ready: 9P proxy " + proxyUrl);
+
+    async function loadRootfsHandoff(route) {
+      route = route || {};
+      window.wanixRootfsRoute = route;
+      window.wanixRootfsHandoff = null;
+      rootfsHandoffCommands = null;
+      copyQemu.disabled = true;
+      copyServe.disabled = true;
+      const status = route.status || "unknown";
+      const summary = {
+        status,
+        ready: route.ready === true,
+        url: route.url || null,
+        missing: Array.isArray(route.missing) ? route.missing : []
+      };
+      if (status !== "available" || route.ready !== true || !route.url) {
+        rootfsOutput.textContent = JSON.stringify(summary, null, 2);
+        const missing = summary.missing.length ? ": " + summary.missing.join(", ") : "";
+        logBoot("Rootfs handoff " + status + missing);
+        return null;
+      }
+      try {
+        const response = await fetch(route.url, { cache: "no-store" });
+        if (!response.ok) {
+          rootfsOutput.textContent = JSON.stringify({ ...summary, fetchStatus: response.status }, null, 2);
+          logBoot("Rootfs handoff fetch failed: HTTP " + response.status);
+          return null;
+        }
+        const handoff = await response.json();
+        const qemuArgv = handoff.qemu?.argv || [];
+        const serveArgv = handoff.serveDirectV86?.argv || [];
+        rootfsHandoffCommands = {
+          qemu: shellCommand(qemuArgv),
+          serve: shellCommand(serveArgv)
+        };
+        window.wanixRootfsHandoff = handoff;
+        rootfsOutput.textContent = JSON.stringify({
+          kind: handoff.kind,
+          rootPath: handoff.rootPath,
+          kernelRoute: handoff.kernelRoute,
+          initRoute: handoff.initRoute,
+          qemuArgv,
+          qemuCommand: rootfsHandoffCommands.qemu,
+          serveArgv,
+          serveCommand: rootfsHandoffCommands.serve
+        }, null, 2);
+        copyQemu.disabled = rootfsHandoffCommands.qemu.length === 0;
+        copyServe.disabled = rootfsHandoffCommands.serve.length === 0;
+        logBoot("Rootfs handoff ready: " + handoff.rootPath);
+        return handoff;
+      } catch (error) {
+        rootfsOutput.textContent = JSON.stringify({
+          ...summary,
+          error: error?.message || String(error)
+        }, null, 2);
+        logBoot("Rootfs handoff fetch failed: " + (error?.message || error));
+        return null;
+      }
+    }
+
+    function shellCommand(argv) {
+      if (!Array.isArray(argv)) return "";
+      return argv.map(shellQuoteArg).join(" ");
+    }
+
+    function shellQuoteArg(value) {
+      const text = String(value);
+      if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(text)) return text;
+      return "'" + text.replace(/'/g, "'\"'\"'") + "'";
+    }
+
+    async function copyCommand(kind) {
+      const command = rootfsHandoffCommands?.[kind] || "";
+      if (!command) return;
+      if (!navigator.clipboard?.writeText) {
+        logBoot("Clipboard API unavailable for " + kind + " command");
+        return;
+      }
+      await navigator.clipboard.writeText(command);
+      logBoot("Copied " + kind + " command");
+    }
+
+    copyQemu.addEventListener("click", () => void copyCommand("qemu"));
+    copyServe.addEventListener("click", () => void copyCommand("serve"));
+
+    function buildConfig() {
+      const config = {
+        memory_size: discovery.v86?.memorySize || DEFAULT_MEMORY_SIZE,
+        vga_memory_size: discovery.v86?.vgaMemorySize || DEFAULT_VGA_MEMORY_SIZE,
+        cmdline: cmdline.value,
+        wasm_path: v86Assets.wasm || "/v86/bundle/v86.wasm",
+        bios: { url: v86Assets.bios || "/v86/bundle/seabios.bin" },
+        vga_bios: { url: v86Assets.vgaBios || "/v86/bundle/vgabios.bin" },
+        bzimage_initrd_from_filesystem: false,
+        filesystem: { proxy_url: proxyUrl },
+        autostart: true,
+        virtio_console: true,
+        disable_speaker: true,
+        disable_mouse: true,
+        disable_keyboard: false,
+        screen_container: document.querySelector("#screen"),
+        serial_container: document.querySelector("#serial")
+      };
+      if (kernel.value) config.bzimage = { url: kernel.value };
+      if (initrd.value) config.initrd = { url: initrd.value };
+      return config;
+    }
+
+    function refreshConfig() {
+      configOutput.textContent = JSON.stringify(buildConfig(), (key, value) => {
+        if (key.endsWith("_container")) return "#" + value.id;
+        return value;
+      }, 2);
+    }
+
+    function appendHvc0(bytes) {
+      hvc0.value += hvc0Decoder.decode(bytes, { stream: true });
+      hvc0.scrollTop = hvc0.scrollHeight;
+    }
+
+    function hvc0KeyBytes(event) {
+      const control = event.key.toLowerCase(); if (event.ctrlKey && !event.altKey && !event.metaKey && (control === "c" || control === "d")) return Uint8Array.of(control === "c" ? 3 : 4);
+      if (event.metaKey || event.altKey || event.ctrlKey) return null;
+      if (event.key === "Enter") return hvc0Encoder.encode("\n");
+      if (event.key === "Backspace") return Uint8Array.of(0x7f);
+      if (event.key === "Tab") return hvc0Encoder.encode("\t");
+      if (event.key.length === 1) return hvc0Encoder.encode(event.key);
+      return null;
+    }
+
+    function hvc0InputBytes(input) { if (input === undefined || input === null) return new Uint8Array(); if (input instanceof Uint8Array) return input; if (input instanceof ArrayBuffer) return new Uint8Array(input); if (ArrayBuffer.isView(input)) return new Uint8Array(input.buffer, input.byteOffset, input.byteLength); if (Array.isArray(input)) return Uint8Array.from(input); return hvc0Encoder.encode(String(input)); }
+    function sendHvc0(vm, bytes) { vm.bus.send("virtio-console0-input-bytes", bytes); }
+    window.wanixV86SendHvc0 = input => { const vm = window.wanixV86; if (!vm) throw new Error("v86 is not started"); sendHvc0(vm, hvc0InputBytes(input)); };
+
+    function sendHvc0Resize(vm) {
+      const columns = Math.max(20, Math.floor(hvc0.clientWidth / 8) || 80);
+      const rows = Math.max(5, Math.floor(hvc0.clientHeight / 18) || 24);
+      vm.bus.send("virtio-console0-resize", [columns, rows]);
+    }
+
+    function connectHvc0Resize(vm) {
+      const resize = () => sendHvc0Resize(vm);
+      if ("ResizeObserver" in window) {
+        const observer = new ResizeObserver(resize);
+        observer.observe(hvc0);
+        window.wanixV86Hvc0ResizeObserver = observer;
+      }
+      window.addEventListener("resize", resize);
+      vm.add_listener("emulator-ready", resize);
+      vm.add_listener("emulator-loaded", resize);
+    }
+
+    function connectHvc0(vm) {
+      vm.add_listener("virtio-console0-output-bytes", appendHvc0);
+      hvc0.addEventListener("keydown", event => {
+        const bytes = hvc0KeyBytes(event);
+        if (!bytes) return;
+        event.preventDefault();
+        sendHvc0(vm, bytes);
+      });
+      hvc0.addEventListener("paste", event => {
+        const text = event.clipboardData?.getData("text");
+        if (!text) return;
+        event.preventDefault();
+        sendHvc0(vm, hvc0Encoder.encode(text));
+      });
+      connectHvc0Resize(vm);
+    }
+
+    function describeDownloadProgress(progress) {
+      if (!progress || typeof progress !== "object") return "download-progress";
+      const name = progress.file_name || progress.name || progress.url || "asset";
+      const loaded = progress.loaded ?? progress.done;
+      const total = progress.total ?? progress.size;
+      if (loaded !== undefined && total !== undefined) return name + " " + loaded + "/" + total;
+      if (loaded !== undefined) return name + " " + loaded;
+      return name;
+    }
+
+    function connectBootStatus(vm) {
+      vm.add_listener("download-progress", progress => logBoot("download: " + describeDownloadProgress(progress)));
+      vm.add_listener("emulator-loaded", () => logBoot("v86 runtime loaded"));
+      vm.add_listener("emulator-ready", () => setStatus("v86 ready"));
+      vm.add_listener("emulator-started", () => setStatus("v86 started"));
+      vm.add_listener("emulator-stopped", () => setStatus("v86 stopped"));
+      vm.add_listener("emulator-error", error => setStatus("v86 error: " + (error?.message || error)));
+    }
+
+    function startVm() {
+      if (window.wanixV86) return;
+      start.disabled = true;
+      setStatus("Starting v86");
+      const vm = new V86(buildConfig());
+      window.wanixV86 = vm;
+      connectBootStatus(vm);
+      connectHvc0(vm);
+      hvc0.focus();
+      return vm;
+    }
+
+    kernel.addEventListener("input", refreshConfig);
+    initrd.addEventListener("input", refreshConfig);
+    cmdline.addEventListener("input", refreshConfig);
+    refreshConfig();
+    start.disabled = false;
+    window.wanixV86Start = startVm;
+    start.addEventListener("click", startVm);
+    if (params.get("autostart") === "1") startVm();
+  </script>
+</body>
+</html>

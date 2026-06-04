@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wanix Rust workbench</title>
+  <style>
+    html, body, #workbench { height: 100%; margin: 0; }
+    body { overflow: hidden; color: #f5f5f5; background: #181818; font: 13px system-ui, sans-serif; }
+    #workbench { width: 100%; }
+    #status {
+      position: fixed;
+      z-index: 10;
+      top: 10px;
+      left: 10px;
+      max-width: min(560px, calc(100vw - 20px));
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border: 1px solid #3f3f46;
+      background: rgba(24, 24, 24, .92);
+      color: #f5f5f5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    body.ready #status { display: none; }
+    body.error #status { border-color: #b85f5f; color: #ffd8d8; }
+  </style>
+</head>
+<body>
+  <div id="workbench" role="main"></div>
+  <div id="status">Loading workbench assets...</div>
+  <script>
+    const statusEl = document.querySelector("#status");
+    const container = document.querySelector("#workbench");
+    const params = new URLSearchParams(location.search);
+    const extensionId = params.get("extension") || "wanix.workbench";
+    const workspaceUri = params.get("workspace") || "wanix:/";
+    const rawAssets = params.get("assets") || "/workbench/";
+    const discoveryUrl = new URL("/.well-known/wanix.json", location.href).href;
+    const extensionRoot = new URL(rawAssets.replace(/\/?$/, "/"), location.href);
+    const codeDir = new URL("code/", extensionRoot);
+    const outDir = new URL("out/", codeDir);
+    const outRoot = outDir.href.replace(/\/?$/, "");
+
+    function showStatus(message) {
+      statusEl.textContent = message;
+    }
+
+    function showError(error) {
+      const message = error && error.stack ? error.stack : String(error);
+      document.body.classList.remove("ready");
+      document.body.classList.add("error");
+      showStatus(message);
+      console.error(error);
+    }
+
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error("failed to load " + src));
+        document.head.appendChild(script);
+      });
+    }
+
+    function loadStylesheet(href) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = href;
+      document.head.appendChild(link);
+    }
+
+    function waitForAmdRequire() {
+      return new Promise((resolve, reject) => {
+        const started = performance.now();
+        const poll = () => {
+          const amdRequire = globalThis.require;
+          if (amdRequire && typeof amdRequire.config === "function") {
+            resolve(amdRequire);
+            return;
+          }
+          if (performance.now() - started > 5000) {
+            reject(new Error("VS Code AMD loader did not initialize"));
+            return;
+          }
+          setTimeout(poll, 0);
+        };
+        poll();
+      });
+    }
+
+    function createWorkbench(amdRequire, discovery) {
+      return new Promise((resolve, reject) => {
+        amdRequire(["vs/workbench/workbench.web.main"], async (wb) => {
+          try {
+            const workbenchConfig = { discoveryUrl };
+            if (discovery.routes?.p9?.websocket) {
+              workbenchConfig.p9 = discovery.routes.p9;
+            }
+            if (discovery.routes?.qjsShell?.websocket) {
+              workbenchConfig.qjsShellUrl = discovery.routes.qjsShell.websocket;
+              workbenchConfig.term = params.has("term");
+            }
+            if (discovery.services?.task && discovery.services?.term) {
+              workbenchConfig.ns = {
+                task: discovery.services.task,
+                term: discovery.services.term
+              };
+              workbenchConfig.qjsTask = discovery.services.drivers?.includes("qjs") || false;
+              workbenchConfig.shell = {
+                cmd: params.get("cmd") || "",
+                type: params.get("type") || "noop",
+                wd: params.get("wd") || "."
+              };
+              workbenchConfig.term = params.has("term");
+              workbenchConfig.raw = params.has("raw");
+            }
+            const activationChannel = new MessageChannel();
+            activationChannel.port2.onmessage = (event) => {
+              if (event.data?.type === "_port" && event.data.port) {
+                event.data.port.postMessage({ config: workbenchConfig });
+              }
+            };
+            const config = {
+              additionalBuiltinExtensions: [wb.URI.parse(extensionRoot.href)],
+              configurationDefaults: {
+                "window.commandCenter": false,
+                "workbench.layoutControl.enabled": false,
+                "workbench.startupEditor": "none",
+                "workbench.tips.enabled": false,
+                "workbench.welcomePage.walkthroughs.openOnInstall": false,
+                "editor.minimap.enabled": false,
+                "explorer.confirmDelete": false,
+                "explorer.confirmDragAndDrop": false
+              },
+              developmentOptions: { logLevel: params.has("debug") ? 2 : 0 },
+              productConfiguration: {
+                extensionEnabledApiProposals: { [extensionId]: ["ipc", "fileSearchProvider", "textSearchProvider"] }
+              },
+              workspaceProvider: {
+                trusted: true,
+                workspace: { folderUri: wb.URI.parse(workspaceUri) },
+                open(workspace) {
+                  const folder = workspace?.folderUri?.toString?.() || workspace?.workspaceUri?.toString?.();
+                  if (!folder) return Promise.resolve(false);
+                  const next = new URL(location.href);
+                  next.searchParams.set("workspace", folder);
+                  location.href = next.href;
+                  return Promise.resolve(true);
+                }
+              },
+              messagePorts: new Map([[extensionId, activationChannel.port1]])
+            };
+            globalThis.wanixWorkbench = {
+              activationPort: activationChannel.port2,
+              assets: extensionRoot.href,
+              config: workbenchConfig,
+              discovery,
+              workspace: workspaceUri
+            };
+            await wb.create(container, config);
+            document.body.classList.add("ready");
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        }, reject);
+      });
+    }
+
+    (async () => {
+      showStatus("Fetching Wanix discovery...");
+      const discoveryResponse = await fetch(discoveryUrl, { cache: "no-store" });
+      if (!discoveryResponse.ok) {
+        throw new Error("failed to fetch discovery: HTTP " + discoveryResponse.status);
+      }
+      const discovery = await discoveryResponse.json();
+      showStatus("Opening " + workspaceUri + " through " + discovery.routes.p9.websocket);
+      loadStylesheet(new URL("vs/workbench/workbench.web.main.css", outDir).href);
+      await loadScript(new URL("nls.messages.js", outDir).href);
+      await loadScript(new URL("vs/loader.js", outDir).href);
+      const amdRequire = await waitForAmdRequire();
+      amdRequire.config({ baseUrl: outRoot });
+      await createWorkbench(amdRequire, discovery);
+    })().catch(showError);
+  </script>
+</body>
+</html>
