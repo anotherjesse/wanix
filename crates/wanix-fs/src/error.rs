@@ -53,3 +53,33 @@ impl fmt::Display for FsError {
 }
 
 impl Error for FsError {}
+
+#[cfg(test)]
+mod tests {
+    use super::FsError;
+
+    #[test]
+    fn fs_error_display_messages_are_stable() {
+        let cases = [
+            (
+                FsError::InvalidPath("bad/../path".to_owned()),
+                "invalid path: bad/../path",
+            ),
+            (FsError::NotFound, "file does not exist"),
+            (FsError::NotSupported, "operation not supported"),
+            (FsError::PermissionDenied, "permission denied"),
+            (FsError::AlreadyExists, "file already exists"),
+            (FsError::NotDirectory, "not a directory"),
+            (FsError::IsDirectory, "is a directory"),
+            (FsError::InvalidFd, "invalid file descriptor"),
+            (FsError::InvalidOffset, "invalid file offset"),
+            (FsError::InvalidTime, "invalid file timestamp"),
+            (FsError::NotEmpty, "directory not empty"),
+            (FsError::Other("host detail".to_owned()), "host detail"),
+        ];
+
+        for (error, message) in cases {
+            assert_eq!(error.to_string(), message);
+        }
+    }
+}
