@@ -318,6 +318,47 @@ mod tests {
         );
     }
 
+    fn tell(fs: &Arc<MemFs>, path: &str, seek: u64) -> (i32, String) {
+        let runner = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+        let stdout = CaptureFile::new();
+        let seek = seek.to_string();
+        let config = WasiConfig::new(namespace_on(fs))
+            .with_args(["guest", "--tell", path, &seek])
+            .with_stdout(Box::new(stdout.clone()), "stdout");
+        let exit = runner.run(config).expect("rust wasm task ran");
+        (exit, stdout.contents())
+    }
+
+    #[test]
+    fn fd_tell_reports_offset_after_seek() {
+        // Seeking to an absolute offset then calling the raw fd_tell syscall must
+        // report that exact position (fd_tell, not fd_seek, supplies the answer).
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("data.txt", b"hello world")
+            .expect("seed data.txt");
+
+        let (exit, out) = tell(&fs, "/data.txt", 6);
+        assert_eq!(exit, 0, "guest should exit cleanly: {out:?}");
+        assert!(
+            out.contains("tell /data.txt at 6"),
+            "fd_tell should report the post-seek offset, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn fd_tell_reports_zero_at_file_start() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("data.txt", b"hello world")
+            .expect("seed data.txt");
+
+        let (exit, out) = tell(&fs, "/data.txt", 0);
+        assert_eq!(exit, 0, "guest should exit cleanly: {out:?}");
+        assert!(
+            out.contains("tell /data.txt at 0"),
+            "fd_tell at start should report offset 0, got: {out:?}"
+        );
+    }
+
     fn symlink(fs: &Arc<MemFs>, target: &str, link: &str) -> (i32, String) {
         let runner = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
         let stdout = CaptureFile::new();

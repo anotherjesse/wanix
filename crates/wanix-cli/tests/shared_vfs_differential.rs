@@ -406,6 +406,66 @@ std.out.flush();
     );
 }
 
+/// Parses the rust guest's `--tell` output (`rust-wasm: tell <path> at <pos>`)
+/// into the reported offset, or panics with the raw output on a non-match.
+fn rust_tell_offset(out: &str) -> u64 {
+    out.lines()
+        .find_map(|l| {
+            l.strip_prefix("rust-wasm: tell ")
+                .and_then(|rest| rest.rsplit(" at ").next())
+        })
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or_else(|| panic!("no tell offset in rust output: {out:?}"))
+}
+
+#[test]
+fn qjs_and_rust_wasm_report_same_tell_offset_after_seek() {
+    // Differential proof for the fd_tell import: qjs and rust-wasm each open the
+    // SAME file on one namespace, seek to absolute offset 6, and read the cursor
+    // back via fd_tell (rust: raw fd_tell syscall; qjs: os.seek(fd, 0, SEEK_CUR),
+    // which the qjs host routes through WasiCtx::fd_tell). Both must report 6 --
+    // proving both engines track descriptor position through one WasiCtx VFS.
+    let fs = Arc::new(MemFs::new());
+    fs.write_file("shared.txt", b"hello world")
+        .expect("seed shared.txt");
+
+    let qjs = QuickJsRunner::from_bundled_wasm().expect("qjs runner");
+    let rust = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+
+    // rust-wasm: open, seek to 6, report position via the raw fd_tell syscall.
+    let (exit, rust_out) = run_rust(&rust, &fs, &["guest", "--tell", "/shared.txt", "6"]);
+    assert_eq!(exit, 0, "rust tell step exit: {rust_out:?}");
+    let rust_offset = rust_tell_offset(&rust_out);
+
+    // qjs: open, seek to 6 (SEEK_SET), then read current position (SEEK_CUR, 0).
+    let qjs_out = run_qjs(
+        &qjs,
+        &fs,
+        r#"import * as std from "qjs:std";
+import * as os from "qjs:os";
+const fd = os.open("/shared.txt", os.O_RDONLY);
+if (fd < 0) { throw new Error("open: " + fd); }
+os.seek(fd, 6, std.SEEK_SET);
+const pos = os.seek(fd, 0, std.SEEK_CUR);
+os.close(fd);
+std.out.puts("tell " + pos + "\n");
+std.out.flush();
+"#,
+    );
+    let qjs_offset: u64 = qjs_out
+        .lines()
+        .find_map(|l| l.strip_prefix("tell ").and_then(|n| n.trim().parse().ok()))
+        .unwrap_or_else(|| panic!("no tell offset in qjs output: {qjs_out:?}"));
+
+    // The differential assertion: both engines, over the SAME namespace, observe
+    // the same descriptor offset after the same seek.
+    assert_eq!(
+        rust_offset, qjs_offset,
+        "qjs and rust-wasm disagree on tell offset\nrust={rust_out:?}\nqjs={qjs_out:?}"
+    );
+    assert_eq!(rust_offset, 6, "expected tell offset 6, got {rust_offset}");
+}
+
 #[test]
 fn qjs_and_rust_wasm_share_one_vfs_two_way() {
     // Backs the `shared_vfs` example as a real automated test: qjs writes a file,

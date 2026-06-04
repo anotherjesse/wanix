@@ -10,9 +10,12 @@
 //!   `guest --truncate <path> <len>`    — set a file's length (ftruncate).
 //!   `guest --symlink <target> <link>`  — create a symbolic link.
 //!   `guest --readlink <link>`          — print a symbolic link's target.
+//!   `guest --tell <path> <seek>`       — seek then report position via fd_tell.
 
 use std::fs;
 use std::fs::OpenOptions;
+use std::io::{Seek, SeekFrom};
+use std::os::wasi::io::AsRawFd;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -40,6 +43,13 @@ fn main() {
     }
     if args.get(1).map(String::as_str) == Some("--readlink") {
         readlink(args.get(2).map_or("", String::as_str));
+        return;
+    }
+    if args.get(1).map(String::as_str) == Some("--tell") {
+        tell(
+            args.get(2).map_or("", String::as_str),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0),
+        );
         return;
     }
     if args.get(1).map(String::as_str) == Some("--truncate") {
@@ -98,6 +108,30 @@ extern "C" {
         new_path: *const u8,
         new_path_len: usize,
     ) -> u16;
+    fn fd_tell(fd: u32, out: *mut u64) -> u16;
+}
+
+/// Seeks `path` to absolute offset `seek`, then reports the cursor via the raw
+/// `fd_tell` syscall (not `fd_seek`, so this genuinely exercises `fd_tell`).
+fn tell(path: &str, seek: u64) {
+    let mut file = match OpenOptions::new().read(true).open(path) {
+        Ok(file) => file,
+        Err(err) => {
+            println!("rust-wasm: tell failed to open {path}: {err}");
+            return;
+        }
+    };
+    if let Err(err) = file.seek(SeekFrom::Start(seek)) {
+        println!("rust-wasm: tell seek failed {path}: {err}");
+        return;
+    }
+    let mut pos: u64 = 0;
+    let errno = unsafe { fd_tell(file.as_raw_fd() as u32, &mut pos) };
+    if errno == 0 {
+        println!("rust-wasm: tell {path} at {pos}");
+    } else {
+        println!("rust-wasm: tell failed {path}: errno {errno}");
+    }
 }
 
 /// Creates a symbolic link `link` pointing at `target` via the `path_symlink`

@@ -120,6 +120,20 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     )?;
     linker.func_wrap(
         m,
+        "fd_tell",
+        |mut caller: Caller<'_, WasiState>, fd: i32, out: i32| -> Result<i32> {
+            match caller.data().ctx.fd_tell(WasiFd::new(fd as u32)) {
+                Ok(pos) => {
+                    let mem = memory(&mut caller)?;
+                    write_u64(&mem, &mut caller, out, pos)?;
+                    Ok(ERRNO_SUCCESS)
+                }
+                Err(e) => Ok(e.preview1_code() as i32),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        m,
         "fd_fdstat_get",
         |mut caller: Caller<'_, WasiState>, fd: i32, out: i32| -> Result<i32> {
             match caller.data().ctx.fd_fdstat_get(WasiFd::new(fd as u32)) {
