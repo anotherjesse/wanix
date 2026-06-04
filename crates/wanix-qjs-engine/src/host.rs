@@ -6,6 +6,7 @@ use wasmtime::{Caller, Linker, Memory};
 mod call;
 mod callback;
 mod config;
+mod fd_read;
 mod fd_write;
 mod fs;
 mod guest_memory;
@@ -87,6 +88,7 @@ pub(crate) fn define_wasi_imports(linker: &mut Linker<HostState>) -> Result<()> 
         },
     )?;
 
+    fd_read::define_import(linker)?;
     fd_write::define_import(linker)?;
     fs::define_imports(linker)?;
     poll::define_import(linker)?;

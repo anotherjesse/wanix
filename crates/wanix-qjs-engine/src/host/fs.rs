@@ -1,5 +1,5 @@
 use super::config::{MAX_VIRTUAL_FILE_PATH_BYTES, validate_virtual_path_components};
-use super::guest_memory::{guest_len, guest_offset_at, guest_range};
+use super::guest_memory::{guest_len, guest_range};
 use super::{
     ERRNO_BADF, ERRNO_INVAL, ERRNO_NAMETOOLONG, ERRNO_NOENT, ERRNO_NOSYS, ERRNO_NOTCAPABLE,
     ERRNO_SUCCESS, HostState, caller_memory, wasi_stdio_fd,
@@ -31,8 +31,6 @@ const DIRENT_INO_OFFSET: usize = 8;
 const DIRENT_NAMLEN_OFFSET: usize = 16;
 const DIRENT_FILETYPE_OFFSET: usize = 20;
 const WASI_U32_SIZE: usize = 4;
-const WASI_IOV_SIZE: usize = 2 * WASI_U32_SIZE;
-const WASI_IOV_LEN_OFFSET: usize = WASI_U32_SIZE;
 
 const FILETYPE_CHARACTER_DEVICE: u8 = 2;
 const FILETYPE_DIRECTORY: u8 = 3;
@@ -112,7 +110,6 @@ pub(super) fn define_imports(linker: &mut Linker<HostState>) -> anyhow::Result<(
         fd_prestat_dir_name,
     )?;
     linker.func_wrap("wasi_snapshot_preview1", "path_open", path_open)?;
-    linker.func_wrap("wasi_snapshot_preview1", "fd_read", fd_read)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_readdir", fd_readdir)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_seek", fd_seek)?;
     linker.func_wrap("wasi_snapshot_preview1", "fd_tell", fd_tell)?;
@@ -816,115 +813,6 @@ fn fd_readdir(
     }
 }
 
-fn fd_read(
-    mut caller: Caller<'_, HostState>,
-    fd: i32,
-    iovs_ptr: i32,
-    iovs_len: i32,
-    nread_ptr: i32,
-) -> wasmtime::Result<i32> {
-    if caller.data().wasi_host().is_some() {
-        let fd = match preview1_fd(fd) {
-            Ok(fd) => fd,
-            Err(errno) => return Ok(errno),
-        };
-        let memory = caller_memory(&caller)?;
-        let iovs_len = guest_len(iovs_len)?;
-        guest_range(&memory, &caller, guest_offset(nread_ptr), WASI_U32_SIZE)?;
-        preflight_fd_read_iovs(&memory, &caller, iovs_ptr, iovs_len)?;
-        let Some(host) = caller.data().wasi_host() else {
-            return Ok(ERRNO_BADF);
-        };
-        let mut host = host
-            .lock()
-            .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
-
-        let mut total_read = 0u32;
-        for index in 0..iovs_len {
-            let iov = read_valid_iov(&memory, &caller, iovs_ptr, index)?;
-            if iov.len == 0 {
-                continue;
-            }
-            let mut bytes = Vec::new();
-            bytes
-                .try_reserve_exact(iov.len)
-                .map_err(|_| wasmtime::Error::msg("fd_read buffer allocation failed"))?;
-            bytes.resize(iov.len, 0);
-            let count = match host.fd_read(fd, &mut bytes) {
-                Ok(count) => count,
-                Err(errno) => return Ok(errno.preview1_result()),
-            };
-            if count > iov.len {
-                return Err(wasmtime::Error::msg(
-                    "QuickJS WASI host returned oversized fd_read count",
-                ));
-            }
-            memory.write(&mut caller, iov.ptr, &bytes[..count])?;
-            total_read = checked_wasi_size_add(
-                total_read,
-                u32::try_from(count)
-                    .map_err(|_| wasmtime::Error::msg("fd_read byte count exceeds u32"))?,
-            )?;
-            if count < iov.len {
-                break;
-            }
-        }
-
-        memory.write(
-            &mut caller,
-            guest_offset(nread_ptr),
-            &total_read.to_le_bytes(),
-        )?;
-        return Ok(ERRNO_SUCCESS);
-    }
-
-    let (bytes, offset, rights_base) = match caller.data().virtual_file(fd) {
-        Some(file) => (Arc::clone(&file.bytes), file.offset, file.rights_base),
-        None => return Ok(ERRNO_BADF),
-    };
-    if rights_base & RIGHT_FD_READ == 0 {
-        return Ok(ERRNO_NOTCAPABLE);
-    }
-
-    let memory = caller_memory(&caller)?;
-    let iovs_len = guest_len(iovs_len)?;
-    guest_range(&memory, &caller, guest_offset(nread_ptr), WASI_U32_SIZE)?;
-    preflight_fd_read_iovs(&memory, &caller, iovs_ptr, iovs_len)?;
-
-    let mut total_read = 0u32;
-    let mut file_offset = usize::try_from(offset)
-        .unwrap_or(usize::MAX)
-        .min(bytes.len());
-    for index in 0..iovs_len {
-        let iov = read_valid_iov(&memory, &caller, iovs_ptr, index)?;
-        if file_offset == bytes.len() || iov.len == 0 {
-            continue;
-        }
-        let chunk_len = iov.len.min(bytes.len() - file_offset);
-        memory.write(
-            &mut caller,
-            iov.ptr,
-            &bytes[file_offset..file_offset + chunk_len],
-        )?;
-        file_offset += chunk_len;
-        total_read = checked_wasi_size_add(
-            total_read,
-            u32::try_from(chunk_len)
-                .map_err(|_| wasmtime::Error::msg("fd_read byte count exceeds u32"))?,
-        )?;
-    }
-
-    memory.write(
-        &mut caller,
-        guest_offset(nread_ptr),
-        &total_read.to_le_bytes(),
-    )?;
-    if let Some(file) = caller.data_mut().virtual_file_mut(fd) {
-        file.offset = offset.saturating_add(u64::from(total_read));
-    }
-    Ok(ERRNO_SUCCESS)
-}
-
 fn fd_seek(
     mut caller: Caller<'_, HostState>,
     fd: i32,
@@ -1086,66 +974,6 @@ fn fd_fdstat_set_flags(
     } else {
         Ok(ERRNO_BADF)
     }
-}
-
-#[derive(Debug)]
-struct GuestIov {
-    ptr: usize,
-    len: usize,
-    len_u32: u32,
-}
-
-fn preflight_fd_read_iovs(
-    memory: &Memory,
-    caller: &Caller<'_, HostState>,
-    iovs_ptr: i32,
-    iovs_len: usize,
-) -> wasmtime::Result<()> {
-    if iovs_len > 0 {
-        guest_range(
-            memory,
-            caller,
-            guest_offset_at(iovs_ptr, iovs_len - 1, WASI_IOV_SIZE)?,
-            WASI_IOV_SIZE,
-        )?;
-    }
-
-    let mut total_len = 0u32;
-    for index in 0..iovs_len {
-        let iov = read_valid_iov(memory, caller, iovs_ptr, index)?;
-        total_len = checked_wasi_size_add(total_len, iov.len_u32)?;
-    }
-    Ok(())
-}
-
-fn read_valid_iov(
-    memory: &Memory,
-    caller: &Caller<'_, HostState>,
-    iovs_ptr: i32,
-    index: usize,
-) -> wasmtime::Result<GuestIov> {
-    let iov_offset = guest_offset_at(iovs_ptr, index, WASI_IOV_SIZE)?;
-    let mut iov = [0u8; WASI_IOV_SIZE];
-    memory.read(caller, iov_offset, &mut iov)?;
-
-    let ptr = usize::try_from(read_iov_u32(&iov, 0))
-        .map_err(|_| wasmtime::Error::msg("guest iov pointer does not fit host usize"))?;
-    let len_u32 = read_iov_u32(&iov, WASI_IOV_LEN_OFFSET);
-    let len = usize::try_from(len_u32)
-        .map_err(|_| wasmtime::Error::msg("guest iov length does not fit host usize"))?;
-    guest_range(memory, caller, ptr, len)?;
-    Ok(GuestIov { ptr, len, len_u32 })
-}
-
-fn read_iov_u32(iov: &[u8; WASI_IOV_SIZE], offset: usize) -> u32 {
-    let mut field = [0; WASI_U32_SIZE];
-    field.copy_from_slice(&iov[offset..offset + WASI_U32_SIZE]);
-    u32::from_le_bytes(field)
-}
-
-fn checked_wasi_size_add(left: u32, right: u32) -> wasmtime::Result<u32> {
-    left.checked_add(right)
-        .ok_or_else(|| wasmtime::Error::msg("WASI byte count overflow"))
 }
 
 fn unsupported_lookupflags(flags: i32) -> bool {
