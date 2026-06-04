@@ -5,13 +5,13 @@
 //! protocol crate remains dependency-free and wire-only.
 
 mod dispatch;
+mod setattr;
 mod transport;
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use wanix_fs::{
     File, FileSeekFrom, FileSystem, FileType, FsError, Metadata, MetadataLookup, NormalizedPath,
@@ -26,13 +26,13 @@ use wanix_protocol::{
     p9_decode_tflush, p9_decode_tflushf, p9_decode_tfsync, p9_decode_tgetattr, p9_decode_tgetlock,
     p9_decode_tlcreate, p9_decode_tlink, p9_decode_tlock, p9_decode_tlopen, p9_decode_tmkdir,
     p9_decode_tmknod, p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink, p9_decode_tremove,
-    p9_decode_trename, p9_decode_trenameat, p9_decode_tsetattr, p9_decode_tstatfs,
-    p9_decode_tsymlink, p9_decode_tunlinkat, p9_decode_tversion, p9_decode_twalk,
-    p9_decode_twalkgetattr, p9_decode_twrite, p9_decode_txattrcreate, p9_decode_txattrwalk,
-    p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rflush, p9_rflushf, p9_rfsync, p9_rgetattr,
-    p9_rgetlock, p9_rlcreate, p9_rlerror, p9_rlink, p9_rlock, p9_rlopen, p9_rmkdir, p9_rread,
-    p9_rreaddir, p9_rreadlink, p9_rremove, p9_rrename, p9_rrenameat, p9_rsetattr, p9_rstatfs,
-    p9_rsymlink, p9_runlinkat, p9_rversion, p9_rwalk, p9_rwalkgetattr, p9_rwrite,
+    p9_decode_trename, p9_decode_trenameat, p9_decode_tstatfs, p9_decode_tsymlink,
+    p9_decode_tunlinkat, p9_decode_tversion, p9_decode_twalk, p9_decode_twalkgetattr,
+    p9_decode_twrite, p9_decode_txattrcreate, p9_decode_txattrwalk, p9_dir_entry_encoded_len,
+    p9_rattach, p9_rclunk, p9_rflush, p9_rflushf, p9_rfsync, p9_rgetattr, p9_rgetlock, p9_rlcreate,
+    p9_rlerror, p9_rlink, p9_rlock, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir, p9_rreadlink,
+    p9_rremove, p9_rrename, p9_rrenameat, p9_rstatfs, p9_rsymlink, p9_runlinkat, p9_rversion,
+    p9_rwalk, p9_rwalkgetattr, p9_rwrite,
 };
 
 pub use transport::{P9TransportError, P9TransportStats};
@@ -417,47 +417,6 @@ impl P9Server {
         Ok(p9_rgetattr(frame.tag(), &attr))
     }
 
-    fn handle_setattr(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        let setattr = p9_decode_tsetattr(frame)?;
-        let Some(path) = self.fids.get(&setattr.fid).map(|entry| entry.path.clone()) else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
-        };
-        if setattr.valid & !P9_SETATTR_KNOWN_MASK != 0 {
-            return Ok(p9_rlerror(frame.tag(), EINVAL));
-        }
-        if setattr.valid & P9_SETATTR_UNSUPPORTED_MASK != 0 {
-            return Ok(p9_rlerror(frame.tag(), EOPNOTSUPP));
-        }
-        if let Err(error) = validate_setattr_times(setattr.valid, &setattr.attr) {
-            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
-        }
-        if setattr.valid & P9_SETATTR_OWNER_MASK != 0
-            && let Err(error) = self.metadata_no_follow(&path)
-        {
-            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
-        }
-
-        if setattr.valid & P9_SETATTR_SIZE != 0
-            && let Err(error) = self.set_file_size(&path, setattr.attr.size)
-        {
-            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
-        }
-        if setattr.valid & (P9_SETATTR_ATIME | P9_SETATTR_MTIME) != 0
-            && let Err(error) = self.set_file_times(&path, setattr.valid, &setattr.attr)
-        {
-            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
-        }
-        if setattr.valid & P9_SETATTR_PERMISSIONS != 0
-            && let Err(error) = self.root.set_permissions(&path, setattr.attr.permissions)
-        {
-            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
-        }
-        if setattr.valid & P9_SETATTR_OWNER_MASK != 0 {
-            self.set_owner_attrs(&path, setattr.valid, &setattr.attr);
-        }
-        Ok(p9_rsetattr(frame.tag()))
-    }
-
     fn handle_xattrwalk(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let xattr = p9_decode_txattrwalk(frame)?;
         if self.fids.contains_key(&xattr.fid) {
@@ -827,57 +786,6 @@ impl P9Server {
         self.owners
             .retain(|path, _| !is_same_or_descendant_path(path, removed_path));
     }
-
-    fn set_file_size(&self, path: &NormalizedPath, size: u64) -> Result<(), FsError> {
-        let mut file = self.root.open(
-            path,
-            OpenOptions {
-                write: true,
-                ..OpenOptions::default()
-            },
-        )?;
-        file.set_len(size)
-    }
-
-    fn set_file_times(
-        &self,
-        path: &NormalizedPath,
-        valid: u32,
-        attr: &P9SetAttr,
-    ) -> Result<(), FsError> {
-        let metadata = self.root.metadata(path)?;
-        let now = if requests_system_time(valid) {
-            Some(current_unix_time_ns()?)
-        } else {
-            None
-        };
-        let accessed_time_ns = if valid & P9_SETATTR_ATIME == 0 {
-            metadata.accessed_time_ns()
-        } else if valid & P9_SETATTR_ATIME_NOT_SYSTEM_TIME != 0 {
-            unix_time_ns(attr.atime_seconds, attr.atime_nanoseconds)?
-        } else {
-            now.expect("system access time was requested")
-        };
-        let modified_time_ns = if valid & P9_SETATTR_MTIME == 0 {
-            metadata.modified_time_ns()
-        } else if valid & P9_SETATTR_MTIME_NOT_SYSTEM_TIME != 0 {
-            unix_time_ns(attr.mtime_seconds, attr.mtime_nanoseconds)?
-        } else {
-            now.expect("system modification time was requested")
-        };
-        self.root
-            .set_times(path, accessed_time_ns, modified_time_ns)
-    }
-}
-
-fn validate_setattr_times(valid: u32, attr: &P9SetAttr) -> Result<(), FsError> {
-    if valid & P9_SETATTR_ATIME != 0 && valid & P9_SETATTR_ATIME_NOT_SYSTEM_TIME != 0 {
-        unix_time_ns(attr.atime_seconds, attr.atime_nanoseconds)?;
-    }
-    if valid & P9_SETATTR_MTIME != 0 && valid & P9_SETATTR_MTIME_NOT_SYSTEM_TIME != 0 {
-        unix_time_ns(attr.mtime_seconds, attr.mtime_nanoseconds)?;
-    }
-    Ok(())
 }
 
 fn negotiate_p9_version(requested: &str) -> (&'static str, u32) {
@@ -897,28 +805,6 @@ fn negotiate_p9_version(requested: &str) -> (&'static str, u32) {
     } else {
         (P9_VERSION_9P2000_L, 0)
     }
-}
-
-fn requests_system_time(valid: u32) -> bool {
-    valid & P9_SETATTR_ATIME != 0 && valid & P9_SETATTR_ATIME_NOT_SYSTEM_TIME == 0
-        || valid & P9_SETATTR_MTIME != 0 && valid & P9_SETATTR_MTIME_NOT_SYSTEM_TIME == 0
-}
-
-fn unix_time_ns(seconds: u64, nanoseconds: u64) -> Result<u64, FsError> {
-    if nanoseconds >= NANOSECONDS_PER_SECOND {
-        return Err(FsError::InvalidTime);
-    }
-    seconds
-        .checked_mul(NANOSECONDS_PER_SECOND)
-        .and_then(|base| base.checked_add(nanoseconds))
-        .ok_or(FsError::InvalidTime)
-}
-
-fn current_unix_time_ns() -> Result<u64, FsError> {
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| FsError::InvalidTime)?;
-    u64::try_from(duration.as_nanos()).map_err(|_| FsError::InvalidTime)
 }
 
 fn join_walk_component(
