@@ -804,7 +804,7 @@ impl WasiCtx {
             return Err(Errno::Notcapable);
         }
         let path = wasi_path(path)?;
-        if path.as_str() == "#task" || path.as_str().starts_with("#task/") {
+        if is_rooted_service_path(&path) {
             return Ok(path);
         }
         join_paths(base, &path).map_err(Errno::from)
@@ -888,6 +888,12 @@ impl WasiCtx {
             .set_times(path, accessed_time_ns, modified_time_ns)
             .map_err(Errno::from)
     }
+}
+
+fn is_rooted_service_path(path: &NormalizedPath) -> bool {
+    matches!(path.as_str(), "#task" | "#term")
+        || path.as_str().starts_with("#task/")
+        || path.as_str().starts_with("#term/")
 }
 
 impl Drop for WasiCtx {

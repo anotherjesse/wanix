@@ -43,7 +43,8 @@ Expose terminal-backed task sessions through composition layers:
 - `wanix-rust qjs-shell` runs the bundled QuickJS shell source through the same
   terminal-backed task shape as the direct native shell demo.
 - `serve --wanix-services` exposes a qjs-shell WebSocket route for
-  browser/workbench pseudoterminals using the same terminal-backed task shape.
+  browser/workbench pseudoterminals using the same terminal-backed task shape,
+  with an optional Wanix cwd selected by the client.
 
 Native and served shell loops may stream terminal output during eval, after
 input batches, after ready-IO turns, and while reporting errors. They may pump
@@ -63,8 +64,9 @@ For native shell input:
 
 Terminal resize travels through `#term/<id>/winch` as `columns rows\n`.
 Deterministic fixtures, served shell sessions, native Unix shell sessions, and
-workbench pseudoterminals should all use that same file. Signal-driven resize
-wakeups may be added later without changing the terminal device contract.
+workbench pseudoterminals should all use that same file. WASI cwd remapping
+must not re-root `#term` service paths. Signal-driven resize wakeups may be
+added later without changing the terminal device contract.
 
 For editor-facing lifecycle, workbench pseudoterminals should close from Wanix
 task/session state instead of from frontend-only assumptions. Served shell

@@ -388,10 +388,11 @@ the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
 > Developer aside: `p9-*` and `serve` are the path toward Linux/v86/editor
 > clients browsing the same Wanix namespace. `serve --wanix-services` exports
 > `#task` and `#term` over direct 9P so browser/workbench clients can start qjs
-> tasks, attach terminals, forward resizes, and observe exit state. `rootfs` and
-> `qemu` are the native VM handoff path, not a VM manager yet; QEMU mount tags
-> and local 9P security models stay explicit because they affect the guest boot
-> contract and host filesystem trust boundary.
+> tasks, attach terminals, start served qjs-shell sessions in the requested
+> Wanix cwd, forward resizes through `#term/<id>/winch`, and observe exit state.
+> `rootfs` and `qemu` are the native VM handoff path, not a VM manager yet; QEMU
+> mount tags and local 9P security models stay explicit because they affect the
+> guest boot contract and host filesystem trust boundary.
 
 ## 10. Snapshot And Restore In One Command
 

@@ -399,7 +399,9 @@ fn service_paths_remain_rooted_when_guest_root_maps_to_cwd() {
     let root = fixture(&[
         ("app/main.js", b"from app"),
         ("app/#svc/id", b"from cwd hash path"),
+        ("app/#term/1/winch", b"wrong cwd terminal"),
         ("#task/self/id", b"not the task service"),
+        ("#term/1/winch", b"rooted terminal service"),
     ]);
     task.bind(root, ".", ".", BindOptions::default()).unwrap();
     let mut ctx = WasiCtx::new(
@@ -413,6 +415,9 @@ fn service_paths_remain_rooted_when_guest_root_maps_to_cwd() {
     let service_fd = ctx
         .path_open(WasiFd::ROOT, "#task/self/id", WasiOpenOptions::read())
         .unwrap();
+    let term_fd = ctx
+        .path_open(WasiFd::ROOT, "#term/1/winch", WasiOpenOptions::read())
+        .unwrap();
     let hash_fd = ctx
         .path_open(WasiFd::ROOT, "#svc/id", WasiOpenOptions::read())
         .unwrap();
@@ -421,6 +426,8 @@ fn service_paths_remain_rooted_when_guest_root_maps_to_cwd() {
     assert_eq!(&buf[..app_count], b"from app");
     let service_count = ctx.fd_read(service_fd, &mut buf).unwrap();
     assert_eq!(&buf[..service_count], b"1\n");
+    let term_count = ctx.fd_read(term_fd, &mut buf).unwrap();
+    assert_eq!(&buf[..term_count], b"rooted terminal service");
     let hash_count = ctx.fd_read(hash_fd, &mut buf).unwrap();
 
     assert_eq!(&buf[..hash_count], b"from cwd hash path");

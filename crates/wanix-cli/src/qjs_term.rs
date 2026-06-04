@@ -39,7 +39,15 @@ pub(super) struct QjsShellSession {
 }
 
 impl QjsShellSession {
+    #[cfg(test)]
     pub(super) fn start(root_path: &Path) -> Result<(Self, Vec<u8>), CliError> {
+        Self::start_in_cwd(root_path, &NormalizedPath::new(".")?)
+    }
+
+    pub(super) fn start_in_cwd(
+        root_path: &Path,
+        cwd: &NormalizedPath,
+    ) -> Result<(Self, Vec<u8>), CliError> {
         let runner = quickjs_runner()?;
         let table = TaskTable::new();
         table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(Arc::clone(&runner))))?;
@@ -71,7 +79,7 @@ impl QjsShellSession {
             QJS_SHELL_SCRIPT_SENTINEL,
             &[],
             &["WANIX_QJS_SHELL_RAW=1".to_owned()],
-            &NormalizedPath::new(".")?,
+            cwd,
         )?;
 
         let mut runtime = runner.create_task_runtime(&task)?;
@@ -1450,6 +1458,7 @@ mod tests {
         PostEvalFeed, QJS_SHELL_SCRIPT_SENTINEL, QjsShellSession, TermResize,
         parse_qjs_shell_command, parse_qjs_term_command,
     };
+    use wanix_fs::NormalizedPath;
 
     #[test]
     fn parse_qjs_term_collects_pre_script_post_eval_feeds() {
@@ -1632,6 +1641,37 @@ mod tests {
 
         let output = session.input(b"exit\n").unwrap();
         assert_eq!(output, b"exit\r\nbye\r\n");
+        assert!(session.is_finished());
+    }
+
+    #[test]
+    fn qjs_shell_session_can_start_in_served_cwd() {
+        let root = temp_dir("wanix-qjs-shell-session-cwd");
+        fs::create_dir(root.join("app")).unwrap();
+        let cwd = NormalizedPath::new("app").unwrap();
+        let (mut session, initial_output) = QjsShellSession::start_in_cwd(&root, &cwd).unwrap();
+
+        assert_eq!(initial_output, b"shell task: 1\r\n$ ");
+        assert!(session.resize(100, 40).unwrap().is_empty());
+        let output = session.input(b"pwd\nsize\nexit\n").unwrap();
+
+        assert_eq!(
+            output,
+            b"pwd\r\napp\r\n$ size\r\nsize 100 40\r\n$ exit\r\nbye\r\n"
+        );
+        assert!(session.is_finished());
+    }
+
+    #[test]
+    fn qjs_shell_session_reports_served_resize() {
+        let root = temp_dir("wanix-qjs-shell-session-resize");
+        let (mut session, initial_output) = QjsShellSession::start(&root).unwrap();
+
+        assert_eq!(initial_output, b"shell task: 1\r\n$ ");
+        assert!(session.resize(100, 40).unwrap().is_empty());
+        let output = session.input(b"size\nexit\n").unwrap();
+
+        assert_eq!(output, b"size\r\nsize 100 40\r\n$ exit\r\nbye\r\n");
         assert!(session.is_finished());
     }
 

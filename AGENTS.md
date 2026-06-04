@@ -99,6 +99,10 @@ bundled shell's `size` command.
 `qjs-term --resize-after-eval COLSxROWS` sends a deterministic post-eval
 resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
 can observe terminal resize broadcasts through live Wanix-backed fd readiness.
+Wanix-backed WASI keeps `#task` and `#term` rooted at the service namespace
+when a task cwd remaps the ordinary guest root, so shell sessions that start in
+a served subdirectory still read resize broadcasts from the real terminal
+service.
 
 The 9P-facing path now connects native stdio/TCP/WebSocket exports, Rust
 `serve`, browser filesystem smoke pages, workbench experiments, direct-v86, and
@@ -167,10 +171,14 @@ service files, keep `#term/...` streams open, and forward workbench
 pseudoterminal resizes through `#term/<id>/winch`. This proves service
 reachability over the workbench path. The same `--wanix-services` mode also exposes
 `/.well-known/qjs-shell`, a Rust-owned terminal/session WebSocket route that
-starts the bundled QuickJS shell as a Wanix task, pumps guest ready-IO while
-browser terminal input arrives, returns terminal output as binary WebSocket
-frames, and reports exit as a lifecycle text frame consumed by the workbench
-pseudoterminal.
+starts the bundled QuickJS shell as a Wanix task, accepts a client-selected
+Wanix cwd, forwards resize frames through `#term/<id>/winch`, pumps guest
+ready-IO while browser terminal input arrives, returns terminal output as
+binary WebSocket frames, and reports exit as a lifecycle text frame consumed by
+the workbench pseudoterminal. The workbench qjs-shell pseudoterminal appends
+the configured cwd to that route and queues the latest dimensions until the
+socket opens, so initial shell commands see the requested Wanix cwd and
+terminal size.
 When launched with `--bundle workbench-fs9p`, `/?bundle=workbench-fs9p`
 returns a generated filesystem-only VS Code web workbench launcher. The page
 loads Code OSS and the `workbench/` extension package from the served root,

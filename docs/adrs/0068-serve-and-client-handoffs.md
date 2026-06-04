@@ -39,7 +39,9 @@ local listener:
   fds, and start it through `#task`.
 - In service mode, `/.well-known/qjs-shell` exposes a terminal/session
   WebSocket route for browser/workbench pseudoterminals to drive a
-  terminal-backed QuickJS task.
+  terminal-backed QuickJS task. The route accepts a Wanix `cwd` query value and
+  resize control frames so editor terminals can start in the requested Wanix
+  cwd and deliver dimensions through `#term/<id>/winch`.
 
 Generated bundle pages and browser smokes should consume the discovery document
 rather than hard-coding route assumptions.

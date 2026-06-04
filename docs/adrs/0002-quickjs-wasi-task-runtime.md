@@ -35,8 +35,8 @@ is backed by Wanix namespaces, task fds, explicit preopens, and Wanix filesystem
 traits rather than by host WASI filesystem semantics. The boundary includes:
 
 - root and cwd handling through task namespaces;
-- service paths such as `#task` staying rooted at the service namespace even
-  when the ordinary root preopen maps to a task cwd;
+- service paths such as `#task` and `#term` staying rooted at the service
+  namespace even when the ordinary root preopen maps to a task cwd;
 - fd reads, writes, seek/tell, fd metadata, fd flags, and fd close behavior;
 - rights projection that lets broad libc open requests become the Wanix-enforced
   rights reported on the opened fd;

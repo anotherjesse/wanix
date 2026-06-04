@@ -180,6 +180,15 @@ function createQjsShellTerminal(config: Config) {
 	let opened = false;
 	let closed = false;
 	const pending: Uint8Array[] = [];
+	let pendingResize: vscode.TerminalDimensions | undefined;
+	const qjsShellUrl = () => {
+		const url = new URL(config.qjsShellUrl || "");
+		const cwd = config.shell?.wd;
+		if (cwd && cwd !== ".") {
+			url.searchParams.set("cwd", cwd);
+		}
+		return url.toString();
+	};
 	const finish = (code?: number) => {
 		if (closed) {
 			return;
@@ -197,14 +206,34 @@ function createQjsShellTerminal(config: Config) {
 			pending.push(bytes);
 		}
 	};
+	const sendResize = (dimensions: vscode.TerminalDimensions) => {
+		if (dimensions.columns <= 0 || dimensions.rows <= 0 || closed) {
+			return;
+		}
+		const payload = JSON.stringify({
+			type: "resize",
+			columns: dimensions.columns,
+			rows: dimensions.rows
+		});
+		if (opened && socket?.readyState === WebSocket.OPEN) {
+			socket.send(payload);
+		} else {
+			pendingResize = dimensions;
+		}
+	};
 	return {
 		onDidWrite: writeEmitter.event,
 		onDidClose: closeEmitter.event,
 		open: () => {
-			socket = new WebSocket(config.qjsShellUrl || "");
+			socket = new WebSocket(qjsShellUrl());
 			socket.binaryType = "arraybuffer";
 			socket.onopen = () => {
 				opened = true;
+				if (pendingResize) {
+					const resize = pendingResize;
+					pendingResize = undefined;
+					sendResize(resize);
+				}
 				while (pending.length > 0) {
 					socket?.send(pending.shift()!);
 				}
@@ -246,13 +275,7 @@ function createQjsShellTerminal(config: Config) {
 			sendInput(enc.encode(data));
 		},
 		setDimensions: (dimensions: vscode.TerminalDimensions) => {
-			if (!closed && socket?.readyState === WebSocket.OPEN) {
-				socket.send(JSON.stringify({
-					type: "resize",
-					columns: dimensions.columns,
-					rows: dimensions.rows
-				}));
-			}
+			sendResize(dimensions);
 		}
 	};
 }
