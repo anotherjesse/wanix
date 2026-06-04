@@ -4,13 +4,23 @@
 //! service shape: reading `new` allocates a terminal resource, and each
 //! resource exposes `id`, `ctl`, `data`, `program`, and `winch` files.
 
-use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use wanix_fs::{
     DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
 };
+
+mod files;
+mod path;
+mod state;
+
+use files::{
+    BytesFile, ControlFile, NewTermFile, TermFile, WinchFile, access, require_file_open,
+    require_read_only,
+};
+use path::{TermPath, parse_path};
+use state::{DeviceState, TermResource, TermSide};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix terminal device filesystem";
@@ -35,38 +45,6 @@ impl fmt::Debug for TermDevice {
                 .finish(),
         }
     }
-}
-
-#[derive(Debug, Default)]
-struct DeviceState {
-    next_id: u64,
-    resources: BTreeMap<String, Arc<TermResource>>,
-}
-
-#[derive(Debug)]
-struct TermResource {
-    id: String,
-    io: Mutex<TermIo>,
-    winch: Mutex<WinchState>,
-    closed: Mutex<bool>,
-}
-
-#[derive(Debug, Default)]
-struct TermIo {
-    data_to_program: VecDeque<u8>,
-    program_to_data: VecDeque<u8>,
-}
-
-#[derive(Debug, Default)]
-struct WinchState {
-    next_subscriber: u64,
-    subscribers: BTreeMap<u64, VecDeque<u8>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TermSide {
-    Data,
-    Program,
 }
 
 impl Default for TermDevice {
@@ -96,12 +74,7 @@ impl TermDevice {
             .map_err(|_| FsError::Other("term device lock poisoned".to_owned()))?;
         state.next_id = state.next_id.saturating_add(1);
         let id = state.next_id.to_string();
-        let resource = Arc::new(TermResource {
-            id: id.clone(),
-            io: Mutex::new(TermIo::default()),
-            winch: Mutex::new(WinchState::default()),
-            closed: Mutex::new(false),
-        });
+        let resource = Arc::new(TermResource::new(id.clone()));
         state.resources.insert(id.clone(), resource);
         Ok(id)
     }
@@ -132,29 +105,6 @@ impl TermDevice {
             .lock()
             .map_err(|_| FsError::Other("term device lock poisoned".to_owned()))?;
         state.resources.get(id).cloned().ok_or(FsError::NotFound)
-    }
-}
-
-impl TermResource {
-    fn close(&self) -> FsResult<()> {
-        let mut closed = self
-            .closed
-            .lock()
-            .map_err(|_| FsError::Other("term resource close lock poisoned".to_owned()))?;
-        *closed = true;
-        Ok(())
-    }
-
-    fn ensure_open(&self) -> FsResult<()> {
-        let closed = self
-            .closed
-            .lock()
-            .map_err(|_| FsError::Other("term resource close lock poisoned".to_owned()))?;
-        if *closed {
-            Err(FsError::InvalidFd)
-        } else {
-            Ok(())
-        }
     }
 }
 
@@ -254,398 +204,12 @@ impl FileSystem for TermDevice {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TermPath<'a> {
-    Root,
-    New,
-    Resource(&'a str),
-    Id(&'a str),
-    Ctl(&'a str),
-    Data(&'a str),
-    Program(&'a str),
-    Winch(&'a str),
-}
-
-fn parse_path(path: &NormalizedPath) -> FsResult<TermPath<'_>> {
-    if path.as_str() == "." {
-        return Ok(TermPath::Root);
-    }
-    let parts = path.as_str().split('/').collect::<Vec<_>>();
-    match parts.as_slice() {
-        ["new"] => Ok(TermPath::New),
-        [id] => Ok(TermPath::Resource(id)),
-        [id, "id"] => Ok(TermPath::Id(id)),
-        [id, "ctl"] => Ok(TermPath::Ctl(id)),
-        [id, "data"] => Ok(TermPath::Data(id)),
-        [id, "program"] => Ok(TermPath::Program(id)),
-        [id, "winch"] => Ok(TermPath::Winch(id)),
-        _ => Err(FsError::NotFound),
-    }
-}
-
-fn require_read_only(options: OpenOptions) -> FsResult<()> {
-    if !options.read {
-        return Err(FsError::PermissionDenied);
-    }
-    if options.write || options.create || options.truncate {
-        return Err(FsError::PermissionDenied);
-    }
-    Ok(())
-}
-
-fn require_file_open(options: OpenOptions) -> FsResult<()> {
-    if !options.read && !options.write {
-        return Err(FsError::PermissionDenied);
-    }
-    if options.create || options.truncate {
-        return Err(FsError::PermissionDenied);
-    }
-    Ok(())
-}
-
-fn access(options: OpenOptions) -> FsResult<FileAccess> {
-    if !options.read && !options.write {
-        return Err(FsError::PermissionDenied);
-    }
-    if options.create {
-        return Err(FsError::PermissionDenied);
-    }
-    Ok(FileAccess {
-        read: options.read,
-        write: options.write,
-    })
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FileAccess {
-    read: bool,
-    write: bool,
-}
-
-impl FileAccess {
-    fn can_read(self) -> FsResult<()> {
-        if self.read {
-            Ok(())
-        } else {
-            Err(FsError::PermissionDenied)
-        }
-    }
-
-    fn can_write(self) -> FsResult<()> {
-        if self.write {
-            Ok(())
-        } else {
-            Err(FsError::PermissionDenied)
-        }
-    }
-}
-
 fn directory_metadata() -> Metadata {
     Metadata::new(FileType::Directory, 2, 0o555)
 }
 
 fn file_metadata(len: u64, mode: u32) -> Metadata {
     Metadata::new(FileType::File, len, mode)
-}
-
-#[derive(Debug)]
-struct NewTermFile {
-    device: TermDevice,
-    bytes: Option<Vec<u8>>,
-    offset: usize,
-}
-
-impl NewTermFile {
-    fn new(device: TermDevice) -> Self {
-        Self {
-            device,
-            bytes: None,
-            offset: 0,
-        }
-    }
-}
-
-impl File for NewTermFile {
-    fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
-        if self.bytes.is_none() {
-            let id = self.device.alloc()?;
-            self.bytes = Some(format!("{id}\n").into_bytes());
-        }
-        read_from_slice(
-            self.bytes
-                .as_ref()
-                .expect("new term bytes are initialized before reading"),
-            &mut self.offset,
-            buf,
-        )
-    }
-
-    fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o555))
-    }
-}
-
-#[derive(Debug)]
-struct BytesFile {
-    bytes: Vec<u8>,
-    offset: usize,
-}
-
-impl BytesFile {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes, offset: 0 }
-    }
-}
-
-impl File for BytesFile {
-    fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
-        read_from_slice(&self.bytes, &mut self.offset, buf)
-    }
-
-    fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(self.bytes.len() as u64, 0o555))
-    }
-}
-
-#[derive(Debug)]
-struct ControlFile {
-    device: TermDevice,
-    id: String,
-    access: FileAccess,
-    data: Vec<u8>,
-}
-
-impl ControlFile {
-    fn new(device: TermDevice, id: String, access: FileAccess) -> Self {
-        Self {
-            device,
-            id,
-            access,
-            data: Vec::new(),
-        }
-    }
-}
-
-impl File for ControlFile {
-    fn read(&mut self, _buf: &mut [u8]) -> FsResult<usize> {
-        self.access.can_read()?;
-        Ok(0)
-    }
-
-    fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
-        self.access.can_write()?;
-        self.data.extend_from_slice(buf);
-        let command = String::from_utf8_lossy(&self.data).trim().to_owned();
-        if command.is_empty() {
-            return Ok(buf.len());
-        }
-        if "close".starts_with(command.as_str()) {
-            if command == "close" {
-                self.device.close(&self.id)?;
-                self.data.clear();
-            }
-            return Ok(buf.len());
-        }
-        Err(FsError::NotSupported)
-    }
-
-    fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o755))
-    }
-}
-
-fn read_from_slice(bytes: &[u8], offset: &mut usize, buf: &mut [u8]) -> FsResult<usize> {
-    let remaining = bytes.len().saturating_sub(*offset);
-    let len = remaining.min(buf.len());
-    buf[..len].copy_from_slice(&bytes[*offset..*offset + len]);
-    *offset += len;
-    Ok(len)
-}
-
-#[derive(Debug)]
-struct TermFile {
-    resource: Arc<TermResource>,
-    side: TermSide,
-    prev_written: Option<u8>,
-}
-
-impl TermFile {
-    fn new(resource: Arc<TermResource>, side: TermSide) -> Self {
-        Self {
-            resource,
-            side,
-            prev_written: None,
-        }
-    }
-}
-
-impl File for TermFile {
-    fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
-        self.resource.ensure_open()?;
-        let mut io = self
-            .resource
-            .io
-            .lock()
-            .map_err(|_| FsError::Other("term resource lock poisoned".to_owned()))?;
-        let queue = match self.side {
-            TermSide::Data => &mut io.program_to_data,
-            TermSide::Program => &mut io.data_to_program,
-        };
-        read_from_queue(queue, buf)
-    }
-
-    fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
-        self.resource.ensure_open()?;
-        let mut io = self
-            .resource
-            .io
-            .lock()
-            .map_err(|_| FsError::Other("term resource lock poisoned".to_owned()))?;
-        match self.side {
-            TermSide::Data => io.data_to_program.extend(buf),
-            TermSide::Program => {
-                for byte in program_output_bytes(buf, &mut self.prev_written) {
-                    io.program_to_data.push_back(byte);
-                }
-            }
-        }
-        Ok(buf.len())
-    }
-
-    fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o666))
-    }
-
-    fn read_ready(&self) -> FsResult<bool> {
-        self.resource.ensure_open()?;
-        let io = self
-            .resource
-            .io
-            .lock()
-            .map_err(|_| FsError::Other("term resource lock poisoned".to_owned()))?;
-        let queue = match self.side {
-            TermSide::Data => &io.program_to_data,
-            TermSide::Program => &io.data_to_program,
-        };
-        Ok(!queue.is_empty())
-    }
-}
-
-fn program_output_bytes(buf: &[u8], prev_written: &mut Option<u8>) -> Vec<u8> {
-    let mut out = Vec::with_capacity(buf.len() + buf.len() / 16);
-    for &byte in buf {
-        if byte == b'\n' && *prev_written != Some(b'\r') {
-            out.push(b'\r');
-        }
-        out.push(byte);
-        *prev_written = Some(byte);
-    }
-    out
-}
-
-fn read_from_queue(queue: &mut VecDeque<u8>, buf: &mut [u8]) -> FsResult<usize> {
-    let len = queue.len().min(buf.len());
-    for slot in buf.iter_mut().take(len) {
-        *slot = queue
-            .pop_front()
-            .expect("queue contains at least len bytes");
-    }
-    Ok(len)
-}
-
-#[derive(Debug)]
-struct WinchFile {
-    resource: Arc<TermResource>,
-    subscriber: Option<u64>,
-    writable: bool,
-}
-
-impl WinchFile {
-    fn new(resource: Arc<TermResource>, readable: bool, writable: bool) -> FsResult<Self> {
-        let subscriber = if readable {
-            let mut winch = resource
-                .winch
-                .lock()
-                .map_err(|_| FsError::Other("term winch lock poisoned".to_owned()))?;
-            winch.next_subscriber = winch.next_subscriber.saturating_add(1);
-            let subscriber = winch.next_subscriber;
-            winch.subscribers.insert(subscriber, VecDeque::new());
-            Some(subscriber)
-        } else {
-            None
-        };
-        Ok(Self {
-            resource,
-            subscriber,
-            writable,
-        })
-    }
-}
-
-impl File for WinchFile {
-    fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
-        self.resource.ensure_open()?;
-        let Some(subscriber) = self.subscriber else {
-            return Err(FsError::PermissionDenied);
-        };
-        let mut winch = self
-            .resource
-            .winch
-            .lock()
-            .map_err(|_| FsError::Other("term winch lock poisoned".to_owned()))?;
-        let queue = winch
-            .subscribers
-            .get_mut(&subscriber)
-            .ok_or(FsError::InvalidFd)?;
-        read_from_queue(queue, buf)
-    }
-
-    fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
-        if !self.writable {
-            return Err(FsError::PermissionDenied);
-        }
-        self.resource.ensure_open()?;
-        let mut winch = self
-            .resource
-            .winch
-            .lock()
-            .map_err(|_| FsError::Other("term winch lock poisoned".to_owned()))?;
-        for queue in winch.subscribers.values_mut() {
-            queue.extend(buf);
-        }
-        Ok(buf.len())
-    }
-
-    fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o666))
-    }
-
-    fn read_ready(&self) -> FsResult<bool> {
-        self.resource.ensure_open()?;
-        let Some(subscriber) = self.subscriber else {
-            return Ok(false);
-        };
-        let winch = self
-            .resource
-            .winch
-            .lock()
-            .map_err(|_| FsError::Other("term winch lock poisoned".to_owned()))?;
-        let queue = winch
-            .subscribers
-            .get(&subscriber)
-            .ok_or(FsError::InvalidFd)?;
-        Ok(!queue.is_empty())
-    }
-}
-
-impl Drop for WinchFile {
-    fn drop(&mut self) {
-        if let Some(subscriber) = self.subscriber
-            && let Ok(mut winch) = self.resource.winch.lock()
-        {
-            winch.subscribers.remove(&subscriber);
-        }
-    }
 }
 
 #[cfg(test)]

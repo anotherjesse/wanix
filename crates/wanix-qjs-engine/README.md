@@ -517,9 +517,7 @@ QUICKJS_WASM=/path/to/quickjs.wasm cargo test
 Run the repository gate before committing changes:
 
 ```sh
-cargo fmt --package wanix-9p --package wanix-cli --package wanix-fs --package wanix-protocol --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-term --package wanix-vfs --package wanix-wasi --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --locked
+just check
 ```
 
 The crate-local `scripts/check.sh` is retained for focused engine work, but the

@@ -117,9 +117,12 @@ explicitly unimplemented trust-boundary work.
 
 ## Code Quality Guardrails
 
-Prefer modules under 250-350 non-test lines. Split responsibility-heavy modules
-before they become difficult to review. Do not hold a namespace or filesystem
-lock while calling into another filesystem.
+Modules should stay under 250-350 non-test lines. A module over 250 lines needs
+a clear reason to keep growing; a module over 350 lines should be split before
+new feature work lands there. Existing over-limit production modules are tracked
+in `tools/module-line-baseline.txt`; they may shrink, but they must not grow
+without an explicit cleanup decision. Do not hold a namespace or filesystem lock
+while calling into another filesystem.
 
 Use explicit Rust types for public contracts. Avoid public raw `i32` flags,
 file descriptors, rights, or modes where newtypes/builders make the trust
@@ -128,9 +131,7 @@ boundary clearer.
 Required checks before a cycle commit:
 
 ```sh
-cargo fmt --package wanix-9p --package wanix-cli --package wanix-fs --package wanix-protocol --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-term --package wanix-vfs --package wanix-wasi --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --locked
+just check
 ```
 
 ## ADR Index
@@ -206,8 +207,11 @@ more feature work.
 - Current `wanix-qjs` and `wanix-cli` tests cache the bundled QuickJS runner per
   test process; keep production runner caching out of scope unless it becomes an
   intentional runtime decision.
-- Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
-  broad new behavior.
+- Use `just module-lines` during cleanup passes. Highest-leverage split targets
+  are `wanix-cli/src/serve.rs`, `wanix-cli/src/qjs_term.rs`,
+  `wanix-cli/src/lib.rs`, `wanix-qjs-engine/src/host/fs.rs`,
+  `wanix-9p/src/lib.rs`, and `wanix-wasi/src/ctx.rs`; keep reducing the
+  baseline before adding broad behavior in those areas.
 - Continue `qjs-shell` interactivity with signal-driven resize wakeups,
   persistent foreground child-task terminal ownership, cancellation, command
   execution beyond the current built-ins and synchronous `qjs` launcher with

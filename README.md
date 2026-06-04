@@ -45,7 +45,7 @@ cargo run --locked --package wanix-cli -- qjs examples/qjs-demo.js
 cargo run --locked --package wanix-cli -- \
   qjs-term --stdin "hello terminal" examples/qjs-term-demo.js
 printf 'write note.txt hello\nls\ncat note.txt\nexit\n' | cargo run --locked --package wanix-cli -- qjs-shell
-cargo test --workspace --locked
+just check
 ```
 
 The Rust workspace crates and active ADR index are documented in
