@@ -6,18 +6,25 @@ import {
 	P9_RLERROR,
 	P9_TATTACH,
 	P9_TCLUNK,
+	P9_TGETATTR,
 	P9_TLOPEN,
 	P9_TREAD,
 	P9_TREADDIR,
 	P9_TUNLINKAT,
 	P9_TVERSION,
 	P9_TWALK,
+	P9_TWALKGETATTR,
 	P9_TWRITE,
 	P9_VERSION,
+	P9_VERSION_GOOGLE_2,
 	P9Frame,
+	P9RemoteAttr,
 	Reader,
 	Writer,
 	frame,
+	readAttr,
+	readVersion,
+	readWalkGetAttr,
 } from './p9-wire.js';
 
 export type P9DirEntry = {
@@ -41,6 +48,7 @@ export class P9Session {
 	private nextTag = 1;
 	private pending = new Map<number, PendingRpc>();
 	private receiveBuffer = new Uint8Array();
+	private negotiatedVersion = P9_VERSION;
 
 	logger: (...args: unknown[]) => void = () => null;
 
@@ -51,14 +59,14 @@ export class P9Session {
 		this.socket.addEventListener("error", () => this.rejectAll("9P websocket failed"));
 	}
 
-	static async connect(websocketUrl: string): Promise<P9Session> {
+	static async connect(websocketUrl: string, preferredVersion = P9_VERSION_GOOGLE_2): Promise<P9Session> {
 		const socket = new WebSocket(websocketUrl);
 		const session = new P9Session(socket);
 		await new Promise<void>((resolve, reject) => {
 			socket.addEventListener("open", () => resolve(), { once: true });
 			socket.addEventListener("error", () => reject(new Error("9P websocket failed to open")), { once: true });
 		});
-		await session.version();
+		await session.version(preferredVersion);
 		await session.attach();
 		return session;
 	}
@@ -79,6 +87,43 @@ export class P9Session {
 			throw new Error(`9P walk resolved ${qids} of ${parts.length} path parts`);
 		}
 		return fid;
+	}
+
+	async walkGetAttrPath(name: string): Promise<{ fid: number; attr: P9RemoteAttr }> {
+		if (!this.supportsWalkGetAttr()) {
+			const fid = await this.walkPath(name);
+			try {
+				return { fid, attr: await this.getAttr(fid) };
+			} catch (error) {
+				await this.clunkQuietly(fid);
+				throw error;
+			}
+		}
+
+		const fid = this.nextFid++;
+		const parts = splitPath(name);
+		const payload = new Writer();
+		payload.u32(this.rootFid);
+		payload.u32(fid);
+		payload.u16(parts.length);
+		for (const part of parts) {
+			payload.string(part);
+		}
+		const response = await this.rpc(P9_TWALKGETATTR, payload.done());
+		const walked = readWalkGetAttr(response.payload);
+		if (walked.qids.length !== parts.length) {
+			await this.clunkQuietly(fid);
+			throw new Error(`9P walkgetattr resolved ${walked.qids.length} of ${parts.length} path parts`);
+		}
+		return { fid, attr: walked.attr };
+	}
+
+	async getAttr(fid: number): Promise<P9RemoteAttr> {
+		const payload = new Writer();
+		payload.u32(fid);
+		payload.u64(0xffff_ffff_ffff_ffffn);
+		const response = await this.rpc(P9_TGETATTR, payload.done());
+		return readAttr(response.payload);
 	}
 
 	async open(fid: number, flags: number): Promise<void> {
@@ -165,11 +210,15 @@ export class P9Session {
 		});
 	}
 
-	private async version(): Promise<void> {
+	private async version(preferredVersion: string): Promise<void> {
 		const payload = new Writer();
 		payload.u32(131072);
-		payload.string(P9_VERSION);
-		await this.rpc(P9_TVERSION, payload.done());
+		payload.string(preferredVersion);
+		const response = await this.rpc(P9_TVERSION, payload.done());
+		this.negotiatedVersion = readVersion(response.payload).version;
+		if (this.negotiatedVersion === "unknown") {
+			throw new Error(`9P server rejected protocol ${preferredVersion}`);
+		}
 	}
 
 	private async attach(): Promise<void> {
@@ -186,6 +235,17 @@ export class P9Session {
 		const payload = new Writer();
 		payload.u32(fid);
 		await this.rpc(P9_TCLUNK, payload.done());
+	}
+
+	private supportsWalkGetAttr(): boolean {
+		if (this.negotiatedVersion === P9_VERSION_GOOGLE_2) {
+			return true;
+		}
+		const prefix = "9P2000.L.Google.";
+		if (!this.negotiatedVersion.startsWith(prefix)) {
+			return false;
+		}
+		return Number(this.negotiatedVersion.slice(prefix.length)) >= 2;
 	}
 
 	private handleMessage(event: MessageEvent): void {

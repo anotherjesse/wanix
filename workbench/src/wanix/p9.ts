@@ -5,12 +5,11 @@ import {
 	O_RDONLY,
 	O_RDWR,
 	O_TRUNC,
-	P9_TGETATTR,
 	P9_TLCREATE,
 	P9_TMKDIR,
 	P9_TRENAMEAT,
+	P9_VERSION_GOOGLE_2,
 	Writer,
-	readAttr,
 } from './p9-wire.js';
 import { P9Session } from './p9-session.js';
 import { baseName, baseNameOrRoot, joinPath, normalizePath, parentPath, splitPath } from './p9-path.js';
@@ -68,11 +67,11 @@ export class WanixP9Handle {
 		if (!websocketUrl) {
 			throw new Error("Wanix 9P route did not advertise a websocket");
 		}
-		return await WanixP9Handle.connect(websocketUrl);
+		return await WanixP9Handle.connect(websocketUrl, preferredProtocol(route));
 	}
 
-	static async connect(websocketUrl: string): Promise<WanixP9Handle> {
-		return new WanixP9Handle(await P9Session.connect(websocketUrl));
+	static async connect(websocketUrl: string, preferredVersion?: string): Promise<WanixP9Handle> {
+		return new WanixP9Handle(await P9Session.connect(websocketUrl, preferredVersion));
 	}
 
 	async readDir(name: string): Promise<string[]> {
@@ -182,13 +181,8 @@ export class WanixP9Handle {
 
 	async stat(name: string): Promise<RemoteEntry> {
 		this.logger(`stat ${name}`);
-		const fid = await this.session.walkPath(name);
+		const { fid, attr } = await this.session.walkGetAttrPath(name);
 		try {
-			const payload = new Writer();
-			payload.u32(fid);
-			payload.u64(0xffff_ffff_ffff_ffffn);
-			const response = await this.session.rpc(P9_TGETATTR, payload.done());
-			const attr = readAttr(response.payload);
 			return {
 				IsDir: attr.isDir,
 				Name: baseNameOrRoot(name),
@@ -376,6 +370,13 @@ export class WanixP9Handle {
 		});
 	}
 
+}
+
+function preferredProtocol(route: WanixP9Route): string | undefined {
+	if (route.supportedProtocols?.includes(P9_VERSION_GOOGLE_2)) {
+		return P9_VERSION_GOOGLE_2;
+	}
+	return route.protocol;
 }
 
 function isLiveServiceStream(name: string): boolean {

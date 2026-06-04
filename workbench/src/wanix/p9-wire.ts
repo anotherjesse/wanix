@@ -7,6 +7,7 @@ export type P9Frame = {
 export const P9_TVERSION = 100;
 export const P9_TATTACH = 104;
 export const P9_TWALK = 110;
+export const P9_TWALKGETATTR = 126;
 export const P9_TGETATTR = 24;
 export const P9_TLOPEN = 12;
 export const P9_TLCREATE = 14;
@@ -20,6 +21,7 @@ export const P9_TUNLINKAT = 76;
 export const P9_RLERROR = 7;
 export const P9_NOFID = 0xffff_ffff;
 export const P9_VERSION = "9P2000.L";
+export const P9_VERSION_GOOGLE_2 = "9P2000.L.Google.2";
 
 export const DT_DIR = 4;
 export const AT_REMOVEDIR = 0x200;
@@ -32,6 +34,24 @@ export const MODE_DIR = 0o040755;
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o040000;
 
+export type P9Qid = {
+	type: number;
+	version: number;
+	path: bigint;
+};
+
+export type P9RemoteAttr = {
+	isDir: boolean;
+	size: number;
+	mtimeMs: number;
+};
+
+type P9AttrBody = {
+	mode: number;
+	size: number;
+	mtimeMs: number;
+};
+
 const utf8 = new TextEncoder();
 const text = new TextDecoder();
 
@@ -39,6 +59,7 @@ export const MESSAGE_NAMES = new Map<number, string>([
 	[P9_TVERSION, "Tversion"],
 	[P9_TATTACH, "Tattach"],
 	[P9_TWALK, "Twalk"],
+	[P9_TWALKGETATTR, "Twalkgetattr"],
 	[P9_TGETATTR, "Tgetattr"],
 	[P9_TLOPEN, "Tlopen"],
 	[P9_TLCREATE, "Tlcreate"],
@@ -120,7 +141,7 @@ export class Reader {
 		return value;
 	}
 
-	qid(): { type: number; version: number; path: bigint } {
+	qid(): P9Qid {
 		return {
 			type: this.u8(),
 			version: this.u32(),
@@ -156,10 +177,37 @@ export function frame(type: number, tag: number, payload: Uint8Array): ArrayBuff
 	return buffer;
 }
 
-export function readAttr(payload: Uint8Array): { isDir: boolean; size: number; mtimeMs: number } {
+export function readVersion(payload: Uint8Array): { msize: number; version: string } {
+	const reader = new Reader(payload);
+	return {
+		msize: reader.u32(),
+		version: reader.string(),
+	};
+}
+
+export function readAttr(payload: Uint8Array): P9RemoteAttr {
 	const reader = new Reader(payload);
 	reader.u64();
 	const qid = reader.qid();
+	return remoteAttr(readAttrBody(reader), qid);
+}
+
+export function readWalkGetAttr(payload: Uint8Array): { attr: P9RemoteAttr; qids: P9Qid[] } {
+	const reader = new Reader(payload);
+	reader.u64();
+	const body = readAttrBody(reader);
+	const qidCount = reader.u16();
+	const qids: P9Qid[] = [];
+	for (let i = 0; i < qidCount; i += 1) {
+		qids.push(reader.qid());
+	}
+	return {
+		attr: remoteAttr(body, qids[qids.length - 1]),
+		qids,
+	};
+}
+
+function readAttrBody(reader: Reader): P9AttrBody {
 	const mode = reader.u32();
 	reader.u32();
 	reader.u32();
@@ -172,9 +220,23 @@ export function readAttr(payload: Uint8Array): { isDir: boolean; size: number; m
 	reader.u64();
 	const mtimeSeconds = Number(reader.u64());
 	const mtimeNanoseconds = Number(reader.u64());
+	reader.u64();
+	reader.u64();
+	reader.u64();
+	reader.u64();
+	reader.u64();
+	reader.u64();
 	return {
-		isDir: (mode & S_IFMT) === S_IFDIR || (qid.type & 0x80) !== 0,
+		mode,
 		size,
 		mtimeMs: (mtimeSeconds * 1000) + Math.floor(mtimeNanoseconds / 1_000_000),
+	};
+}
+
+function remoteAttr(body: P9AttrBody, qid: P9Qid | undefined): P9RemoteAttr {
+	return {
+		isDir: (body.mode & S_IFMT) === S_IFDIR || ((qid?.type ?? 0) & 0x80) !== 0,
+		size: body.size,
+		mtimeMs: body.mtimeMs,
 	};
 }

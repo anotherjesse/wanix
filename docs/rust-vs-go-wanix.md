@@ -499,13 +499,14 @@ state through service files.
 
 The Rust-served workbench path now uses that contract. The `workbench-fs9p`
 bundle launches VS Code web against a `wanix:/` workspace, passes the discovered
-direct-9P route into the extension, populates Explorer through that backend, and
-can run the current JavaScript file as a real Wanix `qjs` task by driving
-`#task` and `#term` over 9P. The served qjs-shell WebSocket route gives the
-workbench a terminal/session path backed by the same native task and terminal
-model; it can start in the configured Wanix cwd and deliver terminal resize
-frames through `#term/<id>/winch`. Direct workbench terminals dispose of owned
-terminal resources through `#term/<id>/ctl`.
+direct-9P route into the extension, negotiates Google.2 `walkgetattr` when the
+server advertises it, populates Explorer through that backend, and can run the
+current JavaScript file as a real Wanix `qjs` task by driving `#task` and
+`#term` over 9P. The served qjs-shell WebSocket route gives the workbench a
+terminal/session path backed by the same native task and terminal model; it can
+start in the configured Wanix cwd and deliver terminal resize frames through
+`#term/<id>/winch`. Direct workbench terminals dispose of owned terminal
+resources through `#term/<id>/ctl`.
 
 With `--bundle direct-v86`, Rust `serve` generates a browser page that fetches
 the discovery document and configures v86 `filesystem.proxy_url` to the Rust 9P
