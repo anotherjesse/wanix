@@ -114,6 +114,9 @@ serve [DIR] [--listen HOST:PORT] [--bundle NAME]` serves static files with
 COOP/COEP/CORS headers and reuses the binary WebSocket 9P handler on the same
 listener, including the named `/.well-known/export9p` route, which is the first
 Rust-native serve shape for browser/v86/VS Code experiments.
+Normal `serve` handles HTTP and direct 9P WebSocket connections concurrently so
+long-lived mounted clients do not block discovery or static assets; `--once`
+remains a deterministic single-connection mode for tests and scripted demos.
 `/.well-known/wanix.json` describes the direct binary 9P WebSocket route, the
 optional bundle hint, and the explicitly unimplemented Ethernet route so
 browser/v86/VS Code clients can discover the current Rust serve contract.
@@ -411,6 +414,9 @@ cargo test --workspace --locked
 - [ADR 0085](docs/adrs/0085-serve-direct-v86-boot-asset-discovery.md):
   Rust direct-v86 discovery reports kernel and initrd routes found in the served
   root, preferring the guest-root `/boot/bzImage` layout.
+- [ADR 0086](docs/adrs/0086-concurrent-rust-serve-clients.md):
+  Normal Rust `serve` accepts concurrent HTTP and direct 9P WebSocket clients
+  while `--once` stays single-connection for deterministic smokes.
 
 ## Cycle Rules
 

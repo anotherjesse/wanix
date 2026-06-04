@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -173,6 +173,15 @@ fn run_serve_with_listener(
     listener: TcpListener,
     process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
+    run_serve_with_listener_inner(command, listener, process_stderr, None)
+}
+
+fn run_serve_with_listener_inner(
+    command: ServeCommand,
+    listener: TcpListener,
+    process_stderr: &mut dyn Write,
+    concurrent_connection_limit: Option<usize>,
+) -> Result<i32, CliError> {
     let local_addr = listener
         .local_addr()
         .map_err(|error| CliError::new(format!("failed to inspect serve address: {error}"), 1))?;
@@ -197,16 +206,109 @@ fn run_serve_with_listener(
         return serve_one_connection(&listener, &roots, process_stderr);
     }
 
+    serve_concurrent_connections(listener, roots, process_stderr, concurrent_connection_limit)
+}
+
+#[cfg(test)]
+fn run_serve_with_listener_for_connections(
+    command: ServeCommand,
+    listener: TcpListener,
+    process_stderr: &mut dyn Write,
+    connection_limit: usize,
+) -> Result<i32, CliError> {
+    run_serve_with_listener_inner(command, listener, process_stderr, Some(connection_limit))
+}
+
+fn serve_concurrent_connections(
+    listener: TcpListener,
+    roots: ServeRoots,
+    process_stderr: &mut dyn Write,
+    connection_limit: Option<usize>,
+) -> Result<i32, CliError> {
+    listener.set_nonblocking(true).map_err(|error| {
+        CliError::new(
+            format!("failed to configure serve listener as nonblocking: {error}"),
+            1,
+        )
+    })?;
+    let roots = Arc::new(roots);
+    let (error_sender, error_receiver) = mpsc::channel::<String>();
+    let mut accepted = 0usize;
+    let mut handles = Vec::new();
+    let mut had_error = false;
+
     loop {
-        let exit_code = serve_one_connection(&listener, &roots, process_stderr)?;
-        if exit_code != 0 {
+        match listener.accept() {
+            Ok((stream, peer_addr)) => {
+                if let Err(error) = stream.set_nonblocking(false) {
+                    had_error = true;
+                    write_process_output(
+                        process_stderr,
+                        "stderr",
+                        format!(
+                            "wanix-rust serve: connection {peer_addr} failed: \
+                             could not configure blocking mode: {error}\n"
+                        )
+                        .as_bytes(),
+                    )?;
+                    continue;
+                }
+                accepted += 1;
+                let connection_roots = Arc::clone(&roots);
+                let connection_errors = error_sender.clone();
+                let handle = thread::spawn(move || {
+                    if let Err(error) = serve_connection(&connection_roots, stream) {
+                        let _ = connection_errors.send(format!(
+                            "wanix-rust serve: connection {peer_addr} failed: {error}\n"
+                        ));
+                    }
+                });
+                if connection_limit.is_some() {
+                    handles.push(handle);
+                }
+                if connection_limit.is_some_and(|limit| accepted >= limit) {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                had_error |= drain_connection_errors(&error_receiver, process_stderr)?;
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(CliError::new(format!("serve accept failed: {error}"), 1)),
+        }
+        had_error |= drain_connection_errors(&error_receiver, process_stderr)?;
+    }
+
+    drop(error_sender);
+    for handle in handles {
+        if handle.join().is_err() {
+            had_error = true;
             write_process_output(
                 process_stderr,
                 "stderr",
-                b"wanix-rust serve: continuing after connection error\n",
+                b"wanix-rust serve: connection worker panicked\n",
             )?;
         }
     }
+    had_error |= drain_connection_errors(&error_receiver, process_stderr)?;
+    Ok(i32::from(had_error))
+}
+
+fn drain_connection_errors(
+    error_receiver: &mpsc::Receiver<String>,
+    process_stderr: &mut dyn Write,
+) -> Result<bool, CliError> {
+    let mut had_error = false;
+    while let Ok(message) = error_receiver.try_recv() {
+        had_error = true;
+        write_process_output(process_stderr, "stderr", message.as_bytes())?;
+        write_process_output(
+            process_stderr,
+            "stderr",
+            b"wanix-rust serve: continuing after connection error\n",
+        )?;
+    }
+    Ok(had_error)
 }
 
 fn serve_url_status(local_addr: SocketAddr, bundle: Option<&str>) -> String {
@@ -1595,6 +1697,112 @@ mod tests {
         assert_eq!(attr.size, 11);
         assert_eq!(attr.mode & 0o170000, 0o100000);
         assert_eq!(p9_decode_rread(&frames[5]).unwrap(), b"hello serve");
+    }
+
+    #[test]
+    fn serve_concurrent_loop_serves_http_while_9p_websocket_stays_open() {
+        let root = temp_dir("wanix-cli-serve-concurrent-http");
+        fs::write(root.join("index.html"), b"wanix serve concurrent").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
+            once: false,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code =
+                run_serve_with_listener_for_connections(command, listener, &mut stderr, 2).unwrap();
+            (exit_code, stderr)
+        });
+
+        let mut socket = connect(format!("ws://{addr}/.well-known/export9p"))
+            .unwrap()
+            .0;
+        socket
+            .send(Message::binary(request_stream([p9_tversion(
+                1,
+                8192,
+                P9_VERSION_9P2000_L,
+            )
+            .unwrap()])))
+            .unwrap();
+        let frames = read_binary_frames(&mut socket, 1);
+        assert_eq!(frame_types(&frames), [P9_RVERSION]);
+
+        let response = http_request(
+            addr,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+        );
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(
+            response.contains("\"websocket\":\"ws://demo.local:7654/.well-known/export9p\""),
+            "{response}"
+        );
+
+        socket.close(None).unwrap();
+        let (exit_code, stderr) = handle.join().unwrap();
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert_eq!(exit_code, 0, "{stderr}");
+    }
+
+    #[test]
+    fn serve_concurrent_loop_serves_two_9p_websockets() {
+        let root = temp_dir("wanix-cli-serve-concurrent-9p");
+        fs::write(root.join("hello.txt"), b"hello concurrent").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: None,
+            once: false,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code =
+                run_serve_with_listener_for_connections(command, listener, &mut stderr, 2).unwrap();
+            (exit_code, stderr)
+        });
+
+        let mut first = connect(format!("ws://{addr}/.well-known/export9p"))
+            .unwrap()
+            .0;
+        let mut second = connect(format!("ws://{addr}/.well-known/export9p"))
+            .unwrap()
+            .0;
+        let requests = || {
+            request_stream([
+                p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+                p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
+                p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
+                p9_tlopen(4, 2, 0),
+                p9_tread(5, 2, 0, 16),
+            ])
+        };
+        first.send(Message::binary(requests())).unwrap();
+        second.send(Message::binary(requests())).unwrap();
+
+        let first_frames = read_binary_frames(&mut first, 5);
+        let second_frames = read_binary_frames(&mut second, 5);
+        first.close(None).unwrap();
+        second.close(None).unwrap();
+        let (exit_code, stderr) = handle.join().unwrap();
+        let stderr = String::from_utf8(stderr).unwrap();
+
+        assert_eq!(exit_code, 0, "{stderr}");
+        for frames in [&first_frames, &second_frames] {
+            assert_eq!(
+                frame_types(frames),
+                [P9_RVERSION, P9_RATTACH, P9_RWALK, P9_RLOPEN, P9_RREAD]
+            );
+            assert_eq!(p9_decode_rread(&frames[4]).unwrap(), b"hello concurrent");
+        }
     }
 
     #[test]
