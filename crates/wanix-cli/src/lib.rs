@@ -8,6 +8,7 @@ mod qemu;
 mod qjs_term;
 mod rootfs;
 mod serve;
+mod terminal_mode;
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -23,6 +24,8 @@ use wanix_fs::{FileSystem, FsError, LocalFs, MemFs, NormalizedPath, OpenOptions}
 use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
 use wanix_task::{Fd, Task, TaskSpec, TaskTable, quote_cmd_argv};
 use wanix_vfs::BindOptions;
+
+pub use terminal_mode::{NativeRawTerminalMode, command_requests_raw_tty};
 
 const USAGE: &str = concat!(
     "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
@@ -446,96 +449,6 @@ fn help_output() -> CliOutput {
         Vec::new(),
         0,
     )
-}
-
-/// Returns true when the command asks the native binary to put stdin in raw mode.
-#[must_use]
-pub fn command_requests_raw_tty(args: &[OsString]) -> bool {
-    matches!(args, [command, rest @ ..] if command == "qjs-shell" && rest.iter().any(|arg| arg == "--raw"))
-}
-
-/// Restore-on-drop guard for native terminal mode.
-#[cfg(unix)]
-#[derive(Debug)]
-pub struct NativeRawTerminalMode {
-    fd: libc::c_int,
-    original: libc::termios,
-}
-
-#[cfg(unix)]
-impl NativeRawTerminalMode {
-    /// Enters raw-ish terminal mode for native stdin when stdin is a TTY.
-    ///
-    /// Returns `Ok(None)` when stdin is not a terminal. The mode disables
-    /// canonical input and OS echo but preserves signal generation, so Ctrl-C
-    /// still reaches the host process.
-    ///
-    /// # Errors
-    ///
-    /// Returns a CLI error when termios state cannot be read or changed.
-    pub fn enter_stdin_if_tty() -> Result<Option<Self>, CliError> {
-        let fd = libc::STDIN_FILENO;
-        // SAFETY: `isatty` only observes the fixed stdin file descriptor.
-        if unsafe { libc::isatty(fd) } == 0 {
-            return Ok(None);
-        }
-
-        let mut original = std::mem::MaybeUninit::<libc::termios>::uninit();
-        // SAFETY: `original` points to valid writable memory for termios.
-        if unsafe { libc::tcgetattr(fd, original.as_mut_ptr()) } != 0 {
-            return Err(termios_error("read native terminal mode"));
-        }
-        // SAFETY: `tcgetattr` succeeded and initialized `original`.
-        let original = unsafe { original.assume_init() };
-        let mut raw = original;
-        raw.c_lflag &= !(libc::ECHO | libc::ICANON | libc::IEXTEN);
-        raw.c_iflag &= !(libc::ICRNL | libc::IXON);
-        raw.c_oflag &= !libc::OPOST;
-        raw.c_cc[libc::VMIN] = 1;
-        raw.c_cc[libc::VTIME] = 0;
-        // SAFETY: `raw` is a termios value derived from the current stdin mode.
-        if unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, &raw) } != 0 {
-            return Err(termios_error("enter native raw terminal mode"));
-        }
-        Ok(Some(Self { fd, original }))
-    }
-}
-
-#[cfg(unix)]
-impl Drop for NativeRawTerminalMode {
-    fn drop(&mut self) {
-        // SAFETY: `original` was captured from this fd with `tcgetattr`.
-        let _ = unsafe { libc::tcsetattr(self.fd, libc::TCSAFLUSH, &self.original) };
-    }
-}
-
-#[cfg(unix)]
-fn termios_error(action: &str) -> CliError {
-    CliError::new(
-        format!("failed to {action}: {}", io::Error::last_os_error()),
-        1,
-    )
-}
-
-/// Restore-on-drop guard for native terminal mode.
-#[cfg(not(unix))]
-#[derive(Debug)]
-pub struct NativeRawTerminalMode;
-
-#[cfg(not(unix))]
-impl NativeRawTerminalMode {
-    /// Enters raw terminal mode for native stdin when supported.
-    ///
-    /// # Errors
-    ///
-    /// Returns a CLI error because raw terminal mode is currently implemented
-    /// only on Unix hosts.
-    pub fn enter_stdin_if_tty() -> Result<Option<Self>, CliError> {
-        Err(CliError::new(
-            "qjs-shell --raw is currently supported only on Unix hosts",
-            1,
-        ))
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
