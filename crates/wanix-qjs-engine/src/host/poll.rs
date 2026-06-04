@@ -1,9 +1,10 @@
 use std::thread;
 use std::time::Duration;
 
+use super::QuickJsWasiErrno;
 use super::guest_memory::{guest_len, guest_offset_at, guest_range};
+use super::state::PollFdReady;
 use super::{ERRNO_INVAL, ERRNO_NOSYS, ERRNO_SUCCESS, HostState, caller_memory};
-use super::{QuickJsWasiErrno, QuickJsWasiFdStat};
 use crate::guest::guest_offset;
 use wasmtime::{Caller, Linker, Memory};
 
@@ -28,8 +29,6 @@ const EVENTTYPE_FD_WRITE: u8 = 2;
 const CLOCKID_REALTIME: u32 = 0;
 const CLOCKID_MONOTONIC: u32 = 1;
 const SUBCLOCKFLAGS_ABSTIME: u16 = 1 << 0;
-const RIGHT_FD_READ: u64 = 1 << 1;
-const RIGHT_FD_WRITE: u64 = 1 << 6;
 
 pub(super) fn define_import(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     linker.func_wrap("wasi_snapshot_preview1", "poll_oneoff", poll_oneoff)?;
@@ -85,7 +84,7 @@ fn poll_oneoff(
     for subscription in &subscriptions {
         match subscription[SUBSCRIPTION_TAG_OFFSET] {
             EVENTTYPE_FD_READ | EVENTTYPE_FD_WRITE => {
-                let event = match fd_event(&caller, subscription)? {
+                let event = match fd_event(&mut caller, subscription)? {
                     Ok(event) => event,
                     Err(errno) => return Ok(errno),
                 };
@@ -146,54 +145,25 @@ fn poll_oneoff(
 }
 
 fn fd_event(
-    caller: &Caller<'_, HostState>,
+    caller: &mut Caller<'_, HostState>,
     subscription: &[u8; SUBSCRIPTION_SIZE],
 ) -> wasmtime::Result<Result<Option<[u8; EVENT_SIZE]>, i32>> {
     let event_type = subscription[SUBSCRIPTION_TAG_OFFSET];
-    let required_right = match event_type {
-        EVENTTYPE_FD_READ => RIGHT_FD_READ,
-        EVENTTYPE_FD_WRITE => RIGHT_FD_WRITE,
+    let want_read = match event_type {
+        EVENTTYPE_FD_READ => true,
+        EVENTTYPE_FD_WRITE => false,
         _ => return Ok(Err(ERRNO_NOSYS)),
     };
-    let Some(host) = caller.data().wasi_host() else {
-        return Ok(Err(ERRNO_NOSYS));
-    };
     let fd = read_u32(subscription, SUBSCRIPTION_FD_OFFSET);
-    let mut host = host
-        .lock()
-        .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
-    let errno = match host.fd_fdstat_get(fd) {
-        Ok(stat) => readiness_errno(stat, required_right),
-        Err(errno) => Some(errno),
-    };
-    if let Some(errno) = errno {
-        return Ok(Ok(Some(event_with_errno(
-            subscription,
-            event_type,
-            Some(errno),
-        ))));
-    }
-    let ready = match event_type {
-        EVENTTYPE_FD_READ => host.fd_read_ready(fd),
-        EVENTTYPE_FD_WRITE => host.fd_write_ready(fd),
-        _ => unreachable!("fd event type checked above"),
-    };
-    match ready {
-        Ok(true) => Ok(Ok(Some(event_with_errno(subscription, event_type, None)))),
-        Ok(false) => Ok(Ok(None)),
-        Err(errno) => Ok(Ok(Some(event_with_errno(
+    match caller.data_mut().poll_fd_ready(fd, want_read)? {
+        PollFdReady::Unsupported => Ok(Err(ERRNO_NOSYS)),
+        PollFdReady::Ready => Ok(Ok(Some(event_with_errno(subscription, event_type, None)))),
+        PollFdReady::Pending => Ok(Ok(None)),
+        PollFdReady::Errno(errno) => Ok(Ok(Some(event_with_errno(
             subscription,
             event_type,
             Some(errno),
         )))),
-    }
-}
-
-fn readiness_errno(stat: QuickJsWasiFdStat, required_right: u64) -> Option<QuickJsWasiErrno> {
-    if stat.rights_base() & required_right == 0 {
-        Some(QuickJsWasiErrno::Notcapable)
-    } else {
-        None
     }
 }
 

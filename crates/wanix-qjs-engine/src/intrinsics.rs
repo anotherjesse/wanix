@@ -2,8 +2,21 @@ use std::fmt;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
 use std::sync::{Arc, Mutex};
 
+use wanix_wasi::WasiCtx;
+
 use crate::QuickJsWasiHost;
-use crate::host::QuickJsWasiHostHandle;
+use crate::host::{ProcExitHook, QuickJsWasiHostHandle, WasiBacking};
+
+fn wasi_backing(
+    wasi_host: Option<QuickJsWasiHostHandle>,
+    wasi_ctx: Option<Box<WasiCtx>>,
+) -> WasiBacking {
+    match (wasi_ctx, wasi_host) {
+        (Some(ctx), _) => WasiBacking::Ctx(ctx),
+        (None, Some(host)) => WasiBacking::Trait(host),
+        (None, None) => WasiBacking::None,
+    }
+}
 
 /// QuickJS intrinsic flags used when creating a fresh runtime.
 ///
@@ -143,6 +156,8 @@ pub struct QuickJsCreateOptions {
     host_config: crate::QuickJsHostConfig,
     intrinsics: Option<QuickJsIntrinsics>,
     wasi_host: Option<QuickJsWasiHostHandle>,
+    wasi_ctx: Option<Box<WasiCtx>>,
+    proc_exit_hook: Option<ProcExitHook>,
 }
 
 impl fmt::Debug for QuickJsCreateOptions {
@@ -151,6 +166,8 @@ impl fmt::Debug for QuickJsCreateOptions {
             .field("host_config", &self.host_config)
             .field("intrinsics", &self.intrinsics)
             .field("has_wasi_host", &self.wasi_host.is_some())
+            .field("has_wasi_ctx", &self.wasi_ctx.is_some())
+            .field("has_proc_exit_hook", &self.proc_exit_hook.is_some())
             .finish()
     }
 }
@@ -191,6 +208,27 @@ impl QuickJsCreateOptions {
         self
     }
 
+    /// Attaches a live [`WasiCtx`] served by the shared WASI Preview 1 linker.
+    ///
+    /// This is the canonical live backing: filesystem and stdio imports run on
+    /// the one shared guest-memory marshalling instead of the engine's
+    /// host-owned trait surface. Install [`with_proc_exit_hook`] to observe
+    /// `proc_exit` for this context.
+    ///
+    /// [`with_proc_exit_hook`]: Self::with_proc_exit_hook
+    #[must_use]
+    pub fn with_wasi_ctx(mut self, ctx: WasiCtx) -> Self {
+        self.wasi_ctx = Some(Box::new(ctx));
+        self
+    }
+
+    /// Installs a hook called with the exit code passed to `proc_exit`.
+    #[must_use]
+    pub fn with_proc_exit_hook(mut self, hook: impl FnMut(i32) + Send + 'static) -> Self {
+        self.proc_exit_hook = Some(Box::new(hook));
+        self
+    }
+
     /// Returns the host import configuration for this fresh runtime.
     #[must_use]
     pub fn host_config(&self) -> &crate::QuickJsHostConfig {
@@ -208,9 +246,15 @@ impl QuickJsCreateOptions {
     ) -> (
         crate::QuickJsHostConfig,
         Option<QuickJsIntrinsics>,
-        Option<QuickJsWasiHostHandle>,
+        WasiBacking,
+        Option<ProcExitHook>,
     ) {
-        (self.host_config, self.intrinsics, self.wasi_host)
+        (
+            self.host_config,
+            self.intrinsics,
+            wasi_backing(self.wasi_host, self.wasi_ctx),
+            self.proc_exit_hook,
+        )
     }
 }
 
@@ -224,6 +268,8 @@ impl QuickJsCreateOptions {
 pub struct QuickJsRestoreOptions {
     host_config: crate::QuickJsHostConfig,
     wasi_host: Option<QuickJsWasiHostHandle>,
+    wasi_ctx: Option<Box<WasiCtx>>,
+    proc_exit_hook: Option<ProcExitHook>,
 }
 
 impl fmt::Debug for QuickJsRestoreOptions {
@@ -231,6 +277,8 @@ impl fmt::Debug for QuickJsRestoreOptions {
         f.debug_struct("QuickJsRestoreOptions")
             .field("host_config", &self.host_config)
             .field("has_wasi_host", &self.wasi_host.is_some())
+            .field("has_wasi_ctx", &self.wasi_ctx.is_some())
+            .field("has_proc_exit_hook", &self.proc_exit_hook.is_some())
             .finish()
     }
 }
@@ -260,13 +308,38 @@ impl QuickJsRestoreOptions {
         self
     }
 
+    /// Reattaches a live [`WasiCtx`] served by the shared WASI Preview 1 linker.
+    ///
+    /// The context is restore-time host state, not snapshot bytes. Install
+    /// [`with_proc_exit_hook`] to observe `proc_exit` for this context.
+    ///
+    /// [`with_proc_exit_hook`]: Self::with_proc_exit_hook
+    #[must_use]
+    pub fn with_wasi_ctx(mut self, ctx: WasiCtx) -> Self {
+        self.wasi_ctx = Some(Box::new(ctx));
+        self
+    }
+
+    /// Installs a hook called with the exit code passed to `proc_exit`.
+    #[must_use]
+    pub fn with_proc_exit_hook(mut self, hook: impl FnMut(i32) + Send + 'static) -> Self {
+        self.proc_exit_hook = Some(Box::new(hook));
+        self
+    }
+
     /// Returns the host import configuration for this restored runtime.
     #[must_use]
     pub fn host_config(&self) -> &crate::QuickJsHostConfig {
         &self.host_config
     }
 
-    pub(crate) fn into_parts(self) -> (crate::QuickJsHostConfig, Option<QuickJsWasiHostHandle>) {
-        (self.host_config, self.wasi_host)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (crate::QuickJsHostConfig, WasiBacking, Option<ProcExitHook>) {
+        (
+            self.host_config,
+            wasi_backing(self.wasi_host, self.wasi_ctx),
+            self.proc_exit_hook,
+        )
     }
 }

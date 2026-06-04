@@ -10,10 +10,10 @@ use wanix_wasi::WasiConfig;
 use crate::host_api::{define_wanix_module_loader, define_wanix_task_globals, qjs_error};
 use crate::task_context::{WanixExitState, WanixTaskContext};
 use crate::task_stdio::task_wasi_config;
-use crate::wasi_host::WanixQuickJsWasiHost;
 use crate::{
     CONSOLE_PRELUDE, QuickJsRunner, captured_stdio_config_for_wasi, define_task_output_callback,
-    drain_runtime_work, exit_requested, task_command, task_wasi_argv, wanix_wasi_host_error,
+    drain_runtime_work, exit_requested, proc_exit_hook, task_command, task_wasi_argv,
+    wanix_wasi_host_error,
 };
 
 /// A live QuickJS runtime attached to a Wanix task.
@@ -338,11 +338,11 @@ pub(crate) fn task_create_options(
     exit_state: WanixExitState,
 ) -> FsResult<QuickJsCreateOptions> {
     let host_config = captured_stdio_config_for_wasi(&wasi_config);
-    let wasi_host = WanixQuickJsWasiHost::new_with_exit_state(wasi_config, exit_state)
-        .map_err(wanix_wasi_host_error)?;
+    let wasi_ctx = wanix_wasi::WasiCtx::try_new(wasi_config).map_err(wanix_wasi_host_error)?;
     Ok(QuickJsCreateOptions::new()
         .with_host_config(host_config)
-        .with_wasi_host(wasi_host))
+        .with_wasi_ctx(wasi_ctx)
+        .with_proc_exit_hook(proc_exit_hook(exit_state)))
 }
 
 pub(crate) fn task_restore_options(
@@ -350,11 +350,11 @@ pub(crate) fn task_restore_options(
     exit_state: WanixExitState,
 ) -> FsResult<QuickJsRestoreOptions> {
     let host_config = captured_stdio_config_for_wasi(&wasi_config);
-    let wasi_host = WanixQuickJsWasiHost::new_with_exit_state(wasi_config, exit_state)
-        .map_err(wanix_wasi_host_error)?;
+    let wasi_ctx = wanix_wasi::WasiCtx::try_new(wasi_config).map_err(wanix_wasi_host_error)?;
     Ok(QuickJsRestoreOptions::new()
         .with_host_config(host_config)
-        .with_wasi_host(wasi_host))
+        .with_wasi_ctx(wasi_ctx)
+        .with_proc_exit_hook(proc_exit_hook(exit_state)))
 }
 
 fn attach_task_host_state(

@@ -27,6 +27,7 @@ mod host_api;
 mod task_context;
 mod task_runtime;
 mod task_stdio;
+#[cfg(test)]
 mod wasi_host;
 
 pub use bundled::bundled_module_cache_dir;
@@ -40,7 +41,6 @@ use host_api::{
 };
 use task_context::{WanixExitState, WanixTaskContext};
 use task_stdio::task_wasi_config;
-use wasi_host::WanixQuickJsWasiHost;
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "quickjs wasi task driver";
@@ -464,14 +464,11 @@ impl QuickJsRunner {
         let source = read_namespace_file(&namespace, &script_path)?;
         let host = QuickJsWanixConfig::new(task_wasi_config(task));
         let exit_state = WanixExitState::default();
-        let wasi_host =
-            WanixQuickJsWasiHost::new_with_exit_state(host.wasi().clone(), exit_state.clone())
-                .map_err(|err| {
-                    FsError::Other(format!(
-                        "failed to create Wanix-backed QuickJS WASI host: {err:?}"
-                    ))
-                })?;
-        let create_options = captured_stdio_options().with_wasi_host(wasi_host);
+        let wasi_ctx =
+            wanix_wasi::WasiCtx::try_new(host.wasi().clone()).map_err(wanix_wasi_host_error)?;
+        let create_options = captured_stdio_options()
+            .with_wasi_ctx(wasi_ctx)
+            .with_proc_exit_hook(proc_exit_hook(exit_state.clone()));
         let run_as_module = uses_module_syntax(&source);
         let script_args = task_wasi_argv(task);
         let context = WanixTaskContext::new(script_args);
@@ -554,23 +551,33 @@ fn captured_stdio_options_with_wanix_wasi(
     config: QuickJsWanixConfig,
 ) -> FsResult<QuickJsCreateOptions> {
     let host_config = captured_stdio_config_for_wasi(config.wasi());
-    Ok(create_options_with_config(host_config).with_wasi_host(wanix_wasi_host(config)?))
+    Ok(create_options_with_config(host_config).with_wasi_ctx(wanix_wasi_ctx(config)?))
 }
 
 fn create_options_with_wanix_wasi(config: QuickJsWanixConfig) -> FsResult<QuickJsCreateOptions> {
     let host_config = QuickJsHostConfig::new().with_clock_time_ns(config.wasi().clock_time_ns());
-    Ok(create_options_with_config(host_config).with_wasi_host(wanix_wasi_host(config)?))
+    Ok(create_options_with_config(host_config).with_wasi_ctx(wanix_wasi_ctx(config)?))
 }
 
 fn restore_options_with_wanix_wasi(config: QuickJsWanixConfig) -> FsResult<QuickJsRestoreOptions> {
     let host_config = QuickJsHostConfig::new().with_clock_time_ns(config.wasi().clock_time_ns());
     Ok(QuickJsRestoreOptions::new()
         .with_host_config(host_config)
-        .with_wasi_host(wanix_wasi_host(config)?))
+        .with_wasi_ctx(wanix_wasi_ctx(config)?))
 }
 
-fn wanix_wasi_host(config: QuickJsWanixConfig) -> FsResult<WanixQuickJsWasiHost> {
-    WanixQuickJsWasiHost::new(config.wasi).map_err(wanix_wasi_host_error)
+fn wanix_wasi_ctx(config: QuickJsWanixConfig) -> FsResult<wanix_wasi::WasiCtx> {
+    wanix_wasi::WasiCtx::try_new(config.wasi).map_err(wanix_wasi_host_error)
+}
+
+/// Installs a `proc_exit` hook that records the WASI exit code, matching the
+/// prior adapter's `0..=255` validation and first-write-wins semantics.
+fn proc_exit_hook(exit_state: WanixExitState) -> impl FnMut(i32) + Send + 'static {
+    move |code| {
+        if (0..=255).contains(&code) {
+            let _ = exit_state.request_exit(code);
+        }
+    }
 }
 
 fn wanix_wasi_host_error(err: wanix_wasi::Errno) -> FsError {

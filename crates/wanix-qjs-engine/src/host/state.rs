@@ -4,7 +4,7 @@ use super::callback::{HostCallbackEntry, HostCallbackMode, QuickJsCopiedValue};
 use super::fs::{FIRST_VIRTUAL_FILE_FD, PREOPEN_ROOT_FD, VirtualFileHandle};
 use super::module_loader::ModuleLoader;
 use super::promise_rejection::QuickJsPromiseRejection;
-use super::wasi_host::QuickJsWasiHostHandle;
+use super::wasi_host::{QuickJsWasiErrno, QuickJsWasiHostHandle};
 use crate::allocation::try_copy_str;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, HashMap};
@@ -12,7 +12,61 @@ use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::time::Duration;
+use wanix_wasi::{Errno, WasiCtx, WasiFd};
 use wasmtime::Memory;
+
+const RIGHT_FD_READ: u64 = 1 << 1;
+const RIGHT_FD_WRITE: u64 = 1 << 6;
+
+/// Outcome of a `poll_oneoff` readiness probe over either WASI backing.
+pub(super) enum PollFdReady {
+    /// The fd is ready now; emit a success event.
+    Ready,
+    /// The fd is not ready; report it as pending.
+    Pending,
+    /// Emit an event carrying this errno.
+    Errno(QuickJsWasiErrno),
+    /// No live WASI provider can answer this probe.
+    Unsupported,
+}
+
+fn errno_to_quickjs(errno: Errno) -> QuickJsWasiErrno {
+    match errno {
+        Errno::Badf => QuickJsWasiErrno::Badf,
+        Errno::Inval => QuickJsWasiErrno::Inval,
+        Errno::Nametoolong => QuickJsWasiErrno::Nametoolong,
+        Errno::Noent => QuickJsWasiErrno::Noent,
+        Errno::Exist => QuickJsWasiErrno::Exist,
+        Errno::Notdir => QuickJsWasiErrno::Notdir,
+        Errno::Isdir => QuickJsWasiErrno::Isdir,
+        Errno::Notempty => QuickJsWasiErrno::Notempty,
+        Errno::Nosys => QuickJsWasiErrno::Nosys,
+        Errno::Notcapable => QuickJsWasiErrno::Notcapable,
+        Errno::Success | Errno::Io => QuickJsWasiErrno::Io,
+    }
+}
+
+/// The live WASI provider backing a runtime's Preview 1 imports.
+///
+/// `Ctx` runs on the shared [`wanix_wasi_host`] linker (the single
+/// guest-memory <-> [`WasiCtx`] marshalling). `Trait` is the engine's
+/// host-owned hook surface, used by embedders that supply their own provider
+/// (and by the engine's generic-host tests). `None` leaves stdio capture and
+/// read-only virtual files on their deterministic engine behavior.
+pub(crate) enum WasiBacking {
+    None,
+    Trait(QuickJsWasiHostHandle),
+    Ctx(Box<WasiCtx>),
+}
+
+impl WasiBacking {
+    pub(crate) const fn is_ctx(&self) -> bool {
+        matches!(self, Self::Ctx(_))
+    }
+}
+
+/// A hook the embedder installs to observe `proc_exit` for a `Ctx` backing.
+pub(crate) type ProcExitHook = Box<dyn FnMut(i32) + Send + 'static>;
 
 pub(crate) struct HostState {
     memory: Option<Memory>,
@@ -27,7 +81,8 @@ pub(crate) struct HostState {
     interrupt_handler_depth: usize,
     promise_rejection_handler: Option<PromiseRejectionHandler>,
     promise_rejection_handler_depth: usize,
-    wasi_host: Option<QuickJsWasiHostHandle>,
+    wasi_backing: WasiBacking,
+    proc_exit_hook: Option<ProcExitHook>,
     process_exited: bool,
     virtual_file_fds: BTreeMap<i32, VirtualFileHandle>,
     next_virtual_file_fd: i32,
@@ -36,12 +91,25 @@ pub(crate) struct HostState {
 impl HostState {
     #[cfg(test)]
     pub(crate) fn new(config: QuickJsHostConfig) -> Self {
-        Self::new_with_wasi_host(config, None)
+        Self::new_with_backing(config, WasiBacking::None, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_wasi_host(
         config: QuickJsHostConfig,
         wasi_host: Option<QuickJsWasiHostHandle>,
+    ) -> Self {
+        let backing = match wasi_host {
+            Some(host) => WasiBacking::Trait(host),
+            None => WasiBacking::None,
+        };
+        Self::new_with_backing(config, backing, None)
+    }
+
+    pub(crate) fn new_with_backing(
+        config: QuickJsHostConfig,
+        wasi_backing: WasiBacking,
+        proc_exit_hook: Option<ProcExitHook>,
     ) -> Self {
         Self {
             memory: None,
@@ -56,7 +124,8 @@ impl HostState {
             interrupt_handler_depth: 0,
             promise_rejection_handler: None,
             promise_rejection_handler_depth: 0,
-            wasi_host,
+            wasi_backing,
+            proc_exit_hook,
             process_exited: false,
             virtual_file_fds: BTreeMap::new(),
             next_virtual_file_fd: FIRST_VIRTUAL_FILE_FD,
@@ -100,18 +169,83 @@ impl HostState {
     }
 
     pub(super) fn wasi_host(&self) -> Option<QuickJsWasiHostHandle> {
-        self.wasi_host.as_ref().map(Arc::clone)
+        match &self.wasi_backing {
+            WasiBacking::Trait(host) => Some(Arc::clone(host)),
+            WasiBacking::None | WasiBacking::Ctx(_) => None,
+        }
+    }
+
+    /// Resolves a `poll_oneoff` fd-read/-write readiness probe over whichever
+    /// live WASI backing is attached, normalizing both to [`PollFdReady`].
+    pub(super) fn poll_fd_ready(
+        &mut self,
+        fd: u32,
+        want_read: bool,
+    ) -> wasmtime::Result<PollFdReady> {
+        match &mut self.wasi_backing {
+            WasiBacking::None => Ok(PollFdReady::Unsupported),
+            WasiBacking::Ctx(ctx) => {
+                let ready = if want_read {
+                    ctx.fd_read_ready(WasiFd::new(fd))
+                } else {
+                    ctx.fd_write_ready(WasiFd::new(fd))
+                };
+                Ok(match ready {
+                    Ok(true) => PollFdReady::Ready,
+                    Ok(false) => PollFdReady::Pending,
+                    Err(errno) => PollFdReady::Errno(errno_to_quickjs(errno)),
+                })
+            }
+            WasiBacking::Trait(host) => {
+                let mut host = host
+                    .lock()
+                    .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
+                let required_right = if want_read {
+                    RIGHT_FD_READ
+                } else {
+                    RIGHT_FD_WRITE
+                };
+                let stat = match host.fd_fdstat_get(fd) {
+                    Ok(stat) => stat,
+                    Err(errno) => return Ok(PollFdReady::Errno(errno)),
+                };
+                if stat.rights_base() & required_right == 0 {
+                    return Ok(PollFdReady::Errno(QuickJsWasiErrno::Notcapable));
+                }
+                let ready = if want_read {
+                    host.fd_read_ready(fd)
+                } else {
+                    host.fd_write_ready(fd)
+                };
+                Ok(match ready {
+                    Ok(true) => PollFdReady::Ready,
+                    Ok(false) => PollFdReady::Pending,
+                    Err(errno) => PollFdReady::Errno(errno),
+                })
+            }
+        }
     }
 
     pub(crate) fn wasi_host_snapshot_blockers(&self) -> Result<Vec<String>> {
-        let Some(wasi_host) = &self.wasi_host else {
-            return Ok(Vec::new());
-        };
-        wasi_host
-            .lock()
-            .map_err(|_| anyhow::anyhow!("WASI host lock poisoned"))?
-            .snapshot_blockers()
-            .map_err(|errno| anyhow::anyhow!("WASI host snapshot blocker check failed: {errno:?}"))
+        match &self.wasi_backing {
+            WasiBacking::None => Ok(Vec::new()),
+            WasiBacking::Ctx(ctx) => {
+                // Reproduce the prior adapter semantics from the shared context.
+                let open_fds = ctx.open_dynamic_fd_count();
+                if open_fds == 0 {
+                    Ok(Vec::new())
+                } else {
+                    Ok(vec![format!("{open_fds} open dynamic WASI fd(s)")])
+                }
+            }
+            WasiBacking::Trait(host) => host
+                .lock()
+                .map_err(|_| anyhow::anyhow!("WASI host lock poisoned"))?
+                .snapshot_blockers()
+                .map_err(|errno| {
+                    anyhow::anyhow!("WASI host snapshot blocker check failed: {errno:?}")
+                }),
+        }
     }
 
     pub(crate) fn mark_process_exited(&mut self) {
@@ -365,6 +499,30 @@ impl HostState {
             self.config.stderr_capture_byte_limit(),
             "stderr",
         )
+    }
+}
+
+impl wanix_wasi_host::WasiHost for HostState {
+    fn wasi(&mut self) -> &mut WasiCtx {
+        match &mut self.wasi_backing {
+            WasiBacking::Ctx(ctx) => ctx,
+            WasiBacking::None | WasiBacking::Trait(_) => {
+                // The shared linker is only attached for a `Ctx` backing, so the
+                // marshalling never reaches a non-`Ctx` state here.
+                unreachable!("shared WASI linker invoked without a WasiCtx backing")
+            }
+        }
+    }
+
+    fn clock_time_ns(&self) -> u64 {
+        self.config.clock_time_ns()
+    }
+
+    fn on_proc_exit(&mut self, code: i32) {
+        self.process_exited = true;
+        if let Some(hook) = self.proc_exit_hook.as_mut() {
+            hook(code);
+        }
     }
 }
 

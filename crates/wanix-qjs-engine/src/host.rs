@@ -22,7 +22,7 @@ pub use config::QuickJsHostConfig;
 pub(crate) use module_loader::{ModuleLoadCallback, ModuleLoader, ModuleNormalizeCallback};
 pub(crate) use promise_rejection::PromiseRejectionHandler;
 pub use promise_rejection::QuickJsPromiseRejection;
-pub(crate) use state::HostState;
+pub(crate) use state::{HostState, ProcExitHook, WasiBacking};
 pub(crate) use wasi_host::QuickJsWasiHostHandle;
 pub use wasi_host::{
     QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat,
@@ -69,6 +69,32 @@ pub(crate) fn define_env_imports(linker: &mut Linker<HostState>) -> Result<()> {
 }
 
 pub(crate) fn define_wasi_imports(linker: &mut Linker<HostState>) -> Result<()> {
+    define_clock_time_get(linker)?;
+    fd_write::define_import(linker)?;
+    fs::define_imports(linker)?;
+    poll::define_import(linker)?;
+    process::define_imports(linker)?;
+    define_random_get(linker)?;
+    Ok(())
+}
+
+/// Re-applies the engine's deterministic `clock_time_get`/`random_get`
+/// semantics over the shared [`wanix_wasi_host`] linker for a `Ctx` backing.
+///
+/// The shared linker fills `random_get` with a fixed byte that differs from the
+/// engine's configurable `random_byte()`, and accepts every `clock_time_get`
+/// clock id. The engine validates the clock id and uses its configured random
+/// byte, so those two imports are shadowed back to the engine versions here.
+pub(crate) fn define_ctx_wasi_overrides(linker: &mut Linker<HostState>) -> Result<()> {
+    define_clock_time_get(linker)?;
+    define_random_get(linker)?;
+    // The shared linker stubs `poll_oneoff` as NOSYS; the engine's deterministic
+    // poll drives QuickJS's ready-IO event loop against the live backing.
+    poll::define_import(linker)?;
+    Ok(())
+}
+
+fn define_clock_time_get(linker: &mut Linker<HostState>) -> Result<()> {
     linker.func_wrap(
         "wasi_snapshot_preview1",
         "clock_time_get",
@@ -86,12 +112,10 @@ pub(crate) fn define_wasi_imports(linker: &mut Linker<HostState>) -> Result<()> 
             Ok(ERRNO_SUCCESS)
         },
     )?;
+    Ok(())
+}
 
-    fd_write::define_import(linker)?;
-    fs::define_imports(linker)?;
-    poll::define_import(linker)?;
-    process::define_imports(linker)?;
-
+fn define_random_get(linker: &mut Linker<HostState>) -> Result<()> {
     linker.func_wrap(
         "wasi_snapshot_preview1",
         "random_get",
@@ -108,7 +132,6 @@ pub(crate) fn define_wasi_imports(linker: &mut Linker<HostState>) -> Result<()> 
             Ok(ERRNO_SUCCESS)
         },
     )?;
-
     Ok(())
 }
 

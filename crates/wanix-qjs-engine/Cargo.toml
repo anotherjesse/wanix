@@ -10,6 +10,8 @@ version.workspace = true
 [dependencies]
 anyhow = "1"
 sha2 = "0.10"
+wanix-wasi = { path = "../wanix-wasi" }
+wanix-wasi-host = { path = "../wanix-wasi-host" }
 wasmtime = { version = "45.0.0", default-features = false, features = [
     "anyhow",
     "cranelift",

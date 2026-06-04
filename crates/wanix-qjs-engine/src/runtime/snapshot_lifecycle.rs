@@ -83,9 +83,16 @@ impl QuickJsRuntime {
         options: QuickJsRestoreOptions,
     ) -> Result<Self> {
         snapshot.validate_for(module)?;
-        let (config, wasi_host) = options.into_parts();
+        let (config, wasi_backing, proc_exit_hook) = options.into_parts();
 
-        let mut vm = Self::instantiate(module.engine(), module, config, wasi_host)?.vm;
+        let mut vm = Self::instantiate(
+            module.engine(),
+            module,
+            config,
+            wasi_backing,
+            proc_exit_hook,
+        )?
+        .vm;
 
         let needed_pages = snapshot_memory_page_count(snapshot.memory.len())?;
         let current_pages = vm.memory.size(&vm.store);
