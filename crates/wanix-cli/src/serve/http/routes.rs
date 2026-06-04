@@ -1,10 +1,10 @@
 use std::net::SocketAddr;
 use std::path::{Component, Path};
 
-use super::super::direct_v86::{DIRECT_V86_BUNDLE, direct_v86_asset_response};
+use super::super::ServeRoots;
+use super::super::direct_v86::direct_v86_asset_response;
 use super::super::discovery::{rootfs_handoff_response, serve_discovery_response};
-use super::super::html::{direct_v86_bundle_html, fs9p_bundle_html, workbench_fs9p_bundle_html};
-use super::super::{FS9P_BUNDLE, ServeRoots, WORKBENCH_FS9P_BUNDLE};
+use super::super::html::bundle_html;
 use super::{HttpStatus, StaticResponse, request_target};
 
 pub(super) fn http_route_response(
@@ -169,16 +169,7 @@ fn matching_bundle_response(
     if configured_bundle != requested_bundle {
         return None;
     }
-    bundle_response_for_name(configured_bundle)
-}
-
-fn bundle_response_for_name(bundle: &str) -> Option<StaticResponse> {
-    match bundle {
-        DIRECT_V86_BUNDLE => Some(direct_v86_bundle_response()),
-        FS9P_BUNDLE => Some(fs9p_bundle_response()),
-        WORKBENCH_FS9P_BUNDLE => Some(workbench_fs9p_bundle_response()),
-        _ => None,
-    }
+    bundle_html_response(configured_bundle)
 }
 
 fn query_param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
@@ -191,26 +182,11 @@ fn query_param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
-fn direct_v86_bundle_response() -> StaticResponse {
-    StaticResponse {
+fn bundle_html_response(bundle: &str) -> Option<StaticResponse> {
+    let html = bundle_html(bundle)?;
+    Some(StaticResponse {
         status: HttpStatus::Ok,
         content_type: "text/html; charset=utf-8",
-        body: direct_v86_bundle_html().into_bytes(),
-    }
-}
-
-fn fs9p_bundle_response() -> StaticResponse {
-    StaticResponse {
-        status: HttpStatus::Ok,
-        content_type: "text/html; charset=utf-8",
-        body: fs9p_bundle_html().into_bytes(),
-    }
-}
-
-fn workbench_fs9p_bundle_response() -> StaticResponse {
-    StaticResponse {
-        status: HttpStatus::Ok,
-        content_type: "text/html; charset=utf-8",
-        body: workbench_fs9p_bundle_html().into_bytes(),
-    }
+        body: html.into_bytes(),
+    })
 }
