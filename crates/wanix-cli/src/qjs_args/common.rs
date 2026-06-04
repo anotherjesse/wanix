@@ -11,6 +11,12 @@ use super::{
 };
 use crate::CliError;
 
+mod handlers;
+mod options;
+
+use handlers::COMMON_QJS_OPTION_HANDLERS;
+use options::CommonQjsOption;
+
 pub(super) struct QjsRunOptions {
     env: Vec<String>,
     cwd: NormalizedPath,
@@ -71,135 +77,72 @@ impl QjsRunOptions {
             mounts: self.mounts,
         }
     }
+
+    fn add_env(&mut self, value: &OsString, label: &str) -> Result<(), CliError> {
+        let value = os_arg_to_string(value, label)?;
+        validate_env_line(&value, label)?;
+        self.env.push(value);
+        Ok(())
+    }
+
+    fn set_cwd(&mut self, value: &OsString, label: &str) -> Result<(), CliError> {
+        self.cwd = NormalizedPath::new(os_arg_to_string(value, label)?)?;
+        Ok(())
+    }
+
+    fn set_stdin_bytes(
+        &mut self,
+        value: &OsString,
+        command: &str,
+        label: &str,
+    ) -> Result<(), CliError> {
+        set_qjs_stdin(
+            &mut self.stdin,
+            QjsStdin::Bytes(os_arg_to_string(value, label)?.into_bytes()),
+            command,
+        )
+    }
+
+    fn set_stdin_file(&mut self, value: &OsString, command: &str) -> Result<(), CliError> {
+        let source = if value == "-" {
+            QjsStdin::Process
+        } else {
+            QjsStdin::File(PathBuf::from(value))
+        };
+        set_qjs_stdin(&mut self.stdin, source, command)
+    }
+
+    fn set_event_loop_ms(&mut self, value: &OsString, label: &str) -> Result<(), CliError> {
+        self.event_loop_wait_budget = parse_duration_millis(value, label)?;
+        Ok(())
+    }
+
+    fn set_ready_io_turns(&mut self, value: &OsString, label: &str) -> Result<(), CliError> {
+        self.ready_io_turns = parse_usize(value, label)?;
+        Ok(())
+    }
+
+    fn set_interrupt_after(&mut self, value: &OsString, label: &str) -> Result<(), CliError> {
+        self.interrupt_poll_budget = Some(parse_usize(value, label)?);
+        Ok(())
+    }
+
+    fn set_memory_limit_bytes(&mut self, value: &OsString, label: &str) -> Result<(), CliError> {
+        self.memory_limit_bytes = Some(parse_u32(value, label)?);
+        Ok(())
+    }
+
+    fn add_mount(&mut self, value: &OsString, label: &str) -> Result<(), CliError> {
+        self.mounts
+            .push(parse_host_mount(&os_arg_to_string(value, label)?, label)?);
+        Ok(())
+    }
 }
 
 pub(super) enum QjsOptionParse {
     Consumed,
     Separator,
     Unknown,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CommonQjsOption {
-    Env,
-    Cwd,
-    Stdin,
-    StdinFile,
-    EventLoopMs,
-    ReadyIoTurns,
-    InterruptAfter,
-    MemoryLimitBytes,
-    Mount,
-    Separator,
-}
-
-impl CommonQjsOption {
-    fn from_arg(arg: &OsString) -> Option<Self> {
-        match arg.to_str()? {
-            "--env" => Some(Self::Env),
-            "--cwd" => Some(Self::Cwd),
-            "--stdin" => Some(Self::Stdin),
-            "--stdin-file" => Some(Self::StdinFile),
-            "--event-loop-ms" => Some(Self::EventLoopMs),
-            "--ready-io-turns" => Some(Self::ReadyIoTurns),
-            "--interrupt-after" => Some(Self::InterruptAfter),
-            "--memory-limit-bytes" => Some(Self::MemoryLimitBytes),
-            "--mount" => Some(Self::Mount),
-            "--" => Some(Self::Separator),
-            _ => None,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Env => "--env",
-            Self::Cwd => "--cwd",
-            Self::Stdin => "--stdin",
-            Self::StdinFile => "--stdin-file",
-            Self::EventLoopMs => "--event-loop-ms",
-            Self::ReadyIoTurns => "--ready-io-turns",
-            Self::InterruptAfter => "--interrupt-after",
-            Self::MemoryLimitBytes => "--memory-limit-bytes",
-            Self::Mount => "--mount",
-            Self::Separator => "--",
-        }
-    }
-
-    fn expected(self) -> &'static str {
-        match self {
-            Self::Env => "KEY=VALUE",
-            Self::Cwd => "a Wanix path",
-            Self::Stdin => "text",
-            Self::StdinFile => "PATH or -",
-            Self::EventLoopMs => "milliseconds",
-            Self::ReadyIoTurns | Self::InterruptAfter => "a count",
-            Self::MemoryLimitBytes => "a byte count",
-            Self::Mount => "HOST=GUEST",
-            Self::Separator => "",
-        }
-    }
-
-    fn apply(
-        self,
-        value: &OsString,
-        command: &str,
-        options: &mut QjsRunOptions,
-    ) -> Result<(), CliError> {
-        match self {
-            Self::Env => {
-                let value = os_arg_to_string(value, &format!("{command} --env"))?;
-                validate_env_line(&value, &format!("{command} --env"))?;
-                options.env.push(value);
-            }
-            Self::Cwd => {
-                options.cwd =
-                    NormalizedPath::new(os_arg_to_string(value, &format!("{command} --cwd"))?)?;
-            }
-            Self::Stdin => {
-                set_qjs_stdin(
-                    &mut options.stdin,
-                    QjsStdin::Bytes(
-                        os_arg_to_string(value, &format!("{command} --stdin"))?.into_bytes(),
-                    ),
-                    command,
-                )?;
-            }
-            Self::StdinFile => {
-                let source = if value == "-" {
-                    QjsStdin::Process
-                } else {
-                    QjsStdin::File(PathBuf::from(value))
-                };
-                set_qjs_stdin(&mut options.stdin, source, command)?;
-            }
-            Self::EventLoopMs => {
-                options.event_loop_wait_budget =
-                    parse_duration_millis(value, &format!("{command} --event-loop-ms"))?;
-            }
-            Self::ReadyIoTurns => {
-                options.ready_io_turns =
-                    parse_usize(value, &format!("{command} --ready-io-turns"))?;
-            }
-            Self::InterruptAfter => {
-                options.interrupt_poll_budget =
-                    Some(parse_usize(value, &format!("{command} --interrupt-after"))?);
-            }
-            Self::MemoryLimitBytes => {
-                options.memory_limit_bytes = Some(parse_u32(
-                    value,
-                    &format!("{command} --memory-limit-bytes"),
-                )?);
-            }
-            Self::Mount => {
-                options.mounts.push(parse_host_mount(
-                    &os_arg_to_string(value, &format!("{command} --mount"))?,
-                    &format!("{command} --mount"),
-                )?);
-            }
-            Self::Separator => {}
-        }
-        Ok(())
-    }
 }
 
 pub(super) fn parse_common_qjs_option(
@@ -216,8 +159,31 @@ pub(super) fn parse_common_qjs_option(
         return Ok(QjsOptionParse::Separator);
     }
     let value = qjs_option_value(args, index, command, option.name(), option.expected())?;
-    option.apply(value, command, options)?;
+    apply_common_qjs_option(option, value, command, options)?;
     Ok(QjsOptionParse::Consumed)
+}
+
+fn apply_common_qjs_option(
+    option: CommonQjsOption,
+    value: &OsString,
+    command: &str,
+    options: &mut QjsRunOptions,
+) -> Result<(), CliError> {
+    let Some(handler) = COMMON_QJS_OPTION_HANDLERS
+        .iter()
+        .find_map(|(candidate, handler)| (*candidate == option).then_some(handler))
+    else {
+        return Err(CliError::new(
+            format!("internal qjs parser missing handler for {}", option.name()),
+            1,
+        ));
+    };
+    handler(
+        value,
+        command,
+        &format!("{command} {}", option.name()),
+        options,
+    )
 }
 
 fn qjs_option_value<'a>(
