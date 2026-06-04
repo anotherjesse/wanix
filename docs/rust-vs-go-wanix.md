@@ -356,9 +356,9 @@ wanix-rust qjs-shell --raw
 terminal. It can feed input after eval, feed line-by-line scripts, pump
 ready-IO handlers, and send deterministic resize events. `qjs-shell` runs the
 bundled QuickJS shell source through the same terminal-backed task runtime,
-including a small `cd`/`ls`/`cat`/`write`/`mkdir`/`rm`/`rmdir`/`mv`/`cp`
-filesystem command set, `env`/`setenv`/`unsetenv` task-environment commands,
-and a synchronous
+including a small filesystem command set (`cd`, `ls`, `cat`, `write`, `mkdir`,
+`rm`, `rmdir`, `mv`, `cp`, `ln -s`, and `readlink`), `env`/`setenv`/
+`unsetenv` task-environment commands, and a synchronous
 `qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]` launcher for served
 namespace and workbench demos. The launcher uses `#task/new/qjs`, service-file
 `cmd`/`env`/`dir`, fd binds, `start`, and `exit` rather than a host-side
@@ -370,13 +370,14 @@ child `qjs` exit code observed from the child's `exit` service file.
 
 This is not yet a fully concurrent, production interactive scheduler. Raw mode
 still relies on the native host to put stdin into raw mode, but bytes then flow
-through `#term/<id>/data` and the guest shell owns echo, simple editing, Ctrl-D,
-and command dispatch. For the bundled interactive shell, served cwd is logical
-shell state recorded in `#task/self/dir`, while WASI remains rooted at the
-served namespace root so `cd` can navigate the tree. Normal qjs script tasks
-keep cwd-as-preopen behavior. Signal handling, cancellation, and richer
-persistent foreground child-task terminal ownership need more work. Resource
-cleanup is explicit: clients that own a terminal can write `close` to
+through `#term/<id>/data` and the guest shell owns echo, simple editing, Ctrl-C
+line cancellation, Ctrl-D exit, and command dispatch. For the bundled
+interactive shell, served cwd is logical shell state recorded in
+`#task/self/dir`, while WASI remains rooted at the served namespace root so
+`cd` can navigate the tree. Normal qjs script tasks keep cwd-as-preopen
+behavior. Signal delivery, child-task cancellation, and richer persistent
+foreground child-task terminal ownership need more work. Resource cleanup is
+explicit: clients that own a terminal can write `close` to
 `#term/<id>/ctl` to remove it from the service and invalidate existing handles.
 
 But the direction is important: terminal behavior is not browser xterm
@@ -510,13 +511,13 @@ The Rust-served workbench path now uses that contract. The `workbench-fs9p`
 bundle launches VS Code web against a `wanix:/` workspace, passes the discovered
 direct-9P route into the extension, negotiates Google.2 `walkgetattr` when the
 server advertises it, populates Explorer through that backend, exposes
-symlink/readlink through direct 9P, and can run the current JavaScript file as a
-real Wanix `qjs` task by driving `#task` and `#term` over 9P. The served
-qjs-shell WebSocket route gives the workbench a terminal/session path backed by
-the same native task and terminal model; it can start in the configured Wanix
-cwd and deliver terminal resize frames through `#term/<id>/winch`. Direct
-workbench terminals dispose of owned terminal resources through
-`#term/<id>/ctl`.
+symlink/readlink through direct 9P, preserves symlink metadata as editor file
+types, and can run the current JavaScript file as a real Wanix `qjs` task by
+driving `#task` and `#term` over 9P. The served qjs-shell WebSocket route gives
+the workbench a terminal/session path backed by the same native task and
+terminal model; it can start in the configured Wanix cwd and deliver terminal
+resize frames through `#term/<id>/winch`. Direct workbench terminals dispose of
+owned terminal resources through `#term/<id>/ctl`.
 
 With `--bundle direct-v86`, Rust `serve` generates a browser page that fetches
 the discovery document and configures v86 `filesystem.proxy_url` to the Rust 9P

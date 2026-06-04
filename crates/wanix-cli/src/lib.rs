@@ -3514,6 +3514,42 @@ std.out.flush();
         assert!(stderr.is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn qjs_shell_can_create_and_read_symlinks() {
+        let host = temp_dir("wanix-cli-shell-symlink");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io(
+            vec![
+                std::ffi::OsString::from("qjs-shell"),
+                std::ffi::OsString::from("--mount"),
+                std::ffi::OsString::from(format!("{}=host", host.display())),
+                std::ffi::OsString::from("--cwd"),
+                std::ffi::OsString::from("host"),
+            ],
+            EofForbiddenStdin::new(
+                b"write target.txt linked data\nln -s target.txt link.txt\nreadlink link.txt\ncat link.txt\nln target.txt bad.txt\nexit\n",
+            ),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            stdout,
+            b"shell task: 1\r\n$ wrote target.txt\r\n$ $ target.txt\r\n$ linked data\r\n$ ln: usage: ln -s TARGET LINK\r\n$ bye\r\n"
+        );
+        assert!(stderr.is_empty());
+        assert_eq!(
+            fs::read_link(host.join("link.txt")).unwrap(),
+            std::path::PathBuf::from("target.txt")
+        );
+        fs::remove_dir_all(host).unwrap();
+    }
+
     #[test]
     fn qjs_shell_flows_cwd_into_bundled_shell_task() {
         let mut stdout = Vec::new();
@@ -3647,6 +3683,27 @@ std.out.flush();
         assert_eq!(
             stdout,
             b"shell task: 1\r\n$ echo hellp\x08 \x08o\r\nhello\r\n$ exit\r\nbye\r\n"
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn qjs_shell_raw_ctrl_c_cancels_pending_line() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io(
+            ["qjs-shell", "--raw"],
+            EofForbiddenStdin::new(b"echo nope\x03echo yes\nexit\n"),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            stdout,
+            b"shell task: 1\r\n$ echo nope^C\r\n$ echo yes\r\nyes\r\n$ exit\r\nbye\r\n"
         );
         assert!(stderr.is_empty());
     }

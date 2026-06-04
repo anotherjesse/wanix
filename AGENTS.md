@@ -75,11 +75,12 @@ tests.
 - `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
   shell modes and served shell sessions use the same `#term` device contract,
-  with a small `cd`/`ls`/`cat`/`write`/`mkdir`/`rm`/`rmdir`/`mv`/`cp`
-  filesystem command set, `env`/`setenv`/`unsetenv` task-environment commands,
-  and synchronous child `qjs` task launches with inherited env, direct terminal
-  stdio including buffered foreground stdin handoff, namespace stdio
-  redirection, and observable child exit status for demos.
+  with a small filesystem command set (`cd`, `ls`, `cat`, `write`, `mkdir`,
+  `rm`, `rmdir`, `mv`, `cp`, `ln -s`, and `readlink`), `env`/`setenv`/
+  `unsetenv` task-environment commands, and synchronous child `qjs` task
+  launches with inherited env, direct terminal stdio including buffered
+  foreground stdin handoff, namespace stdio redirection, and observable child
+  exit status for demos.
 - `wanix-rust p9-stdio`, `p9-listen`, `p9-ws`, and `serve`: the Rust 9P server
   exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
   layers, with binary protocol traffic kept separate from diagnostics.
@@ -90,9 +91,9 @@ tests.
 - `serve --bundle workbench-fs9p`: local Code OSS/workbench launch path where
   the bootstrap passes the discovered direct-9P route into the extension,
   negotiates Google.2 `walkgetattr` when available, browses and mutates
-  `wanix:/` over direct 9P, and can open qjs-backed terminal sessions when
-  services are enabled. Direct terminal disposal writes `close` through
-  `#term/<id>/ctl`.
+  `wanix:/` over direct 9P, preserves symlink metadata for editor file types,
+  and can open qjs-backed terminal sessions when services are enabled. Direct
+  terminal disposal writes `close` through `#term/<id>/ctl`.
 - `serve --bundle direct-v86`: browser v86 handoff over Rust serve discovery,
   direct 9P, boot-asset hints, hvc0 console bridging, and autostart-friendly
   launch hooks. The generated page reports rootfs handoff status and, for
@@ -169,7 +170,8 @@ These are current guardrails for keeping retired bridge ideas out of new work:
 - Wanix runtime paths should use live Wanix-backed WASI providers; engine
   read-only virtual files are fixture support only.
 - Raw shell input should flow through `#term`; guest shells own echo, simple
-  editing, newline handling, Ctrl-D, and command dispatch.
+  editing, newline handling, Ctrl-C line cancellation, Ctrl-D exit, and command
+  dispatch.
 - Rust-served workbench paths should pass discovered direct-9P routes into the
   extension; the MessagePort/CBOR bridge is browser-embedded compatibility only.
 

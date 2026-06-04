@@ -1,6 +1,7 @@
 import { baseName, parentPath, splitPath } from './p9-path.js';
 import {
 	DT_DIR,
+	DT_LNK,
 	MESSAGE_NAMES,
 	P9_NOFID,
 	P9_RLERROR,
@@ -21,6 +22,8 @@ import {
 	P9_VERSION_GOOGLE_2,
 	P9Frame,
 	P9RemoteAttr,
+	QID_DIR,
+	QID_SYMLINK,
 	Reader,
 	Writer,
 	frame,
@@ -31,6 +34,7 @@ import {
 
 export type P9DirEntry = {
 	IsDir: boolean;
+	IsSymlink: boolean;
 	Name: string;
 	ModTime: number;
 	Offset: bigint;
@@ -170,7 +174,8 @@ export class P9Session {
 			const direntType = dirBytes.u8();
 			const name = dirBytes.string();
 			entries.push({
-				IsDir: direntType === DT_DIR || (qid.type & 0x80) !== 0,
+				IsDir: direntType === DT_DIR || (qid.type & QID_DIR) !== 0,
+				IsSymlink: direntType === DT_LNK || (qid.type & QID_SYMLINK) !== 0,
 				Name: name,
 				ModTime: 0,
 				Offset: offset,

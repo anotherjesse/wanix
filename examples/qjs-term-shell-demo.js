@@ -544,6 +544,41 @@ function runCp(words) {
   prompt();
 }
 
+function runLn(words) {
+  if (words.length !== 4 || words[1] !== "-s") {
+    std.out.puts("ln: usage: ln -s TARGET LINK\n");
+    prompt();
+    return;
+  }
+  const linkPath = resolveShellPath(words[3]);
+  if (linkPath[0] === "#") {
+    std.out.puts("ln: " + words[3] + ": service paths are not written by shell commands\n");
+    prompt();
+    return;
+  }
+  const result = os.symlink(words[2], linkPath);
+  if (result !== 0) {
+    std.out.puts("ln: " + words[3] + ": errno " + result + "\n");
+  }
+  prompt();
+}
+
+function runReadlink(words) {
+  if (words.length !== 2) {
+    std.out.puts("readlink: usage: readlink PATH\n");
+    prompt();
+    return;
+  }
+  const path = resolveShellPath(words[1]);
+  const [target, err] = os.readlink(path);
+  if (err !== 0) {
+    std.out.puts("readlink: " + words[1] + ": errno " + err + "\n");
+  } else {
+    std.out.puts(target + "\n");
+  }
+  prompt();
+}
+
 function runQjs(words) {
   if (words.length < 2) {
     std.out.puts("qjs: usage: qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]\n");
@@ -696,6 +731,14 @@ function runCommand(line) {
     runCp(words);
     return;
   }
+  if (words[0] === "ln") {
+    runLn(words);
+    return;
+  }
+  if (words[0] === "readlink") {
+    runReadlink(words);
+    return;
+  }
   if (words[0] === "qjs") {
     runQjs(words);
     return;
@@ -738,6 +781,12 @@ function runInputLine(line, bufferedRemainder) {
 }
 
 function handleRawByte(byte) {
+  if (byte === 0x03) {
+    pending = "";
+    std.out.puts("^C\n");
+    prompt();
+    return;
+  }
   if (byte === 0x04 && pending.length === 0) {
     runCommand("exit");
     return;

@@ -29,6 +29,7 @@ export type WanixP9Route = {
 
 type RemoteEntry = {
 	IsDir: boolean;
+	IsSymlink?: boolean;
 	Name: string;
 	ModTime: number;
 	Size: number;
@@ -79,25 +80,30 @@ export class WanixP9Handle {
 	}
 
 	async readDir(name: string): Promise<string[]> {
+		const entries = await this.readDirEntries(name);
+		return entries.map((entry) => entry.IsDir ? `${entry.Name}/` : entry.Name);
+	}
+
+	async readDirEntries(name: string): Promise<RemoteEntry[]> {
 		this.logger(`readDir ${name}`);
 		const fid = await this.session.walkPath(name);
 		try {
 			await this.session.open(fid, O_RDONLY);
-			const names: string[] = [];
+			const entries: RemoteEntry[] = [];
 			let offset = 0n;
 			while (true) {
-				const entries = await this.session.readdir(fid, offset, READ_CHUNK_SIZE);
-				if (entries.length === 0) {
+				const page = await this.session.readdir(fid, offset, READ_CHUNK_SIZE);
+				if (page.length === 0) {
 					break;
 				}
-				names.push(...entries.map((entry) => entry.IsDir ? `${entry.Name}/` : entry.Name));
-				const nextOffset = entries[entries.length - 1].Offset;
+				entries.push(...page);
+				const nextOffset = page[page.length - 1].Offset;
 				if (nextOffset <= offset) {
 					break;
 				}
 				offset = nextOffset;
 			}
-			return names;
+			return entries;
 		} finally {
 			await this.session.clunkQuietly(fid);
 		}
@@ -209,6 +215,7 @@ export class WanixP9Handle {
 		try {
 			return {
 				IsDir: attr.isDir,
+				IsSymlink: attr.isSymlink,
 				Name: baseNameOrRoot(name),
 				ModTime: attr.mtimeMs,
 				Size: attr.size,

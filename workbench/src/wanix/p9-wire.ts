@@ -26,6 +26,7 @@ export const P9_VERSION = "9P2000.L";
 export const P9_VERSION_GOOGLE_2 = "9P2000.L.Google.2";
 
 export const DT_DIR = 4;
+export const DT_LNK = 10;
 export const AT_REMOVEDIR = 0x200;
 export const O_RDONLY = 0;
 export const O_RDWR = 0o2;
@@ -35,6 +36,9 @@ export const MODE_DIR = 0o040755;
 
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o040000;
+const S_IFLNK = 0o120000;
+export const QID_DIR = 0x80;
+export const QID_SYMLINK = 0x02;
 
 export type P9Qid = {
 	type: number;
@@ -44,6 +48,7 @@ export type P9Qid = {
 
 export type P9RemoteAttr = {
 	isDir: boolean;
+	isSymlink: boolean;
 	size: number;
 	mtimeMs: number;
 };
@@ -239,7 +244,8 @@ function readAttrBody(reader: Reader): P9AttrBody {
 
 function remoteAttr(body: P9AttrBody, qid: P9Qid | undefined): P9RemoteAttr {
 	return {
-		isDir: (body.mode & S_IFMT) === S_IFDIR || ((qid?.type ?? 0) & 0x80) !== 0,
+		isDir: (body.mode & S_IFMT) === S_IFDIR || ((qid?.type ?? 0) & QID_DIR) !== 0,
+		isSymlink: (body.mode & S_IFMT) === S_IFLNK || ((qid?.type ?? 0) & QID_SYMLINK) !== 0,
 		size: body.size,
 		mtimeMs: body.mtimeMs,
 	};

@@ -353,11 +353,13 @@ $ bye
 > Developer aside: `qjs-term` and `qjs-shell` prove that terminal behavior is a
 > Wanix device contract, not browser xterm glue. `qjs-shell --raw` puts native
 > stdin in raw mode on Unix hosts, then feeds bytes through `#term/<id>/data` so
-> the guest shell owns echo, simple editing, Ctrl-D, and command dispatch.
+> the guest shell owns echo, simple editing, Ctrl-C line cancellation, Ctrl-D
+> exit, and command dispatch.
 > The bundled shell has a small filesystem command set (`cd`, `ls`, `cat`,
-> `write`, `mkdir`, `rm`, `rmdir`, `mv`, and `cp`) for Wanix namespace demos,
-> `env`/`setenv`/`unsetenv` commands that edit the shell task's `#task/self/env`,
-> plus a synchronous `qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]`
+> `write`, `mkdir`, `rm`, `rmdir`, `mv`, `cp`, `ln -s`, and `readlink`) for
+> Wanix namespace demos, `env`/`setenv`/`unsetenv` commands that edit the shell
+> task's `#task/self/env`, plus a synchronous
+> `qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]`
 > launcher that allocates a child `qjs` task through `#task/new/qjs`, wires
 > terminal stdio or namespace files to fd `0`/`1`/`2`, copies the shell task
 > environment into the child task, hands buffered terminal input after the qjs
@@ -437,11 +439,11 @@ the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
 > clients browsing the same Wanix namespace. The workbench bootstrap passes the
 > discovered direct-9P route into the extension, the workbench client negotiates
 > Google.2 `walkgetattr` when available, direct browser/workbench clients expose
-> symlink/readlink over the same 9P route, and `serve --wanix-services` exports
-> `#task` and `#term` so those clients can start qjs
-> tasks, attach terminals, start served qjs-shell sessions in the requested
-> Wanix cwd, forward resizes through `#term/<id>/winch`, close owned terminals
-> through `#term/<id>/ctl`, and observe exit state.
+> symlink/readlink and preserve symlink metadata over the same 9P route, and
+> `serve --wanix-services` exports `#task` and `#term` so those clients can
+> start qjs tasks, attach terminals, start served qjs-shell sessions in the
+> requested Wanix cwd, forward resizes through `#term/<id>/winch`, close owned
+> terminals through `#term/<id>/ctl`, and observe exit state.
 > `rootfs` and `qemu` are the native VM handoff path, not a VM manager yet.
 > `rootfs --json` emits `wanix-rootfs.v1` with the prepared root, boot markers,
 > default QEMU manifest, and direct-v86 serve argv. `/.well-known/rootfs.json`

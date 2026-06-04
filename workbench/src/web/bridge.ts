@@ -17,6 +17,7 @@ import {
 
 interface RemoteEntry {
     IsDir: boolean;
+    IsSymlink?: boolean;
     Name: string;
     // Ctime: number;
     ModTime: number;
@@ -240,6 +241,14 @@ function looksBinary(contents: Uint8Array): boolean {
 	return false;
 }
 
+function remoteFileType(entry: RemoteEntry): FileType {
+	let type = entry.IsDir ? FileType.Directory : FileType.File;
+	if (entry.IsSymlink) {
+		type |= FileType.SymbolicLink;
+	}
+	return type;
+}
+
 function* textSearchResults(uri: Uri, text: string, matcher: RegExp): Iterable<WanixTextSearchResult> {
 	const lines = text.split("\n");
 	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
@@ -278,7 +287,7 @@ export class File implements FileStat {
 	name: string;
 
 	constructor(public uri: Uri, entry: RemoteEntry) {
-		this.type = FileType.File;
+		this.type = remoteFileType(entry);
 		this.ctime = 0;
 		this.mtime = entry.ModTime || 0;
 		this.size = entry.Size;
@@ -296,7 +305,7 @@ export class Directory implements FileStat {
 	name: string;
 
 	constructor(public uri: Uri, entry: RemoteEntry) {
-		this.type = FileType.Directory;
+		this.type = remoteFileType(entry);
 		this.ctime = 0;
 		this.mtime = entry.ModTime || 0;
 		this.size = entry.Size;
@@ -392,6 +401,10 @@ export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider,
 
 	async _readDirectory(uri: Uri): Promise<[string, FileType][]> {
         await this.ready;
+		if (typeof this.wfsys.readDirEntries === "function") {
+			const entries: RemoteEntry[] = await this.wfsys.readDirEntries(this.normalizePath(uri.path));
+			return entries.map((entry) => [entry.Name, remoteFileType(entry)]);
+		}
 		const entries = await this.wfsys.readDir(this.normalizePath(uri.path));
 		let result: [string, FileType][] = [];
 		for (const entry of entries) {

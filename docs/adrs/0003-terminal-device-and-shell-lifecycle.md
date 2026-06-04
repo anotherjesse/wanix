@@ -50,8 +50,8 @@ pseudoterminals, deterministic fixtures, or future VM/editor terminals. Those
 surfaces should use `#task` and `#term` service files and close from observed
 Wanix task/session state rather than from frontend-only assumptions. In raw
 interactive modes, the host should feed bytes through the terminal device and
-let the guest-side shell own echo, simple editing, newline handling, Ctrl-D, and
-command dispatch.
+let the guest-side shell own echo, simple editing, newline handling, Ctrl-C
+line cancellation, Ctrl-D exit, and command dispatch.
 
 The bundled QuickJS shell is a guest program inside a Wanix task, not a separate
 process model. It may provide built-in interactive commands such as `cd`, `ls`,
