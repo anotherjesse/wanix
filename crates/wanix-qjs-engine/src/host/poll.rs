@@ -5,22 +5,9 @@ use super::guest_memory::{guest_len, guest_offset_at, guest_range};
 use super::{ERRNO_INVAL, ERRNO_NOSYS, ERRNO_SUCCESS, HostState, caller_memory};
 use super::{QuickJsWasiErrno, QuickJsWasiFdStat};
 use crate::guest::guest_offset;
-use wasmtime::{Caller, Linker, Memory};
+use wasmtime::{Caller, Linker};
 
-const WASI_U32_SIZE: usize = 4;
-const SUBSCRIPTION_SIZE: usize = 48;
-const EVENT_SIZE: usize = 32;
-
-const SUBSCRIPTION_USERDATA_OFFSET: usize = 0;
-const SUBSCRIPTION_TAG_OFFSET: usize = 8;
-const SUBSCRIPTION_CLOCK_ID_OFFSET: usize = 16;
-const SUBSCRIPTION_CLOCK_TIMEOUT_OFFSET: usize = 24;
-const SUBSCRIPTION_CLOCK_FLAGS_OFFSET: usize = 40;
-const SUBSCRIPTION_FD_OFFSET: usize = 16;
-
-const EVENT_USERDATA_OFFSET: usize = 0;
-const EVENT_ERROR_OFFSET: usize = 8;
-const EVENT_TYPE_OFFSET: usize = 10;
+mod layout;
 
 const EVENTTYPE_CLOCK: u8 = 0;
 const EVENTTYPE_FD_READ: u8 = 1;
@@ -48,13 +35,18 @@ fn poll_oneoff(
         return Ok(ERRNO_INVAL);
     }
     let memory = caller_memory(&caller)?;
-    guest_range(&memory, &caller, guest_offset(nevents_ptr), WASI_U32_SIZE)?;
+    guest_range(
+        &memory,
+        &caller,
+        guest_offset(nevents_ptr),
+        layout::WASI_U32_SIZE,
+    )?;
     guest_range(
         &memory,
         &caller,
         guest_offset(in_ptr),
         nsubscriptions
-            .checked_mul(SUBSCRIPTION_SIZE)
+            .checked_mul(layout::SUBSCRIPTION_SIZE)
             .ok_or_else(|| wasmtime::Error::msg("poll_oneoff subscription size overflow"))?,
     )?;
     guest_range(
@@ -62,7 +54,7 @@ fn poll_oneoff(
         &caller,
         guest_offset(out_ptr),
         nsubscriptions
-            .checked_mul(EVENT_SIZE)
+            .checked_mul(layout::EVENT_SIZE)
             .ok_or_else(|| wasmtime::Error::msg("poll_oneoff event size overflow"))?,
     )?;
 
@@ -71,10 +63,10 @@ fn poll_oneoff(
         .try_reserve_exact(nsubscriptions)
         .map_err(|_| wasmtime::Error::msg("poll_oneoff subscription allocation failed"))?;
     for index in 0..nsubscriptions {
-        let mut subscription = [0; SUBSCRIPTION_SIZE];
+        let mut subscription = [0; layout::SUBSCRIPTION_SIZE];
         memory.read(
             &caller,
-            guest_offset_at(in_ptr, index, SUBSCRIPTION_SIZE)?,
+            guest_offset_at(in_ptr, index, layout::SUBSCRIPTION_SIZE)?,
             &mut subscription,
         )?;
         subscriptions.push(subscription);
@@ -83,7 +75,7 @@ fn poll_oneoff(
     let mut ready_events = Vec::new();
     let mut pending_fd = false;
     for subscription in &subscriptions {
-        match subscription[SUBSCRIPTION_TAG_OFFSET] {
+        match layout::subscription_tag(subscription) {
             EVENTTYPE_FD_READ | EVENTTYPE_FD_WRITE => {
                 let event = match fd_event(&caller, subscription)? {
                     Ok(event) => event,
@@ -108,13 +100,13 @@ fn poll_oneoff(
         }
     }
     if !ready_events.is_empty() {
-        write_events(&memory, &mut caller, out_ptr, &ready_events)?;
-        write_nevents(&memory, &mut caller, nevents_ptr, ready_events.len())?;
+        layout::write_events(&memory, &mut caller, out_ptr, &ready_events)?;
+        layout::write_nevents(&memory, &mut caller, nevents_ptr, ready_events.len())?;
         return Ok(ERRNO_SUCCESS);
     }
 
     if pending_fd {
-        write_nevents(&memory, &mut caller, nevents_ptr, 0)?;
+        layout::write_nevents(&memory, &mut caller, nevents_ptr, 0)?;
         return Ok(ERRNO_SUCCESS);
     }
 
@@ -125,14 +117,14 @@ fn poll_oneoff(
     guest_range(
         &memory,
         &caller,
-        guest_offset_at(in_ptr, 0, SUBSCRIPTION_SIZE)?,
-        SUBSCRIPTION_SIZE,
+        guest_offset_at(in_ptr, 0, layout::SUBSCRIPTION_SIZE)?,
+        layout::SUBSCRIPTION_SIZE,
     )?;
     guest_range(
         &memory,
         &caller,
-        guest_offset_at(out_ptr, 0, EVENT_SIZE)?,
-        EVENT_SIZE,
+        guest_offset_at(out_ptr, 0, layout::EVENT_SIZE)?,
+        layout::EVENT_SIZE,
     )?;
 
     let event = match clock_event(&caller, &subscriptions[0]) {
@@ -141,15 +133,15 @@ fn poll_oneoff(
     };
 
     memory.write(&mut caller, guest_offset(out_ptr), &event)?;
-    write_nevents(&memory, &mut caller, nevents_ptr, 1)?;
+    layout::write_nevents(&memory, &mut caller, nevents_ptr, 1)?;
     Ok(ERRNO_SUCCESS)
 }
 
 fn fd_event(
     caller: &Caller<'_, HostState>,
-    subscription: &[u8; SUBSCRIPTION_SIZE],
-) -> wasmtime::Result<Result<Option<[u8; EVENT_SIZE]>, i32>> {
-    let event_type = subscription[SUBSCRIPTION_TAG_OFFSET];
+    subscription: &layout::Subscription,
+) -> wasmtime::Result<Result<Option<layout::Event>, i32>> {
+    let event_type = layout::subscription_tag(subscription);
     let required_right = match event_type {
         EVENTTYPE_FD_READ => RIGHT_FD_READ,
         EVENTTYPE_FD_WRITE => RIGHT_FD_WRITE,
@@ -158,7 +150,7 @@ fn fd_event(
     let Some(host) = caller.data().wasi_host() else {
         return Ok(Err(ERRNO_NOSYS));
     };
-    let fd = read_u32(subscription, SUBSCRIPTION_FD_OFFSET);
+    let fd = layout::subscription_fd(subscription);
     let mut host = host
         .lock()
         .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
@@ -199,8 +191,8 @@ fn readiness_errno(stat: QuickJsWasiFdStat, required_right: u64) -> Option<Quick
 
 fn immediate_clock_event(
     caller: &Caller<'_, HostState>,
-    subscription: &[u8; SUBSCRIPTION_SIZE],
-) -> Result<Option<[u8; EVENT_SIZE]>, i32> {
+    subscription: &layout::Subscription,
+) -> Result<Option<layout::Event>, i32> {
     let sleep_ns = clock_sleep_ns(caller, subscription)?;
     if sleep_ns == 0 {
         Ok(Some(event_with_errno(subscription, EVENTTYPE_CLOCK, None)))
@@ -211,8 +203,8 @@ fn immediate_clock_event(
 
 fn clock_event(
     caller: &Caller<'_, HostState>,
-    subscription: &[u8; SUBSCRIPTION_SIZE],
-) -> Result<[u8; EVENT_SIZE], i32> {
+    subscription: &layout::Subscription,
+) -> Result<layout::Event, i32> {
     let sleep_ns = clock_sleep_ns(caller, subscription)?;
     if sleep_ns != 0 {
         thread::sleep(Duration::from_nanos(sleep_ns));
@@ -222,19 +214,19 @@ fn clock_event(
 
 fn clock_sleep_ns(
     caller: &Caller<'_, HostState>,
-    subscription: &[u8; SUBSCRIPTION_SIZE],
+    subscription: &layout::Subscription,
 ) -> Result<u64, i32> {
-    if subscription[SUBSCRIPTION_TAG_OFFSET] != EVENTTYPE_CLOCK {
+    if layout::subscription_tag(subscription) != EVENTTYPE_CLOCK {
         return Err(ERRNO_NOSYS);
     }
 
-    let clock_id = read_u32(subscription, SUBSCRIPTION_CLOCK_ID_OFFSET);
+    let clock_id = layout::subscription_clock_id(subscription);
     if clock_id != CLOCKID_REALTIME && clock_id != CLOCKID_MONOTONIC {
         return Err(ERRNO_NOSYS);
     }
 
-    let timeout_ns = read_u64(subscription, SUBSCRIPTION_CLOCK_TIMEOUT_OFFSET);
-    let flags = read_u16(subscription, SUBSCRIPTION_CLOCK_FLAGS_OFFSET);
+    let timeout_ns = layout::subscription_clock_timeout(subscription);
+    let flags = layout::subscription_clock_flags(subscription);
     if flags & !SUBCLOCKFLAGS_ABSTIME != 0 {
         return Err(ERRNO_INVAL);
     }
@@ -248,70 +240,13 @@ fn clock_sleep_ns(
 }
 
 fn event_with_errno(
-    subscription: &[u8; SUBSCRIPTION_SIZE],
+    subscription: &layout::Subscription,
     event_type: u8,
     errno: Option<QuickJsWasiErrno>,
-) -> [u8; EVENT_SIZE] {
-    let mut event = [0; EVENT_SIZE];
-    event[EVENT_USERDATA_OFFSET..EVENT_USERDATA_OFFSET + 8].copy_from_slice(
-        &subscription[SUBSCRIPTION_USERDATA_OFFSET..SUBSCRIPTION_USERDATA_OFFSET + 8],
-    );
+) -> layout::Event {
+    let mut event = layout::event_with_userdata(subscription);
     let errno = errno.map_or(0, |errno| errno.preview1_result() as u16);
-    event[EVENT_ERROR_OFFSET..EVENT_ERROR_OFFSET + 2].copy_from_slice(&errno.to_le_bytes());
-    event[EVENT_TYPE_OFFSET] = event_type;
+    layout::set_event_errno(&mut event, errno);
+    layout::set_event_type(&mut event, event_type);
     event
-}
-
-fn write_events(
-    memory: &Memory,
-    caller: &mut Caller<'_, HostState>,
-    out_ptr: i32,
-    events: &[[u8; EVENT_SIZE]],
-) -> wasmtime::Result<()> {
-    for (index, event) in events.iter().enumerate() {
-        memory.write(
-            &mut *caller,
-            guest_offset_at(out_ptr, index, EVENT_SIZE)?,
-            event,
-        )?;
-    }
-    Ok(())
-}
-
-fn write_nevents(
-    memory: &Memory,
-    caller: &mut Caller<'_, HostState>,
-    nevents_ptr: i32,
-    nevents: usize,
-) -> wasmtime::Result<()> {
-    let nevents = u32::try_from(nevents)
-        .map_err(|_| wasmtime::Error::msg("poll_oneoff event count exceeds u32"))?;
-    memory.write(caller, guest_offset(nevents_ptr), &nevents.to_le_bytes())?;
-    Ok(())
-}
-
-fn read_u16(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([
-        bytes[offset],
-        bytes[offset + 1],
-        bytes[offset + 2],
-        bytes[offset + 3],
-    ])
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes([
-        bytes[offset],
-        bytes[offset + 1],
-        bytes[offset + 2],
-        bytes[offset + 3],
-        bytes[offset + 4],
-        bytes[offset + 5],
-        bytes[offset + 6],
-        bytes[offset + 7],
-    ])
 }
