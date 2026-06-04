@@ -27,8 +27,6 @@ mod host_api;
 mod task_context;
 mod task_runtime;
 mod task_stdio;
-#[cfg(test)]
-mod wasi_host;
 
 pub use bundled::bundled_module_cache_dir;
 pub use driver::QuickJsTaskDriver;
