@@ -29,70 +29,161 @@ pub(super) enum PostEvalFeed {
 }
 
 pub(crate) fn parse_qjs_term_command(args: &[OsString]) -> Result<QjsTermCommand, CliError> {
-    let mut qjs_args = Vec::new();
-    let mut feed_after_eval = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--feed-after-eval" {
-            i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage("qjs-term --feed-after-eval expects text"))?;
-            feed_after_eval.push(PostEvalFeed::Bytes(
-                os_arg_to_string(value, "qjs-term --feed-after-eval")?.into_bytes(),
-            ));
-            i += 1;
-        } else if args[i] == "--feed-after-eval-file" {
-            i += 1;
-            let value = args.get(i).ok_or_else(|| {
-                CliError::usage("qjs-term --feed-after-eval-file expects PATH or -")
-            })?;
-            if value == "-" {
-                feed_after_eval.push(PostEvalFeed::Process);
-            } else {
-                feed_after_eval.push(PostEvalFeed::File(PathBuf::from(value)));
-            }
-            i += 1;
-        } else if args[i] == "--feed-after-eval-lines" {
-            i += 1;
-            let value = args.get(i).ok_or_else(|| {
-                CliError::usage("qjs-term --feed-after-eval-lines expects PATH or -")
-            })?;
-            if value == "-" {
-                feed_after_eval.push(PostEvalFeed::LinesProcess);
-            } else {
-                feed_after_eval.push(PostEvalFeed::LinesFile(PathBuf::from(value)));
-            }
-            i += 1;
-        } else if args[i] == "--resize-after-eval" {
-            i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage("qjs-term --resize-after-eval expects COLSxROWS"))?;
-            feed_after_eval.push(PostEvalFeed::Resize(parse_term_resize(
-                value,
-                "qjs-term --resize-after-eval",
-            )?));
-            i += 1;
-        } else if args[i] == "--" {
-            qjs_args.extend_from_slice(&args[i..]);
-            break;
-        } else if qjs_option_takes_value(&args[i]) {
-            qjs_args.push(args[i].clone());
-            i += 1;
-            if let Some(value) = args.get(i) {
-                qjs_args.push(value.clone());
-                i += 1;
-            }
-        } else {
-            qjs_args.extend_from_slice(&args[i..]);
-            break;
+    let parsed = QjsTermArgParser::new(args).parse()?;
+    Ok(QjsTermCommand {
+        qjs: parse_qjs_command_for(&parsed.qjs_args, "qjs-term")?,
+        feed_after_eval: parsed.feed_after_eval,
+    })
+}
+
+struct ParsedQjsTermArgs {
+    qjs_args: Vec<OsString>,
+    feed_after_eval: Vec<PostEvalFeed>,
+}
+
+struct QjsTermArgParser<'a> {
+    args: &'a [OsString],
+    index: usize,
+    parsed: ParsedQjsTermArgs,
+}
+
+impl<'a> QjsTermArgParser<'a> {
+    fn new(args: &'a [OsString]) -> Self {
+        Self {
+            args,
+            index: 0,
+            parsed: ParsedQjsTermArgs {
+                qjs_args: Vec::new(),
+                feed_after_eval: Vec::new(),
+            },
         }
     }
-    Ok(QjsTermCommand {
-        qjs: parse_qjs_command_for(&qjs_args, "qjs-term")?,
-        feed_after_eval,
-    })
+
+    fn parse(mut self) -> Result<ParsedQjsTermArgs, CliError> {
+        while let Some(arg) = self.current() {
+            match QjsTermOption::from_arg(arg) {
+                Some(QjsTermOption::FeedBytes) => self.parse_feed_bytes()?,
+                Some(QjsTermOption::FeedFile) => self.parse_feed_file()?,
+                Some(QjsTermOption::FeedLines) => self.parse_feed_lines()?,
+                Some(QjsTermOption::Resize) => self.parse_resize()?,
+                None if qjs_option_takes_value(arg) => self.parse_qjs_value_option(),
+                None => {
+                    self.forward_remaining_qjs_args();
+                    break;
+                }
+            }
+        }
+        Ok(self.parsed)
+    }
+
+    fn current(&self) -> Option<&OsString> {
+        self.args.get(self.index)
+    }
+
+    fn take_value(&mut self, label: &str) -> Result<&'a OsString, CliError> {
+        self.index += 1;
+        let value = self
+            .args
+            .get(self.index)
+            .ok_or_else(|| CliError::usage(format!("{label} expects {}", value_name(label))))?;
+        self.index += 1;
+        Ok(value)
+    }
+
+    fn parse_feed_bytes(&mut self) -> Result<(), CliError> {
+        let label = "qjs-term --feed-after-eval";
+        let value = self.take_value(label)?;
+        self.parsed.feed_after_eval.push(PostEvalFeed::Bytes(
+            os_arg_to_string(value, label)?.into_bytes(),
+        ));
+        Ok(())
+    }
+
+    fn parse_feed_file(&mut self) -> Result<(), CliError> {
+        let value = self.take_value("qjs-term --feed-after-eval-file")?;
+        self.parsed.feed_after_eval.push(feed_path_or_process(
+            value,
+            PostEvalFeed::File,
+            PostEvalFeed::Process,
+        ));
+        Ok(())
+    }
+
+    fn parse_feed_lines(&mut self) -> Result<(), CliError> {
+        let value = self.take_value("qjs-term --feed-after-eval-lines")?;
+        self.parsed.feed_after_eval.push(feed_path_or_process(
+            value,
+            PostEvalFeed::LinesFile,
+            PostEvalFeed::LinesProcess,
+        ));
+        Ok(())
+    }
+
+    fn parse_resize(&mut self) -> Result<(), CliError> {
+        let label = "qjs-term --resize-after-eval";
+        let value = self.take_value(label)?;
+        self.parsed
+            .feed_after_eval
+            .push(PostEvalFeed::Resize(parse_term_resize(value, label)?));
+        Ok(())
+    }
+
+    fn parse_qjs_value_option(&mut self) {
+        let arg = &self.args[self.index];
+        self.parsed.qjs_args.push(arg.clone());
+        self.index += 1;
+        if let Some(value) = self.args.get(self.index) {
+            self.parsed.qjs_args.push(value.clone());
+            self.index += 1;
+        }
+    }
+
+    fn forward_remaining_qjs_args(&mut self) {
+        self.parsed
+            .qjs_args
+            .extend_from_slice(&self.args[self.index..]);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum QjsTermOption {
+    FeedBytes,
+    FeedFile,
+    FeedLines,
+    Resize,
+}
+
+impl QjsTermOption {
+    fn from_arg(arg: &OsString) -> Option<Self> {
+        match arg.to_str()? {
+            "--feed-after-eval" => Some(Self::FeedBytes),
+            "--feed-after-eval-file" => Some(Self::FeedFile),
+            "--feed-after-eval-lines" => Some(Self::FeedLines),
+            "--resize-after-eval" => Some(Self::Resize),
+            _ => None,
+        }
+    }
+}
+
+fn value_name(label: &str) -> &'static str {
+    match label {
+        "qjs-term --feed-after-eval" => "text",
+        "qjs-term --feed-after-eval-file" | "qjs-term --feed-after-eval-lines" => "PATH or -",
+        "qjs-term --resize-after-eval" => "COLSxROWS",
+        _ => "value",
+    }
+}
+
+fn feed_path_or_process(
+    value: &OsString,
+    file: impl FnOnce(PathBuf) -> PostEvalFeed,
+    process: PostEvalFeed,
+) -> PostEvalFeed {
+    if value == "-" {
+        process
+    } else {
+        file(PathBuf::from(value))
+    }
 }
 
 pub(crate) fn parse_qjs_shell_command(args: &[OsString]) -> Result<QjsShellCommand, CliError> {

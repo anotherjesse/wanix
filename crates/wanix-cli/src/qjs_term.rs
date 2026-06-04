@@ -199,6 +199,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_qjs_term_continues_after_qjs_value_options_before_script() {
+        let command = parse_qjs_term_command(&[
+            "--cwd".into(),
+            "app".into(),
+            "--feed-after-eval".into(),
+            "input".into(),
+            "--ready-io-turns".into(),
+            "3".into(),
+            "--resize-after-eval".into(),
+            "120x50".into(),
+            "demo.js".into(),
+        ])
+        .unwrap();
+
+        assert_eq!(command.qjs.cwd.as_str(), "app");
+        assert_eq!(command.qjs.ready_io_turns, 3);
+        assert_eq!(command.qjs.script_path, PathBuf::from("demo.js"));
+        assert_eq!(
+            command.feed_after_eval,
+            [
+                PostEvalFeed::Bytes(b"input".to_vec()),
+                PostEvalFeed::Resize(TermResize {
+                    columns: 120,
+                    rows: 50
+                })
+            ]
+        );
+    }
+
+    #[test]
     fn parse_qjs_term_preserves_feed_option_after_script_as_argument() {
         let command = parse_qjs_term_command(&[
             "demo.js".into(),
