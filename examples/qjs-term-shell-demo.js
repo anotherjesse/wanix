@@ -7,7 +7,9 @@ function stringFromBytes(bytes, count) {
 
 let pending = "";
 let running = true;
+let terminalSize = "";
 const rawInput = std.getenv("WANIX_QJS_SHELL_RAW") === "1";
+const termId = std.getenv("WANIX_TERM_ID") || "1";
 
 function prompt() {
   if (running) {
@@ -24,6 +26,9 @@ function runCommand(line) {
   if (trimmed === "exit") {
     running = false;
     os.setReadHandler(0, null);
+    if (winchFd >= 0) {
+      os.close(winchFd);
+    }
     std.out.puts("bye\n");
     std.out.flush();
     std.exit(0);
@@ -36,6 +41,12 @@ function runCommand(line) {
   }
   if (trimmed === "pwd") {
     std.out.puts(std.loadFile("#task/self/dir").trim() + "\n");
+    prompt();
+    return;
+  }
+  if (trimmed === "size") {
+    drainWinch();
+    std.out.puts("size " + (terminalSize || "unknown") + "\n");
     prompt();
     return;
   }
@@ -103,6 +114,21 @@ function handleLineInput(bytes, count) {
     const line = pending.slice(0, newline);
     pending = pending.slice(newline + 1);
     runCommand(line);
+  }
+}
+
+const winchFd = os.open("#term/" + termId + "/winch", os.O_RDONLY);
+function drainWinch() {
+  if (winchFd < 0) {
+    return;
+  }
+  const bytes = new Uint8Array(64);
+  let count;
+  while ((count = os.read(winchFd, bytes.buffer, 0, bytes.length)) > 0) {
+    const lines = stringFromBytes(bytes, count).trim().split("\n").filter(Boolean);
+    if (lines.length > 0) {
+      terminalSize = lines[lines.length - 1];
+    }
   }
 }
 

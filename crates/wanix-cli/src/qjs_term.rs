@@ -1,3 +1,5 @@
+#[cfg(all(test, unix))]
+use std::collections::VecDeque;
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::io;
@@ -5,6 +7,8 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(all(test, unix))]
+use std::sync::Mutex;
 use std::time::Duration;
 
 use wanix_fs::{FileSystem, LocalFs, MemFs, NormalizedPath, OpenOptions};
@@ -22,7 +26,7 @@ use super::{
 
 const QJS_SHELL_SOURCE: &str = include_str!("../../../examples/qjs-term-shell-demo.js");
 const QJS_SHELL_SCRIPT_SENTINEL: &str = "__wanix_qjs_shell.js";
-const QJS_SHELL_READY_IO_TURNS: usize = 1;
+const QJS_SHELL_READY_IO_TURNS: usize = 2;
 const QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS: u64 = 20;
 
 pub(super) struct QjsShellSession {
@@ -160,7 +164,7 @@ pub(super) struct QjsShellCommand {
     raw: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TermResize {
     columns: u16,
     rows: u16,
@@ -173,11 +177,113 @@ enum ProcessInputMode {
     PollFd(libc::c_int),
 }
 
+#[derive(Debug, Clone)]
+enum ProcessResizeSource {
+    None,
+    #[cfg(unix)]
+    TerminalSizeFd(TerminalSizeSource),
+    #[cfg(all(test, unix))]
+    Queue(Arc<Mutex<VecDeque<(u16, u16)>>>),
+}
+
+#[derive(Debug, Clone)]
+struct ProcessEventSources {
+    input_mode: ProcessInputMode,
+    resize_source: ProcessResizeSource,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TerminalPumpPolicy {
     ready_io_turns: usize,
     event_loop_wait_budget: Duration,
     input_mode: ProcessInputMode,
+}
+
+#[derive(Debug, Clone)]
+struct TerminalPumpState {
+    policy: TerminalPumpPolicy,
+    resize_source: ProcessResizeSource,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminalSizeSource {
+    fd: libc::c_int,
+    last: Option<TermResize>,
+}
+
+impl ProcessResizeSource {
+    fn next_resize(&mut self) -> Result<Option<TermResize>, CliError> {
+        match self {
+            Self::None => Ok(None),
+            #[cfg(unix)]
+            Self::TerminalSizeFd(source) => source.next_resize(),
+            #[cfg(all(test, unix))]
+            Self::Queue(queue) => {
+                let Some((columns, rows)) = queue
+                    .lock()
+                    .map_err(|_| CliError::new("test resize queue lock poisoned", 1))?
+                    .pop_front()
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(TermResize { columns, rows }))
+            }
+        }
+    }
+}
+
+impl ProcessEventSources {
+    fn blocking() -> Self {
+        Self {
+            input_mode: ProcessInputMode::Blocking,
+            resize_source: ProcessResizeSource::None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn input_fd(input_fd: libc::c_int) -> Self {
+        Self {
+            input_mode: ProcessInputMode::PollFd(input_fd),
+            resize_source: ProcessResizeSource::None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn terminal_fds(input_fd: libc::c_int, terminal_size_fd: libc::c_int) -> Self {
+        Self {
+            input_mode: ProcessInputMode::PollFd(input_fd),
+            resize_source: ProcessResizeSource::TerminalSizeFd(TerminalSizeSource::new(
+                terminal_size_fd,
+            )),
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    fn resize_queue(input_fd: libc::c_int, resize_queue: Arc<Mutex<VecDeque<(u16, u16)>>>) -> Self {
+        Self {
+            input_mode: ProcessInputMode::PollFd(input_fd),
+            resize_source: ProcessResizeSource::Queue(resize_queue),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl TerminalSizeSource {
+    fn new(fd: libc::c_int) -> Self {
+        Self { fd, last: None }
+    }
+
+    fn next_resize(&mut self) -> Result<Option<TermResize>, CliError> {
+        let Some(resize) = terminal_size_for_fd(self.fd)? else {
+            return Ok(None);
+        };
+        if self.last == Some(resize) {
+            return Ok(None);
+        }
+        self.last = Some(resize);
+        Ok(Some(resize))
+    }
 }
 
 impl TermResize {
@@ -400,7 +506,55 @@ pub(super) fn run_qjs_shell_streaming_with_input_fd(
             PostEvalFeed::LinesProcess
         }],
         QjsTermProgram::BundledShell,
-        ProcessInputMode::PollFd(input_fd),
+        ProcessEventSources::input_fd(input_fd),
+        process_stdin,
+        process_stdout,
+        process_stderr,
+    )
+}
+
+#[cfg(unix)]
+pub(super) fn run_qjs_shell_streaming_with_terminal_fds(
+    command: QjsShellCommand,
+    process_stdin: &mut dyn Read,
+    input_fd: libc::c_int,
+    terminal_size_fd: libc::c_int,
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    run_qjs_term_program_streaming_with_input_mode(
+        qjs_shell_command(command.qjs, command.raw),
+        vec![if command.raw {
+            PostEvalFeed::RawBytesProcess
+        } else {
+            PostEvalFeed::LinesProcess
+        }],
+        QjsTermProgram::BundledShell,
+        ProcessEventSources::terminal_fds(input_fd, terminal_size_fd),
+        process_stdin,
+        process_stdout,
+        process_stderr,
+    )
+}
+
+#[cfg(all(test, unix))]
+pub(super) fn run_qjs_shell_streaming_with_resize_queue(
+    command: QjsShellCommand,
+    process_stdin: &mut dyn Read,
+    input_fd: libc::c_int,
+    resize_queue: Arc<Mutex<VecDeque<(u16, u16)>>>,
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    run_qjs_term_program_streaming_with_input_mode(
+        qjs_shell_command(command.qjs, command.raw),
+        vec![if command.raw {
+            PostEvalFeed::RawBytesProcess
+        } else {
+            PostEvalFeed::LinesProcess
+        }],
+        QjsTermProgram::BundledShell,
+        ProcessEventSources::resize_queue(input_fd, resize_queue),
         process_stdin,
         process_stdout,
         process_stderr,
@@ -408,6 +562,7 @@ pub(super) fn run_qjs_shell_streaming_with_input_fd(
 }
 
 fn qjs_shell_command(mut command: QjsCommand, raw: bool) -> QjsCommand {
+    command.ready_io_turns = command.ready_io_turns.max(QJS_SHELL_READY_IO_TURNS);
     if raw {
         command.env.push("WANIX_QJS_SHELL_RAW=1".to_owned());
     }
@@ -432,7 +587,7 @@ fn run_qjs_term_program_streaming(
         qjs_command,
         feed_after_eval,
         program,
-        ProcessInputMode::Blocking,
+        ProcessEventSources::blocking(),
         process_stdin,
         process_stdout,
         process_stderr,
@@ -443,7 +598,7 @@ fn run_qjs_term_program_streaming_with_input_mode(
     qjs_command: QjsCommand,
     feed_after_eval: Vec<PostEvalFeed>,
     program: QjsTermProgram,
-    input_mode: ProcessInputMode,
+    event_sources: ProcessEventSources,
     process_stdin: &mut dyn Read,
     process_stdout: &mut dyn Write,
     process_stderr: &mut dyn Write,
@@ -475,11 +630,15 @@ fn run_qjs_term_program_streaming_with_input_mode(
     bind_host_mounts(&task, &qjs_command.mounts)?;
 
     let (terminal, terminal_id) = attach_task_terminal(&task, stdin_bytes)?;
+    let mut task_env = qjs_command.env.clone();
+    if program == QjsTermProgram::BundledShell {
+        task_env.push(format!("WANIX_TERM_ID={terminal_id}"));
+    }
     configure_qjs_task(
         &task,
         QJS_GUEST_SCRIPT,
         &qjs_command.args,
-        &qjs_command.env,
+        &task_env,
         &qjs_command.cwd,
     )?;
 
@@ -511,10 +670,13 @@ fn run_qjs_term_program_streaming_with_input_mode(
                 &terminal,
                 &terminal_id,
                 &mut runtime,
-                TerminalPumpPolicy {
-                    ready_io_turns: qjs_command.ready_io_turns,
-                    event_loop_wait_budget: qjs_command.event_loop_wait_budget,
-                    input_mode,
+                TerminalPumpState {
+                    policy: TerminalPumpPolicy {
+                        ready_io_turns: qjs_command.ready_io_turns,
+                        event_loop_wait_budget: qjs_command.event_loop_wait_budget,
+                        input_mode: event_sources.input_mode,
+                    },
+                    resize_source: event_sources.resize_source,
                 },
                 process_stdout,
             )?;
@@ -548,9 +710,10 @@ fn run_post_eval_feeds(
     terminal: &TermDevice,
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
-    policy: TerminalPumpPolicy,
+    mut pump_state: TerminalPumpState,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
+    let policy = pump_state.policy;
     let mut current_batch = Vec::new();
     for feed in feeds {
         match feed {
@@ -632,7 +795,7 @@ fn run_post_eval_feeds(
                     terminal,
                     terminal_id,
                     runtime,
-                    policy,
+                    &mut pump_state,
                     process_stdout,
                 )?;
             }
@@ -654,7 +817,7 @@ fn run_post_eval_feeds(
                     terminal,
                     terminal_id,
                     runtime,
-                    policy,
+                    &mut pump_state,
                     process_stdout,
                 )?;
             }
@@ -702,9 +865,10 @@ fn run_process_raw_byte_feed_session_after_eval(
     terminal: &TermDevice,
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
-    policy: TerminalPumpPolicy,
+    pump_state: &mut TerminalPumpState,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
+    let policy = pump_state.policy;
     #[cfg(unix)]
     if let ProcessInputMode::PollFd(input_fd) = policy.input_mode {
         return run_process_polled_feed_session_after_eval(
@@ -713,7 +877,7 @@ fn run_process_raw_byte_feed_session_after_eval(
             terminal,
             terminal_id,
             runtime,
-            policy,
+            pump_state,
             process_stdout,
         );
     }
@@ -765,9 +929,10 @@ fn run_process_line_feed_session_after_eval(
     terminal: &TermDevice,
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
-    policy: TerminalPumpPolicy,
+    pump_state: &mut TerminalPumpState,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
+    let policy = pump_state.policy;
     #[cfg(unix)]
     if let ProcessInputMode::PollFd(input_fd) = policy.input_mode {
         return run_process_polled_feed_session_after_eval(
@@ -776,7 +941,7 @@ fn run_process_line_feed_session_after_eval(
             terminal,
             terminal_id,
             runtime,
-            policy,
+            pump_state,
             process_stdout,
         );
     }
@@ -806,20 +971,35 @@ fn run_process_polled_feed_session_after_eval(
     terminal: &TermDevice,
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
-    policy: TerminalPumpPolicy,
+    pump_state: &mut TerminalPumpState,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let _nonblocking = NonBlockingFd::enter(input_fd)?;
     let mut bytes = [0; 1024];
     let poll_timeout = Duration::from_millis(QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS);
+    let policy = pump_state.policy;
     let idle_budget = qjs_shell_idle_event_loop_budget(policy.event_loop_wait_budget);
     loop {
         match poll_process_stdin(input_fd, poll_timeout)? {
             ProcessStdinPoll::Ready => {
+                pump_terminal_resize_if_changed(
+                    terminal,
+                    terminal_id,
+                    runtime,
+                    pump_state,
+                    process_stdout,
+                )?;
                 let count = match process_stdin.read(&mut bytes) {
                     Ok(count) => count,
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        pump_terminal_resize_if_changed(
+                            terminal,
+                            terminal_id,
+                            runtime,
+                            pump_state,
+                            process_stdout,
+                        )?;
                         pump_terminal_idle(
                             terminal,
                             terminal_id,
@@ -851,6 +1031,13 @@ fn run_process_polled_feed_session_after_eval(
                 )?;
             }
             ProcessStdinPoll::Idle => {
+                pump_terminal_resize_if_changed(
+                    terminal,
+                    terminal_id,
+                    runtime,
+                    pump_state,
+                    process_stdout,
+                )?;
                 pump_terminal_idle(
                     terminal,
                     terminal_id,
@@ -964,6 +1151,34 @@ fn qjs_shell_idle_event_loop_budget(configured: Duration) -> Duration {
     }
 }
 
+#[cfg(unix)]
+fn terminal_size_for_fd(fd: libc::c_int) -> Result<Option<TermResize>, CliError> {
+    // SAFETY: `isatty` only observes the supplied file descriptor.
+    if unsafe { libc::isatty(fd) } == 0 {
+        return Ok(None);
+    }
+    let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
+    // SAFETY: `size` points to valid writable memory for TIOCGWINSZ.
+    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, size.as_mut_ptr()) } != 0 {
+        return Err(CliError::new(
+            format!(
+                "failed to read native terminal size: {}",
+                io::Error::last_os_error()
+            ),
+            1,
+        ));
+    }
+    // SAFETY: ioctl succeeded and initialized the winsize value.
+    let size = unsafe { size.assume_init() };
+    if size.ws_col == 0 || size.ws_row == 0 {
+        return Ok(None);
+    }
+    Ok(Some(TermResize {
+        columns: size.ws_col,
+        rows: size.ws_row,
+    }))
+}
+
 fn read_process_line_after_eval(
     process_stdin: &mut dyn Read,
     line: &mut Vec<u8>,
@@ -1062,6 +1277,27 @@ fn pump_terminal_idle(
         .map_err(CliError::from);
     drain_terminal_output(terminal, terminal_id, process_stdout)?;
     result
+}
+
+fn pump_terminal_resize_if_changed(
+    terminal: &TermDevice,
+    terminal_id: &str,
+    runtime: &mut QuickJsTaskRuntime,
+    pump_state: &mut TerminalPumpState,
+    process_stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    let Some(resize) = pump_state.resize_source.next_resize()? else {
+        return Ok(());
+    };
+    feed_terminal_resize_and_pump(
+        terminal,
+        terminal_id,
+        runtime,
+        &resize,
+        pump_state.policy.ready_io_turns,
+        pump_state.policy.event_loop_wait_budget,
+        process_stdout,
+    )
 }
 
 fn feed_terminal_resize_and_pump(

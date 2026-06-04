@@ -90,7 +90,10 @@ editing, Ctrl-D, and command dispatch inside the Wanix task.
 `qjs-shell` still accepts `--event-loop-ms` for deterministic scripted feeds;
 on Unix, native process IO also passes a pollable stdin fd into the shell loop
 and pumps bounded QuickJS event-loop work while stdin is idle, so delayed shell
-output can surface before the next native input byte.
+output can surface before the next native input byte. The Unix native shell
+also polls the host terminal size through stdout, delivers changed dimensions
+through `#term/<id>/winch`, and exposes the latest queued resize through the
+bundled shell's `size` command.
 `qjs-term --resize-after-eval COLSxROWS` sends a deterministic post-eval
 resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
 can observe terminal resize broadcasts through live Wanix-backed fd readiness.
@@ -552,7 +555,9 @@ cargo test --workspace --locked
 Prefer the highest-leverage externally visible capability or demo outcome.
 Use cleanup only when it unblocks that outcome, protects a trust boundary,
 preserves compatibility, or fixes a major review finding. Commit each completed
-cycle before starting the next one.
+cycle before starting the next one. Every roughly five feature commits, run a
+review/cleanup pass over the changes since the last cleanup pass before adding
+more feature work.
 
 Treat ADRs like code. Before adding one, check whether the change is a durable
 architecture, API, format, or workflow decision instead of a milestone note or
@@ -571,8 +576,8 @@ direction.
 - Run a dedicated ADR librarian pass: delete or consolidate superseded bridge
   records, fixture rebuild notes, per-WASI-call records, and per-9P-op records
   into subsystem-level decisions.
-- Continue `qjs-shell` interactivity with signal handling, live native resize
-  propagation, cancellation, and richer terminal/session lifecycle control.
+- Continue `qjs-shell` interactivity with signal-driven resize wakeups,
+  cancellation, and richer terminal/session lifecycle control.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
   integration, then extend the direct-v86 route into a complete qemu/v86 bundle,
   `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`

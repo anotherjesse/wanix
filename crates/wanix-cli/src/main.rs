@@ -17,10 +17,11 @@ fn main() {
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
     #[cfg(unix)]
-    let result = wanix_cli::run_with_process_io_and_stdin_fd(
+    let result = wanix_cli::run_with_process_io_and_terminal_fds(
         args,
         stdin.lock(),
         libc::STDIN_FILENO,
+        libc::STDOUT_FILENO,
         stdout.lock(),
         stderr.lock(),
     );

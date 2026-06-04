@@ -291,6 +291,86 @@ where
     }
 }
 
+/// Runs the native CLI command against supplied process IO streams and Unix
+/// terminal fds.
+///
+/// This lets live terminal commands pump guest work while native stdin is idle
+/// and propagate host terminal resizes into Wanix `#term` resources.
+///
+/// # Errors
+///
+/// Returns a CLI error when command execution fails before command-managed
+/// output is available, or when the supplied output streams cannot be written.
+#[cfg(unix)]
+pub fn run_with_process_io_and_terminal_fds<I, S, R, W, E>(
+    args: I,
+    process_stdin: R,
+    stdin_fd: libc::c_int,
+    terminal_size_fd: libc::c_int,
+    process_stdout: W,
+    process_stderr: E,
+) -> Result<i32, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+    R: Read,
+    W: Write,
+    E: Write,
+{
+    let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+    match args.as_slice() {
+        [command, rest @ ..] if command == "qjs-shell" => {
+            let mut process_stdin = process_stdin;
+            let mut process_stdout = process_stdout;
+            let mut process_stderr = process_stderr;
+            qjs_term::run_qjs_shell_streaming_with_terminal_fds(
+                qjs_term::parse_qjs_shell_command(rest)?,
+                &mut process_stdin,
+                stdin_fd,
+                terminal_size_fd,
+                &mut process_stdout,
+                &mut process_stderr,
+            )
+        }
+        _ => run_with_process_io(args, process_stdin, process_stdout, process_stderr),
+    }
+}
+
+#[cfg(all(unix, test))]
+fn run_with_process_io_and_resize_queue<I, S, R, W, E>(
+    args: I,
+    process_stdin: R,
+    stdin_fd: libc::c_int,
+    resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
+    process_stdout: W,
+    process_stderr: E,
+) -> Result<i32, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+    R: Read,
+    W: Write,
+    E: Write,
+{
+    let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+    match args.as_slice() {
+        [command, rest @ ..] if command == "qjs-shell" => {
+            let mut process_stdin = process_stdin;
+            let mut process_stdout = process_stdout;
+            let mut process_stderr = process_stderr;
+            qjs_term::run_qjs_shell_streaming_with_resize_queue(
+                qjs_term::parse_qjs_shell_command(rest)?,
+                &mut process_stdin,
+                stdin_fd,
+                resize_queue,
+                &mut process_stdout,
+                &mut process_stderr,
+            )
+        }
+        _ => run_with_process_io(args, process_stdin, process_stdout, process_stderr),
+    }
+}
+
 fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
     match args.as_slice() {
         [] => Ok(help_output()),
@@ -1614,6 +1694,8 @@ fn parse_exit(exit: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::collections::VecDeque;
     use std::fs;
     use std::io::{self, Read, Write};
     #[cfg(unix)]
@@ -1625,8 +1707,12 @@ mod tests {
     #[cfg(unix)]
     use std::sync::mpsc;
     #[cfg(unix)]
+    use std::sync::{Arc, Mutex};
+    #[cfg(unix)]
     use std::time::Duration;
 
+    #[cfg(unix)]
+    use super::run_with_process_io_and_resize_queue;
     #[cfg(unix)]
     use super::run_with_process_io_and_stdin_fd;
     use super::{run, run_with_process_io, run_with_process_stdin};
@@ -3093,6 +3179,44 @@ std.out.flush();
         assert_eq!(
             stdout.bytes(),
             b"shell task: 1\r\n$ scheduled\r\nlater: tick\r\n$ bye\r\n"
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qjs_shell_fd_aware_loop_delivers_resize_before_next_native_input() {
+        let (input_reader, mut input_writer) = UnixStream::pair().unwrap();
+        let input_fd = input_reader.as_raw_fd();
+        let resize_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let resize_writer = Arc::clone(&resize_queue);
+        let (prompt_sender, prompt_receiver) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            prompt_receiver
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap();
+            resize_writer.lock().unwrap().push_back((100, 40));
+            input_writer.write_all(b"size\nexit\n").unwrap();
+        });
+        let mut stdout =
+            SignalingStdout::new_many(vec![(b"shell task: 1\r\n$ ".to_vec(), prompt_sender)]);
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io_and_resize_queue(
+            ["qjs-shell"],
+            input_reader,
+            input_fd,
+            resize_queue,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        writer.join().unwrap();
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            stdout.bytes(),
+            b"shell task: 1\r\n$ size 100 40\r\n$ bye\r\n"
         );
         assert!(stderr.is_empty());
     }
