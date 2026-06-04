@@ -9,6 +9,7 @@ use wasmtime::error::Context as _;
 use wasmtime::{Engine, Module};
 
 mod abi;
+mod cache;
 
 pub(crate) use abi::QUICKJS_WASM_ABI_VERSION;
 use abi::{QuickJsModuleAbi, validate_quickjs_module_abi};
@@ -89,6 +90,51 @@ impl QuickJsModule {
     /// does not export the required QuickJS runtime ABI.
     pub fn from_bytes(engine: &Engine, bytes: &[u8]) -> Result<Self> {
         let module = Module::new(engine, bytes).context("failed to compile QuickJS WASM module")?;
+        Self::finish(module, bytes)
+    }
+
+    /// Loads a QuickJS WebAssembly module, reusing a compiled artifact cached
+    /// under `cache_dir` when one matches the wasm bytes.
+    ///
+    /// Cranelift compilation of the QuickJS fixture dominates qjs cold-start.
+    /// The first call compiles and writes a Wasmtime artifact keyed by the wasm
+    /// SHA-256; later calls in fresh processes deserialize it in well under a
+    /// millisecond. The cache is advisory: an unreadable, stale, or
+    /// engine-incompatible artifact transparently recompiles, so the result is
+    /// always identical to [`Self::from_bytes`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Wasmtime rejects the module bytes, or if the module
+    /// does not export the required QuickJS runtime ABI. Cache I/O failures are
+    /// not surfaced as errors.
+    pub fn from_bytes_cached(engine: &Engine, bytes: &[u8], cache_dir: &Path) -> Result<Self> {
+        let wasm_sha256: [u8; 32] = Sha256::digest(bytes).into();
+        let module = cache::load_or_compile(engine, bytes, &wasm_sha256, cache_dir)
+            .map_err(|err| err.context("failed to compile QuickJS WASM module"))?;
+        let abi = validate_quickjs_module_abi(&module)?;
+        Ok(Self {
+            module,
+            wasm_sha256,
+            abi,
+        })
+    }
+
+    /// Compiles and ABI-preflights a QuickJS module from bytes with a default
+    /// engine, reusing a cached compiled artifact under `cache_dir`.
+    ///
+    /// See [`Self::from_bytes_cached`] for cache semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Wasmtime rejects the module bytes, or if the module
+    /// does not export the required QuickJS runtime ABI.
+    pub fn from_bytes_with_default_engine_cached(bytes: &[u8], cache_dir: &Path) -> Result<Self> {
+        let engine = Engine::default();
+        Self::from_bytes_cached(&engine, bytes, cache_dir)
+    }
+
+    fn finish(module: Module, bytes: &[u8]) -> Result<Self> {
         let abi = validate_quickjs_module_abi(&module)?;
         let wasm_sha256 = Sha256::digest(bytes).into();
         Ok(Self {

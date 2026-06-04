@@ -44,6 +44,35 @@ fn module_preflight_default_engine_file_constructor_matches_bytes() -> Result<()
 }
 
 #[test]
+fn module_cache_writes_artifact_and_reuses_it() -> Result<()> {
+    let dir = std::env::temp_dir().join(format!("wanix-qjs-cache-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // First load compiles and populates the cache.
+    let first =
+        QuickJsModule::from_bytes_with_default_engine_cached(MINIMAL_ABI_WAT.as_bytes(), &dir)?;
+    let artifacts: Vec<_> = std::fs::read_dir(&dir)?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "cwasm"))
+        .collect();
+    assert_eq!(artifacts.len(), 1, "expected exactly one cached artifact");
+
+    // Second load deserializes the cached artifact and yields the same identity.
+    let second =
+        QuickJsModule::from_bytes_with_default_engine_cached(MINIMAL_ABI_WAT.as_bytes(), &dir)?;
+    assert_eq!(first.wasm_sha256(), second.wasm_sha256());
+
+    // A corrupt artifact transparently recompiles instead of failing.
+    std::fs::write(artifacts[0].path(), b"not a valid artifact")?;
+    let recovered =
+        QuickJsModule::from_bytes_with_default_engine_cached(MINIMAL_ABI_WAT.as_bytes(), &dir)?;
+    assert_eq!(first.wasm_sha256(), recovered.wasm_sha256());
+
+    std::fs::remove_dir_all(&dir)?;
+    Ok(())
+}
+
+#[test]
 fn module_preflight_allows_extra_exports() -> Result<()> {
     let wat = with_extra_export();
 
