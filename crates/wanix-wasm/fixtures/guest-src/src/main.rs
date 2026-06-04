@@ -64,6 +64,13 @@ fn main() {
         println!("{:.10}", leibniz_pi(n));
         return;
     }
+    if args.get(1).map(String::as_str) == Some("--utime") {
+        utime(
+            args.get(2).map_or("", String::as_str),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0),
+        );
+        return;
+    }
     if args.get(1).map(String::as_str) == Some("--echo") {
         // Proves --env and --stdin reach the guest through the runner.
         use std::io::Read;
@@ -136,6 +143,28 @@ extern "C" {
         new_path_len: usize,
     ) -> u16;
     fn fd_tell(fd: u32, out: *mut u64) -> u16;
+    fn path_filestat_set_times(
+        fd: u32,
+        flags: u32,
+        path: *const u8,
+        path_len: usize,
+        atim: u64,
+        mtim: u64,
+        fst_flags: u16,
+    ) -> u16;
+}
+
+/// Sets `path`'s modified time to `mtime` ns via the `path_filestat_set_times`
+/// syscall (fst_flags = MTIM). Resolves `path` against the preopened root (fd 3).
+fn utime(path: &str, mtime: u64) {
+    let rel = path.strip_prefix('/').unwrap_or(path);
+    // MTIM = 1 << 2 — set the modified time to the supplied value.
+    let errno = unsafe { path_filestat_set_times(3, 0, rel.as_ptr(), rel.len(), 0, mtime, 1 << 2) };
+    if errno == 0 {
+        println!("ok");
+    } else {
+        println!("rust-wasm: utime failed {path}: errno {errno}");
+    }
 }
 
 /// Seeks `path` to absolute offset `seek`, then reports the cursor via the raw

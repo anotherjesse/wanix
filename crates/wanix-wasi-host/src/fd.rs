@@ -196,6 +196,18 @@ pub(super) fn register<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<
     )?;
     linker.func_wrap(
         m,
+        "fd_filestat_set_times",
+        |mut caller: Caller<'_, S>, fd: i32, atim: i64, mtim: i64, fst_flags: i32| {
+            code(caller.data_mut().wasi().fd_filestat_set_times(
+                WasiFd::new(fd as u32),
+                atim as u64,
+                mtim as u64,
+                fst_flags as u16,
+            ))
+        },
+    )?;
+    linker.func_wrap(
+        m,
         "fd_filestat_get",
         |mut caller: Caller<'_, S>, fd: i32, out: i32| -> Result<i32> {
             match caller.data_mut().wasi().fd_filestat_get(WasiFd::new(fd as u32)) {

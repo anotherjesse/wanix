@@ -74,6 +74,30 @@ pub(super) fn register<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<
     )?;
     linker.func_wrap(
         m,
+        "path_filestat_set_times",
+        |mut caller: Caller<'_, S>,
+         dirfd: i32,
+         flags: i32,
+         path: i32,
+         path_len: i32,
+         atim: i64,
+         mtim: i64,
+         fst_flags: i32|
+         -> Result<i32> {
+            let mem = memory(&mut caller)?;
+            let name = read_str(&mem, &mut caller, path, path_len)?;
+            Ok(code(caller.data_mut().wasi().path_filestat_set_times(
+                WasiFd::new(dirfd as u32),
+                flags as u32,
+                &name,
+                atim as u64,
+                mtim as u64,
+                fst_flags as u16,
+            )))
+        },
+    )?;
+    linker.func_wrap(
+        m,
         "path_create_directory",
         |mut caller: Caller<'_, S>, dirfd: i32, path: i32, path_len: i32| -> Result<i32> {
             let mem = memory(&mut caller)?;

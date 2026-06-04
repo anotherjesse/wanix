@@ -236,7 +236,7 @@ impl File for CaptureFile {
 mod tests {
     use std::sync::Arc;
 
-    use wanix_fs::MemFs;
+    use wanix_fs::{FileSystem, MemFs, NormalizedPath};
     use wanix_vfs::{BindOptions, Namespace};
     use wanix_wasi::WasiConfig;
 
@@ -259,6 +259,26 @@ mod tests {
             .with_stdout(Box::new(stdout.clone()), "stdout");
         let exit = runner.run(config).expect("rust wasm task ran");
         (exit, stdout.contents())
+    }
+
+    #[test]
+    fn path_filestat_set_times_sets_mtime() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("f.txt", b"x").expect("write f.txt");
+
+        let runner = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+        let stdout = CaptureFile::new();
+        let config = WasiConfig::new(namespace_on(&fs))
+            .with_args(["guest", "--utime", "/f.txt", "123456789"])
+            .with_stdout(Box::new(stdout.clone()), "stdout");
+        let exit = runner.run(config).expect("rust wasm task ran");
+        assert_eq!(exit, 0);
+        assert!(stdout.contents().contains("ok"), "{}", stdout.contents());
+
+        let meta = fs
+            .metadata(&NormalizedPath::new("f.txt").unwrap())
+            .expect("metadata");
+        assert_eq!(meta.modified_time_ns(), 123_456_789);
     }
 
     #[test]
