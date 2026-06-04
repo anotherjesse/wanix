@@ -248,6 +248,49 @@ where
     }
 }
 
+/// Runs the native CLI command against supplied process IO streams and a
+/// pollable Unix stdin fd.
+///
+/// This lets live terminal commands pump guest work while native stdin is idle.
+/// Commands that do not need fd-aware input delegate to [`run_with_process_io`].
+///
+/// # Errors
+///
+/// Returns a CLI error when command execution fails before command-managed
+/// output is available, or when the supplied output streams cannot be written.
+#[cfg(unix)]
+pub fn run_with_process_io_and_stdin_fd<I, S, R, W, E>(
+    args: I,
+    process_stdin: R,
+    stdin_fd: libc::c_int,
+    process_stdout: W,
+    process_stderr: E,
+) -> Result<i32, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+    R: Read,
+    W: Write,
+    E: Write,
+{
+    let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+    match args.as_slice() {
+        [command, rest @ ..] if command == "qjs-shell" => {
+            let mut process_stdin = process_stdin;
+            let mut process_stdout = process_stdout;
+            let mut process_stderr = process_stderr;
+            qjs_term::run_qjs_shell_streaming_with_input_fd(
+                qjs_term::parse_qjs_shell_command(rest)?,
+                &mut process_stdin,
+                stdin_fd,
+                &mut process_stdout,
+                &mut process_stderr,
+            )
+        }
+        _ => run_with_process_io(args, process_stdin, process_stdout, process_stderr),
+    }
+}
+
 fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
     match args.as_slice() {
         [] => Ok(help_output()),
@@ -1573,9 +1616,19 @@ fn parse_exit(exit: &str) -> i32 {
 mod tests {
     use std::fs;
     use std::io::{self, Read, Write};
+    #[cfg(unix)]
+    use std::os::fd::AsRawFd;
+    #[cfg(unix)]
+    use std::os::unix::net::UnixStream;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+    #[cfg(unix)]
+    use std::sync::mpsc;
+    #[cfg(unix)]
+    use std::time::Duration;
 
+    #[cfg(unix)]
+    use super::run_with_process_io_and_stdin_fd;
     use super::{run, run_with_process_io, run_with_process_stdin};
     use wanix_protocol::{
         P9_LOCK_STATUS_OK, P9_LOCK_TYPE_READ, P9_LOCK_TYPE_UNLOCK, P9_LOCK_TYPE_WRITE, P9_NOFID,
@@ -1661,6 +1714,63 @@ mod tests {
                 .any(|window| window == self.needle)
             {
                 fs::write(&self.marker, &self.marker_bytes)?;
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    struct StdoutSignal {
+        needle: Vec<u8>,
+        sender: mpsc::Sender<()>,
+        signaled: bool,
+    }
+
+    #[cfg(unix)]
+    struct SignalingStdout {
+        signals: Vec<StdoutSignal>,
+        bytes: Vec<u8>,
+    }
+
+    #[cfg(unix)]
+    impl SignalingStdout {
+        fn new_many(signals: Vec<(Vec<u8>, mpsc::Sender<()>)>) -> Self {
+            Self {
+                signals: signals
+                    .into_iter()
+                    .map(|(needle, sender)| StdoutSignal {
+                        needle,
+                        sender,
+                        signaled: false,
+                    })
+                    .collect(),
+                bytes: Vec::new(),
+            }
+        }
+
+        fn bytes(&self) -> &[u8] {
+            &self.bytes
+        }
+    }
+
+    #[cfg(unix)]
+    impl Write for SignalingStdout {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes.extend_from_slice(buf);
+            for signal in &mut self.signals {
+                if !signal.signaled
+                    && self
+                        .bytes
+                        .windows(signal.needle.len())
+                        .any(|window| window == signal.needle)
+                {
+                    let _ = signal.sender.send(());
+                    signal.signaled = true;
+                }
             }
             Ok(buf.len())
         }
@@ -2943,6 +3053,45 @@ std.out.flush();
         assert_eq!(exit_code, 0);
         assert_eq!(
             stdout,
+            b"shell task: 1\r\n$ scheduled\r\nlater: tick\r\n$ bye\r\n"
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qjs_shell_fd_aware_loop_pumps_delayed_output_while_native_input_is_idle() {
+        let (input_reader, mut input_writer) = UnixStream::pair().unwrap();
+        let input_fd = input_reader.as_raw_fd();
+        let (prompt_sender, prompt_receiver) = mpsc::channel();
+        let (later_sender, later_receiver) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            prompt_receiver
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap();
+            input_writer.write_all(b"later tick\n").unwrap();
+            later_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            input_writer.write_all(b"exit\n").unwrap();
+        });
+        let mut stdout = SignalingStdout::new_many(vec![
+            (b"shell task: 1\r\n$ ".to_vec(), prompt_sender),
+            (b"later: tick\r\n$ ".to_vec(), later_sender),
+        ]);
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io_and_stdin_fd(
+            ["qjs-shell"],
+            input_reader,
+            input_fd,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        writer.join().unwrap();
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            stdout.bytes(),
             b"shell task: 1\r\n$ scheduled\r\nlater: tick\r\n$ bye\r\n"
         );
         assert!(stderr.is_empty());

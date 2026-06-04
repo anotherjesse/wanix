@@ -1,4 +1,6 @@
 use std::ffi::OsString;
+#[cfg(unix)]
+use std::io;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
@@ -165,9 +167,17 @@ struct TermResize {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TerminalPumpLimits {
+enum ProcessInputMode {
+    Blocking,
+    #[cfg(unix)]
+    PollFd(libc::c_int),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminalPumpPolicy {
     ready_io_turns: usize,
     event_loop_wait_budget: Duration,
+    input_mode: ProcessInputMode,
 }
 
 impl TermResize {
@@ -374,6 +384,29 @@ pub(super) fn run_qjs_shell_streaming(
     )
 }
 
+#[cfg(unix)]
+pub(super) fn run_qjs_shell_streaming_with_input_fd(
+    command: QjsShellCommand,
+    process_stdin: &mut dyn Read,
+    input_fd: libc::c_int,
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    run_qjs_term_program_streaming_with_input_mode(
+        qjs_shell_command(command.qjs, command.raw),
+        vec![if command.raw {
+            PostEvalFeed::RawBytesProcess
+        } else {
+            PostEvalFeed::LinesProcess
+        }],
+        QjsTermProgram::BundledShell,
+        ProcessInputMode::PollFd(input_fd),
+        process_stdin,
+        process_stdout,
+        process_stderr,
+    )
+}
+
 fn qjs_shell_command(mut command: QjsCommand, raw: bool) -> QjsCommand {
     if raw {
         command.env.push("WANIX_QJS_SHELL_RAW=1".to_owned());
@@ -391,6 +424,26 @@ fn run_qjs_term_program_streaming(
     qjs_command: QjsCommand,
     feed_after_eval: Vec<PostEvalFeed>,
     program: QjsTermProgram,
+    process_stdin: &mut dyn Read,
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    run_qjs_term_program_streaming_with_input_mode(
+        qjs_command,
+        feed_after_eval,
+        program,
+        ProcessInputMode::Blocking,
+        process_stdin,
+        process_stdout,
+        process_stderr,
+    )
+}
+
+fn run_qjs_term_program_streaming_with_input_mode(
+    qjs_command: QjsCommand,
+    feed_after_eval: Vec<PostEvalFeed>,
+    program: QjsTermProgram,
+    input_mode: ProcessInputMode,
     process_stdin: &mut dyn Read,
     process_stdout: &mut dyn Write,
     process_stderr: &mut dyn Write,
@@ -458,9 +511,10 @@ fn run_qjs_term_program_streaming(
                 &terminal,
                 &terminal_id,
                 &mut runtime,
-                TerminalPumpLimits {
+                TerminalPumpPolicy {
                     ready_io_turns: qjs_command.ready_io_turns,
                     event_loop_wait_budget: qjs_command.event_loop_wait_budget,
+                    input_mode,
                 },
                 process_stdout,
             )?;
@@ -494,7 +548,7 @@ fn run_post_eval_feeds(
     terminal: &TermDevice,
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
-    limits: TerminalPumpLimits,
+    policy: TerminalPumpPolicy,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let mut current_batch = Vec::new();
@@ -529,8 +583,8 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     &mut current_batch,
-                    limits.ready_io_turns,
-                    limits.event_loop_wait_budget,
+                    policy.ready_io_turns,
+                    policy.event_loop_wait_budget,
                     process_stdout,
                 )?;
                 if task_exited(runtime)? {
@@ -551,8 +605,8 @@ fn run_post_eval_feeds(
                         terminal_id,
                         runtime,
                         &[line],
-                        limits.ready_io_turns,
-                        limits.event_loop_wait_budget,
+                        policy.ready_io_turns,
+                        policy.event_loop_wait_budget,
                         process_stdout,
                     )?;
                     if task_exited(runtime)? {
@@ -566,8 +620,8 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     &mut current_batch,
-                    limits.ready_io_turns,
-                    limits.event_loop_wait_budget,
+                    policy.ready_io_turns,
+                    policy.event_loop_wait_budget,
                     process_stdout,
                 )?;
                 if task_exited(runtime)? {
@@ -578,8 +632,7 @@ fn run_post_eval_feeds(
                     terminal,
                     terminal_id,
                     runtime,
-                    limits.ready_io_turns,
-                    limits.event_loop_wait_budget,
+                    policy,
                     process_stdout,
                 )?;
             }
@@ -589,8 +642,8 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     &mut current_batch,
-                    limits.ready_io_turns,
-                    limits.event_loop_wait_budget,
+                    policy.ready_io_turns,
+                    policy.event_loop_wait_budget,
                     process_stdout,
                 )?;
                 if task_exited(runtime)? {
@@ -601,8 +654,7 @@ fn run_post_eval_feeds(
                     terminal,
                     terminal_id,
                     runtime,
-                    limits.ready_io_turns,
-                    limits.event_loop_wait_budget,
+                    policy,
                     process_stdout,
                 )?;
             }
@@ -612,8 +664,8 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     &mut current_batch,
-                    limits.ready_io_turns,
-                    limits.event_loop_wait_budget,
+                    policy.ready_io_turns,
+                    policy.event_loop_wait_budget,
                     process_stdout,
                 )?;
                 if task_exited(runtime)? {
@@ -624,8 +676,8 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     &resize,
-                    limits.ready_io_turns,
-                    limits.event_loop_wait_budget,
+                    policy.ready_io_turns,
+                    policy.event_loop_wait_budget,
                     process_stdout,
                 )?;
                 if task_exited(runtime)? {
@@ -639,8 +691,8 @@ fn run_post_eval_feeds(
         terminal_id,
         runtime,
         &mut current_batch,
-        limits.ready_io_turns,
-        limits.event_loop_wait_budget,
+        policy.ready_io_turns,
+        policy.event_loop_wait_budget,
         process_stdout,
     )
 }
@@ -650,10 +702,22 @@ fn run_process_raw_byte_feed_session_after_eval(
     terminal: &TermDevice,
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
-    ready_io_turns: usize,
-    event_loop_wait_budget: Duration,
+    policy: TerminalPumpPolicy,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
+    #[cfg(unix)]
+    if let ProcessInputMode::PollFd(input_fd) = policy.input_mode {
+        return run_process_polled_feed_session_after_eval(
+            process_stdin,
+            input_fd,
+            terminal,
+            terminal_id,
+            runtime,
+            policy,
+            process_stdout,
+        );
+    }
+
     let mut byte = [0; 1];
     loop {
         let count = process_stdin.read(&mut byte).map_err(|error| {
@@ -670,8 +734,8 @@ fn run_process_raw_byte_feed_session_after_eval(
             terminal_id,
             runtime,
             &byte[..count],
-            ready_io_turns,
-            event_loop_wait_budget,
+            policy.ready_io_turns,
+            policy.event_loop_wait_budget,
             process_stdout,
         )?;
         if task_exited(runtime)? {
@@ -701,10 +765,22 @@ fn run_process_line_feed_session_after_eval(
     terminal: &TermDevice,
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
-    ready_io_turns: usize,
-    event_loop_wait_budget: Duration,
+    policy: TerminalPumpPolicy,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
+    #[cfg(unix)]
+    if let ProcessInputMode::PollFd(input_fd) = policy.input_mode {
+        return run_process_polled_feed_session_after_eval(
+            process_stdin,
+            input_fd,
+            terminal,
+            terminal_id,
+            runtime,
+            policy,
+            process_stdout,
+        );
+    }
+
     let mut line = Vec::new();
     while read_process_line_after_eval(process_stdin, &mut line)? {
         feed_terminal_batch_and_pump(
@@ -712,8 +788,8 @@ fn run_process_line_feed_session_after_eval(
             terminal_id,
             runtime,
             &[line.clone()],
-            ready_io_turns,
-            event_loop_wait_budget,
+            policy.ready_io_turns,
+            policy.event_loop_wait_budget,
             process_stdout,
         )?;
         if task_exited(runtime)? {
@@ -721,6 +797,171 @@ fn run_process_line_feed_session_after_eval(
         }
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn run_process_polled_feed_session_after_eval(
+    process_stdin: &mut dyn Read,
+    input_fd: libc::c_int,
+    terminal: &TermDevice,
+    terminal_id: &str,
+    runtime: &mut QuickJsTaskRuntime,
+    policy: TerminalPumpPolicy,
+    process_stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    let _nonblocking = NonBlockingFd::enter(input_fd)?;
+    let mut bytes = [0; 1024];
+    let poll_timeout = Duration::from_millis(QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS);
+    let idle_budget = qjs_shell_idle_event_loop_budget(policy.event_loop_wait_budget);
+    loop {
+        match poll_process_stdin(input_fd, poll_timeout)? {
+            ProcessStdinPoll::Ready => {
+                let count = match process_stdin.read(&mut bytes) {
+                    Ok(count) => count,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        pump_terminal_idle(
+                            terminal,
+                            terminal_id,
+                            runtime,
+                            policy.ready_io_turns,
+                            idle_budget,
+                            process_stdout,
+                        )?;
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(CliError::new(
+                            format!("failed to read process stdin after eval: {error}"),
+                            1,
+                        ));
+                    }
+                };
+                if count == 0 {
+                    return Ok(());
+                }
+                feed_terminal_chunk_and_pump(
+                    terminal,
+                    terminal_id,
+                    runtime,
+                    &bytes[..count],
+                    policy.ready_io_turns,
+                    policy.event_loop_wait_budget,
+                    process_stdout,
+                )?;
+            }
+            ProcessStdinPoll::Idle => {
+                pump_terminal_idle(
+                    terminal,
+                    terminal_id,
+                    runtime,
+                    policy.ready_io_turns,
+                    idle_budget,
+                    process_stdout,
+                )?;
+            }
+        }
+        if task_exited(runtime)? {
+            return Ok(());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct NonBlockingFd {
+    fd: libc::c_int,
+    original_flags: libc::c_int,
+}
+
+#[cfg(unix)]
+impl NonBlockingFd {
+    fn enter(fd: libc::c_int) -> Result<Self, CliError> {
+        let original_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if original_flags < 0 {
+            return Err(CliError::new(
+                format!(
+                    "failed to read process stdin flags: {}",
+                    io::Error::last_os_error()
+                ),
+                1,
+            ));
+        }
+        let nonblocking_flags = original_flags | libc::O_NONBLOCK;
+        if unsafe { libc::fcntl(fd, libc::F_SETFL, nonblocking_flags) } < 0 {
+            return Err(CliError::new(
+                format!(
+                    "failed to enter nonblocking process stdin mode: {}",
+                    io::Error::last_os_error()
+                ),
+                1,
+            ));
+        }
+        Ok(Self { fd, original_flags })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for NonBlockingFd {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::fcntl(self.fd, libc::F_SETFL, self.original_flags) };
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessStdinPoll {
+    Ready,
+    Idle,
+}
+
+#[cfg(unix)]
+fn poll_process_stdin(
+    input_fd: libc::c_int,
+    timeout: Duration,
+) -> Result<ProcessStdinPoll, CliError> {
+    let mut poll_fd = libc::pollfd {
+        fd: input_fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        let result = unsafe { libc::poll(&mut poll_fd, 1, poll_timeout_millis(timeout)) };
+        if result == 0 {
+            return Ok(ProcessStdinPoll::Idle);
+        }
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(CliError::new(
+                format!("failed to poll process stdin: {error}"),
+                1,
+            ));
+        }
+        if poll_fd.revents & libc::POLLNVAL != 0 {
+            return Err(CliError::new("failed to poll process stdin: invalid fd", 1));
+        }
+        if poll_fd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+            return Ok(ProcessStdinPoll::Ready);
+        }
+        return Ok(ProcessStdinPoll::Idle);
+    }
+}
+
+#[cfg(unix)]
+fn poll_timeout_millis(timeout: Duration) -> libc::c_int {
+    let millis = timeout.as_millis();
+    millis.min(libc::c_int::MAX as u128) as libc::c_int
+}
+
+fn qjs_shell_idle_event_loop_budget(configured: Duration) -> Duration {
+    if configured.is_zero() {
+        Duration::from_millis(QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS)
+    } else {
+        configured
+    }
 }
 
 fn read_process_line_after_eval(
@@ -804,6 +1045,21 @@ fn feed_terminal_chunk_and_pump(
         runtime.run_event_loop_turns(event_loop_wait_budget, ready_io_turns)?;
         Ok(())
     })();
+    drain_terminal_output(terminal, terminal_id, process_stdout)?;
+    result
+}
+
+fn pump_terminal_idle(
+    terminal: &TermDevice,
+    terminal_id: &str,
+    runtime: &mut QuickJsTaskRuntime,
+    ready_io_turns: usize,
+    event_loop_wait_budget: Duration,
+    process_stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    let result = runtime
+        .run_event_loop_turns(event_loop_wait_budget, ready_io_turns)
+        .map_err(CliError::from);
     drain_terminal_output(terminal, terminal_id, process_stdout)?;
     result
 }
