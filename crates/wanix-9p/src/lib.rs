@@ -4,7 +4,9 @@
 //! filesystems. It owns fid state and filesystem error mapping, while the
 //! protocol crate remains dependency-free and wire-only.
 
+mod attrs;
 mod dispatch;
+mod path;
 mod setattr;
 mod transport;
 
@@ -21,9 +23,9 @@ use wanix_protocol::{
     P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_CTIME, P9_SETATTR_GID,
     P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
     P9_SETATTR_UID, P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_1,
-    P9_VERSION_9P2000_L_GOOGLE_2, P9Attr, P9AttrBody, P9DirEntry, P9Error, P9Frame, P9FsStat,
-    P9Lock, P9Qid, P9SetAttr, P9Version, p9_decode_tattach, p9_decode_tauth, p9_decode_tclunk,
-    p9_decode_tflush, p9_decode_tflushf, p9_decode_tfsync, p9_decode_tgetattr, p9_decode_tgetlock,
+    P9_VERSION_9P2000_L_GOOGLE_2, P9AttrBody, P9DirEntry, P9Error, P9Frame, P9Lock, P9Qid,
+    P9SetAttr, P9Version, p9_decode_tattach, p9_decode_tauth, p9_decode_tclunk, p9_decode_tflush,
+    p9_decode_tflushf, p9_decode_tfsync, p9_decode_tgetattr, p9_decode_tgetlock,
     p9_decode_tlcreate, p9_decode_tlink, p9_decode_tlock, p9_decode_tlopen, p9_decode_tmkdir,
     p9_decode_tmknod, p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink, p9_decode_tremove,
     p9_decode_trename, p9_decode_trenameat, p9_decode_tstatfs, p9_decode_tsymlink,
@@ -36,6 +38,14 @@ use wanix_protocol::{
 };
 
 pub use transport::{P9TransportError, P9TransportStats};
+
+#[cfg(test)]
+use attrs::{
+    DT_DIR, DT_REG, P9_DEFAULT_BLOCK_SIZE, P9_DEFAULT_NAME_LENGTH, P9_FS_MAGIC, P9_MODE_DIR,
+    P9_MODE_LNK, P9_MODE_REG, P9_MODE_TYPE_MASK,
+};
+use attrs::{attr_for_metadata, dirent_type_for_metadata, fs_stat, qid_for_metadata};
+use path::{is_same_or_descendant_path, join_walk_component, rebase_path};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix 9P filesystem server adapters";
@@ -78,17 +88,6 @@ const P9_SETATTR_KNOWN_MASK: u32 = P9_SETATTR_PERMISSIONS
 const P9_SETATTR_OWNER_MASK: u32 = P9_SETATTR_UID | P9_SETATTR_GID;
 const P9_SETATTR_UNSUPPORTED_MASK: u32 = P9_SETATTR_CTIME;
 
-const DT_DIR: u8 = 4;
-const DT_REG: u8 = 8;
-const DT_LNK: u8 = 10;
-
-const P9_MODE_TYPE_MASK: u32 = 0o170000;
-const P9_MODE_DIR: u32 = 0o040000;
-const P9_MODE_REG: u32 = 0o100000;
-const P9_MODE_LNK: u32 = 0o120000;
-const P9_DEFAULT_BLOCK_SIZE: u64 = 65_536;
-const P9_FS_MAGIC: u32 = 0x0102_1997;
-const P9_DEFAULT_NAME_LENGTH: u32 = 255;
 const P9_GOOGLE_VERSION_PREFIX: &str = "9P2000.L.Google.";
 const P9_GOOGLE_TFLUSHF_VERSION: u32 = 1;
 const P9_GOOGLE_TWALKGETATTR_VERSION: u32 = 2;
@@ -805,143 +804,6 @@ fn negotiate_p9_version(requested: &str) -> (&'static str, u32) {
     } else {
         (P9_VERSION_9P2000_L, 0)
     }
-}
-
-fn join_walk_component(
-    base: &NormalizedPath,
-    component: &str,
-) -> Result<NormalizedPath, Wanix9pError> {
-    let path = if base.as_str() == "." {
-        component.to_owned()
-    } else {
-        format!("{}/{component}", base.as_str())
-    };
-    NormalizedPath::new(&path).map_err(|_| Wanix9pError::InvalidPath(path))
-}
-
-fn qid_for_metadata(path: &NormalizedPath, metadata: Metadata) -> P9Qid {
-    let qid_type = match metadata.file_type() {
-        FileType::Directory => 0x80,
-        FileType::Symlink => 0x02,
-        FileType::File => 0,
-    };
-    P9Qid {
-        qid_type,
-        version: 0,
-        path: fnv1a_64(path.as_str().as_bytes()),
-    }
-}
-
-fn attr_for_metadata(
-    path: &NormalizedPath,
-    metadata: Metadata,
-    request_mask: u64,
-    owner: P9OwnerAttrs,
-) -> P9Attr {
-    let (atime_seconds, atime_nanoseconds) = split_unix_time_ns(metadata.accessed_time_ns());
-    let (mtime_seconds, mtime_nanoseconds) = split_unix_time_ns(metadata.modified_time_ns());
-    let (ctime_seconds, ctime_nanoseconds) = split_unix_time_ns(metadata.changed_time_ns());
-    P9Attr {
-        valid: request_mask,
-        qid: qid_for_metadata(path, metadata.clone()),
-        mode: p9_mode_for_metadata(&metadata),
-        uid: owner.uid.unwrap_or(0),
-        gid: owner.gid.unwrap_or(0),
-        nlink: metadata.link_count(),
-        rdev: 0,
-        size: metadata.len(),
-        block_size: P9_DEFAULT_BLOCK_SIZE,
-        blocks: metadata.len().div_ceil(P9_DEFAULT_BLOCK_SIZE),
-        atime_seconds,
-        atime_nanoseconds,
-        mtime_seconds,
-        mtime_nanoseconds,
-        ctime_seconds,
-        ctime_nanoseconds,
-        btime_seconds: 0,
-        btime_nanoseconds: 0,
-        generation: 0,
-        data_version: 0,
-    }
-}
-
-fn rebase_path(
-    path: &NormalizedPath,
-    old_path: &NormalizedPath,
-    new_path: &NormalizedPath,
-) -> Option<NormalizedPath> {
-    if path == old_path {
-        return Some(new_path.clone());
-    }
-    let suffix = descendant_suffix(path, old_path)?;
-    let rebased = if new_path.as_str() == "." {
-        suffix.to_owned()
-    } else {
-        format!("{}/{}", new_path.as_str(), suffix)
-    };
-    NormalizedPath::new(&rebased).ok()
-}
-
-fn is_same_or_descendant_path(path: &NormalizedPath, base: &NormalizedPath) -> bool {
-    path == base || descendant_suffix(path, base).is_some()
-}
-
-fn descendant_suffix<'a>(path: &'a NormalizedPath, base: &NormalizedPath) -> Option<&'a str> {
-    let base = base.as_str();
-    if base == "." {
-        return Some(path.as_str());
-    }
-    path.as_str()
-        .strip_prefix(base)
-        .and_then(|rest| rest.strip_prefix('/'))
-        .filter(|suffix| !suffix.is_empty())
-}
-
-fn p9_mode_for_metadata(metadata: &Metadata) -> u32 {
-    let mode = metadata.mode();
-    if mode & P9_MODE_TYPE_MASK != 0 {
-        return mode;
-    }
-    mode | match metadata.file_type() {
-        FileType::Directory => P9_MODE_DIR,
-        FileType::Symlink => P9_MODE_LNK,
-        FileType::File => P9_MODE_REG,
-    }
-}
-
-fn split_unix_time_ns(value: u64) -> (u64, u64) {
-    (value / 1_000_000_000, value % 1_000_000_000)
-}
-
-fn fs_stat() -> P9FsStat {
-    P9FsStat {
-        fs_type: P9_FS_MAGIC,
-        block_size: P9_DEFAULT_BLOCK_SIZE as u32,
-        blocks: 0,
-        blocks_free: 0,
-        blocks_available: 0,
-        files: 0,
-        files_free: 0,
-        fsid: fnv1a_64(b"wanix-9p"),
-        name_length: P9_DEFAULT_NAME_LENGTH,
-    }
-}
-
-fn dirent_type_for_metadata(metadata: &Metadata) -> u8 {
-    match metadata.file_type() {
-        FileType::Directory => DT_DIR,
-        FileType::Symlink => DT_LNK,
-        FileType::File => DT_REG,
-    }
-}
-
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 fn open_options_from_flags(flags: u32) -> OpenOptions {
