@@ -1239,3 +1239,34 @@ fn absolute_virtual_path_from_open_path(path: &[u8]) -> Result<Vec<u8>, i32> {
     absolute.extend_from_slice(path);
     Ok(absolute)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ERRNO_BADF, ERRNO_INVAL, ERRNO_NAMETOOLONG, ERRNO_NOENT, ERRNO_NOSYS, ERRNO_NOTCAPABLE,
+        QuickJsWasiErrno, preview1_errno,
+    };
+
+    #[test]
+    fn preview1_errno_maps_supported_raw_codes() {
+        let cases = [
+            (ERRNO_BADF, QuickJsWasiErrno::Badf),
+            (ERRNO_INVAL, QuickJsWasiErrno::Inval),
+            (ERRNO_NAMETOOLONG, QuickJsWasiErrno::Nametoolong),
+            (ERRNO_NOENT, QuickJsWasiErrno::Noent),
+            (ERRNO_NOSYS, QuickJsWasiErrno::Nosys),
+            (ERRNO_NOTCAPABLE, QuickJsWasiErrno::Notcapable),
+        ];
+
+        for (raw, errno) in cases {
+            assert_eq!(preview1_errno(raw), errno);
+        }
+    }
+
+    #[test]
+    fn preview1_errno_defaults_unknown_raw_codes_to_io() {
+        assert_eq!(preview1_errno(-1), QuickJsWasiErrno::Io);
+        assert_eq!(preview1_errno(0), QuickJsWasiErrno::Io);
+        assert_eq!(preview1_errno(i32::MAX), QuickJsWasiErrno::Io);
+    }
+}

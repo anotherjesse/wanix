@@ -259,3 +259,50 @@ impl QuickJsWasiFileStat {
         self.changed_time_ns
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{QuickJsWasiErrno, QuickJsWasiFileType};
+
+    #[test]
+    fn preview1_errno_codes_are_pinned() {
+        let cases = [
+            (QuickJsWasiErrno::Badf, 8),
+            (QuickJsWasiErrno::Exist, 20),
+            (QuickJsWasiErrno::Inval, 28),
+            (QuickJsWasiErrno::Io, 29),
+            (QuickJsWasiErrno::Isdir, 31),
+            (QuickJsWasiErrno::Nametoolong, 37),
+            (QuickJsWasiErrno::Noent, 44),
+            (QuickJsWasiErrno::Nosys, 52),
+            (QuickJsWasiErrno::Notdir, 54),
+            (QuickJsWasiErrno::Notempty, 55),
+            (QuickJsWasiErrno::Notcapable, 76),
+        ];
+
+        for (errno, code) in cases {
+            assert_eq!(errno.preview1_result(), code);
+        }
+    }
+
+    #[test]
+    fn preview1_file_type_codes_round_trip_known_values() {
+        let cases = [
+            (0, QuickJsWasiFileType::Unknown),
+            (2, QuickJsWasiFileType::CharacterDevice),
+            (3, QuickJsWasiFileType::Directory),
+            (4, QuickJsWasiFileType::RegularFile),
+            (7, QuickJsWasiFileType::SymbolicLink),
+        ];
+
+        for (code, file_type) in cases {
+            assert_eq!(
+                QuickJsWasiFileType::from_preview1_code(code),
+                Some(file_type)
+            );
+            assert_eq!(file_type.preview1_code(), code);
+        }
+        assert_eq!(QuickJsWasiFileType::from_preview1_code(1), None);
+        assert_eq!(QuickJsWasiFileType::from_preview1_code(u8::MAX), None);
+    }
+}
