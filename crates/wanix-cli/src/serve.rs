@@ -822,9 +822,10 @@ mod tests {
 
     use tungstenite::{Message, connect};
     use wanix_protocol::{
-        P9_RATTACH, P9_RGETATTR, P9_RLOPEN, P9_RREAD, P9_RVERSION, P9_RWALK, P9_VERSION_9P2000_L,
-        P9Frame, p9_decode_rgetattr, p9_decode_rread, p9_tattach, p9_tgetattr, p9_tlopen, p9_tread,
-        p9_tversion, p9_twalk,
+        P9_RATTACH, P9_RGETATTR, P9_RLOPEN, P9_RREAD, P9_RSETATTR, P9_RVERSION, P9_RWALK,
+        P9_SETATTR_GID, P9_SETATTR_UID, P9_VERSION_9P2000_L, P9Frame, P9SetAttr,
+        p9_decode_rgetattr, p9_decode_rread, p9_tattach, p9_tgetattr, p9_tlopen, p9_tread,
+        p9_tsetattr, p9_tversion, p9_twalk,
     };
 
     use super::*;
@@ -1210,13 +1211,23 @@ mod tests {
             p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
             p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
             p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
-            p9_tgetattr(4, 2, u64::MAX),
-            p9_tlopen(5, 2, 0),
-            p9_tread(6, 2, 0, 12),
+            p9_tsetattr(
+                4,
+                2,
+                P9_SETATTR_UID | P9_SETATTR_GID,
+                &P9SetAttr {
+                    uid: 1000,
+                    gid: 1001,
+                    ..P9SetAttr::default()
+                },
+            ),
+            p9_tgetattr(5, 2, u64::MAX),
+            p9_tlopen(6, 2, 0),
+            p9_tread(7, 2, 0, 12),
         ]);
         socket.send(Message::binary(requests)).unwrap();
 
-        let frames = read_binary_frames(&mut socket, 6);
+        let frames = read_binary_frames(&mut socket, 7);
         socket.close(None).unwrap();
         let (exit_code, _stderr) = handle.join().unwrap();
 
@@ -1227,12 +1238,16 @@ mod tests {
                 P9_RVERSION,
                 P9_RATTACH,
                 P9_RWALK,
+                P9_RSETATTR,
                 P9_RGETATTR,
                 P9_RLOPEN,
                 P9_RREAD
             ]
         );
-        assert_eq!(p9_decode_rread(&frames[5]).unwrap(), b"hello export");
+        let attr = p9_decode_rgetattr(&frames[4]).unwrap();
+        assert_eq!(attr.uid, 1000);
+        assert_eq!(attr.gid, 1001);
+        assert_eq!(p9_decode_rread(&frames[6]).unwrap(), b"hello export");
     }
 
     #[test]

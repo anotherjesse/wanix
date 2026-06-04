@@ -95,6 +95,7 @@ and read-only directories, reads/writes regular files, lists directories with
 and reads symbolic links with `Tsymlink` and `Treadlink`, and handles core mount
 and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, `Trenameat`, and
 `Tunlinkat`, file size, permission, and timestamp mutation with `Tsetattr`,
+session-virtual uid/gid ownership through `Tsetattr`/`Tgetattr`,
 advisory-lock compatibility probes with `Tlock`/`Tgetlock`, synchronous
 compatibility probes with `Tflush` and `Tfsync`, and append-open write
 semantics for `O_APPEND` fids; it also serves encoded request/response frames
@@ -375,6 +376,9 @@ cargo test --workspace --locked
 - [ADR 0079](docs/adrs/0079-rust-serve-direct-v86-bundle.md):
   `wanix-rust serve --bundle direct-v86` serves a browser page that wires the
   discovery document's direct 9P WebSocket route into v86 `filesystem.proxy_url`.
+- [ADR 0080](docs/adrs/0080-9p-virtual-ownership.md):
+  `wanix-9p` stores uid/gid as session-virtual metadata so mounted clients can
+  observe chown-style changes without adding a filesystem-wide ownership API.
 
 ## Cycle Rules
 
@@ -397,3 +401,7 @@ cycle before starting the next one.
   integration, then extend the direct-v86 route into a complete qemu/v86 bundle,
   `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`
   endpoint.
+- Add typed 9P2000.L codecs for still-missing Linux/editor probes such as
+  `Tmknod`, `Tlink`, and xattrs; route them to intentional compatibility
+  responses until Wanix grows backing contracts for special files, hard links,
+  or extended attributes.

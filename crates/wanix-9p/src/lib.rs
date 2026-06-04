@@ -73,7 +73,8 @@ const P9_SETATTR_KNOWN_MASK: u32 = P9_SETATTR_PERMISSIONS
     | P9_SETATTR_CTIME
     | P9_SETATTR_ATIME_NOT_SYSTEM_TIME
     | P9_SETATTR_MTIME_NOT_SYSTEM_TIME;
-const P9_SETATTR_UNSUPPORTED_MASK: u32 = P9_SETATTR_UID | P9_SETATTR_GID | P9_SETATTR_CTIME;
+const P9_SETATTR_OWNER_MASK: u32 = P9_SETATTR_UID | P9_SETATTR_GID;
+const P9_SETATTR_UNSUPPORTED_MASK: u32 = P9_SETATTR_CTIME;
 
 const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
@@ -119,6 +120,7 @@ impl From<P9Error> for Wanix9pError {
 pub struct P9Server {
     root: Arc<dyn FileSystem>,
     fids: BTreeMap<u32, FidEntry>,
+    owners: BTreeMap<NormalizedPath, P9OwnerAttrs>,
     msize: u32,
     max_msize: u32,
 }
@@ -129,6 +131,12 @@ struct FidEntry {
     append: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct P9OwnerAttrs {
+    uid: Option<u32>,
+    gid: Option<u32>,
+}
+
 impl P9Server {
     /// Creates a server around `root` using [`DEFAULT_MAX_MSIZE`].
     #[must_use]
@@ -136,6 +144,7 @@ impl P9Server {
         Self {
             root,
             fids: BTreeMap::new(),
+            owners: BTreeMap::new(),
             msize: DEFAULT_MAX_MSIZE,
             max_msize: DEFAULT_MAX_MSIZE,
         }
@@ -180,6 +189,7 @@ impl P9Server {
     fn handle_version(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let P9Version { msize, version } = p9_decode_tversion(frame)?;
         self.fids.clear();
+        self.owners.clear();
         self.msize = msize.min(self.max_msize);
         let version = if version == P9_VERSION_9P2000_L {
             P9_VERSION_9P2000_L
@@ -289,6 +299,7 @@ impl P9Server {
             return Ok(p9_rlerror(frame.tag(), EBADF));
         };
         let path = join_walk_component(&dir_path, &create.name)?;
+        let existing_path = self.metadata_no_follow(&path).is_ok();
         let mut options = open_options_from_flags(create.flags);
         options.create = true;
         let file = match self.root.open(&path, options) {
@@ -300,6 +311,9 @@ impl P9Server {
             Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         };
         let qid = qid_for_metadata(&path, metadata);
+        if !existing_path {
+            self.set_created_gid(&path, create.gid);
+        }
         let Some(entry) = self.fids.get_mut(&create.fid) else {
             return Ok(p9_rlerror(frame.tag(), EBADF));
         };
@@ -330,6 +344,7 @@ impl P9Server {
             Ok(metadata) => metadata,
             Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         };
+        self.set_created_gid(&path, symlink.gid);
         Ok(p9_rsymlink(frame.tag(), qid_for_metadata(&path, metadata)))
     }
 
@@ -357,7 +372,12 @@ impl P9Server {
             Ok(metadata) => metadata,
             Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         };
-        let attr = attr_for_metadata(&path, metadata, getattr.request_mask);
+        let attr = attr_for_metadata(
+            &path,
+            metadata,
+            getattr.request_mask,
+            self.owner_attrs(&path),
+        );
         Ok(p9_rgetattr(frame.tag(), &attr))
     }
 
@@ -375,6 +395,11 @@ impl P9Server {
         if let Err(error) = validate_setattr_times(setattr.valid, &setattr.attr) {
             return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
         }
+        if setattr.valid & P9_SETATTR_OWNER_MASK != 0
+            && let Err(error) = self.metadata_no_follow(&path)
+        {
+            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
+        }
 
         if setattr.valid & P9_SETATTR_SIZE != 0
             && let Err(error) = self.set_file_size(&path, setattr.attr.size)
@@ -390,6 +415,9 @@ impl P9Server {
             && let Err(error) = self.root.set_permissions(&path, setattr.attr.permissions)
         {
             return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
+        }
+        if setattr.valid & P9_SETATTR_OWNER_MASK != 0 {
+            self.set_owner_attrs(&path, setattr.valid, &setattr.attr);
         }
         Ok(p9_rsetattr(frame.tag()))
     }
@@ -534,6 +562,7 @@ impl P9Server {
             Ok(metadata) => metadata,
             Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         };
+        self.set_created_gid(&path, mkdir.gid);
         Ok(p9_rmkdir(frame.tag(), qid_for_metadata(&path, metadata)))
     }
 
@@ -556,7 +585,10 @@ impl P9Server {
         let old_path = join_walk_component(&old_dir_path, &rename.old_name)?;
         let new_path = join_walk_component(&new_dir_path, &rename.new_name)?;
         match self.root.rename(&old_path, &new_path) {
-            Ok(()) => Ok(p9_rrenameat(frame.tag())),
+            Ok(()) => {
+                self.move_owner_attrs(&old_path, &new_path);
+                Ok(p9_rrenameat(frame.tag()))
+            }
             Err(error) => Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         }
     }
@@ -577,7 +609,10 @@ impl P9Server {
             self.root.remove_file(&path)
         };
         match result {
-            Ok(()) => Ok(p9_runlinkat(frame.tag())),
+            Ok(()) => {
+                self.remove_owner_attrs(&path);
+                Ok(p9_runlinkat(frame.tag()))
+            }
             Err(error) => Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         }
     }
@@ -598,6 +633,54 @@ impl P9Server {
     fn metadata_no_follow(&self, path: &NormalizedPath) -> Result<Metadata, FsError> {
         self.root
             .metadata_with_lookup(path, MetadataLookup::NoFollow)
+    }
+
+    fn owner_attrs(&self, path: &NormalizedPath) -> P9OwnerAttrs {
+        self.owners.get(path).copied().unwrap_or_default()
+    }
+
+    fn set_owner_attrs(&mut self, path: &NormalizedPath, valid: u32, attr: &P9SetAttr) {
+        let mut owner = self.owner_attrs(path);
+        if valid & P9_SETATTR_UID != 0 {
+            owner.uid = Some(attr.uid);
+        }
+        if valid & P9_SETATTR_GID != 0 {
+            owner.gid = Some(attr.gid);
+        }
+        self.owners.insert(path.clone(), owner);
+    }
+
+    fn set_created_gid(&mut self, path: &NormalizedPath, gid: u32) {
+        self.owners.insert(
+            path.clone(),
+            P9OwnerAttrs {
+                uid: None,
+                gid: Some(gid),
+            },
+        );
+    }
+
+    fn move_owner_attrs(&mut self, old_path: &NormalizedPath, new_path: &NormalizedPath) {
+        if old_path == new_path {
+            return;
+        }
+        let moves = self
+            .owners
+            .iter()
+            .filter_map(|(path, owner)| {
+                rebase_owner_path(path, old_path, new_path).map(|to| (path.clone(), to, *owner))
+            })
+            .collect::<Vec<_>>();
+        self.remove_owner_attrs(new_path);
+        for (from, to, owner) in moves {
+            self.owners.remove(&from);
+            self.owners.insert(to, owner);
+        }
+    }
+
+    fn remove_owner_attrs(&mut self, removed_path: &NormalizedPath) {
+        self.owners
+            .retain(|path, _| !is_same_or_descendant_path(path, removed_path));
     }
 
     fn set_file_size(&self, path: &NormalizedPath, size: u64) -> Result<(), FsError> {
@@ -699,7 +782,12 @@ fn qid_for_metadata(path: &NormalizedPath, metadata: Metadata) -> P9Qid {
     }
 }
 
-fn attr_for_metadata(path: &NormalizedPath, metadata: Metadata, request_mask: u64) -> P9Attr {
+fn attr_for_metadata(
+    path: &NormalizedPath,
+    metadata: Metadata,
+    request_mask: u64,
+    owner: P9OwnerAttrs,
+) -> P9Attr {
     let (atime_seconds, atime_nanoseconds) = split_unix_time_ns(metadata.accessed_time_ns());
     let (mtime_seconds, mtime_nanoseconds) = split_unix_time_ns(metadata.modified_time_ns());
     let (ctime_seconds, ctime_nanoseconds) = split_unix_time_ns(metadata.changed_time_ns());
@@ -707,8 +795,8 @@ fn attr_for_metadata(path: &NormalizedPath, metadata: Metadata, request_mask: u6
         valid: request_mask,
         qid: qid_for_metadata(path, metadata.clone()),
         mode: p9_mode_for_metadata(&metadata),
-        uid: 0,
-        gid: 0,
+        uid: owner.uid.unwrap_or(0),
+        gid: owner.gid.unwrap_or(0),
         nlink: 1,
         rdev: 0,
         size: metadata.len(),
@@ -725,6 +813,38 @@ fn attr_for_metadata(path: &NormalizedPath, metadata: Metadata, request_mask: u6
         generation: 0,
         data_version: 0,
     }
+}
+
+fn rebase_owner_path(
+    path: &NormalizedPath,
+    old_path: &NormalizedPath,
+    new_path: &NormalizedPath,
+) -> Option<NormalizedPath> {
+    if path == old_path {
+        return Some(new_path.clone());
+    }
+    let suffix = descendant_suffix(path, old_path)?;
+    let rebased = if new_path.as_str() == "." {
+        suffix.to_owned()
+    } else {
+        format!("{}/{}", new_path.as_str(), suffix)
+    };
+    NormalizedPath::new(&rebased).ok()
+}
+
+fn is_same_or_descendant_path(path: &NormalizedPath, base: &NormalizedPath) -> bool {
+    path == base || descendant_suffix(path, base).is_some()
+}
+
+fn descendant_suffix<'a>(path: &'a NormalizedPath, base: &NormalizedPath) -> Option<&'a str> {
+    let base = base.as_str();
+    if base == "." {
+        return Some(path.as_str());
+    }
+    path.as_str()
+        .strip_prefix(base)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .filter(|suffix| !suffix.is_empty())
 }
 
 fn p9_mode_for_metadata(metadata: &Metadata) -> u32 {
@@ -1107,19 +1227,52 @@ mod tests {
 
         attach_root(&mut server);
         let response = server
-            .handle_frame(&p9_tlcreate(2, 1, "new.txt", O_RDWR, 0o100664, 0).unwrap())
+            .handle_frame(&p9_tlcreate(2, 1, "new.txt", O_RDWR, 0o100664, 1234).unwrap())
             .unwrap();
         assert_eq!(response.message_type(), P9_RLCREATE);
         let (qid, iounit) = p9_decode_rlcreate(&response).unwrap();
         assert_eq!(qid.qid_type, 0);
         assert_eq!(iounit, DEFAULT_MAX_MSIZE - RLOPEN_OVERHEAD);
 
+        let response = server.handle_frame(&p9_tgetattr(3, 1, u64::MAX)).unwrap();
+        assert_eq!(response.message_type(), P9_RGETATTR);
+        assert_eq!(p9_decode_rgetattr(&response).unwrap().gid, 1234);
+
         let response = server
-            .handle_frame(&p9_twrite(3, 1, 0, b"created over 9p").unwrap())
+            .handle_frame(&p9_twrite(4, 1, 0, b"created over 9p").unwrap())
             .unwrap();
         assert_eq!(response.message_type(), P9_RWRITE);
         assert_eq!(p9_decode_rwrite(&response).unwrap(), 15);
         assert_eq!(fs.read_file("new.txt").unwrap(), b"created over 9p");
+    }
+
+    #[test]
+    fn lcreate_existing_file_preserves_virtual_owner() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("existing.txt", b"old").unwrap();
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["existing.txt"]);
+        let owner = P9SetAttr {
+            uid: 1000,
+            gid: 1001,
+            ..P9SetAttr::default()
+        };
+        let response = server
+            .handle_frame(&p9_tsetattr(3, 2, P9_SETATTR_UID | P9_SETATTR_GID, &owner))
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RSETATTR);
+
+        let response = server
+            .handle_frame(&p9_tlcreate(4, 1, "existing.txt", O_RDWR, 0o100664, 2000).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLCREATE);
+
+        let response = server.handle_frame(&p9_tgetattr(5, 1, u64::MAX)).unwrap();
+        let attr = p9_decode_rgetattr(&response).unwrap();
+        assert_eq!(attr.uid, 1000);
+        assert_eq!(attr.gid, 1001);
     }
 
     #[test]
@@ -1577,7 +1730,7 @@ mod tests {
     }
 
     #[test]
-    fn setattr_unsupported_uid_does_not_partially_resize() {
+    fn setattr_uid_gid_update_reported_owner() {
         let fs = Arc::new(MemFs::new());
         fs.write_file("owner.txt", b"abcdef").unwrap();
         let mut server = server(Arc::clone(&fs));
@@ -1586,16 +1739,97 @@ mod tests {
         walk(&mut server, 1, 2, &["owner.txt"]);
         let attr = P9SetAttr {
             uid: 1000,
+            gid: 1001,
             size: 3,
             ..P9SetAttr::default()
         };
         let response = server
-            .handle_frame(&p9_tsetattr(3, 2, P9_SETATTR_UID | P9_SETATTR_SIZE, &attr))
+            .handle_frame(&p9_tsetattr(
+                3,
+                2,
+                P9_SETATTR_UID | P9_SETATTR_GID | P9_SETATTR_SIZE,
+                &attr,
+            ))
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RSETATTR);
+        p9_decode_rsetattr(&response).unwrap();
+        assert_eq!(fs.read_file("owner.txt").unwrap(), b"abc");
+
+        let response = server.handle_frame(&p9_tgetattr(4, 2, u64::MAX)).unwrap();
+        assert_eq!(response.message_type(), P9_RGETATTR);
+        let attr = p9_decode_rgetattr(&response).unwrap();
+        assert_eq!(attr.uid, 1000);
+        assert_eq!(attr.gid, 1001);
+    }
+
+    #[test]
+    fn virtual_owner_attrs_move_on_rename_and_clear_on_unlink() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("old.txt", b"owned").unwrap();
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["old.txt"]);
+        let attr = P9SetAttr {
+            uid: 42,
+            gid: 43,
+            ..P9SetAttr::default()
+        };
+        assert_eq!(
+            server
+                .handle_frame(&p9_tsetattr(3, 2, P9_SETATTR_UID | P9_SETATTR_GID, &attr))
+                .unwrap()
+                .message_type(),
+            P9_RSETATTR
+        );
+
+        let response = server
+            .handle_frame(&p9_trenameat(4, 1, "old.txt", 1, "new.txt").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RRENAMEAT);
+        walk(&mut server, 1, 3, &["new.txt"]);
+        let response = server.handle_frame(&p9_tgetattr(5, 3, u64::MAX)).unwrap();
+        let attr = p9_decode_rgetattr(&response).unwrap();
+        assert_eq!(attr.uid, 42);
+        assert_eq!(attr.gid, 43);
+
+        let response = server
+            .handle_frame(&p9_tunlinkat(6, 1, "new.txt", 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RUNLINKAT);
+        fs.write_file("new.txt", b"fresh").unwrap();
+        walk(&mut server, 1, 4, &["new.txt"]);
+        let response = server.handle_frame(&p9_tgetattr(7, 4, u64::MAX)).unwrap();
+        let attr = p9_decode_rgetattr(&response).unwrap();
+        assert_eq!(attr.uid, 0);
+        assert_eq!(attr.gid, 0);
+    }
+
+    #[test]
+    fn setattr_ctime_remains_unsupported_without_partial_resize() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("ctime.txt", b"abcdef").unwrap();
+        let mut server = server(Arc::clone(&fs));
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["ctime.txt"]);
+        let attr = P9SetAttr {
+            size: 3,
+            ..P9SetAttr::default()
+        };
+        let response = server
+            .handle_frame(&p9_tsetattr(
+                3,
+                2,
+                P9_SETATTR_CTIME | P9_SETATTR_SIZE,
+                &attr,
+            ))
             .unwrap();
 
         assert_eq!(response.message_type(), P9_RLERROR);
         assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EOPNOTSUPP);
-        assert_eq!(fs.read_file("owner.txt").unwrap(), b"abcdef");
+        assert_eq!(fs.read_file("ctime.txt").unwrap(), b"abcdef");
     }
 
     #[test]
@@ -1629,6 +1863,36 @@ mod tests {
             .unwrap();
         assert_eq!(response.message_type(), P9_RLERROR);
         assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+    }
+
+    #[test]
+    fn version_resets_virtual_owner_attrs() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("owned.txt", b"owned").unwrap();
+        let mut server = server(fs);
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["owned.txt"]);
+        let owner = P9SetAttr {
+            uid: 7,
+            gid: 8,
+            ..P9SetAttr::default()
+        };
+        let response = server
+            .handle_frame(&p9_tsetattr(3, 2, P9_SETATTR_UID | P9_SETATTR_GID, &owner))
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RSETATTR);
+
+        let response = server
+            .handle_frame(&p9_tversion(4, 8192, P9_VERSION_9P2000_L).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RVERSION);
+        attach_root(&mut server);
+        walk(&mut server, 1, 3, &["owned.txt"]);
+        let response = server.handle_frame(&p9_tgetattr(5, 3, u64::MAX)).unwrap();
+        let attr = p9_decode_rgetattr(&response).unwrap();
+        assert_eq!(attr.uid, 0);
+        assert_eq!(attr.gid, 0);
     }
 
     #[test]
