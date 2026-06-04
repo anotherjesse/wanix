@@ -259,46 +259,23 @@ contracts. Deleted ADR numbers remain in git history; do not re-add milestone
 proofs or progress-journal records as active ADRs.
 
 - [ADR 0001](docs/adrs/0001-rust-native-wasmtime-runtime.md): Rust Wanix is the
-  host/microkernel runtime, Wasmtime is the execution substrate, and Go is a
-  migration oracle rather than a structure to copy.
-- [ADR 0002](docs/adrs/0002-wanix-owned-wasi-semantics.md): Wanix owns live
-  WASI Preview 1 filesystem, fd, clock, readiness, symlink, mutation, and
-  service-path semantics through namespaces and task fds.
-- [ADR 0003](docs/adrs/0003-quickjs-vm-image-snapshots.md): QuickJS snapshots
-  are VM images; Wanix host resources and lifecycle policy are reattached at
-  create/restore time.
-- [ADR 0005](docs/adrs/0005-crate-boundaries-and-dependency-graph.md): Crate
-  boundaries keep core Wanix contracts independent from QuickJS, Wasmtime,
-  protocol transports, and composition-layer policy.
-- [ADR 0009](docs/adrs/0009-quickjs-tasks-use-wanix-process-semantics.md):
-  QuickJS is the execution engine inside `qjs` Wanix tasks while Wanix owns task
-  identity, argv/env/cwd, fds, stdio, and exit state.
-- [ADR 0012](docs/adrs/0012-quickjs-libc-std-fixture.md): The checked-in
-  QuickJS fixture and `qjs:std`/`qjs:os` namespace modules are a compatibility
-  boundary; virtual files are engine-only fixture support.
-- [ADR 0017](docs/adrs/0017-explicit-host-directory-qjs-mounts.md): Host files
-  enter Wanix only through explicit rooted `LocalFs` mounts with escape checks.
-- [ADR 0040](docs/adrs/0040-quickjs-immediate-event-loop-turns.md): QuickJS
-  timers, ready-IO turns, interrupt budgets, and memory limits are bounded host
-  execution policy, not a scheduler or serialized task state.
+  host/microkernel runtime, Wasmtime is the execution substrate, Go is a
+  migration oracle, and workspace crates stay layered around Wanix-owned
+  contracts.
+- [ADR 0002](docs/adrs/0002-quickjs-wasi-task-runtime.md): QuickJS runs as a
+  Wanix `qjs` task; Wanix owns task identity, live WASI semantics, fd/service
+  state, snapshots reattachment, fixture boundaries, and bounded guest
+  execution policy.
 - [ADR 0050](docs/adrs/0050-rust-terminal-device-and-shell-lifecycle.md):
   `wanix-term`, `qjs-term`, native `qjs-shell`, and served qjs-shell sessions
   share one terminal device and shell lifecycle contract.
 - [ADR 0058](docs/adrs/0058-rust-9p-protocol-framing.md): `wanix-protocol` and
   `wanix-9p` own the Rust 9P frame, codec, fid, metadata, mutation, and
   compatibility contract across transports.
-- [ADR 0068](docs/adrs/0068-rust-serve-http-websocket-9p.md): Rust `serve`
-  owns local HTTP, discovery, direct 9P WebSocket, service namespace, and
-  qjs-shell route policy for browser/v86/workbench clients.
-- [ADR 0079](docs/adrs/0079-rust-serve-direct-v86-bundle.md): Direct v86 is a
-  browser/emulator handoff that consumes Rust serve discovery, direct 9P, boot
-  assets, hvc0 console, and smoke-readiness hints.
-- [ADR 0088](docs/adrs/0088-native-qemu-virtio9p-handoff-command.md): Native
-  QEMU support is a validated virtio-9p handoff command plus explicit
-  foreground `--exec`, not a VM manager.
-- [ADR 0092](docs/adrs/0092-serve-fs9p-browser-filesystem-bundle.md): Browser
-  filesystem and workbench integration uses Rust serve discovery, direct 9P,
-  `wanix:` filesystems, and `#task`/`#term` service workflows.
+- [ADR 0068](docs/adrs/0068-serve-and-client-handoffs.md): Rust `serve`,
+  browser filesystem/workbench, direct-v86, rootfs prep, and native QEMU share
+  explicit discovery and handoff contracts instead of becoming runtime
+  foundations.
 
 ## Retired Bridge Notes
 
@@ -307,7 +284,7 @@ proofs or progress-journal records as active ADRs.
   files.
 - The read-only virtual WASI projection is retired as a Wanix runtime path.
   Engine-level read-only virtual files may remain only as isolated fixture
-  support under ADR 0012.
+  support under ADR 0002.
 - Host line-discipline shell framing is retired. Native raw mode feeds bytes
   through the terminal device and lets the guest QuickJS shell own echo,
   editing, newline handling, and Ctrl-D behavior under ADR 0050.

@@ -493,7 +493,7 @@ actual process, namespace, and fd policy.
 The Wanix workspace does not vendor the Vercel reference source or build tree.
 The checked-in reference WASM binary can be rebuilt from an external
 `vercel-labs/quickjs-wasi` checkout plus the libc fixture changes summarized in
-the root [QuickJS fixture ADR](../../docs/adrs/0012-quickjs-libc-std-fixture.md)
+the root [QuickJS/WASI task runtime ADR](../../docs/adrs/0002-quickjs-wasi-task-runtime.md)
 and this crate's [architecture notes](docs/architecture.md):
 
 ```sh

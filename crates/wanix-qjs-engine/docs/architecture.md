@@ -8,19 +8,14 @@ the engine-specific invariants in one place.
 See the root ADRs for the Wanix-facing decisions:
 
 - [Rust-native Wasmtime runtime](../../../docs/adrs/0001-rust-native-wasmtime-runtime.md)
-- [Live Wanix-owned WASI semantics](../../../docs/adrs/0002-wanix-owned-wasi-semantics.md)
-- [QuickJS VM image snapshot boundary](../../../docs/adrs/0003-quickjs-vm-image-snapshots.md)
-- [Workspace crate boundaries](../../../docs/adrs/0005-crate-boundaries-and-dependency-graph.md)
-- [QuickJS tasks use Wanix process semantics](../../../docs/adrs/0009-quickjs-tasks-use-wanix-process-semantics.md)
-- [QuickJS fixture and namespace modules](../../../docs/adrs/0012-quickjs-libc-std-fixture.md)
-- [Bounded QuickJS guest execution policy](../../../docs/adrs/0040-quickjs-immediate-event-loop-turns.md)
+- [QuickJS/WASI task runtime boundary](../../../docs/adrs/0002-quickjs-wasi-task-runtime.md)
 
 ## Engine Role
 
 The engine crate owns the Wasmtime and QuickJS plumbing. It does not own Wanix
-task identity, namespaces, cwd/env/cmd, service files, fd-table policy, or
-runtime lifecycle semantics. Those stay in `wanix-task`, `wanix-vfs`,
-`wanix-wasi`, and `wanix-qjs`.
+task identity, namespaces, cwd/env/cmd, service files, fd-table policy, WASI
+semantics, or runtime lifecycle semantics. Those stay in `wanix-task`,
+`wanix-vfs`, `wanix-wasi`, and `wanix-qjs`.
 
 QuickJS runs as a WASI Preview 1 WebAssembly reactor. Native QuickJS pointers
 are not portable across process or runtime boundaries; inside wasm32, the

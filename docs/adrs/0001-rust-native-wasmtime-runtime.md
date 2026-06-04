@@ -34,11 +34,35 @@ implementation layout:
   process semantics by default.
 - QuickJS/WASI is the initial task runtime and the proof that JavaScript can run
   as a Wanix process outside Chrome.
+- Host files enter Wanix only through explicit rooted mounts with escape checks;
+  ambient host paths are not part of the default namespace.
 - Browser, workbench, v86, native QEMU, and CLI paths compose with the Rust
   runtime through explicit protocols and service files.
 - Migration uses Go behavior and tests as references when semantics are
   ambiguous, but Rust crate boundaries should follow the contracts being
   rebuilt.
+
+Keep the workspace layered around contract ownership:
+
+- `wanix-fs`: filesystem traits, metadata, errors, path rules, readiness hooks,
+  in-memory fixtures, and explicit host-directory-backed filesystems.
+- `wanix-vfs`: Plan 9-style namespace binding and resolution.
+- `wanix-task`: task identity, `#task`, metadata files, fd tables, fd binding,
+  and task driver registration.
+- `wanix-term`: `#term` terminal device filesystem and readiness behavior.
+- `wanix-wasi`: Wanix-owned WASI Preview 1 semantics backed by namespaces and
+  task fds.
+- `wanix-qjs-engine`: Wasmtime-hosted QuickJS/WASI mechanics, fixture loading,
+  guest memory decoding, runtime creation/restoration, and provider plumbing.
+- `wanix-qjs`: adapter that turns QuickJS engine runtimes into Wanix `qjs` task
+  drivers.
+- `wanix-protocol`: dependency-free protocol codecs, currently centered on 9P.
+- `wanix-9p`: 9P server state and filesystem mapping backed by Wanix traits.
+- `wanix-cli` and `serve`: native and browser-facing composition layers.
+
+Core filesystem, namespace, and task crates must remain free of Wasmtime and
+QuickJS. Protocol codecs must remain independent of server, CLI, and browser
+transport policy.
 
 ## Consequences
 
@@ -47,12 +71,14 @@ instead of translating every Go file. Architectural choices should favor
 Wanix-owned semantics at trust boundaries, even when host or Wasmtime defaults
 would be easier.
 
-This ADR is intentionally broad. More specific ADRs record crate boundaries,
-QuickJS task semantics, Wanix-owned WASI, snapshots, terminals, 9P, serve,
-workbench, v86, and QEMU handoff contracts.
+This ADR is intentionally broad. More specific ADRs record QuickJS/WASI task
+runtime semantics, terminals, 9P, serve, workbench, v86, and QEMU handoff
+contracts.
 
 ## Replaces
 
-This ADR absorbs the durable direction from ADR 0004. The separate Go-oracle
-record was removed because the oracle rule is part of the runtime direction,
-not a standalone architecture boundary.
+This ADR absorbs the durable direction from ADR 0004, ADR 0005, and ADR 0017.
+The separate Go-oracle record was removed because the oracle rule is part of
+the runtime direction, not a standalone architecture boundary. The workspace
+crate boundary and explicit host-directory mount rules are part of the runtime
+trust boundary, not standalone progress records.
