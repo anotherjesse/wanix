@@ -1578,6 +1578,19 @@ mod tests {
     }
 
     #[test]
+    fn qjs_shell_session_close_tolerates_external_terminal_close() {
+        let root = temp_dir("wanix-qjs-shell-session-external-close");
+        let (mut session, _initial_output) = QjsShellSession::start(&root).unwrap();
+        let terminal = session.terminal_for_test();
+        let terminal_id = session.terminal_id_for_test().to_owned();
+
+        terminal.close(&terminal_id).unwrap();
+
+        session.close_terminal_resource().unwrap();
+        session.close_terminal_resource().unwrap();
+    }
+
+    #[test]
     fn qjs_shell_session_can_start_in_served_cwd() {
         let root = temp_dir("wanix-qjs-shell-session-cwd");
         fs::create_dir(root.join("app")).unwrap();

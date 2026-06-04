@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use wanix_fs::{LocalFs, MemFs, NormalizedPath};
+use wanix_fs::{FsError, LocalFs, MemFs, NormalizedPath};
 use wanix_qjs::{QuickJsTaskDriver, QuickJsTaskRuntime};
 use wanix_task::{Task, TaskTable};
 use wanix_term::TermDevice;
@@ -156,7 +156,10 @@ impl QjsShellSession {
         if self.terminal_closed {
             return Ok(());
         }
-        self.terminal.close(&self.terminal_id)?;
+        match self.terminal.close(&self.terminal_id) {
+            Ok(()) | Err(FsError::NotFound) => {}
+            Err(error) => return Err(error.into()),
+        }
         self.terminal_closed = true;
         Ok(())
     }
