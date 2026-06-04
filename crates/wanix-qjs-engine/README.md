@@ -26,8 +26,8 @@ transfer/capture boundaries, copied scalar and binary values, host callback
 reattachment, and synchronous ES module loading.
 
 See [docs/architecture.md](docs/architecture.md) for the crate-local boundary
-summary. The old prototype ADRs were consolidated there; the root Wanix
-[ADR index](../../AGENTS.md#adr-index) is now the authoritative decision set.
+summary. The root Wanix [ADR index](../../AGENTS.md#adr-index) is the
+authoritative decision set.
 
 ## Quick Start
 
@@ -593,5 +593,4 @@ Not implemented yet:
   events.
 
 See [docs/architecture.md](docs/architecture.md) for the current boundary
-summary. Historical investigation and milestone notes belong in git history,
-not in the active documentation set.
+summary.

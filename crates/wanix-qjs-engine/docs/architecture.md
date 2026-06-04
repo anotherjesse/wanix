@@ -1,9 +1,8 @@
 # QuickJS Engine Architecture Notes
 
-`wanix-qjs-engine` was relocated from the `rust-wasi-quickjs` prototype into
-the Wanix workspace. The prototype carried one ADR per public API slice. In the
-Wanix tree, the root ADR index is the durable decision set, and this file keeps
-the engine-specific invariants in one place.
+`wanix-qjs-engine` owns crate-local QuickJS/Wasmtime invariants inside the
+Wanix workspace. The root ADR index is the durable Wanix decision set, and this
+file keeps engine-specific details in one place.
 
 See the root ADRs for the Wanix-facing decisions:
 
