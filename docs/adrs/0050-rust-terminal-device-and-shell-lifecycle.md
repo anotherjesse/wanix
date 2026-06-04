@@ -90,9 +90,3 @@ This still leaves important future work: signal delivery, signal-driven resize
 wakeups, cancellation, richer terminal/session lifecycle control beyond exit
 observation, process groups, durable terminal attachment, and VM/editor
 terminal policy.
-
-## Replaces
-
-This ADR consolidates the retired terminal-device series around ADRs 0051
-through 0057, ADR 0091, ADR 0099, and the later native fd-aware shell pumping
-and resize notes into the terminal device and shell lifecycle contract.

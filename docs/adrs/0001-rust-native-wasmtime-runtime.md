@@ -73,12 +73,5 @@ would be easier.
 
 This ADR is intentionally broad. More specific ADRs record QuickJS/WASI task
 runtime semantics, terminals, 9P, serve, workbench, v86, and QEMU handoff
-contracts.
-
-## Replaces
-
-This ADR absorbs the durable direction from ADR 0004, ADR 0005, and ADR 0017.
-The separate Go-oracle record was removed because the oracle rule is part of
-the runtime direction, not a standalone architecture boundary. The workspace
-crate boundary and explicit host-directory mount rules are part of the runtime
-trust boundary, not standalone progress records.
+contracts. Historical milestone records remain available in git history; the
+active ADR set should stay focused on current durable decisions.

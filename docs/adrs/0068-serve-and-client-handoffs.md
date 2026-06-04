@@ -103,9 +103,3 @@ session policy should be recorded as new decisions because they change the
 serve/client trust boundary. Future QEMU work that adds daemon mode, persistent
 VM management, network/vnet, terminal multiplexing, or rootfs build ownership
 should also get a new decision.
-
-## Replaces
-
-This ADR consolidates ADRs 0069 through 0071, ADR 0079, ADRs 0083 through 0086,
-ADRs 0088 through 0090, ADRs 0092 through 0098, ADR 0100, and ADR 0101 into the
-serve, browser/editor, v86, and native QEMU handoff contract.

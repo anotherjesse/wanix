@@ -256,9 +256,10 @@ cargo test --workspace --locked
 
 ## ADR Index
 
-Keep this index to active architecture, API, format, trust-boundary, and workflow
-contracts. Deleted ADR numbers remain in git history; do not re-add milestone
-proofs or progress-journal records as active ADRs.
+Keep this index to active architecture, API, format, trust-boundary, and
+workflow contracts. The active set is intentionally small; deleted ADR numbers
+remain in git history, and milestone proofs or progress-journal records should
+not be restored as active ADRs.
 
 - [ADR 0001](docs/adrs/0001-rust-native-wasmtime-runtime.md): Rust Wanix is the
   host/microkernel runtime, Wasmtime is the execution substrate, Go is a
@@ -298,9 +299,11 @@ format, trust-boundary, or workflow decisions. When touching a topic, review the
 related ADRs at the same time and consolidate, delete, or clearly retire records
 that no longer describe the current direction.
 
-The root ADR index is the active Wanix decision set. Imported prototype ADR
-archives should be consolidated into topic docs or deleted; do not let nested
-crates regrow progress-journal ADR series.
+The root ADR index above is the active Wanix decision set. Imported prototype
+ADR archives should be consolidated into topic docs or deleted; do not let
+nested crates regrow progress-journal ADR series. Do not keep replacement
+ledgers inside active ADRs; git history already records which milestone notes
+were removed.
 
 Milestone proofs, fixture rebuild notes, per-syscall or per-operation coverage,
 CLI/demo slices, and smoke-test progress belong in tests, examples,

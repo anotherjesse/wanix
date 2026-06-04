@@ -88,9 +88,3 @@ Exact syscall, fixture, snapshot, and bounded-execution behavior is pinned by
 `wanix-wasi`, `wanix-qjs`, `wanix-qjs-engine`, and CLI tests instead of by one
 ADR per operation or demo. Future additions should update this ADR only when
 they change the durable task runtime boundary.
-
-## Replaces
-
-This ADR consolidates ADR 0003, ADR 0008, ADR 0009, ADR 0012 through ADR 0016,
-ADR 0018 through ADR 0024, ADRs 0025 through 0039, and ADRs 0040 through 0049
-into one QuickJS/WASI task runtime boundary.

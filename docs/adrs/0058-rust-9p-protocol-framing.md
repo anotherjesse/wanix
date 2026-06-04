@@ -69,8 +69,3 @@ serve layers.
 Future 9P work should add ADRs only when it changes the protocol contract,
 authentication/trust boundary, transport multiplexing model, or backing Wanix
 filesystem semantics.
-
-## Replaces
-
-This ADR consolidates ADRs 0059 through 0067, ADRs 0072 through 0082, and
-ADR 0087 into the Rust 9P protocol and server contract.
