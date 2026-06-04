@@ -78,6 +78,10 @@ tests.
 - `wanix-rust qjs main.js`: JavaScript runs outside Chrome as a Wanix `qjs`
   task with live Wanix-backed WASI, namespace access, stdio/fds, env/cwd/cmd,
   observable exit status, and `#task` service files.
+- `wanix-rust wasm hot.wasm [args]`: turnkey runner for a compiled
+  `wasm32-wasi` task (the `wanix-wasm` path), one command with no host glue —
+  process cwd preopened as the namespace root, argv/stdout/stderr/exit wired
+  like `qjs`. The DX sibling of `wanix-rust qjs` for the compiled-to-wasm tier.
 - `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
   shell modes and served shell sessions use the same `#term` device contract,

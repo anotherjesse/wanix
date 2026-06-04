@@ -94,6 +94,12 @@ impl CaptureFile {
     pub fn contents(&self) -> String {
         String::from_utf8_lossy(&self.buffer.lock().expect("capture lock")).into_owned()
     }
+
+    /// Returns the raw bytes written so far.
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        self.buffer.lock().expect("capture lock").clone()
+    }
 }
 
 impl File for CaptureFile {

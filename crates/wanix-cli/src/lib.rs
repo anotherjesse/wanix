@@ -8,6 +8,7 @@ mod qemu;
 mod qjs_term;
 mod rootfs;
 mod serve;
+mod wasm_run;
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -210,6 +211,12 @@ where
         ),
         [command, rest @ ..] if command == "qjs-shell" => qjs_term::run_qjs_shell_streaming(
             qjs_term::parse_qjs_shell_command(rest)?,
+            &mut process_stdin,
+            &mut process_stdout,
+            &mut process_stderr,
+        ),
+        [command, rest @ ..] if command == "wasm" => wasm_run::run_wasm_streaming(
+            wasm_run::parse_wasm_command(rest)?,
             &mut process_stdin,
             &mut process_stdout,
             &mut process_stderr,
