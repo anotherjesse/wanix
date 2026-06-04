@@ -19,12 +19,12 @@ integration.
 
 - `wanix-fs`: filesystem traits, metadata, errors, path rules, in-memory
   fixtures, and explicit host-directory-backed filesystems for native demos.
-- `wanix-protocol`: dependency-free wire protocol helpers, starting with 9P
-  frame splitting, tag extraction, version negotiation, and basic
-  server-facing 9P2000.L operation codecs.
-- `wanix-9p`: 9P server adapters backed by Wanix filesystems, starting with
-  an in-process frame handler for attach/walk/open/read/write/clunk and
-  directory listing, plus a synchronous byte-stream transport loop.
+- `wanix-protocol`: dependency-free wire protocol helpers, currently centered
+  on 9P frame splitting, tag extraction, version negotiation, and
+  server-facing 9P2000.L/Google compatibility codecs.
+- `wanix-9p`: 9P server adapters backed by Wanix filesystems, including fid
+  state, metadata/mutation mapping, compatibility probes, and synchronous
+  byte-stream transport helpers.
 - `wanix-vfs`: Plan 9-style namespace binding and resolution.
 - `wanix-task`: task model, `#task`, fd table, and driver registry.
 - `wanix-term`: terminal device filesystem for `#term/new`,
@@ -63,188 +63,42 @@ wanix-cli  -> runtime crates for orchestration
 No upward dependencies: `wanix-task` must not depend on `wanix-wasi` or
 `wanix-qjs`. Keep core filesystem and namespace crates free of Wasmtime.
 
-## Current Vertical Slices
+## Current Capability Map
 
-The baseline qjs demo is `wanix-rust qjs main.js`: JavaScript runs outside
-Chrome, reads and writes files through a Wanix namespace, prints through
-task-backed stdio, exits with an observable status, and can read `#task/self/id`
-to prove task context crosses into QuickJS.
+Keep this section concise. Detailed walkthrough output belongs in
+`rust-walkthrough.md`; implementation history belongs in commit messages and
+tests.
 
-Terminal-facing demos now include `wanix-rust qjs-term main.js` and
-`wanix-rust qjs-shell`: JavaScript still runs as a Wanix `qjs` task, but fd
-0/1/2 are bound through `#term/<id>/program` and the native binary streams
-terminal `data` output while the task runtime is live. The checked-in
-`qjs-term-ready-io-demo.js` also proves QuickJS ready-IO handlers can consume
-terminal-backed fd 0 in bounded turns. The `--feed-after-eval`,
-`--feed-after-eval-file`, and `--feed-after-eval-lines` options prove terminal
-input can arrive after JS has registered a read handler while the runtime
-remains live, including deterministic line-by-line scripted sessions and
-post-eval native stdin line streaming. Terminal fd readiness is queue-aware, so
-ready-IO pumps can run while a read handler is armed without firing on empty
-terminal input. Post-eval terminal feeds stop when the qjs task requests a
-Wanix process exit, which lets the shell demo's `exit` command return without
-waiting for native stdin EOF. The user-facing shell demo is now
-`wanix-rust qjs-shell`, which runs the bundled QuickJS shell source through the
-same terminal-backed Wanix task runtime with line-oriented native input.
-`qjs-shell --raw` adds native raw-mode setup and feeds native bytes directly
-through the terminal device, letting the bundled QuickJS shell own echo, simple
-editing, Ctrl-D, and command dispatch inside the Wanix task.
-`qjs-shell` still accepts `--event-loop-ms` for deterministic scripted feeds;
-on Unix, native process IO also passes a pollable stdin fd into the shell loop
-and pumps bounded QuickJS event-loop work while stdin is idle, so delayed shell
-output can surface before the next native input byte. The Unix native shell
-also polls the host terminal size through stdout, delivers changed dimensions
-through `#term/<id>/winch`, and exposes the latest queued resize through the
-bundled shell's `size` command.
-`qjs-term --resize-after-eval COLSxROWS` sends a deterministic post-eval
-resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
-can observe terminal resize broadcasts through live Wanix-backed fd readiness.
-Wanix-backed WASI keeps `#task` and `#term` rooted at the service namespace
-when a task cwd remaps the ordinary guest root, so shell sessions that start in
-a served subdirectory still read resize broadcasts from the real terminal
-service.
+- `wanix-rust qjs main.js`: JavaScript runs outside Chrome as a Wanix `qjs`
+  task with live Wanix-backed WASI, namespace access, stdio/fds, env/cwd/cmd,
+  observable exit status, and `#task` service files.
+- `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
+  `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
+  shell modes and served shell sessions use the same `#term` device contract.
+- `wanix-rust p9-stdio`, `p9-listen`, `p9-ws`, and `serve`: the Rust 9P server
+  exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
+  layers, with binary protocol traffic kept separate from diagnostics.
+- `serve --wanix-services`: exports a Wanix namespace containing the served
+  root, `#task`, and `#term`; direct 9P clients can allocate/start `noop` or
+  `qjs` tasks and attach terminal resources through service files.
+- `serve --bundle fs9p`: browser filesystem client over direct 9P.
+- `serve --bundle workbench-fs9p`: local Code OSS/workbench launch path where
+  the extension discovers Rust serve, browses `wanix:/` over direct 9P, and
+  can open qjs-backed terminal sessions when services are enabled.
+- `serve --bundle direct-v86`: browser v86 handoff over Rust serve discovery,
+  direct 9P, boot-asset hints, hvc0 console bridging, and autostart-friendly
+  launch hooks.
+- `wanix-rust rootfs --archive FILE.tgz --out DIR`: prepares a guest root,
+  rejects unsafe archive paths, validates VM boot markers, and prints QEMU and
+  direct-v86 launch hints without owning rootfs build or VM lifecycle.
+- `wanix-rust qemu --root DIR`: validates the same guest-root shape and emits a
+  shell or `wanix-qemu-virtio9p.v1` JSON handoff; `--exec` is an explicit
+  foreground launch, not a Wanix VM supervisor.
 
-The 9P-facing path now connects native stdio/TCP/WebSocket exports, Rust
-`serve`, browser filesystem smoke pages, workbench experiments, direct-v86, and
-native QEMU handoff work. The server core negotiates 9P2000.L and caps
-Google-extension negotiation at `9P2000.L.Google.2`, attaches, walks, opens
-regular files and read-only directories, reads/writes regular files, lists
-directories with `Treaddir`,
-clunks fids, reports no-follow metadata and host-backed link counts with
-`Tgetattr` and Google.2 `Twalkgetattr`, creates and reads symbolic links with
-`Tsymlink` and `Treadlink`, creates host-backed hard links with `Tlink` when the
-exported filesystem supports them, and handles core mount
-and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, legacy `Trename` and
-`Tremove`, `Trenameat`, and `Tunlinkat`, file size, permission, and timestamp
-mutation with `Tsetattr`,
-session-virtual uid/gid ownership through `Tsetattr`/`Tgetattr`,
-advisory-lock compatibility probes with `Tlock`/`Tgetlock`, synchronous
-compatibility probes with `Tflush`, Google.1 `Tflushf`, and `Tfsync`, and
-append-open write semantics for `O_APPEND` fids; it also decodes `Tmknod` and
-xattr probes as typed compatibility requests and returns intentional unsupported
-errors until Wanix grows backing contracts, while `Tauth` returns explicit
-`ENOSYS` because Rust Wanix does not require a separate 9P auth phase yet. It
-serves encoded request/response frames through a synchronous stream loop.
-`wanix-rust p9-stdio --root DIR` exposes that server over process
-stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
-for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
---addr 127.0.0.1:5640` exposes the same `LocalFs` export over a native TCP
-listener. `wanix-rust p9-ws --root DIR --addr 127.0.0.1:7654` exposes the same
-server over binary WebSocket frames for browser/v86 experiments. `wanix-rust
-serve [DIR] [--listen HOST:PORT] [--bundle NAME] [--wanix-services]` serves
-static files with COOP/COEP/CORS headers and reuses the binary WebSocket 9P
-handler on the same listener, including the named `/.well-known/export9p`
-route, which is the Rust-native serve shape for browser/v86/VS Code
-experiments.
-Normal `serve` handles HTTP and direct 9P WebSocket connections concurrently so
-long-lived mounted clients do not block discovery or static assets; `--once`
-remains a deterministic single-connection mode for tests and scripted demos.
-`/.well-known/wanix.json` describes the direct binary 9P WebSocket route,
-including base and Google.2 supported protocol strings, the optional bundle
-hint, and the explicitly unimplemented Ethernet route so browser/v86/VS Code
-clients can discover the current Rust serve contract.
-`serve --wanix-services` switches the 9P export from a bare host directory to a
-Wanix namespace that binds the host root at `/`, `#term`, and `#task` from a
-service-root task context. The service table registers `noop` and `qjs`, so
-direct 9P clients can allocate a QuickJS task with `#task/new/qjs`, set
-`cmd`/`env`/`dir`, bind fds, and `ctl start` it inside the served namespace.
-Discovery advertises those service roots and drivers through a `services`
-object. The 9P server now preserves device-stream behavior for non-seekable fids
-while keeping offset semantics for regular seekable files.
-When launched with `--bundle fs9p`, `/?bundle=fs9p` returns a generated browser
-filesystem smoke page that fetches discovery, opens the direct binary 9P
-WebSocket route, negotiates 9P2000.L, and exposes list/read/write/rename/delete
-controls against the served root. Its browser-side client follows `Treaddir`
-offset cookies so large directories are listed across multiple response pages.
-This remains the standalone browser-side 9P transport smoke; the workbench
-provider below is the editor path.
-The web workbench extension now also has a direct 9P filesystem backend that
-matches the existing `WanixBridge` provider shape by consuming Rust serve
-discovery and issuing 9P operations for `stat`, paginated directory listing,
-file read/write, mkdir, rename, copy, and removal. It also registers bounded
-client-side `wanix:/` file and text search providers when the served workbench
-enables the matching VS Code proposed APIs. The classic MessagePort/CBOR
-backend remains preferred when an embedding browser Wanix system supplies one.
-When discovery advertises services, the Rust-served launcher passes `#task` and
-`#term` paths into the extension and the direct 9P client can write existing
-service files, keep `#term/...` streams open, and forward workbench
-pseudoterminal resizes through `#term/<id>/winch`. This proves service
-reachability over the workbench path. The same `--wanix-services` mode also exposes
-`/.well-known/qjs-shell`, a Rust-owned terminal/session WebSocket route that
-starts the bundled QuickJS shell as a Wanix task, accepts a client-selected
-Wanix cwd, forwards resize frames through `#term/<id>/winch`, pumps guest
-ready-IO while browser terminal input arrives, returns terminal output as
-binary WebSocket frames, and reports exit as a lifecycle text frame consumed by
-the workbench pseudoterminal. The workbench qjs-shell pseudoterminal appends
-the configured cwd to that route and queues the latest dimensions until the
-socket opens, so initial shell commands see the requested Wanix cwd and
-terminal size.
-When launched with `--bundle workbench-fs9p`, `/?bundle=workbench-fs9p`
-returns a generated filesystem-only VS Code web workbench launcher. The page
-loads Code OSS and the `workbench/` extension package from the served root,
-opens `wanix:/` as the workspace, uses VS Code IPC only to wake the extension
-and pass a config-only absolute discovery URL, and does not supply the legacy
-Wanix MessagePort filesystem bridge. The
-intended backend remains the extension's Rust serve discovery path for direct
-9P filesystem access.
-This is a dev/demo launch path for local generated workbench assets, not a
-packaged Code OSS distribution or a general task launcher.
-The first browser smoke now proves the Rust-served page boots Code OSS to the
-`wanix:/` workspace root, loads the served `wanix.workbench` extension, opens
-the Rust direct 9P WebSocket, and populates Explorer from the served root.
-`--wanix-services` adds a test-covered service namespace export, a qjs-backed
-terminal route for the workbench pseudoterminal, and real one-shot qjs task
-startup through `#task`; direct service-backed workbench terminals also forward
-resize events to the terminal `winch` file and close from observed task exit
-state. Richer task/session lifecycle controls remain follow-ups.
-When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
-browser page that fetches the discovery document and configures v86
-`filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also
-advertises direct-v86 boot hints: the default 9P-root Linux cmdline, memory
-size, VGA memory size, virtio-console requirement, and embedded v86 asset
-routes. Discovery also reports guest boot asset URLs found in the served root,
-preferring `/boot/bzImage` over legacy `/bzImage` for the kernel and reporting a
-present initrd route when one is available. Discovery marks direct-v86 boot
-readiness by checking for a kernel and `/bin/init`, reporting missing required
-markers for smoke automation. With `--bundle direct-v86`, Rust
-serve owns the embedded `/v86/lib/libv86.mjs`, `/v86/lib/mod.js`,
-`/v86/lib/offscreen.js`, wasm, and BIOS routes so the browser emulator runtime
-does not have to live in the served root. The page accepts caller-supplied
-kernel/initrd/cmdline URLs or query overrides, and `autostart=1` starts v86
-after discovery/configuration so the URL can be used as a repeatable browser
-boot smoke. The same generated page bridges v86
-`virtio-console0-output-bytes` into a visible console textarea, sends
-typed/pasted browser input back through `virtio-console0-input-bytes`, and
-sends browser console size changes as `virtio-console0-resize`, matching the
-guest's `hvc0` console path used by QEMU.
-`wanix-rust rootfs --archive FILE.tgz --out DIR` extracts a gzipped tar guest
-root into a missing or empty directory, rejects unsafe archive paths, validates
-the shared VM boot markers (`/boot/bzImage` or `/bzImage`, plus `/bin/init`),
-and prints ready-to-run QEMU and direct-v86 serve commands. This command is the
-Rust-side bridge from `extras/dist/alpine-linux.tgz`-style artifacts to both VM
-entrypoints; it prepares a directory but does not build the archive or manage VM
-lifecycle.
-`wanix-rust qemu --root DIR` prints a shell-quoted native QEMU/KVM virtio-9p
-command for the same Linux guest/rootfs shape, discovering `/boot/bzImage` or
-legacy `/bzImage` from the guest root unless `--kernel PATH` overrides it. The
-command uses base `9p2000.L` root flags and `hvc0` virtconsole by default,
-offers `--cmdline`, repeatable `--append`, configurable 9P mount tags, and
-validated QEMU local 9P `security_model` choices for host-specific boot tuning,
-and can emit the same validated argv and boot policy as a
-`wanix-qemu-virtio9p.v1` JSON handoff for scripts and future editor/serve
-surfaces. It accepts `--exec` as an explicit foreground launch mode. Exec mode
-spawns the same validated argv, lets QEMU inherit native stdin/stdout/stderr
-for `-nographic` console ownership, and returns QEMU's exit status; richer VM
-lifecycle, rootfs build automation, signal policy, and network bridging remain
-follow-ups.
-`/.well-known` routes are reserved for protocol endpoints;
-`/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
-lands. Listener commands accept `--once` for tests and scripted demos.
-`p9-stdio` and the `serve` well-known WebSocket route both have compatibility
-probe smokes for auth, mknod, xattr, legacy rename, and legacy remove requests,
-plus host-backed hard-link success smokes; the serve WebSocket path also has a
-Google.2 `Twalkgetattr` smoke, pinning the externally visible contract used by
-Linux/v86/editor clients.
+The biggest missing pieces remain interactive shell/session depth, broader
+Linux/v86/editor 9P compatibility, QEMU/v86 boot workflows, and Rust
+serve/workbench/VS Code integration. Ethernet/vnet and public auth remain
+explicitly unimplemented trust-boundary work.
 
 ## Code Quality Guardrails
 
@@ -301,6 +155,9 @@ not be restored as active ADRs.
 - Host line-discipline shell framing is retired. Native raw mode feeds bytes
   through the terminal device and lets the guest QuickJS shell own echo,
   editing, newline handling, and Ctrl-D behavior under ADR 0050.
+- The legacy MessagePort/CBOR workbench bridge is compatibility for
+  browser-embedded Wanix systems, not the Rust serve direction. Rust-served
+  workbench integrations should consume discovery and direct 9P under ADR 0068.
 
 ## ADR Workflow
 
@@ -343,4 +200,4 @@ more feature work.
   `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`
   endpoint.
 - Add backing contracts for 9P special files or extended attributes only when a
-  Linux/v86/editor workflow proves they are required.
+  Linux/v86/editor workflow requires them.

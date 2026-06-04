@@ -82,13 +82,7 @@ running as a Wanix `qjs` task observes terminals through ordinary fd readiness
 and service files such as `#term/<id>/winch`, while Wanix continues to own task
 identity, fds, namespace, stdio, and exit state.
 
-Per-demo records for `qjs-term`, post-eval feeds, terminal fd readiness, native
-output streaming, `qjs-shell`, raw byte pumping, deterministic resize feeds,
-served idle pumping, and native idle/resize pumping are implementation history.
-Their behavior is now pinned by tests and examples, while this ADR records the
-durable terminal lifecycle contract.
-
-This still leaves important future work: signal delivery, signal-driven resize
-wakeups, cancellation, richer terminal/session lifecycle control beyond exit
-observation, process groups, durable terminal attachment, and VM/editor
-terminal policy.
+Exact native, served, and fixture behavior is pinned by tests and examples.
+Future signal delivery, cancellation, process-group, durable attachment, or
+VM/editor terminal policy should get a separate decision when it changes the
+terminal/service contract.

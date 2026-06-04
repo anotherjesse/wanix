@@ -30,7 +30,7 @@ local listener:
   selected bundles, service availability, direct-v86 boot hints, and explicitly
   unimplemented routes such as Ethernet/vnet until those contracts exist.
 - `--once` remains a deterministic single-connection mode for tests and
-  scripted smokes; normal serve accepts concurrent HTTP and 9P WebSocket
+  scripted clients; normal serve accepts concurrent HTTP and 9P WebSocket
   clients.
 - `--wanix-services` exports a Wanix namespace containing `#task` and `#term`
   through direct 9P from a service-root task context.
@@ -43,18 +43,21 @@ local listener:
   resize control frames so editor terminals can start in the requested Wanix
   cwd and deliver dimensions through `#term/<id>/winch`.
 
-Generated bundle pages and browser smokes should consume the discovery document
+Generated bundle pages and browser clients should consume the discovery document
 rather than hard-coding route assumptions.
 
 Browser filesystem and workbench clients are frontend integrations over that
 serve contract:
 
-- `serve --bundle fs9p` exposes a browser filesystem smoke page that proves
-  direct 9P browse/read/write behavior against the served root.
+- `serve --bundle fs9p` exposes a browser filesystem page for direct 9P
+  browse/read/write behavior against the served root.
 - The workbench extension can back its `wanix:` filesystem provider with direct
   9P operations, plus bounded client-side search over `wanix:/`.
 - `serve --bundle workbench-fs9p` is a local generated VS Code web workbench
   launch path that points the extension at Rust serve discovery.
+- The legacy MessagePort/CBOR workbench bridge is a compatibility path for
+  browser-embedded Wanix systems; Rust serve discovery and direct 9P are the
+  Rust-hosted workbench direction.
 - When discovery advertises services, the workbench path can open qjs shell
   sessions and can start `qjs` Wanix tasks by driving `#task` and `#term` over
   direct 9P.
@@ -72,7 +75,7 @@ Direct v86 is a browser/emulator handoff over Rust serve:
 - discovery exposes boot hints such as the default 9P-root Linux cmdline,
   memory size, VGA memory size, and virtio-console expectation;
 - query overrides can supply kernel, initrd, cmdline, and autostart behavior
-  for deterministic smokes; and
+  for deterministic browser launches; and
 - the generated page exposes the guest `hvc0` virtio-console stream for visible
   browser boot and shell interaction.
 

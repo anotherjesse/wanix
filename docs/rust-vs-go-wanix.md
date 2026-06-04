@@ -147,7 +147,7 @@ Here is the short comparative shape before getting into the Rust architecture:
 | Filesystems | Large Go `io/fs`-based toolkit plus browser storage/services | Rust filesystem traits, `MemFs`, explicit rooted `LocalFs`, VFS, WASI projection |
 | JavaScript runtime | Browser JS plus GoJS/WASI workers | QuickJS running outside Chrome as a Wanix task |
 | Terminal | Browser xterm integration over `#term` resources | Native `#term` device contract used by `qjs-term`, `qjs-shell`, and the Rust-served qjs-shell route |
-| VM/browser integration | Broad v86 and workbench integration in browser | Rust-served direct-v86 page with embedded assets, 9P discovery, hvc0 bridge, boot-smoke diagnostics, plus native QEMU handoff |
+| VM/browser integration | Broad v86 and workbench integration in browser | Rust-served direct-v86 page with embedded assets, 9P discovery, hvc0 bridge, boot-readiness diagnostics, plus native QEMU handoff |
 | 9P | `p9kit` adapter over external p9 library, plus Go serve routes | Owned protocol codecs and Wanix-backed 9P server over stdio/TCP/WebSocket, used by browser filesystem and workbench clients |
 | Persistence/mobility | Browser/session-oriented | QuickJS VM snapshot/resume with explicit host-resource reattachment |
 | Cloud readiness | Possible through browser-facing serve pieces, but browser remains close to runtime | Runtime can run without Chrome; protocols and mounts are explicit, but orchestration/auth remain future work |
@@ -487,8 +487,8 @@ With `--bundle direct-v86`, Rust `serve` generates a browser page that fetches
 the discovery document and configures v86 `filesystem.proxy_url` to the Rust 9P
 WebSocket route. The discovery data includes boot defaults such as the Linux
 cmdline needed to mount the 9P export as `root=host9p`, memory settings, VGA
-memory, and the virtio-console requirement. The direct-v86 page now also has a
-repeatable smoke shape: it can autostart from `?autostart=1`, exposes a visible
+memory, and the virtio-console requirement. The direct-v86 page can autostart
+from `?autostart=1`, exposes a visible
 boot log and `window.wanixV86BootLog`, reports v86 lifecycle status, sends
 browser console resize events to hvc0, and reports boot readiness from the
 served root by checking for a kernel and `/bin/init`.
@@ -598,7 +598,7 @@ It does not yet have the full browser service surface from Go. It does not yet
 have the whole web component authoring model. `qjs-shell` has a native raw path
 and a served terminal/session route, but it is not a complete production
 terminal scheduler with signals, cancellation, and rich lifecycle control.
-Direct-v86 is becoming a reproducible browser boot smoke, but it is not a full
+Direct-v86 is becoming a reproducible browser boot path, but it is not a full
 assembled VM distribution, not a vnet bridge, and not a native VM supervisor.
 The Rust-served workbench path can browse, edit, search, open a qjs shell route,
 start that shell in the configured Wanix cwd, forward terminal resizes, close

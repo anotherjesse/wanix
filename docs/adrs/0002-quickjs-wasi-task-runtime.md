@@ -85,6 +85,5 @@ semantics without `globalThis.Wanix` helpers and without a read-only virtual
 projection bridge.
 
 Exact syscall, fixture, snapshot, and bounded-execution behavior is pinned by
-`wanix-wasi`, `wanix-qjs`, `wanix-qjs-engine`, and CLI tests instead of by one
-ADR per operation or demo. Future additions should update this ADR only when
-they change the durable task runtime boundary.
+`wanix-wasi`, `wanix-qjs`, `wanix-qjs-engine`, and CLI tests. Update this ADR
+only when the durable task runtime boundary changes.

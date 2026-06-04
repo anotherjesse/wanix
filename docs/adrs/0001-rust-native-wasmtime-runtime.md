@@ -71,7 +71,6 @@ instead of translating every Go file. Architectural choices should favor
 Wanix-owned semantics at trust boundaries, even when host or Wasmtime defaults
 would be easier.
 
-This ADR is intentionally broad. More specific ADRs record QuickJS/WASI task
-runtime semantics, terminals, 9P, serve, workbench, v86, and QEMU handoff
-contracts. Historical milestone records remain available in git history; the
-active ADR set should stay focused on current durable decisions.
+Keep this ADR broad. Use more specific ADRs only for durable runtime,
+QuickJS/WASI, terminal, protocol, serve, client handoff, trust-boundary, or
+workflow decisions.

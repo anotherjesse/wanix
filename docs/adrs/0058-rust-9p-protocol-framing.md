@@ -11,9 +11,8 @@ Wanix namespace from outside the runtime. The Rust port needs a protocol stack
 that keeps wire codecs, server fid state, filesystem semantics, and transports
 separate enough to evolve safely.
 
-The old ADR set recorded many individual operation milestones. Those tests are
-valuable, but the durable decision is the Rust-owned 9P contract and the
-boundaries around it.
+The durable decision is the Rust-owned 9P contract and the boundaries between
+wire codecs, server state, filesystem semantics, and transports.
 
 ## Decision
 
