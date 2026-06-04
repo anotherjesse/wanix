@@ -119,10 +119,12 @@ optional bundle hint, and the explicitly unimplemented Ethernet route so
 browser/v86/VS Code clients can discover the current Rust serve contract.
 When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86
-`filesystem.proxy_url` with the Rust direct 9P WebSocket route. The page assumes
-the served root contains the v86 browser assets and accepts caller-supplied
-kernel/initrd URLs, so it is a route wiring proof rather than a complete VM
-bundle assembler.
+`filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also
+advertises direct-v86 boot hints: the default 9P-root Linux cmdline, memory
+size, VGA memory size, and virtio-console requirement. The page assumes the
+served root contains the v86 browser assets and accepts caller-supplied
+kernel/initrd/cmdline URLs or query overrides, so it is a boot handoff proof
+rather than a complete VM bundle assembler.
 `/.well-known` routes are reserved for protocol endpoints;
 `/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
 lands. Listener commands accept `--once` for tests and scripted demos.
@@ -395,6 +397,9 @@ cargo test --workspace --locked
   `wanix-9p` supports legacy fid-oriented `Trename` and `Tremove`, including
   rename fid rebasing and remove clunk semantics, for mounted-client
   compatibility.
+- [ADR 0083](docs/adrs/0083-serve-direct-v86-boot-contract.md):
+  Rust `serve --bundle direct-v86` advertises and applies the 9P-root Linux
+  boot cmdline and virtio-console defaults needed by the v86 handoff.
 
 ## Cycle Rules
 

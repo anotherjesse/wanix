@@ -18,6 +18,9 @@ use crate::{CliError, write_process_output};
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
 const DIRECT_V86_BUNDLE: &str = "direct-v86";
+const DIRECT_V86_DEFAULT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,aname=,cache=none,msize=131072 loglevel=3";
+const DIRECT_V86_MEMORY_SIZE: u32 = 1024 * 1024 * 1024;
+const DIRECT_V86_VGA_MEMORY_SIZE: u32 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ServeCommand {
@@ -515,11 +518,13 @@ fn direct_v86_bundle_response() -> StaticResponse {
     StaticResponse {
         status: HttpStatus::Ok,
         content_type: "text/html; charset=utf-8",
-        body: DIRECT_V86_BUNDLE_HTML.as_bytes().to_vec(),
+        body: direct_v86_bundle_html().into_bytes(),
     }
 }
 
-const DIRECT_V86_BUNDLE_HTML: &str = r##"<!doctype html>
+fn direct_v86_bundle_html() -> String {
+    let mut html = String::new();
+    html.push_str(r##"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -549,6 +554,8 @@ const DIRECT_V86_BUNDLE_HTML: &str = r##"<!doctype html>
       <input id="kernel" value="/bzImage">
       <label for="initrd">initrd URL</label>
       <input id="initrd" value="">
+      <label for="cmdline">kernel command line</label>
+      <textarea id="cmdline" spellcheck="false"></textarea>
       <button id="start" disabled>Start VM</button>
       <pre id="config"></pre>
     </aside>
@@ -558,27 +565,50 @@ const DIRECT_V86_BUNDLE_HTML: &str = r##"<!doctype html>
   <script type="module">
     import { V86 } from "/v86/lib/mod.js";
 
+"##);
+    html.push_str("    const DEFAULT_CMDLINE = ");
+    html.push_str(&json_string(DIRECT_V86_DEFAULT_CMDLINE));
+    html.push_str(";\n");
+    html.push_str("    const DEFAULT_MEMORY_SIZE = ");
+    html.push_str(&DIRECT_V86_MEMORY_SIZE.to_string());
+    html.push_str(";\n");
+    html.push_str("    const DEFAULT_VGA_MEMORY_SIZE = ");
+    html.push_str(&DIRECT_V86_VGA_MEMORY_SIZE.to_string());
+    html.push_str(";\n");
+    html.push_str(r##"
     const status = document.querySelector("#status");
     const start = document.querySelector("#start");
     const configOutput = document.querySelector("#config");
     const kernel = document.querySelector("#kernel");
     const initrd = document.querySelector("#initrd");
+    const cmdline = document.querySelector("#cmdline");
     const params = new URLSearchParams(location.search);
+    if (params.get("kernel")) kernel.value = params.get("kernel");
     if (params.get("bzimage")) kernel.value = params.get("bzimage");
     if (params.get("initrd")) initrd.value = params.get("initrd");
 
     const discovery = await fetch("/.well-known/wanix.json", { cache: "no-store" }).then(response => response.json());
     const proxyUrl = discovery.routes.p9.websocket;
+    cmdline.value = discovery.v86?.defaultCmdline || DEFAULT_CMDLINE;
+    if (params.get("cmdline")) cmdline.value = params.get("cmdline");
+    if (params.get("append")) cmdline.value = [cmdline.value, params.get("append")].filter(Boolean).join(" ");
     status.textContent = "9P proxy: " + proxyUrl;
 
     function buildConfig() {
       const config = {
+        memory_size: discovery.v86?.memorySize || DEFAULT_MEMORY_SIZE,
+        vga_memory_size: discovery.v86?.vgaMemorySize || DEFAULT_VGA_MEMORY_SIZE,
+        cmdline: cmdline.value,
         wasm_path: "/v86/bundle/v86.wasm",
         bios: { url: "/v86/bundle/seabios.bin" },
         vga_bios: { url: "/v86/bundle/vgabios.bin" },
+        bzimage_initrd_from_filesystem: false,
         filesystem: { proxy_url: proxyUrl },
         autostart: true,
+        virtio_console: true,
         disable_speaker: true,
+        disable_mouse: true,
+        disable_keyboard: false,
         screen_container: document.querySelector("#screen"),
         serial_container: document.querySelector("#serial")
       };
@@ -596,6 +626,7 @@ const DIRECT_V86_BUNDLE_HTML: &str = r##"<!doctype html>
 
     kernel.addEventListener("input", refreshConfig);
     initrd.addEventListener("input", refreshConfig);
+    cmdline.addEventListener("input", refreshConfig);
     refreshConfig();
     start.disabled = false;
     start.addEventListener("click", () => {
@@ -605,7 +636,9 @@ const DIRECT_V86_BUNDLE_HTML: &str = r##"<!doctype html>
   </script>
 </body>
 </html>
-"##;
+"##);
+    html
+}
 
 fn serve_discovery_response(roots: &ServeRoots, request: &[u8]) -> StaticResponse {
     StaticResponse {
@@ -627,9 +660,13 @@ fn serve_discovery_json(local_addr: SocketAddr, bundle: Option<&str>, request: &
          \"p9\":{{\"websocket\":{},\"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\"}},\
          \"ethernet\":{{\"websocket\":{},\"status\":\"not-implemented\"}}\
          }},\
+         \"v86\":{{\"defaultCmdline\":{},\"memorySize\":{},\"vgaMemorySize\":{},\"virtioConsole\":true}},\
          \"bundle\":{}}}",
         json_string(&p9_url),
         json_string(&ethernet_url),
+        json_string(DIRECT_V86_DEFAULT_CMDLINE),
+        DIRECT_V86_MEMORY_SIZE,
+        DIRECT_V86_VGA_MEMORY_SIZE,
         bundle
     )
 }
@@ -1000,6 +1037,35 @@ mod tests {
             "{response}"
         );
         assert!(
+            response.contains(
+                "const DEFAULT_CMDLINE = \"console=hvc0 init=/bin/init rw root=host9p rootfstype=9p"
+            ),
+            "{response}"
+        );
+        assert!(
+            response.contains("cmdline.value = discovery.v86?.defaultCmdline || DEFAULT_CMDLINE"),
+            "{response}"
+        );
+        assert!(
+            response
+                .contains("if (params.get(\"cmdline\")) cmdline.value = params.get(\"cmdline\")"),
+            "{response}"
+        );
+        assert!(
+            response.contains("if (params.get(\"append\")) cmdline.value = [cmdline.value, params.get(\"append\")]"),
+            "{response}"
+        );
+        assert!(response.contains("cmdline: cmdline.value"), "{response}");
+        assert!(response.contains("virtio_console: true"), "{response}");
+        assert!(
+            response.contains("bzimage_initrd_from_filesystem: false"),
+            "{response}"
+        );
+        assert!(
+            response.contains("memory_size: discovery.v86?.memorySize || DEFAULT_MEMORY_SIZE"),
+            "{response}"
+        );
+        assert!(
             response.contains("wasm_path: \"/v86/bundle/v86.wasm\""),
             "{response}"
         );
@@ -1095,6 +1161,18 @@ mod tests {
             response.contains("\"bundle\":\"vm-workbench\""),
             "{response}"
         );
+        assert!(
+            response.contains(
+                "\"v86\":{\"defaultCmdline\":\"console=hvc0 init=/bin/init rw root=host9p rootfstype=9p"
+            ),
+            "{response}"
+        );
+        assert!(
+            response.contains(
+                "\"memorySize\":1073741824,\"vgaMemorySize\":8388608,\"virtioConsole\":true"
+            ),
+            "{response}"
+        );
     }
 
     #[test]
@@ -1111,6 +1189,10 @@ mod tests {
             "{body}"
         );
         assert!(body.contains("\"bundle\":\"quote\\\"bundle\""), "{body}");
+        assert!(
+            body.contains("\"defaultCmdline\":\"console=hvc0 init=/bin/init rw root=host9p"),
+            "{body}"
+        );
 
         let ipv6_addr = "[::1]:7654".parse().unwrap();
         let ipv6_body = serve_discovery_json(
