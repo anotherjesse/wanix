@@ -98,5 +98,27 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
             ))
         },
     )?;
+    linker.func_wrap(
+        m,
+        "path_rename",
+        |mut caller: Caller<'_, WasiState>,
+         old_fd: i32,
+         old_path: i32,
+         old_path_len: i32,
+         new_fd: i32,
+         new_path: i32,
+         new_path_len: i32|
+         -> Result<i32> {
+            let mem = memory(&mut caller)?;
+            let old_name = read_str(&mem, &mut caller, old_path, old_path_len)?;
+            let new_name = read_str(&mem, &mut caller, new_path, new_path_len)?;
+            Ok(code(caller.data().ctx.path_rename(
+                WasiFd::new(old_fd as u32),
+                &old_name,
+                WasiFd::new(new_fd as u32),
+                &new_name,
+            )))
+        },
+    )?;
     Ok(())
 }

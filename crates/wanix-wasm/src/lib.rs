@@ -202,6 +202,60 @@ mod tests {
         );
     }
 
+    fn rename(fs: &Arc<MemFs>, src: &str, dst: &str) -> (i32, String) {
+        let runner = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+        let stdout = CaptureFile::new();
+        let config = WasiConfig::new(namespace_on(fs))
+            .with_args(["guest", "--rename", src, dst])
+            .with_stdout(Box::new(stdout.clone()), "stdout");
+        let exit = runner.run(config).expect("rust wasm task ran");
+        (exit, stdout.contents())
+    }
+
+    #[test]
+    fn path_rename_moves_file_preserving_bytes() {
+        let fs = Arc::new(MemFs::new());
+        fs.create_dir_all("shared").expect("make /shared");
+        fs.write_file("shared/a.txt", b"original bytes")
+            .expect("seed a.txt");
+
+        let (exit, out) = rename(&fs, "/shared/a.txt", "/shared/b.txt");
+        assert_eq!(exit, 0, "guest should exit cleanly: {out:?}");
+        assert!(
+            out.contains("renamed /shared/a.txt -> /shared/b.txt"),
+            "unexpected rename output: {out:?}"
+        );
+
+        assert_eq!(
+            fs.read_file("shared/b.txt").expect("b.txt exists"),
+            b"original bytes",
+            "renamed file should keep original bytes"
+        );
+        assert!(
+            fs.read_file("shared/a.txt").is_err(),
+            "source a.txt should be gone after rename"
+        );
+    }
+
+    #[test]
+    fn path_rename_missing_source_propagates_error() {
+        // Renaming a nonexistent source must surface the Errno as an error line
+        // (the guest's Err arm), not panic or trap the runner.
+        let fs = Arc::new(MemFs::new());
+        fs.create_dir_all("shared").expect("make /shared");
+
+        let (exit, out) = rename(&fs, "/shared/missing.txt", "/shared/b.txt");
+        assert_eq!(exit, 0, "guest itself exits cleanly: {out:?}");
+        assert!(
+            out.contains("rename failed /shared/missing.txt -> /shared/b.txt"),
+            "expected rename error on missing source, got: {out:?}"
+        );
+        assert!(
+            fs.read_file("shared/b.txt").is_err(),
+            "no target should be created on failed rename"
+        );
+    }
+
     #[test]
     fn fd_readdir_on_regular_file_reports_error() {
         // Calling readdir on a non-directory fd must surface as an error

@@ -125,6 +125,82 @@ fn qjs_and_rust_wasm_see_identical_directory_listing() {
 }
 
 #[test]
+fn qjs_writes_rust_renames_qjs_observes_move() {
+    // Differential proof for the new path_rename import: qjs writes a file,
+    // rust-wasm `std::fs::rename`s it on the SAME namespace, then qjs observes
+    // (via os.stat) that the new path exists with the original bytes and the
+    // old path is gone. Both engines route rename/stat through one WasiCtx VFS.
+    let fs = Arc::new(MemFs::new());
+    fs.create_dir_all("shared").expect("make /shared");
+
+    let qjs = QuickJsRunner::from_bundled_wasm().expect("qjs runner");
+    let rust = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+
+    // 1. qjs creates the source file.
+    let qjs_out = run_qjs(
+        &qjs,
+        &fs,
+        r#"import * as std from "qjs:std";
+std.writeFile("/shared/src.txt", "move me");
+std.out.puts("qjs: wrote src\n");
+std.out.flush();
+"#,
+    );
+    assert!(qjs_out.contains("qjs: wrote src"), "qjs write: {qjs_out:?}");
+
+    // 2. rust-wasm renames it through the path_rename import.
+    let (exit, rust_out) = run_rust(
+        &rust,
+        &fs,
+        &["guest", "--rename", "/shared/src.txt", "/shared/dst.txt"],
+    );
+    assert_eq!(exit, 0, "rust rename step exit: {rust_out:?}");
+    assert!(
+        rust_out.contains("renamed /shared/src.txt -> /shared/dst.txt"),
+        "rust rename output: {rust_out:?}"
+    );
+
+    // 3. qjs, on the same namespace, observes the move: dst exists with the
+    // original bytes; src no longer resolves.
+    let observed = run_qjs(
+        &qjs,
+        &fs,
+        r#"import * as std from "qjs:std";
+import * as os from "qjs:os";
+const [, srcErr] = os.stat("/shared/src.txt");
+const [, dstErr] = os.stat("/shared/dst.txt");
+std.out.puts("src_present " + (srcErr === 0) + "\n");
+std.out.puts("dst_present " + (dstErr === 0) + "\n");
+if (dstErr === 0) std.out.puts("dst_body " + std.loadFile("/shared/dst.txt") + "\n");
+std.out.flush();
+"#,
+    );
+    assert!(
+        observed.contains("src_present false"),
+        "qjs should see src gone after rename: {observed:?}"
+    );
+    assert!(
+        observed.contains("dst_present true"),
+        "qjs should see dst after rename: {observed:?}"
+    );
+    assert!(
+        observed.contains("dst_body move me"),
+        "qjs should read renamed bytes: {observed:?}"
+    );
+
+    // Host-side confirmation straight from the shared backing filesystem.
+    assert_eq!(
+        fs.read_file("shared/dst.txt").expect("dst exists"),
+        b"move me",
+        "renamed file should keep original bytes on the backing fs"
+    );
+    assert!(
+        fs.read_file("shared/src.txt").is_err(),
+        "source should be gone on the backing fs after rename"
+    );
+}
+
+#[test]
 fn qjs_and_rust_wasm_share_one_vfs_two_way() {
     // Backs the `shared_vfs` example as a real automated test: qjs writes a file,
     // rust-wasm reads it and writes its own, qjs reads that back.

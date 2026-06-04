@@ -5,6 +5,7 @@
 //! Usage:
 //!   `guest <input-path> <output-path>` — copy/transform a file.
 //!   `guest --list <dir>`               — list a directory's entries + types.
+//!   `guest --rename <src> <dst>`       — atomically move a file/dir.
 
 use std::fs;
 
@@ -12,6 +13,13 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--list") {
         list_dir(args.get(2).map_or("/", String::as_str));
+        return;
+    }
+    if args.get(1).map(String::as_str) == Some("--rename") {
+        rename(
+            args.get(2).map_or("", String::as_str),
+            args.get(3).map_or("", String::as_str),
+        );
         return;
     }
 
@@ -33,6 +41,14 @@ fn main() {
     match fs::write(&output, payload.as_bytes()) {
         Ok(()) => println!("rust-wasm: wrote {} bytes to {output}", payload.len()),
         Err(err) => println!("rust-wasm: could not write {output}: {err}"),
+    }
+}
+
+/// Atomically moves `src` to `dst` via `fs::rename` (the `path_rename` syscall).
+fn rename(src: &str, dst: &str) {
+    match fs::rename(src, dst) {
+        Ok(()) => println!("rust-wasm: renamed {src} -> {dst}"),
+        Err(err) => println!("rust-wasm: rename failed {src} -> {dst}: {err}"),
     }
 }
 
