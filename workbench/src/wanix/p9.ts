@@ -169,6 +169,26 @@ export class WanixP9Handle {
 		return text.decode(await this.readFile(name));
 	}
 
+	async readlink(name: string): Promise<string> {
+		this.logger(`readlink ${name}`);
+		const fid = await this.session.walkPath(name);
+		try {
+			return await this.session.readlink(fid);
+		} finally {
+			await this.session.clunkQuietly(fid);
+		}
+	}
+
+	async symlink(oldname: string, newname: string): Promise<void> {
+		this.logger(`symlink ${oldname} ${newname}`);
+		const parent = await this.session.walkPath(parentPath(newname));
+		try {
+			await this.session.symlink(parent, baseName(newname), oldname);
+		} finally {
+			await this.session.clunkQuietly(parent);
+		}
+	}
+
 	async waitFor(name: string, timeoutMs = 1000): Promise<void> {
 		this.logger(`waitFor ${name} ${timeoutMs}ms`);
 		const start = Date.now();

@@ -436,8 +436,9 @@ the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
 > Developer aside: `p9-*` and `serve` are the path toward Linux/v86/editor
 > clients browsing the same Wanix namespace. The workbench bootstrap passes the
 > discovered direct-9P route into the extension, the workbench client negotiates
-> Google.2 `walkgetattr` when available, and `serve --wanix-services` exports
-> `#task` and `#term` over that route so browser/workbench clients can start qjs
+> Google.2 `walkgetattr` when available, direct browser/workbench clients expose
+> symlink/readlink over the same 9P route, and `serve --wanix-services` exports
+> `#task` and `#term` so those clients can start qjs
 > tasks, attach terminals, start served qjs-shell sessions in the requested
 > Wanix cwd, forward resizes through `#term/<id>/winch`, close owned terminals
 > through `#term/<id>/ctl`, and observe exit state.

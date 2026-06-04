@@ -8,8 +8,10 @@ import {
 	P9_TCLUNK,
 	P9_TGETATTR,
 	P9_TLOPEN,
+	P9_TREADLINK,
 	P9_TREAD,
 	P9_TREADDIR,
+	P9_TSYMLINK,
 	P9_TUNLINKAT,
 	P9_TVERSION,
 	P9_TWALK,
@@ -176,6 +178,22 @@ export class P9Session {
 			});
 		}
 		return entries;
+	}
+
+	async readlink(fid: number): Promise<string> {
+		const payload = new Writer();
+		payload.u32(fid);
+		const response = await this.rpc(P9_TREADLINK, payload.done());
+		return new Reader(response.payload).string();
+	}
+
+	async symlink(dirFid: number, name: string, target: string, gid = 0): Promise<void> {
+		const payload = new Writer();
+		payload.u32(dirFid);
+		payload.string(name);
+		payload.string(target);
+		payload.u32(gid);
+		await this.rpc(P9_TSYMLINK, payload.done());
 	}
 
 	async unlink(name: string, flags: number): Promise<void> {

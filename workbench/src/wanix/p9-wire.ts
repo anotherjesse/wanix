@@ -11,6 +11,8 @@ export const P9_TWALKGETATTR = 126;
 export const P9_TGETATTR = 24;
 export const P9_TLOPEN = 12;
 export const P9_TLCREATE = 14;
+export const P9_TSYMLINK = 16;
+export const P9_TREADLINK = 22;
 export const P9_TREAD = 116;
 export const P9_TWRITE = 118;
 export const P9_TCLUNK = 120;
@@ -63,6 +65,8 @@ export const MESSAGE_NAMES = new Map<number, string>([
 	[P9_TGETATTR, "Tgetattr"],
 	[P9_TLOPEN, "Tlopen"],
 	[P9_TLCREATE, "Tlcreate"],
+	[P9_TSYMLINK, "Tsymlink"],
+	[P9_TREADLINK, "Treadlink"],
 	[P9_TREAD, "Tread"],
 	[P9_TWRITE, "Twrite"],
 	[P9_TCLUNK, "Tclunk"],

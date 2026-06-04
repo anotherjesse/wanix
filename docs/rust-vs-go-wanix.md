@@ -509,13 +509,14 @@ state through service files.
 The Rust-served workbench path now uses that contract. The `workbench-fs9p`
 bundle launches VS Code web against a `wanix:/` workspace, passes the discovered
 direct-9P route into the extension, negotiates Google.2 `walkgetattr` when the
-server advertises it, populates Explorer through that backend, and can run the
-current JavaScript file as a real Wanix `qjs` task by driving `#task` and
-`#term` over 9P. The served qjs-shell WebSocket route gives the workbench a
-terminal/session path backed by the same native task and terminal model; it can
-start in the configured Wanix cwd and deliver terminal resize frames through
-`#term/<id>/winch`. Direct workbench terminals dispose of owned terminal
-resources through `#term/<id>/ctl`.
+server advertises it, populates Explorer through that backend, exposes
+symlink/readlink through direct 9P, and can run the current JavaScript file as a
+real Wanix `qjs` task by driving `#task` and `#term` over 9P. The served
+qjs-shell WebSocket route gives the workbench a terminal/session path backed by
+the same native task and terminal model; it can start in the configured Wanix
+cwd and deliver terminal resize frames through `#term/<id>/winch`. Direct
+workbench terminals dispose of owned terminal resources through
+`#term/<id>/ctl`.
 
 With `--bundle direct-v86`, Rust `serve` generates a browser page that fetches
 the discovery document and configures v86 `filesystem.proxy_url` to the Rust 9P
@@ -644,12 +645,12 @@ terminal scheduler with signals, cancellation, and rich lifecycle control.
 Direct-v86 is becoming a reproducible browser boot path, but it is not a full
 assembled VM distribution, not a vnet bridge, and not a native VM supervisor.
 The Rust-served workbench path can browse, edit, copy directory trees, search,
-open a qjs shell route, start that shell in the configured Wanix cwd, forward
-terminal resizes, close owned terminal resources through service files, and run
-a qjs task, but it is still an integration demo rather than the full Go browser
-environment. Public auth, writable export policy, HTTPS, Ethernet/vnet, QEMU
-supervision, multi-tenant isolation, and cloud orchestration remain open design
-work.
+create and read symlinks, open a qjs shell route, start that shell in the
+configured Wanix cwd, forward terminal resizes, close owned terminal resources
+through service files, and run a qjs task, but it is still an integration demo
+rather than the full Go browser environment. Public auth, writable export
+policy, HTTPS, Ethernet/vnet, QEMU supervision, multi-tenant isolation, and
+cloud orchestration remain open design work.
 
 Snapshots are not whole-process checkpoints. 9P has intentional unsupported
 areas. Browser clients can discover the current Rust serve contract, but that
