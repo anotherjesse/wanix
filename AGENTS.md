@@ -122,10 +122,12 @@ browser page that fetches the discovery document and configures v86
 `filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also
 advertises direct-v86 boot hints: the default 9P-root Linux cmdline, memory
 size, VGA memory size, virtio-console requirement, and embedded v86 asset
-routes. With `--bundle direct-v86`, Rust serve owns the embedded
-`/v86/lib/libv86.mjs`, `/v86/lib/mod.js`, `/v86/lib/offscreen.js`, wasm, and
-BIOS routes so the browser emulator runtime does not have to live in the served
-root. The page accepts caller-supplied
+routes. Discovery also reports guest boot asset URLs found in the served root,
+preferring `/boot/bzImage` over legacy `/bzImage` for the kernel and reporting a
+present initrd route when one is available. With `--bundle direct-v86`, Rust
+serve owns the embedded `/v86/lib/libv86.mjs`, `/v86/lib/mod.js`,
+`/v86/lib/offscreen.js`, wasm, and BIOS routes so the browser emulator runtime
+does not have to live in the served root. The page accepts caller-supplied
 kernel/initrd/cmdline URLs or query overrides, so it is a boot handoff proof
 rather than a complete guest asset assembler.
 `/.well-known` routes are reserved for protocol endpoints;
@@ -406,6 +408,9 @@ cargo test --workspace --locked
 - [ADR 0084](docs/adrs/0084-serve-embedded-direct-v86-assets.md):
   Rust `serve --bundle direct-v86` serves embedded v86 module, wasm, and BIOS
   assets and advertises those routes in discovery.
+- [ADR 0085](docs/adrs/0085-serve-direct-v86-boot-asset-discovery.md):
+  Rust direct-v86 discovery reports kernel and initrd routes found in the served
+  root, preferring the guest-root `/boot/bzImage` layout.
 
 ## Cycle Rules
 

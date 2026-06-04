@@ -19,6 +19,7 @@ const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
 const DIRECT_V86_BUNDLE: &str = "direct-v86";
 const DIRECT_V86_DEFAULT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,aname=,cache=none,msize=131072 loglevel=3";
+const DIRECT_V86_DEFAULT_KERNEL_PATH: &str = "/boot/bzImage";
 const DIRECT_V86_MEMORY_SIZE: u32 = 1024 * 1024 * 1024;
 const DIRECT_V86_VGA_MEMORY_SIZE: u32 = 8 * 1024 * 1024;
 const DIRECT_V86_MODULE_PATH: &str = "/v86/lib/libv86.mjs";
@@ -27,6 +28,9 @@ const DIRECT_V86_OFFSCREEN_PATH: &str = "/v86/lib/offscreen.js";
 const DIRECT_V86_WASM_PATH: &str = "/v86/bundle/v86.wasm";
 const DIRECT_V86_BIOS_PATH: &str = "/v86/bundle/seabios.bin";
 const DIRECT_V86_VGA_BIOS_PATH: &str = "/v86/bundle/vgabios.bin";
+const DIRECT_V86_KERNEL_CANDIDATES: &[&str] = &[DIRECT_V86_DEFAULT_KERNEL_PATH, "/bzImage"];
+const DIRECT_V86_INITRD_CANDIDATES: &[&str] =
+    &["/boot/initrd", "/boot/initrd.img", "/initrd", "/initrd.img"];
 
 struct BuiltinAsset {
     route: &'static str,
@@ -612,7 +616,7 @@ fn direct_v86_bundle_html() -> String {
       <h1>Wanix Rust direct v86</h1>
       <p id="status">Loading Wanix discovery...</p>
       <label for="kernel">bzImage URL</label>
-      <input id="kernel" value="/bzImage">
+      <input id="kernel" value="">
       <label for="initrd">initrd URL</label>
       <input id="initrd" value="">
       <label for="cmdline">kernel command line</label>
@@ -628,6 +632,9 @@ fn direct_v86_bundle_html() -> String {
     html.push_str("    const DEFAULT_CMDLINE = ");
     html.push_str(&json_string(DIRECT_V86_DEFAULT_CMDLINE));
     html.push_str(";\n");
+    html.push_str("    const DEFAULT_KERNEL_URL = ");
+    html.push_str(&json_string(DIRECT_V86_DEFAULT_KERNEL_PATH));
+    html.push_str(";\n");
     html.push_str("    const DEFAULT_MEMORY_SIZE = ");
     html.push_str(&DIRECT_V86_MEMORY_SIZE.to_string());
     html.push_str(";\n");
@@ -642,14 +649,17 @@ fn direct_v86_bundle_html() -> String {
     const initrd = document.querySelector("#initrd");
     const cmdline = document.querySelector("#cmdline");
     const params = new URLSearchParams(location.search);
-    if (params.get("kernel")) kernel.value = params.get("kernel");
-    if (params.get("bzimage")) kernel.value = params.get("bzimage");
-    if (params.get("initrd")) initrd.value = params.get("initrd");
 
     const discovery = await fetch("/.well-known/wanix.json", { cache: "no-store" }).then(response => response.json());
     const v86Assets = discovery.v86?.assets || {};
+    const v86Boot = discovery.v86?.boot || {};
     const { V86 } = await import(v86Assets.module || "/v86/lib/libv86.mjs");
     const proxyUrl = discovery.routes.p9.websocket;
+    kernel.value = v86Boot.kernel || DEFAULT_KERNEL_URL;
+    if (v86Boot.initrd) initrd.value = v86Boot.initrd;
+    if (params.get("kernel")) kernel.value = params.get("kernel");
+    if (params.get("bzimage")) kernel.value = params.get("bzimage");
+    if (params.get("initrd")) initrd.value = params.get("initrd");
     cmdline.value = discovery.v86?.defaultCmdline || DEFAULT_CMDLINE;
     if (params.get("cmdline")) cmdline.value = params.get("cmdline");
     if (params.get("append")) cmdline.value = [cmdline.value, params.get("append")].filter(Boolean).join(" ");
@@ -705,15 +715,20 @@ fn serve_discovery_response(roots: &ServeRoots, request: &[u8]) -> StaticRespons
     StaticResponse {
         status: HttpStatus::Ok,
         content_type: "application/json",
-        body: serve_discovery_json(roots.local_addr, roots.bundle.as_deref(), request).into_bytes(),
+        body: serve_discovery_json(roots, request).into_bytes(),
     }
 }
 
-fn serve_discovery_json(local_addr: SocketAddr, bundle: Option<&str>, request: &[u8]) -> String {
-    let host = request_host(request).unwrap_or_else(|| display_host(local_addr));
+fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
+    let host = request_host(request).unwrap_or_else(|| display_host(roots.local_addr));
     let p9_url = format!("ws://{host}/.well-known/export9p");
     let ethernet_url = format!("ws://{host}/.well-known/ethernet");
-    let bundle = bundle.map(json_string).unwrap_or_else(|| "null".to_owned());
+    let bundle = roots
+        .bundle
+        .as_deref()
+        .map(json_string)
+        .unwrap_or_else(|| "null".to_owned());
+    let direct_v86_boot = direct_v86_boot_json(&roots.static_root);
     format!(
         "{{\"version\":1,\
          \"runtime\":\"wanix-rust\",\
@@ -722,6 +737,7 @@ fn serve_discovery_json(local_addr: SocketAddr, bundle: Option<&str>, request: &
          \"ethernet\":{{\"websocket\":{},\"status\":\"not-implemented\"}}\
          }},\
          \"v86\":{{\"assets\":{{\"module\":{},\"mod\":{},\"offscreen\":{},\"wasm\":{},\"bios\":{},\"vgaBios\":{}}},\
+         \"boot\":{},\
          \"defaultCmdline\":{},\"memorySize\":{},\"vgaMemorySize\":{},\"virtioConsole\":true}},\
          \"bundle\":{}}}",
         json_string(&p9_url),
@@ -732,11 +748,33 @@ fn serve_discovery_json(local_addr: SocketAddr, bundle: Option<&str>, request: &
         json_string(DIRECT_V86_WASM_PATH),
         json_string(DIRECT_V86_BIOS_PATH),
         json_string(DIRECT_V86_VGA_BIOS_PATH),
+        direct_v86_boot,
         json_string(DIRECT_V86_DEFAULT_CMDLINE),
         DIRECT_V86_MEMORY_SIZE,
         DIRECT_V86_VGA_MEMORY_SIZE,
         bundle
     )
+}
+
+fn direct_v86_boot_json(static_root: &Path) -> String {
+    let mut fields = Vec::new();
+    if let Some(kernel) = first_existing_static_route(static_root, DIRECT_V86_KERNEL_CANDIDATES) {
+        fields.push(format!("\"kernel\":{}", json_string(kernel)));
+    }
+    if let Some(initrd) = first_existing_static_route(static_root, DIRECT_V86_INITRD_CANDIDATES) {
+        fields.push(format!("\"initrd\":{}", json_string(initrd)));
+    }
+    format!("{{{}}}", fields.join(","))
+}
+
+fn first_existing_static_route(
+    static_root: &Path,
+    candidates: &[&'static str],
+) -> Option<&'static str> {
+    candidates
+        .iter()
+        .copied()
+        .find(|route| static_root.join(route.trim_start_matches('/')).is_file())
 }
 
 fn request_host(request: &[u8]) -> Option<String> {
@@ -1101,9 +1139,25 @@ mod tests {
             "{response}"
         );
         assert!(
+            response.contains("const DEFAULT_KERNEL_URL = \"/boot/bzImage\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("const v86Boot = discovery.v86?.boot || {}"),
+            "{response}"
+        );
+        assert!(
             response.contains(
                 "const { V86 } = await import(v86Assets.module || \"/v86/lib/libv86.mjs\")"
             ),
+            "{response}"
+        );
+        assert!(
+            response.contains("kernel.value = v86Boot.kernel || DEFAULT_KERNEL_URL"),
+            "{response}"
+        );
+        assert!(
+            response.contains("if (v86Boot.initrd) initrd.value = v86Boot.initrd"),
             "{response}"
         );
         assert!(
@@ -1333,7 +1387,10 @@ mod tests {
     #[test]
     fn serve_once_returns_well_known_discovery_document() {
         let root = temp_dir("wanix-cli-serve-discovery");
+        fs::create_dir_all(root.join("boot")).unwrap();
         fs::write(root.join("index.html"), b"wanix serve discovery").unwrap();
+        fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
+        fs::write(root.join("boot/initrd"), b"initrd").unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let command = ServeCommand {
@@ -1405,6 +1462,11 @@ mod tests {
             "{response}"
         );
         assert!(
+            response
+                .contains("\"boot\":{\"kernel\":\"/boot/bzImage\",\"initrd\":\"/boot/initrd\"}"),
+            "{response}"
+        );
+        assert!(
             response.contains("\"defaultCmdline\":\"console=hvc0 init=/bin/init rw root=host9p"),
             "{response}"
         );
@@ -1418,12 +1480,14 @@ mod tests {
 
     #[test]
     fn serve_discovery_falls_back_to_listener_address_without_host_header() {
-        let local_addr = "0.0.0.0:7654".parse().unwrap();
-        let body = serve_discovery_json(
-            local_addr,
-            Some("quote\"bundle"),
-            b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n",
-        );
+        let root = temp_dir("wanix-cli-serve-discovery-no-host");
+        let roots = ServeRoots::new(
+            &root,
+            "0.0.0.0:7654".parse().unwrap(),
+            Some("quote\"bundle".to_owned()),
+        )
+        .unwrap();
+        let body = serve_discovery_json(&roots, b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n");
 
         assert!(
             body.contains("\"websocket\":\"ws://localhost:7654/.well-known/export9p\""),
@@ -1435,12 +1499,9 @@ mod tests {
             "{body}"
         );
 
-        let ipv6_addr = "[::1]:7654".parse().unwrap();
-        let ipv6_body = serve_discovery_json(
-            ipv6_addr,
-            None,
-            b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n",
-        );
+        let ipv6_roots = ServeRoots::new(&root, "[::1]:7654".parse().unwrap(), None).unwrap();
+        let ipv6_body =
+            serve_discovery_json(&ipv6_roots, b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n");
         assert!(
             ipv6_body.contains("\"websocket\":\"ws://[::1]:7654/.well-known/export9p\""),
             "{ipv6_body}"
@@ -1448,11 +1509,33 @@ mod tests {
     }
 
     #[test]
-    fn serve_discovery_ignores_unsafe_host_header() {
-        let local_addr = "127.0.0.1:7654".parse().unwrap();
+    fn serve_discovery_finds_direct_v86_legacy_top_level_kernel() {
+        let root = temp_dir("wanix-cli-serve-discovery-legacy-kernel");
+        fs::write(root.join("bzImage"), b"kernel").unwrap();
+        let roots = ServeRoots::new(
+            &root,
+            "127.0.0.1:7654".parse().unwrap(),
+            Some(DIRECT_V86_BUNDLE.to_owned()),
+        )
+        .unwrap();
+
         let body = serve_discovery_json(
-            local_addr,
-            None,
+            &roots,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+        );
+
+        assert!(
+            body.contains("\"boot\":{\"kernel\":\"/bzImage\"}"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn serve_discovery_ignores_unsafe_host_header() {
+        let root = temp_dir("wanix-cli-serve-discovery-unsafe-host");
+        let roots = ServeRoots::new(&root, "127.0.0.1:7654".parse().unwrap(), None).unwrap();
+        let body = serve_discovery_json(
+            &roots,
             b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654/escape\r\n\r\n",
         );
 
