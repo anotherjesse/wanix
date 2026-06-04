@@ -7,6 +7,9 @@ use crate::guest::{
 use crate::{QuickJsBinaryValue, QuickJsTypedArrayKind};
 use wasmtime::{Caller, Extern, Linker, Memory, TypedFunc, WasmParams, WasmResults};
 
+mod scalar;
+use scalar::{maybe_quickjs_value_to_scalar, quickjs_value_to_scalar};
+
 const JS_VALUE_PTR_LEN: usize = 4;
 
 pub(super) fn define_import(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
@@ -92,68 +95,6 @@ fn read_host_callback_args(
         args.push(arg);
     }
     Ok(args)
-}
-
-fn quickjs_value_to_scalar(
-    memory: &Memory,
-    caller: &mut Caller<'_, HostState>,
-    value: i32,
-) -> wasmtime::Result<QuickJsValue> {
-    match maybe_quickjs_value_to_scalar(memory, caller, value)? {
-        Some(value) => Ok(value),
-        None => Err(host_import_error("unsupported host callback argument type")),
-    }
-}
-
-fn maybe_quickjs_value_to_scalar(
-    memory: &Memory,
-    caller: &mut Caller<'_, HostState>,
-    value: i32,
-) -> wasmtime::Result<Option<QuickJsValue>> {
-    let qjs_is_undefined = quickjs_export::<i32, i32>(caller, "qjs_is_undefined")?;
-    if qjs_is_undefined.call(&mut *caller, value)? != 0 {
-        return Ok(Some(QuickJsValue::Undefined));
-    }
-
-    if let Some(qjs_is_null) = optional_quickjs_export::<i32, i32>(caller, "qjs_is_null")?
-        && qjs_is_null.call(&mut *caller, value)? != 0
-    {
-        return Ok(Some(QuickJsValue::Null));
-    }
-
-    if let Some(qjs_is_bool) = optional_quickjs_export::<i32, i32>(caller, "qjs_is_bool")?
-        && qjs_is_bool.call(&mut *caller, value)? != 0
-    {
-        let qjs_get_bool = quickjs_export::<i32, i32>(caller, "qjs_get_bool")?;
-        return Ok(Some(QuickJsValue::Bool(
-            qjs_get_bool.call(&mut *caller, value)? != 0,
-        )));
-    }
-
-    let qjs_is_number = quickjs_export::<i32, i32>(caller, "qjs_is_number")?;
-    if qjs_is_number.call(&mut *caller, value)? != 0 {
-        let qjs_get_float64 = quickjs_export::<i32, f64>(caller, "qjs_get_float64")?;
-        return Ok(Some(QuickJsValue::Number(
-            qjs_get_float64.call(&mut *caller, value)?,
-        )));
-    }
-
-    let qjs_is_string = quickjs_export::<i32, i32>(caller, "qjs_is_string")?;
-    if qjs_is_string.call(&mut *caller, value)? != 0 {
-        return quickjs_value_to_string(memory, caller, value)
-            .map(QuickJsValue::String)
-            .map(Some);
-    }
-
-    if let Some(qjs_is_big_int) = optional_quickjs_export::<i32, i32>(caller, "qjs_is_big_int")?
-        && qjs_is_big_int.call(&mut *caller, value)? != 0
-    {
-        return read_big_int64_value(memory, caller, value)
-            .map(QuickJsValue::BigIntI64)
-            .map(Some);
-    }
-
-    Ok(None)
 }
 
 fn quickjs_value_to_callback(

@@ -3,7 +3,7 @@
 # Remove entries as cleanup passes split files below the 350-line hard limit.
 1078 crates/wanix-qjs-engine/src/host/fs.rs
 643 crates/wanix-9p/src/lib.rs
-879 crates/wanix-qjs-engine/src/host/call.rs
+827 crates/wanix-qjs-engine/src/host/call.rs
 570 crates/wanix-qjs/src/lib.rs
 541 crates/wanix-qjs-engine/src/runtime/binary.rs
 505 crates/wanix-fs/src/localfs.rs
