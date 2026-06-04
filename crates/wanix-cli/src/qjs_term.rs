@@ -6,17 +6,15 @@ use std::sync::Arc;
 #[cfg(all(test, unix))]
 use std::sync::Mutex;
 
-use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
+use wanix_fs::{MemFs, NormalizedPath};
 use wanix_qjs::QuickJsTaskDriver;
-use wanix_task::{Fd, Task, TaskTable};
-use wanix_term::TermDevice;
+use wanix_task::TaskTable;
 use wanix_vfs::BindOptions;
 
 use super::{
     CliError, CliOutput, QJS_GUEST_SCRIPT, QjsCommand, apply_qjs_task_runtime_limits,
     bind_host_mounts, configure_qjs_task, copy_script_directory, eval_qjs_source,
-    guest_path_in_cwd, parse_exit, quickjs_runner, read_qjs_stdin, read_utf8_script,
-    write_process_output,
+    guest_path_in_cwd, quickjs_runner, read_qjs_stdin, read_utf8_script,
 };
 
 const QJS_SHELL_SOURCE: &str = include_str!("../../../examples/qjs-term-shell-demo.js");
@@ -29,6 +27,7 @@ mod post_eval;
 mod process;
 mod pump;
 mod session;
+mod terminal;
 
 use command::{PostEvalFeed, qjs_shell_command};
 pub(super) use command::{
@@ -37,6 +36,7 @@ pub(super) use command::{
 use post_eval::run_post_eval_feeds;
 use pump::{ProcessEventSources, TerminalPumpPolicy, TerminalPumpState, drain_terminal_output};
 pub(crate) use session::QjsShellSession;
+use terminal::{attach_task_terminal, finish_terminal_task_output};
 
 pub(super) fn run_qjs_term(
     command: QjsTermCommand,
@@ -241,10 +241,10 @@ fn run_qjs_term_program_streaming_with_input_mode(
     task.bind(root, ".", ".", BindOptions::default())?;
     bind_host_mounts(&task, &qjs_command.mounts)?;
 
-    let (terminal, terminal_id) = attach_task_terminal(&task, stdin_bytes)?;
+    let terminal = attach_task_terminal(&task, stdin_bytes)?;
     let mut task_env = qjs_command.env.clone();
     if program == QjsTermProgram::BundledShell {
-        task_env.push(format!("WANIX_TERM_ID={terminal_id}"));
+        task_env.push(format!("WANIX_TERM_ID={}", terminal.id));
     }
     configure_qjs_task(
         &task,
@@ -276,14 +276,14 @@ fn run_qjs_term_program_streaming_with_input_mode(
             qjs_command.event_loop_wait_budget,
             eval_ready_io_turns,
         );
-        drain_terminal_output(&terminal, &terminal_id, process_stdout)?;
+        drain_terminal_output(&terminal.device, &terminal.id, process_stdout)?;
         eval_result?;
         if !feed_after_eval.is_empty() {
             run_post_eval_feeds(
                 feed_after_eval,
                 process_stdin,
-                &terminal,
-                &terminal_id,
+                &terminal.device,
+                &terminal.id,
                 &mut runtime,
                 TerminalPumpState {
                     policy: TerminalPumpPolicy {
@@ -297,7 +297,7 @@ fn run_qjs_term_program_streaming_with_input_mode(
             )?;
         }
         let finish_result = runtime.finish();
-        drain_terminal_output(&terminal, &terminal_id, process_stdout)?;
+        drain_terminal_output(&terminal.device, &terminal.id, process_stdout)?;
         finish_result?;
         Ok(())
     })();
@@ -306,7 +306,6 @@ fn run_qjs_term_program_streaming_with_input_mode(
         start_result,
         &task,
         &terminal,
-        &terminal_id,
         process_stdout,
         process_stderr,
     )
@@ -316,55 +315,6 @@ fn read_qjs_term_program(script_path: &Path, program: QjsTermProgram) -> Result<
     match program {
         QjsTermProgram::HostScript => read_utf8_script(script_path),
         QjsTermProgram::BundledShell => Ok(QJS_SHELL_SOURCE.to_owned()),
-    }
-}
-
-fn attach_task_terminal(
-    task: &Task,
-    stdin_bytes: Option<Vec<u8>>,
-) -> Result<(Arc<TermDevice>, String), CliError> {
-    let terminal = Arc::new(TermDevice::new());
-    let id = terminal.alloc()?;
-    task.bind(terminal.clone(), ".", "#term", BindOptions::default())?;
-
-    let program = format!("#term/{id}/program");
-    task.bind_fd_from_namespace(&program, Fd::STDIN)?;
-    task.bind_fd_from_namespace(&program, Fd::STDOUT)?;
-    task.bind_fd_from_namespace(&program, Fd::STDERR)?;
-
-    if let Some(bytes) = stdin_bytes {
-        let mut data = terminal.open(
-            &NormalizedPath::new(format!("{id}/data"))?,
-            OpenOptions {
-                write: true,
-                ..OpenOptions::default()
-            },
-        )?;
-        data.write(&bytes)?;
-    }
-
-    Ok((terminal, id))
-}
-
-fn finish_terminal_task_output(
-    result: Result<(), CliError>,
-    task: &Task,
-    terminal: &TermDevice,
-    terminal_id: &str,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
-) -> Result<i32, CliError> {
-    drain_terminal_output(terminal, terminal_id, process_stdout)?;
-    match result {
-        Ok(()) => Ok(parse_exit(&task.exit())),
-        Err(error) => {
-            write_process_output(
-                process_stderr,
-                "stderr",
-                format!("wanix-rust qjs-term: {error}\n").as_bytes(),
-            )?;
-            Ok(1)
-        }
     }
 }
 

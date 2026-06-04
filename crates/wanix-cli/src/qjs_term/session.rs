@@ -12,9 +12,10 @@ use super::pump::{
     TermResize, drain_terminal_output_bytes, feed_terminal_after_eval,
     feed_terminal_resize_after_eval,
 };
+use super::terminal::attach_task_terminal;
 use super::{
     QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS, QJS_SHELL_READY_IO_TURNS, QJS_SHELL_SCRIPT_SENTINEL,
-    QJS_SHELL_SOURCE, attach_task_terminal, configure_qjs_task, eval_qjs_source,
+    QJS_SHELL_SOURCE, configure_qjs_task, eval_qjs_source,
 };
 use crate::{CliError, parse_exit, quickjs_runner};
 
@@ -63,7 +64,7 @@ impl QjsShellSession {
             BindOptions::default(),
         )?;
 
-        let (terminal, terminal_id) = attach_task_terminal(&task, None)?;
+        let terminal = attach_task_terminal(&task, None)?;
         let runtime_cwd = NormalizedPath::new(".")?;
         configure_qjs_task(
             &task,
@@ -82,12 +83,12 @@ impl QjsShellSession {
             Duration::ZERO,
             0,
         )?;
-        let initial_output = drain_terminal_output_bytes(&terminal, &terminal_id)?;
+        let initial_output = drain_terminal_output_bytes(&terminal.device, &terminal.id)?;
         Ok((
             Self {
                 task,
-                terminal,
-                terminal_id,
+                terminal: terminal.device,
+                terminal_id: terminal.id,
                 runtime,
                 ready_io_turns: QJS_SHELL_READY_IO_TURNS,
                 finished: false,

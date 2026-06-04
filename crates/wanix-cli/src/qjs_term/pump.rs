@@ -11,6 +11,8 @@ use wanix_fs::{FileSystem, NormalizedPath, OpenOptions};
 use wanix_qjs::QuickJsTaskRuntime;
 use wanix_term::TermDevice;
 
+use crate::write_process_output;
+
 use super::CliError;
 #[cfg(unix)]
 use super::process::terminal_size_for_fd;
@@ -306,7 +308,7 @@ pub(super) fn drain_terminal_output(
     terminal_id: &str,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
-    super::write_process_output(
+    write_process_output(
         process_stdout,
         "stdout",
         &drain_terminal_output_bytes(terminal, terminal_id)?,
