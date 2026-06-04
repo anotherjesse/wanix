@@ -53,6 +53,14 @@ interactive modes, the host should feed bytes through the terminal device and
 let the guest-side shell own echo, simple editing, newline handling, Ctrl-D, and
 command dispatch.
 
+The bundled QuickJS shell is a guest program inside a Wanix task, not a separate
+process model. It may provide built-in interactive commands such as `cd`, `ls`,
+`cat`, and `write`, but those commands should use `qjs:std`, `qjs:os`, and
+service files. For shell sessions, `#task/self/dir` is the logical shell cwd,
+while the WASI root preopen stays at the namespace root so `cd` can navigate the
+served tree. Non-shell qjs script tasks continue to use task cwd as their WASI
+root preopen.
+
 Bounded output draining or event-loop pumping around terminal sessions is host
 lifecycle policy for an already evaluated task runtime. It is not a general
 Wanix scheduler, signal system, cancellation model, or process-group contract.

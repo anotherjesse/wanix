@@ -74,15 +74,19 @@ impl QjsShellSession {
         )?;
 
         let (terminal, terminal_id) = attach_task_terminal(&task, None)?;
+        // Shell sessions keep WASI rooted at the namespace root so `cd` can
+        // navigate the served tree while `#task/self/dir` tracks logical cwd.
+        let runtime_cwd = NormalizedPath::new(".")?;
         configure_qjs_task(
             &task,
             QJS_SHELL_SCRIPT_SENTINEL,
             &[],
             &["WANIX_QJS_SHELL_RAW=1".to_owned()],
-            cwd,
+            &runtime_cwd,
         )?;
 
         let mut runtime = runner.create_task_runtime(&task)?;
+        task.set_dir(cwd.as_str())?;
         eval_qjs_source(
             &mut runtime,
             QJS_SHELL_SOURCE,
@@ -632,7 +636,23 @@ fn run_qjs_term_program_streaming_with_input_mode(
     if program == QjsTermProgram::HostScript {
         copy_script_directory(&qjs_command.script_path, &root, &qjs_command.cwd)?;
     }
-    let guest_script = guest_path_in_cwd(&qjs_command.cwd, QJS_GUEST_SCRIPT)?;
+    let runtime_cwd = if program == QjsTermProgram::BundledShell {
+        // The bundled shell implements cwd in guest code; keep the WASI root
+        // at namespace root so shell navigation is not trapped below --cwd.
+        NormalizedPath::new(".")?
+    } else {
+        qjs_command.cwd.clone()
+    };
+    let program_path = if program == QjsTermProgram::BundledShell {
+        QJS_SHELL_SCRIPT_SENTINEL
+    } else {
+        QJS_GUEST_SCRIPT
+    };
+    let guest_script = if program == QjsTermProgram::BundledShell {
+        QJS_SHELL_SCRIPT_SENTINEL.to_owned()
+    } else {
+        guest_path_in_cwd(&qjs_command.cwd, QJS_GUEST_SCRIPT)?
+    };
     root.write_file(guest_script.as_str(), script.as_bytes())?;
     task.bind(root, ".", ".", BindOptions::default())?;
     bind_host_mounts(&task, &qjs_command.mounts)?;
@@ -644,14 +664,17 @@ fn run_qjs_term_program_streaming_with_input_mode(
     }
     configure_qjs_task(
         &task,
-        QJS_GUEST_SCRIPT,
+        program_path,
         &qjs_command.args,
         &task_env,
-        &qjs_command.cwd,
+        &runtime_cwd,
     )?;
 
     let start_result = (|| -> Result<(), CliError> {
         let mut runtime = runner.create_task_runtime(&task)?;
+        if program == QjsTermProgram::BundledShell {
+            task.set_dir(qjs_command.cwd.as_str())?;
+        }
         apply_qjs_task_runtime_limits(
             &mut runtime,
             qjs_command.interrupt_poll_budget,
@@ -1658,6 +1681,32 @@ mod tests {
         assert_eq!(
             output,
             b"pwd\r\napp\r\n$ size\r\nsize 100 40\r\n$ exit\r\nbye\r\n"
+        );
+        assert!(session.is_finished());
+    }
+
+    #[test]
+    fn qjs_shell_session_navigates_and_edits_served_files() {
+        let root = temp_dir("wanix-qjs-shell-session-files");
+        fs::write(root.join("visible.txt"), "served root\n").unwrap();
+        fs::create_dir(root.join("app")).unwrap();
+        fs::write(root.join("app").join("note.txt"), "from app\n").unwrap();
+        let (mut session, initial_output) = QjsShellSession::start(&root).unwrap();
+
+        assert_eq!(initial_output, b"shell task: 1\r\n$ ");
+        let output = session
+            .input(
+                b"ls\ncat visible.txt\ncd app\npwd\nls\ncat note.txt\nwrite made.txt made by shell\ncat made.txt\ncat missing.txt\ncd ..\npwd\nexit\n",
+            )
+            .unwrap();
+
+        assert_eq!(
+            output,
+            b"ls\r\napp visible.txt\r\n$ cat visible.txt\r\nserved root\r\n$ cd app\r\n$ pwd\r\napp\r\n$ ls\r\nnote.txt\r\n$ cat note.txt\r\nfrom app\r\n$ write made.txt made by shell\r\nwrote made.txt\r\n$ cat made.txt\r\nmade by shell\r\n$ cat missing.txt\r\ncat: missing.txt: not found\r\n$ cd ..\r\n$ pwd\r\n.\r\n$ exit\r\nbye\r\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("app").join("made.txt")).unwrap(),
+            "made by shell\n"
         );
         assert!(session.is_finished());
     }

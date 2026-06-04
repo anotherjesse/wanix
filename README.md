@@ -27,13 +27,13 @@ for that work is a Wanix core that can run outside Chrome, with Wasmtime as the
 execution substrate and QuickJS/WASI as the first serious task runtime.
 
 The Rust port now has native slices for QuickJS-backed Wanix tasks, terminal
-devices with service-file lifecycle control, `qjs-shell`, 9P exports over
-stdio/TCP/WebSocket, Rust `serve` discovery, browser filesystem and workbench
-demos, direct-v86 handoff, rootfs preparation with shell/JSON handoffs,
-trusted-local served prepared-root handoff discovery with copyable browser
-commands, and initrd-aware native QEMU command/JSON handoff. Wanix owns task identity,
-namespaces, cwd/env/cmd, stdio/fds, exit status, and WASI filesystem semantics;
-QuickJS is the execution engine inside a `qjs` task.
+devices with service-file lifecycle control, `qjs-shell` with basic filesystem
+commands, 9P exports over stdio/TCP/WebSocket, Rust `serve` discovery, browser
+filesystem and workbench demos, direct-v86 handoff, rootfs preparation with
+shell/JSON handoffs, trusted-local served prepared-root handoff discovery with
+copyable browser commands, and initrd-aware native QEMU command/JSON handoff.
+Wanix owns task identity, namespaces, cwd/env/cmd, stdio/fds, exit status, and
+WASI filesystem semantics; QuickJS is the execution engine inside a `qjs` task.
 
 Try the native demo path from the workspace root:
 
@@ -41,7 +41,7 @@ Try the native demo path from the workspace root:
 cargo run --locked --package wanix-cli -- qjs examples/qjs-demo.js
 cargo run --locked --package wanix-cli -- \
   qjs-term --stdin "hello terminal" examples/qjs-term-demo.js
-printf 'echo hello shell\nid\npwd\nexit\n' | cargo run --locked --package wanix-cli -- qjs-shell
+printf 'write note.txt hello\nls\ncat note.txt\nexit\n' | cargo run --locked --package wanix-cli -- qjs-shell
 cargo test --workspace --locked
 ```
 

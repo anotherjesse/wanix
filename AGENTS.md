@@ -74,7 +74,8 @@ tests.
   observable exit status, and `#task` service files.
 - `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
-  shell modes and served shell sessions use the same `#term` device contract.
+  shell modes and served shell sessions use the same `#term` device contract,
+  with a small `cd`/`ls`/`cat`/`write` filesystem command set for demos.
 - `wanix-rust p9-stdio`, `p9-listen`, `p9-ws`, and `serve`: the Rust 9P server
   exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
   layers, with binary protocol traffic kept separate from diagnostics.
@@ -204,7 +205,8 @@ more feature work.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
 - Continue `qjs-shell` interactivity with signal-driven resize wakeups,
-  cancellation, and richer terminal/session lifecycle control.
+  cancellation, command execution beyond the current built-ins, and richer
+  terminal/session lifecycle control.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
   integration, then extend the direct-v86 route into a complete qemu/v86 bundle,
   `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`

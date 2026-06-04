@@ -335,13 +335,15 @@ terminal stderr: same screen
 Run the bundled QuickJS shell through the same terminal-backed task path:
 
 ```sh
-printf 'echo hello shell\nid\npwd\nexit\n' | $WANIX qjs-shell
+printf 'write note.txt hello shell\nls\ncat note.txt\nid\npwd\nexit\n' | $WANIX qjs-shell
 ```
 
 Expected output:
 
 ```text
 shell task: 1
+$ wrote note.txt
+$ note.txt
 $ hello shell
 $ 1
 $ .
@@ -352,6 +354,11 @@ $ bye
 > Wanix device contract, not browser xterm glue. `qjs-shell --raw` puts native
 > stdin in raw mode on Unix hosts, then feeds bytes through `#term/<id>/data` so
 > the guest shell owns echo, simple editing, Ctrl-D, and command dispatch.
+> The bundled shell has a small filesystem command set (`cd`, `ls`, `cat`, and
+> `write`) for Wanix namespace demos. Served/workbench shell sessions keep WASI
+> rooted at the served namespace root while `#task/self/dir` tracks the logical
+> shell cwd, so `cd` can navigate the served tree without changing normal qjs
+> script cwd semantics.
 > Clients that own a terminal resource can release it by writing `close` to
 > `#term/<id>/ctl`; that cleans up the terminal resource without pretending to
 > be task cancellation.

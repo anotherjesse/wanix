@@ -10,11 +10,216 @@ let running = true;
 let terminalSize = "";
 const rawInput = std.getenv("WANIX_QJS_SHELL_RAW") === "1";
 const termId = std.getenv("WANIX_TERM_ID") || "1";
+let cwd = normalizeNamespacePath(std.loadFile("#task/self/dir").trim() || ".");
 
 function prompt() {
   if (running) {
     std.out.puts("$ ");
   }
+}
+
+function bytesFromString(text) {
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) {
+    bytes[i] = text.charCodeAt(i) & 0xff;
+  }
+  return bytes;
+}
+
+function writeText(path, text) {
+  const fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666);
+  if (fd < 0) {
+    return fd;
+  }
+  const bytes = bytesFromString(text);
+  const count = os.write(fd, bytes.buffer, 0, bytes.length);
+  os.close(fd);
+  return count;
+}
+
+function writeServiceText(path, text) {
+  const fd = os.open(path, os.O_WRONLY);
+  if (fd < 0) {
+    return fd;
+  }
+  const bytes = bytesFromString(text);
+  const count = os.write(fd, bytes.buffer, 0, bytes.length);
+  os.close(fd);
+  return count;
+}
+
+function parseWords(line) {
+  const words = [];
+  let current = "";
+  let quote = "";
+  let escaping = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaping = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) {
+        quote = "";
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (escaping) {
+    current += "\\";
+  }
+  if (quote) {
+    return { error: "unterminated quote" };
+  }
+  if (current.length > 0) {
+    words.push(current);
+  }
+  return { words };
+}
+
+function normalizeNamespacePath(path, base) {
+  if (!path || path === ".") {
+    return base || ".";
+  }
+  if (path[0] === "#") {
+    return path;
+  }
+  const parts = [];
+  if (path[0] !== "/" && base && base !== ".") {
+    for (const part of base.split("/")) {
+      if (part) {
+        parts.push(part);
+      }
+    }
+  }
+  for (const part of path.split("/")) {
+    if (!part || part === ".") {
+      continue;
+    }
+    if (part === "..") {
+      if (parts.length > 0) {
+        parts.pop();
+      }
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.length > 0 ? parts.join("/") : ".";
+}
+
+function resolveShellPath(path) {
+  return normalizeNamespacePath(path || ".", cwd);
+}
+
+function visibleEntries(path) {
+  const [entries, err] = os.readdir(path);
+  if (err !== 0) {
+    return { err };
+  }
+  return {
+    entries: entries
+      .filter((name) => name !== "." && name !== ".." && name !== "__wanix_qjs_shell.js")
+      .sort()
+  };
+}
+
+function runLs(words) {
+  const path = resolveShellPath(words[1] || ".");
+  const result = visibleEntries(path);
+  if (result.err !== undefined) {
+    std.out.puts("ls: " + (words[1] || ".") + ": errno " + result.err + "\n");
+    prompt();
+    return;
+  }
+  std.out.puts(result.entries.join(" ") + "\n");
+  prompt();
+}
+
+function runCd(words) {
+  const requested = words[1] || ".";
+  const path = resolveShellPath(requested);
+  if (path[0] === "#") {
+    std.out.puts("cd: " + requested + ": service paths are not directories\n");
+    prompt();
+    return;
+  }
+  const result = visibleEntries(path);
+  if (result.err !== undefined) {
+    std.out.puts("cd: " + requested + ": errno " + result.err + "\n");
+    prompt();
+    return;
+  }
+  const count = writeServiceText("#task/self/dir", path + "\n");
+  if (count < 0) {
+    std.out.puts("cd: " + requested + ": failed to update cwd " + count + "\n");
+    prompt();
+    return;
+  }
+  cwd = path;
+  prompt();
+}
+
+function runCat(words) {
+  if (words.length < 2) {
+    std.out.puts("cat: missing path\n");
+    prompt();
+    return;
+  }
+  for (const requested of words.slice(1)) {
+    const path = resolveShellPath(requested);
+    try {
+      const text = std.loadFile(path);
+      if (text === null || text === undefined) {
+        std.out.puts("cat: " + requested + ": not found\n");
+      } else {
+        std.out.puts(text);
+      }
+    } catch (error) {
+      std.out.puts("cat: " + requested + ": " + error.message + "\n");
+    }
+  }
+  prompt();
+}
+
+function runWrite(words) {
+  if (words.length < 3) {
+    std.out.puts("write: usage: write PATH TEXT...\n");
+    prompt();
+    return;
+  }
+  const path = resolveShellPath(words[1]);
+  if (path[0] === "#") {
+    std.out.puts("write: " + words[1] + ": service paths are read by command-specific helpers\n");
+    prompt();
+    return;
+  }
+  const count = writeText(path, words.slice(2).join(" ") + "\n");
+  if (count < 0) {
+    std.out.puts("write: " + words[1] + ": errno " + count + "\n");
+  } else {
+    std.out.puts("wrote " + words[1] + "\n");
+  }
+  prompt();
 }
 
 function runCommand(line) {
@@ -23,6 +228,13 @@ function runCommand(line) {
     prompt();
     return;
   }
+  const parsed = parseWords(trimmed);
+  if (parsed.error) {
+    std.out.puts(parsed.error + "\n");
+    prompt();
+    return;
+  }
+  const words = parsed.words;
   if (trimmed === "exit") {
     running = false;
     os.setReadHandler(0, null);
@@ -40,8 +252,24 @@ function runCommand(line) {
     return;
   }
   if (trimmed === "pwd") {
-    std.out.puts(std.loadFile("#task/self/dir").trim() + "\n");
+    std.out.puts(cwd + "\n");
     prompt();
+    return;
+  }
+  if (words[0] === "ls") {
+    runLs(words);
+    return;
+  }
+  if (words[0] === "cd") {
+    runCd(words);
+    return;
+  }
+  if (words[0] === "cat") {
+    runCat(words);
+    return;
+  }
+  if (words[0] === "write") {
+    runWrite(words);
     return;
   }
   if (trimmed === "size") {

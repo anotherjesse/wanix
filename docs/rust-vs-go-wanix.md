@@ -355,15 +355,20 @@ wanix-rust qjs-shell --raw
 `qjs-term` runs JavaScript as a Wanix `qjs` task with fd 0/1/2 bound through a
 terminal. It can feed input after eval, feed line-by-line scripts, pump
 ready-IO handlers, and send deterministic resize events. `qjs-shell` runs the
-bundled QuickJS shell source through the same terminal-backed task runtime.
+bundled QuickJS shell source through the same terminal-backed task runtime,
+including a small `cd`/`ls`/`cat`/`write` filesystem command set for served
+namespace and workbench demos.
 
 This is not yet a fully concurrent, production interactive scheduler. Raw mode
 still relies on the native host to put stdin into raw mode, but bytes then flow
 through `#term/<id>/data` and the guest shell owns echo, simple editing, Ctrl-D,
-and command dispatch. Signal handling, cancellation, and richer lifecycle
-control need more work. Resource cleanup is explicit: clients that own a
-terminal can write `close` to `#term/<id>/ctl` to remove it from the service and
-invalidate existing handles.
+and command dispatch. For the bundled interactive shell, served cwd is logical
+shell state recorded in `#task/self/dir`, while WASI remains rooted at the
+served namespace root so `cd` can navigate the tree. Normal qjs script tasks
+keep cwd-as-preopen behavior. Signal handling, cancellation, and richer
+lifecycle control need more work. Resource cleanup is explicit: clients that
+own a terminal can write `close` to `#term/<id>/ctl` to remove it from the
+service and invalidate existing handles.
 
 But the direction is important: terminal behavior is not browser xterm
 plumbing. It is a Wanix device surface. A browser xterm, a local terminal, a

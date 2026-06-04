@@ -3498,7 +3498,9 @@ std.out.flush();
 
         let exit_code = run_with_process_io(
             ["qjs-shell"],
-            EofForbiddenStdin::new(b"echo hello shell\nid\npwd\nexit\n"),
+            EofForbiddenStdin::new(
+                b"write note.txt hello shell\nls\ncat note.txt\nid\npwd\nexit\n",
+            ),
             &mut stdout,
             &mut stderr,
         )
@@ -3507,7 +3509,7 @@ std.out.flush();
         assert_eq!(exit_code, 0);
         assert_eq!(
             stdout,
-            b"shell task: 1\r\n$ hello shell\r\n$ 1\r\n$ .\r\n$ bye\r\n"
+            b"shell task: 1\r\n$ wrote note.txt\r\n$ note.txt\r\n$ hello shell\r\n$ 1\r\n$ .\r\n$ bye\r\n"
         );
         assert!(stderr.is_empty());
     }
