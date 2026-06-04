@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use wanix_fs::{DirEntry, FileSeekFrom, FileSystem, FileType, NormalizedPath, OpenOptions};
+use wanix_fs::{DirEntry, FileSystem, FileType, NormalizedPath, OpenOptions};
 use wanix_vfs::Namespace;
 
 use crate::{
@@ -13,10 +13,13 @@ use crate::{
 mod handle;
 mod open;
 mod path;
+mod seek;
 
 use handle::{Handle, OpenFileHandle};
 use open::FileOpenRequest;
 use path::{is_rooted_service_path, join_paths, wasi_path, wasi_symlink_target};
+pub use seek::WasiWhence;
+use seek::{seek_handle, tell_handle};
 
 const FIRST_PREOPEN_FD: u32 = 3;
 
@@ -516,50 +519,12 @@ impl WasiCtx {
 
     /// Seeks an fd offset.
     pub fn fd_seek(&mut self, fd: WasiFd, offset: i64, whence: WasiWhence) -> Result<u64, Errno> {
-        match self.fds.get_mut(&fd).ok_or(Errno::Badf)? {
-            Handle::Stdio { file } => {
-                if !file.is_seekable_file().map_err(Errno::from)? {
-                    return Err(Errno::Notcapable);
-                }
-                let from = file_seek_from(offset, whence)?;
-                file.seek_file(from).map_err(Errno::from)
-            }
-            Handle::File {
-                file, rights_base, ..
-            } => {
-                if !rights_base.contains(WasiRights::FD_SEEK)
-                    || !file.is_seekable_file().map_err(Errno::from)?
-                {
-                    return Err(Errno::Notcapable);
-                }
-                let from = file_seek_from(offset, whence)?;
-                file.seek_file(from).map_err(Errno::from)
-            }
-            Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Notcapable),
-        }
+        seek_handle(self.fds.get_mut(&fd).ok_or(Errno::Badf)?, offset, whence)
     }
 
     /// Returns the current fd offset.
     pub fn fd_tell(&self, fd: WasiFd) -> Result<u64, Errno> {
-        match self.fds.get(&fd).ok_or(Errno::Badf)? {
-            Handle::Stdio { file } => {
-                if !file.is_seekable_file().map_err(Errno::from)? {
-                    return Err(Errno::Notcapable);
-                }
-                file.tell_file().map_err(Errno::from)
-            }
-            Handle::File {
-                file, rights_base, ..
-            } => {
-                if !rights_base.contains(WasiRights::FD_TELL)
-                    || !file.is_seekable_file().map_err(Errno::from)?
-                {
-                    return Err(Errno::Notcapable);
-                }
-                file.tell_file().map_err(Errno::from)
-            }
-            Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Notcapable),
-        }
+        tell_handle(self.fds.get(&fd).ok_or(Errno::Badf)?)
     }
 
     /// Returns stat data for a namespace path relative to `dirfd`.
@@ -831,29 +796,6 @@ impl Drop for WasiCtx {
     }
 }
 
-/// WASI Preview 1 seek origin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WasiWhence {
-    /// Seek relative to the start.
-    Set,
-    /// Seek relative to the current offset.
-    Cur,
-    /// Seek relative to the end.
-    End,
-}
-
-impl WasiWhence {
-    /// Converts a WASI Preview 1 whence code into a typed value.
-    pub fn from_preview1(code: i32) -> Result<Self, Errno> {
-        match code {
-            0 => Ok(Self::Set),
-            1 => Ok(Self::Cur),
-            2 => Ok(Self::End),
-            _ => Err(Errno::Inval),
-        }
-    }
-}
-
 fn attached_file_rights(file: &WasiFile) -> Result<WasiRights, Errno> {
     let mut rights = WasiRights::FD_FILESTAT_GET;
     if file.can_read() {
@@ -866,17 +808,6 @@ fn attached_file_rights(file: &WasiFile) -> Result<WasiRights, Errno> {
         rights |= WasiRights::FD_SEEK | WasiRights::FD_TELL;
     }
     Ok(rights)
-}
-
-fn file_seek_from(offset: i64, whence: WasiWhence) -> Result<FileSeekFrom, Errno> {
-    match whence {
-        WasiWhence::Set => {
-            let offset = u64::try_from(offset).map_err(|_| Errno::Inval)?;
-            Ok(FileSeekFrom::Start(offset))
-        }
-        WasiWhence::Cur => Ok(FileSeekFrom::Current(offset)),
-        WasiWhence::End => Ok(FileSeekFrom::End(offset)),
-    }
 }
 
 impl WasiCtx {
