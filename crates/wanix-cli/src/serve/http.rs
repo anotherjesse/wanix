@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use super::{ServeConnectionError, ServeRoots};
+use super::{ServeRoots, connection::ServeConnectionError};
 
 mod response;
 mod routes;

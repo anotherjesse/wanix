@@ -8,7 +8,7 @@ use wanix_fs::NormalizedPath;
 use crate::p9_ws::P9WsConnectionError;
 use crate::qjs_term::QjsShellSession;
 
-use super::ServeConnectionError;
+use super::connection::ServeConnectionError;
 use super::http::{HttpStatus, StaticResponse, percent_decode};
 
 pub(super) const QJS_SHELL_WEBSOCKET_PATH: &str = "/.well-known/qjs-shell";

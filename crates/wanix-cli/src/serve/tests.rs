@@ -19,7 +19,8 @@ use wanix_protocol::{
 
 use super::direct_v86::{DIRECT_V86_BUNDLE, direct_v86_asset_response};
 use super::discovery::{rootfs_handoff_response, serve_discovery_json};
-use super::terminal_ws::parse_terminal_resize_message;
+use super::http::HttpStatus;
+use super::terminal_ws::{parse_terminal_resize_message, qjs_shell_cwd_from_target};
 use super::*;
 
 const EBADF: u32 = 9;
