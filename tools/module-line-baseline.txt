@@ -14,7 +14,6 @@
 541 crates/wanix-qjs-engine/src/runtime/binary.rs
 505 crates/wanix-fs/src/localfs.rs
 500 crates/wanix-vfs/src/lib.rs
-469 crates/wanix-cli/src/qemu.rs
 454 crates/wanix-fs/src/memfs.rs
 399 crates/wanix-qjs-engine/src/host/state.rs
 392 crates/wanix-task/src/task_files.rs

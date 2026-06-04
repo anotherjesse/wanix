@@ -59,7 +59,7 @@ const USAGE: &str = concat!(
     "       wanix-rust rootfs --archive FILE.tgz --out DIR [--json]\n",
     "       wanix-rust qemu --root DIR [--kernel PATH] [--initrd PATH] [--cmdline TEXT] [--append TEXT ...] ",
     "[--qemu-bin PATH] [--memory-mb N] ",
-    "[--mount-tag TAG] [--security-model MODEL] ",
+    "[--mount-tag TAG] [--security-model MODEL] [--p9-msize N] ",
     "[--json] [--no-kvm] [--exec]\n",
     "       wanix-rust serve [--root DIR | DIR] [--addr HOST:PORT | --listen HOST:PORT] ",
     "[--bundle NAME] [--wanix-services] [--once]\n",
@@ -1930,6 +1930,7 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("--append TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--mount-tag TAG"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--security-model MODEL"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--p9-msize N"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--exec"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust serve"));
         assert!(output.stderr().is_empty());
@@ -2082,6 +2083,7 @@ mod tests {
         assert_eq!(qemu["cmdline"], cmdline);
         assert_eq!(qemu["mountTag"], "host9p");
         assert_eq!(qemu["securityModel"], "mapped-xattr");
+        assert_eq!(qemu["p9Msize"], 131072);
         assert_eq!(qemu["console"], "hvc0");
         assert_eq!(qemu["rootFilesystem"], "9p");
         assert_eq!(qemu_argv, expected_qemu_argv);
@@ -2280,12 +2282,15 @@ mod tests {
             "wanixroot".to_owned(),
             "--security-model".to_owned(),
             "none".to_owned(),
+            "--p9-msize".to_owned(),
+            "65536".to_owned(),
         ])
         .unwrap();
 
         let stdout = String::from_utf8(output.stdout().to_vec()).unwrap();
         let root = fs::canonicalize(root).unwrap();
         assert!(stdout.contains("root=wanixroot rootfstype=9p"), "{stdout}");
+        assert!(stdout.contains("msize=65536"), "{stdout}");
         assert!(stdout.contains(&format!(
             "-fsdev local,id=host9p,path={},security_model=none",
             root.display()
@@ -2313,6 +2318,8 @@ mod tests {
             "wanixroot".to_owned(),
             "--security-model".to_owned(),
             "none".to_owned(),
+            "--p9-msize".to_owned(),
+            "65536".to_owned(),
             "--append".to_owned(),
             append.to_owned(),
             "--json".to_owned(),
@@ -2326,7 +2333,7 @@ mod tests {
         let manifest: serde_json::Value = serde_json::from_slice(output.stdout()).unwrap();
         let cmdline = format!(
             "console=hvc0 init=/bin/init rw root=wanixroot rootfstype=9p \
-             rootflags=trans=virtio,version=9p2000.L,msize=131072 loglevel=3 {append}"
+             rootflags=trans=virtio,version=9p2000.L,msize=65536 loglevel=3 {append}"
         );
         let expected_argv = vec![
             qemu_bin.to_owned(),
@@ -2374,6 +2381,7 @@ mod tests {
         assert_eq!(manifest["kvm"], true);
         assert_eq!(manifest["mountTag"], "wanixroot");
         assert_eq!(manifest["securityModel"], "none");
+        assert_eq!(manifest["p9Msize"], 65536);
         assert_eq!(manifest["console"], "hvc0");
         assert_eq!(manifest["rootFilesystem"], "9p");
     }
@@ -2551,6 +2559,21 @@ mod tests {
             invalid_security_model
                 .to_string()
                 .contains("expects one of mapped-xattr, mapped-file, passthrough, none")
+        );
+
+        let invalid_p9_msize = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            missing_kernel_root.display().to_string(),
+            "--p9-msize".to_owned(),
+            "0".to_owned(),
+        ])
+        .unwrap_err();
+        assert_eq!(invalid_p9_msize.exit_code(), 2);
+        assert!(
+            invalid_p9_msize
+                .to_string()
+                .contains("qemu --p9-msize expects a positive integer")
         );
 
         let initrd_root = temp_dir("wanix-cli-qemu-missing-initrd-root");

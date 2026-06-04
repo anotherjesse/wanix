@@ -462,8 +462,9 @@ That set of commands says a lot about the intended shape:
 - prepare a Linux guest root and emit shell or `wanix-rootfs.v1` JSON handoffs
   for native QEMU and direct-v86;
 - print a native QEMU/KVM virtio-9p handoff command with explicit host 9P
-  mount tag, initrd, and security-model knobs for the same guest-root shape as
-  direct-v86, or emit the same handoff as a machine-readable argv manifest;
+  mount tag, initrd, `msize`, and security-model knobs for the same guest-root
+  shape as direct-v86, or emit the same handoff as a machine-readable argv
+  manifest;
 - serve browser assets, protocol routes, optional Wanix services, workbench,
   and direct-v86 entrypoints from one native listener.
 
@@ -579,15 +580,15 @@ Native QEMU is the other path. `wanix-rust qemu` targets real host execution of
 QEMU/KVM or software emulation with the same guest-root shape: a Linux kernel,
 an optional initrd, an hvc0 virtconsole, and a virtio-9p root mounted from a
 Wanix/host directory. It can tune the generated guest mount tag, explicit
-initrd, and QEMU local 9P `security_model` without changing the default
-`host9p`/`mapped-xattr` handoff; a fully replaced kernel cmdline remains
-caller-owned. `wanix-rust rootfs --json` can package the prepared root, boot
-markers, default QEMU manifest, and direct-v86 serve argv in a
+initrd, QEMU local 9P `security_model`, and guest 9P `msize` without changing
+the default `host9p`/`mapped-xattr`/`131072` handoff; a fully replaced kernel
+cmdline remains caller-owned. `wanix-rust rootfs --json` can package the
+prepared root, boot markers, default QEMU manifest, and direct-v86 serve argv in a
 `wanix-rootfs.v1` manifest. A served prepared root publishes the same manifest
 at `/.well-known/rootfs.json` to loopback clients, while
 `wanix-rust qemu --json` renders just the validated QEMU argv, discovered or
-explicit initrd path, and boot policy for scripts or future editor/serve
-surfaces.
+explicit initrd path, 9P `msize`, and boot policy for scripts or future
+editor/serve surfaces.
 That path is closer to "use the hardware when available." Today it is a validated
 handoff command, not a
 supervised Wanix VM process, but it is the right native parity path for serious

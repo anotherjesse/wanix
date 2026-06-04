@@ -111,8 +111,8 @@ tests.
   local browser/editor/VM launchers.
 - `wanix-rust qemu --root DIR`: validates the same guest-root shape and emits a
   shell or `wanix-qemu-virtio9p.v1` JSON handoff with discovered or explicit
-  initrd support; `--exec` is an explicit foreground launch, not a Wanix VM
-  supervisor.
+  initrd support plus an explicit 9P `msize` boot knob; `--exec` is an
+  explicit foreground launch, not a Wanix VM supervisor.
 
 The biggest missing pieces remain interactive shell/session depth, broader
 Linux/v86/editor 9P compatibility, QEMU/v86 boot workflows, and Rust

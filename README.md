@@ -36,7 +36,7 @@ exports over stdio/TCP/WebSocket, Rust `serve` discovery, browser filesystem
 and workbench demos, direct-v86 handoff, rootfs preparation with shell/JSON
 handoffs, trusted-local served prepared-root handoff discovery with copyable
 browser commands, hvc0 Ctrl-C/Ctrl-D forwarding plus a scriptable send hook,
-and initrd-aware native QEMU command/JSON handoff.
+and initrd-aware native QEMU command/JSON handoff with a tunable 9P `msize`.
 Wanix owns task identity, namespaces, cwd/env/cmd, stdio/fds, exit status, and
 WASI filesystem semantics; QuickJS is the execution engine inside a `qjs` task.
 

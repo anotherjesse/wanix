@@ -427,7 +427,7 @@ QEMU and direct-v86 serve commands from the trusted local manifest.
 For host-specific 9P policy, tune the generated QEMU command before launching:
 
 ```sh
-$WANIX qemu --root /tmp/wanix-rootfs --security-model none --mount-tag wanixroot
+$WANIX qemu --root /tmp/wanix-rootfs --security-model none --mount-tag wanixroot --p9-msize 65536
 ```
 
 If the prepared root includes `/boot/initrd`, QEMU handoffs include `-initrd`
@@ -439,8 +439,9 @@ For scripts or editor integration, ask for the same validated handoff as JSON:
 $WANIX qemu --root /tmp/wanix-rootfs --json
 ```
 
-`--mount-tag` also updates the generated default kernel cmdline. If you replace
-the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
+`--mount-tag` and `--p9-msize` also update the generated default kernel
+cmdline. If you replace the full cmdline with `--cmdline`, include the matching
+`root=TAG` and 9P `msize=N` yourself.
 `--json` is an inspection format; it cannot be combined with `--exec`.
 
 > Developer aside: `p9-*` and `serve` are the path toward Linux/v86/editor
@@ -462,8 +463,9 @@ the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
 > future UI surfaces can consume the handoff without reinterpreting a shell
 > string.
 > Prepared-root initrds are part of that argv contract when present.
-> QEMU mount tags and local 9P security models stay explicit because they
-> affect the guest boot contract and host filesystem trust boundary.
+> QEMU mount tags, local 9P security models, and 9P `msize` stay explicit
+> because they affect the guest boot contract and host filesystem trust
+> boundary.
 
 ## 10. Snapshot And Restore In One Command
 
