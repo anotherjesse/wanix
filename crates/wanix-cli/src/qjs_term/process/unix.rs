@@ -34,6 +34,7 @@ pub(super) fn run_process_polled_feed_session_after_eval(
         policy,
         idle_budget,
     };
+    session.pump_idle()?;
     loop {
         match poll_process_stdin(input_fd, poll_timeout)? {
             ProcessStdinPoll::Ready => {

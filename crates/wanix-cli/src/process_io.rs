@@ -1,10 +1,67 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
 
+mod fd;
+
 use crate::{
     CliError, p9_listen, p9_stdio, p9_ws, qemu, qjs_term, run_collected, serve,
     write_process_output,
 };
+
+#[cfg(all(unix, test))]
+pub(super) fn run_with_resize_queue(
+    args: Vec<OsString>,
+    process_stdin: &mut dyn Read,
+    stdin_fd: libc::c_int,
+    resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    fd::run_with_resize_queue(
+        args,
+        process_stdin,
+        stdin_fd,
+        resize_queue,
+        process_stdout,
+        process_stderr,
+    )
+}
+
+#[cfg(unix)]
+pub(super) fn run_with_stdin_fd(
+    args: Vec<OsString>,
+    process_stdin: &mut dyn Read,
+    stdin_fd: libc::c_int,
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    fd::run_with_stdin_fd(
+        args,
+        process_stdin,
+        stdin_fd,
+        process_stdout,
+        process_stderr,
+    )
+}
+
+#[cfg(unix)]
+pub(super) fn run_with_terminal_fds(
+    args: Vec<OsString>,
+    process_stdin: &mut dyn Read,
+    stdin_fd: libc::c_int,
+    terminal_size_fd: libc::c_int,
+    process_stdout: &mut dyn Write,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    fd::run_with_terminal_fds(
+        args,
+        process_stdin,
+        stdin_fd,
+        terminal_size_fd,
+        process_stdout,
+        process_stderr,
+    )
+}
 
 type StreamingHandler =
     fn(&[OsString], &mut dyn Read, &mut dyn Write, &mut dyn Write) -> Result<i32, CliError>;

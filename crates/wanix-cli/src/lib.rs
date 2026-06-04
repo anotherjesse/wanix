@@ -1,5 +1,6 @@
 //! Native CLI plumbing for Rust Wanix demos.
 
+mod collected;
 mod help;
 mod json;
 mod native;
@@ -190,10 +191,10 @@ where
 #[cfg(unix)]
 pub fn run_with_process_io_and_stdin_fd<I, S, R, W, E>(
     args: I,
-    process_stdin: R,
+    mut process_stdin: R,
     stdin_fd: libc::c_int,
-    process_stdout: W,
-    process_stderr: E,
+    mut process_stdout: W,
+    mut process_stderr: E,
 ) -> Result<i32, CliError>
 where
     I: IntoIterator<Item = S>,
@@ -203,21 +204,13 @@ where
     E: Write,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
-    match args.as_slice() {
-        [command, rest @ ..] if command == "qjs-shell" => {
-            let mut process_stdin = process_stdin;
-            let mut process_stdout = process_stdout;
-            let mut process_stderr = process_stderr;
-            qjs_term::run_qjs_shell_streaming_with_input_fd(
-                qjs_term::parse_qjs_shell_command(rest)?,
-                &mut process_stdin,
-                stdin_fd,
-                &mut process_stdout,
-                &mut process_stderr,
-            )
-        }
-        _ => run_with_process_io(args, process_stdin, process_stdout, process_stderr),
-    }
+    process_io::run_with_stdin_fd(
+        args,
+        &mut process_stdin,
+        stdin_fd,
+        &mut process_stdout,
+        &mut process_stderr,
+    )
 }
 
 /// Runs the native CLI command against supplied process IO streams and Unix
@@ -233,11 +226,11 @@ where
 #[cfg(unix)]
 pub fn run_with_process_io_and_terminal_fds<I, S, R, W, E>(
     args: I,
-    process_stdin: R,
+    mut process_stdin: R,
     stdin_fd: libc::c_int,
     terminal_size_fd: libc::c_int,
-    process_stdout: W,
-    process_stderr: E,
+    mut process_stdout: W,
+    mut process_stderr: E,
 ) -> Result<i32, CliError>
 where
     I: IntoIterator<Item = S>,
@@ -247,32 +240,24 @@ where
     E: Write,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
-    match args.as_slice() {
-        [command, rest @ ..] if command == "qjs-shell" => {
-            let mut process_stdin = process_stdin;
-            let mut process_stdout = process_stdout;
-            let mut process_stderr = process_stderr;
-            qjs_term::run_qjs_shell_streaming_with_terminal_fds(
-                qjs_term::parse_qjs_shell_command(rest)?,
-                &mut process_stdin,
-                stdin_fd,
-                terminal_size_fd,
-                &mut process_stdout,
-                &mut process_stderr,
-            )
-        }
-        _ => run_with_process_io(args, process_stdin, process_stdout, process_stderr),
-    }
+    process_io::run_with_terminal_fds(
+        args,
+        &mut process_stdin,
+        stdin_fd,
+        terminal_size_fd,
+        &mut process_stdout,
+        &mut process_stderr,
+    )
 }
 
 #[cfg(all(unix, test))]
 fn run_with_process_io_and_resize_queue<I, S, R, W, E>(
     args: I,
-    process_stdin: R,
+    mut process_stdin: R,
     stdin_fd: libc::c_int,
     resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
-    process_stdout: W,
-    process_stderr: E,
+    mut process_stdout: W,
+    mut process_stderr: E,
 ) -> Result<i32, CliError>
 where
     I: IntoIterator<Item = S>,
@@ -282,22 +267,14 @@ where
     E: Write,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
-    match args.as_slice() {
-        [command, rest @ ..] if command == "qjs-shell" => {
-            let mut process_stdin = process_stdin;
-            let mut process_stdout = process_stdout;
-            let mut process_stderr = process_stderr;
-            qjs_term::run_qjs_shell_streaming_with_resize_queue(
-                qjs_term::parse_qjs_shell_command(rest)?,
-                &mut process_stdin,
-                stdin_fd,
-                resize_queue,
-                &mut process_stdout,
-                &mut process_stderr,
-            )
-        }
-        _ => run_with_process_io(args, process_stdin, process_stdout, process_stderr),
-    }
+    process_io::run_with_resize_queue(
+        args,
+        &mut process_stdin,
+        stdin_fd,
+        resize_queue,
+        &mut process_stdout,
+        &mut process_stderr,
+    )
 }
 
 fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
@@ -307,56 +284,7 @@ fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<Cl
     if command == "--help" || command == "-h" {
         return Ok(help::help_output());
     }
-    run_collected_command(command, rest, process_stdin)
-}
-
-fn run_collected_command(
-    command: &OsString,
-    rest: &[OsString],
-    process_stdin: &mut dyn Read,
-) -> Result<CliOutput, CliError> {
-    match command.to_string_lossy().as_ref() {
-        "qjs" => run_qjs(parse_qjs_command(rest)?, process_stdin),
-        "qjs-term" => {
-            qjs_term::run_qjs_term(qjs_term::parse_qjs_term_command(rest)?, process_stdin)
-        }
-        "qjs-shell" => {
-            qjs_term::run_qjs_shell(qjs_term::parse_qjs_shell_command(rest)?, process_stdin)
-        }
-        "qjs-snapshot" => run_qjs_snapshot(
-            parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?,
-            process_stdin,
-        ),
-        "qjs-resume" => run_qjs_resume(
-            parse_qjs_snapshot_file_command(rest, "qjs-resume")?,
-            process_stdin,
-        ),
-        "qjs-restore" => qjs_restore::parse_and_run_qjs_restore(rest),
-        "p9-stdio" => {
-            p9_stdio::run_p9_stdio(p9_stdio::parse_p9_stdio_command(rest)?, process_stdin)
-        }
-        "rootfs" => rootfs::run_rootfs_command(rootfs::parse_rootfs_command(rest)?),
-        "p9-listen" => {
-            require_live_process_io(p9_listen::parse_p9_listen_command(rest), "p9-listen")
-        }
-        "p9-ws" => require_live_process_io(p9_ws::parse_p9_ws_command(rest), "p9-ws"),
-        "qemu" => qemu::run_qemu_command(qemu::parse_qemu_command(rest)?),
-        "serve" => require_live_process_io(serve::parse_serve_command(rest), "serve"),
-        _ => Err(CliError::usage(format!(
-            "unknown wanix-rust command: {}",
-            command.to_string_lossy()
-        ))),
-    }
-}
-
-fn require_live_process_io<T>(
-    parsed: Result<T, CliError>,
-    command_name: &str,
-) -> Result<CliOutput, CliError> {
-    let _ = parsed?;
-    Err(CliError::usage(format!(
-        "{command_name} requires live process IO; use the wanix-rust binary"
-    )))
+    collected::run_collected_command(command, rest, process_stdin)
 }
 
 fn write_process_output(output: &mut dyn Write, label: &str, bytes: &[u8]) -> Result<(), CliError> {
@@ -636,6 +564,7 @@ mod tests {
 
     impl Write for MarkerStdout {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            eprintln!("SIGNALING STDOUT WRITE: {:?}", String::from_utf8_lossy(buf));
             self.bytes.extend_from_slice(buf);
             if self
                 .bytes
@@ -2535,8 +2464,8 @@ std.out.flush();
             input_writer.write_all(b"exit\n").unwrap();
         });
         let mut stdout = SignalingStdout::new_many(vec![
-            (b"shell task: 1\r\n$ ".to_vec(), prompt_sender),
-            (b"later: tick\r\n$ ".to_vec(), later_sender),
+            (b"$ ".to_vec(), prompt_sender),
+            (b"later: tick".to_vec(), later_sender),
         ]);
         let mut stderr = Vec::new();
 
@@ -2573,8 +2502,7 @@ std.out.flush();
             resize_writer.lock().unwrap().push_back((100, 40));
             input_writer.write_all(b"size\nexit\n").unwrap();
         });
-        let mut stdout =
-            SignalingStdout::new_many(vec![(b"shell task: 1\r\n$ ".to_vec(), prompt_sender)]);
+        let mut stdout = SignalingStdout::new_many(vec![(b"$ ".to_vec(), prompt_sender)]);
         let mut stderr = Vec::new();
 
         let exit_code = run_with_process_io_and_resize_queue(
