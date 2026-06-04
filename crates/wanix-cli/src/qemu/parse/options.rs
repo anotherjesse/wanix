@@ -1,0 +1,215 @@
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+use crate::CliError;
+
+use super::super::{
+    DEFAULT_MEMORY_MB, DEFAULT_MOUNT_TAG, DEFAULT_P9_MSIZE, DEFAULT_QEMU_BIN,
+    DEFAULT_SECURITY_MODEL, QemuOutputFormat,
+};
+use super::{
+    os_arg_to_string, parse_memory_mb, parse_mount_tag, parse_p9_msize, parse_security_model,
+};
+
+pub(super) struct QemuOptions {
+    pub(super) root_path: Option<PathBuf>,
+    pub(super) kernel_path: Option<PathBuf>,
+    pub(super) initrd_path: Option<PathBuf>,
+    pub(super) qemu_bin: String,
+    pub(super) memory_mb: u32,
+    pub(super) kvm: bool,
+    pub(super) mount_tag: String,
+    pub(super) security_model: String,
+    pub(super) p9_msize: u32,
+    pub(super) cmdline: Option<String>,
+    pub(super) append: Vec<String>,
+    pub(super) output_format: QemuOutputFormat,
+    pub(super) exec: bool,
+}
+
+impl Default for QemuOptions {
+    fn default() -> Self {
+        Self {
+            root_path: None,
+            kernel_path: None,
+            initrd_path: None,
+            qemu_bin: DEFAULT_QEMU_BIN.to_owned(),
+            memory_mb: DEFAULT_MEMORY_MB,
+            kvm: true,
+            mount_tag: DEFAULT_MOUNT_TAG.to_owned(),
+            security_model: DEFAULT_SECURITY_MODEL.to_owned(),
+            p9_msize: DEFAULT_P9_MSIZE,
+            cmdline: None,
+            append: Vec::new(),
+            output_format: QemuOutputFormat::Shell,
+            exec: false,
+        }
+    }
+}
+
+const QEMU_OPTIONS: &[QemuOption] = &[
+    QemuOption::value("--root", "qemu --root", "DIR", QemuOptionKind::Root),
+    QemuOption::value("--kernel", "qemu --kernel", "PATH", QemuOptionKind::Kernel),
+    QemuOption::value("--initrd", "qemu --initrd", "PATH", QemuOptionKind::Initrd),
+    QemuOption::value(
+        "--cmdline",
+        "qemu --cmdline",
+        "TEXT",
+        QemuOptionKind::Cmdline,
+    ),
+    QemuOption::value("--append", "qemu --append", "TEXT", QemuOptionKind::Append),
+    QemuOption::value(
+        "--qemu-bin",
+        "qemu --qemu-bin",
+        "PATH",
+        QemuOptionKind::QemuBin,
+    ),
+    QemuOption::value(
+        "--memory-mb",
+        "qemu --memory-mb",
+        "N",
+        QemuOptionKind::MemoryMb,
+    ),
+    QemuOption::value(
+        "--p9-msize",
+        "qemu --p9-msize",
+        "N",
+        QemuOptionKind::P9Msize,
+    ),
+    QemuOption::value(
+        "--mount-tag",
+        "qemu --mount-tag",
+        "TAG",
+        QemuOptionKind::MountTag,
+    ),
+    QemuOption::value(
+        "--security-model",
+        "qemu --security-model",
+        "MODEL",
+        QemuOptionKind::SecurityModel,
+    ),
+    QemuOption::flag("--json", "qemu --json", QemuOptionKind::Json),
+    QemuOption::flag("--no-kvm", "qemu --no-kvm", QemuOptionKind::NoKvm),
+    QemuOption::flag("--exec", "qemu --exec", QemuOptionKind::Exec),
+];
+
+#[derive(Clone, Copy)]
+pub(super) struct QemuOption {
+    flag: &'static str,
+    label: &'static str,
+    expected: Option<&'static str>,
+    kind: QemuOptionKind,
+}
+
+#[derive(Clone, Copy)]
+enum QemuOptionKind {
+    Root,
+    Kernel,
+    Initrd,
+    Cmdline,
+    Append,
+    QemuBin,
+    MemoryMb,
+    P9Msize,
+    MountTag,
+    SecurityModel,
+    Json,
+    NoKvm,
+    Exec,
+}
+
+impl QemuOption {
+    const fn value(
+        flag: &'static str,
+        label: &'static str,
+        expected: &'static str,
+        kind: QemuOptionKind,
+    ) -> Self {
+        Self {
+            flag,
+            label,
+            expected: Some(expected),
+            kind,
+        }
+    }
+
+    const fn flag(flag: &'static str, label: &'static str, kind: QemuOptionKind) -> Self {
+        Self {
+            flag,
+            label,
+            expected: None,
+            kind,
+        }
+    }
+
+    pub(super) fn from_arg(arg: &OsString) -> Option<Self> {
+        let arg = arg.to_str()?;
+        QEMU_OPTIONS
+            .iter()
+            .find(|option| option.flag == arg)
+            .copied()
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        self.label
+    }
+
+    pub(super) fn expected_value(self) -> Option<&'static str> {
+        self.expected
+    }
+
+    pub(super) fn apply_value(
+        self,
+        value: &OsString,
+        options: &mut QemuOptions,
+    ) -> Result<(), CliError> {
+        match self.kind {
+            QemuOptionKind::Root => options.root_path = Some(PathBuf::from(value)),
+            QemuOptionKind::Kernel => set_single_path(
+                &mut options.kernel_path,
+                value,
+                "qemu accepts only one --kernel",
+            )?,
+            QemuOptionKind::Initrd => set_single_path(
+                &mut options.initrd_path,
+                value,
+                "qemu accepts only one --initrd",
+            )?,
+            QemuOptionKind::Cmdline => {
+                if options.cmdline.is_some() {
+                    return Err(CliError::usage("qemu accepts only one --cmdline"));
+                }
+                options.cmdline = Some(os_arg_to_string(value, self.label())?);
+            }
+            QemuOptionKind::Append => options.append.push(os_arg_to_string(value, self.label())?),
+            QemuOptionKind::QemuBin => options.qemu_bin = os_arg_to_string(value, self.label())?,
+            QemuOptionKind::MemoryMb => options.memory_mb = parse_memory_mb(value)?,
+            QemuOptionKind::P9Msize => options.p9_msize = parse_p9_msize(value)?,
+            QemuOptionKind::MountTag => options.mount_tag = parse_mount_tag(value)?,
+            QemuOptionKind::SecurityModel => options.security_model = parse_security_model(value)?,
+            QemuOptionKind::Json | QemuOptionKind::NoKvm | QemuOptionKind::Exec => {}
+        }
+        Ok(())
+    }
+
+    pub(super) fn apply_flag(self, options: &mut QemuOptions) {
+        match self.kind {
+            QemuOptionKind::Json => options.output_format = QemuOutputFormat::Json,
+            QemuOptionKind::NoKvm => options.kvm = false,
+            QemuOptionKind::Exec => options.exec = true,
+            _ => {}
+        }
+    }
+}
+
+fn set_single_path(
+    target: &mut Option<PathBuf>,
+    value: &OsString,
+    duplicate_message: &str,
+) -> Result<(), CliError> {
+    if target.is_some() {
+        return Err(CliError::usage(duplicate_message));
+    }
+    *target = Some(PathBuf::from(value));
+    Ok(())
+}
