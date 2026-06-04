@@ -43,6 +43,10 @@ The generated `workbench-fs9p` launcher passes the discovered WebSocket URL to
 the workbench extension. The extension creates a VS Code pseudoterminal backed
 by that raw-byte WebSocket when the user requests `?term=1`.
 
+ADR 0097 separately exposes one-shot `qjs` task startup through the `#task`
+service. The terminal WebSocket route remains the live session path because it
+owns browser input frames and ready-IO pumping.
+
 ## Consequences
 
 Rust `serve --bundle workbench-fs9p --wanix-services` now has a visible

@@ -126,10 +126,13 @@ including base and Google.2 supported protocol strings, the optional bundle
 hint, and the explicitly unimplemented Ethernet route so browser/v86/VS Code
 clients can discover the current Rust serve contract.
 `serve --wanix-services` switches the 9P export from a bare host directory to a
-Wanix namespace that binds the host root at `/`, `#task` with a `noop` driver,
-and `#term`; discovery advertises those service roots through a `services`
-object. The 9P server now preserves device-stream behavior for non-seekable
-fids while keeping offset semantics for regular seekable files.
+Wanix namespace that binds the host root at `/`, `#term`, and `#task` from a
+service-root task context. The service table registers `noop` and `qjs`, so
+direct 9P clients can allocate a QuickJS task with `#task/new/qjs`, set
+`cmd`/`env`/`dir`, bind fds, and `ctl start` it inside the served namespace.
+Discovery advertises those service roots and drivers through a `services`
+object. The 9P server now preserves device-stream behavior for non-seekable fids
+while keeping offset semantics for regular seekable files.
 When launched with `--bundle fs9p`, `/?bundle=fs9p` returns a generated browser
 filesystem smoke page that fetches discovery, opens the direct binary 9P
 WebSocket route, negotiates 9P2000.L, and exposes list/read/write/rename/delete
@@ -162,9 +165,10 @@ packaged Code OSS distribution or a general task launcher.
 The first browser smoke now proves the Rust-served page boots Code OSS to the
 `wanix:/` workspace root, loads the served `wanix.workbench` extension, opens
 the Rust direct 9P WebSocket, and populates Explorer from the served root.
-`--wanix-services` adds a test-covered service namespace export and a qjs-backed
-terminal route for the workbench pseudoterminal, but search providers and richer
-task/session lifecycle controls remain follow-ups.
+`--wanix-services` adds a test-covered service namespace export, a qjs-backed
+terminal route for the workbench pseudoterminal, and real one-shot qjs task
+startup through `#task`, but search providers and richer task/session lifecycle
+controls remain follow-ups.
 When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86
 `filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also
@@ -502,6 +506,9 @@ cargo test --workspace --locked
 - [ADR 0096](docs/adrs/0096-serve-qjs-shell-terminal-route.md):
   `serve --wanix-services` exposes a qjs-shell WebSocket route so the workbench
   can drive a QuickJS-backed Wanix task through terminal bytes.
+- [ADR 0097](docs/adrs/0097-serve-qjs-task-service-driver.md):
+  `serve --wanix-services` registers a real `qjs` task driver and exports
+  `#task` from a service-root task context so direct 9P clients can start JS.
 
 ## Cycle Rules
 

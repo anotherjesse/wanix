@@ -11,13 +11,14 @@ use std::time::Duration;
 
 use tungstenite::{Error as WsError, Message, WebSocket, accept};
 use wanix_fs::{FileSystem, LocalFs};
+use wanix_qjs::QuickJsTaskDriver;
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
-use wanix_vfs::{BindOptions, Namespace};
+use wanix_vfs::{BindOptions, BindPosition, Namespace};
 
 use crate::p9_ws::{P9WsConnectionError, serve_websocket_connection};
 use crate::qjs_term::QjsShellSession;
-use crate::{CliError, write_process_output};
+use crate::{CliError, quickjs_runner, write_process_output};
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
@@ -364,7 +365,7 @@ impl ServeRoots {
                 1,
             )
         })?;
-        let p9_root = serve_p9_root(root_path, bundle.as_deref(), wanix_services)?;
+        let p9_root = serve_p9_root(root_path, wanix_services)?;
         Ok(Self {
             static_root,
             p9_root,
@@ -375,11 +376,7 @@ impl ServeRoots {
     }
 }
 
-fn serve_p9_root(
-    root_path: &Path,
-    bundle: Option<&str>,
-    wanix_services: bool,
-) -> Result<Arc<dyn FileSystem>, CliError> {
+fn serve_p9_root(root_path: &Path, wanix_services: bool) -> Result<Arc<dyn FileSystem>, CliError> {
     let host_root = Arc::new(LocalFs::new(root_path).map_err(|error| {
         CliError::new(
             format!(
@@ -393,22 +390,28 @@ fn serve_p9_root(
         return Ok(host_root);
     }
 
-    let table = TaskTable::new();
-    table.register_noop_driver("noop")?;
+    let table = serve_task_table()?;
     let terminal = Arc::new(TermDevice::new());
     let mut namespace = Namespace::new();
     namespace.bind(host_root, ".", ".", BindOptions::default())?;
+    namespace.bind(terminal, ".", "#term", BindOptions::default())?;
+    let root_task = table.allocate_root_with_namespace("noop", namespace.clone())?;
     namespace.bind(
-        Arc::new(table.filesystem()),
+        Arc::new(table.filesystem_for(root_task.id())),
         ".",
         "#task",
-        BindOptions::default(),
+        BindOptions {
+            position: BindPosition::Replace,
+        },
     )?;
-    namespace.bind(terminal, ".", "#term", BindOptions::default())?;
-    if bundle == Some(WORKBENCH_FS9P_BUNDLE) {
-        table.allocate_root_with_namespace("noop", namespace.clone())?;
-    }
     Ok(Arc::new(namespace))
+}
+
+fn serve_task_table() -> Result<TaskTable, CliError> {
+    let table = TaskTable::new();
+    table.register_noop_driver("noop")?;
+    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(quickjs_runner()?)))?;
+    Ok(table)
 }
 
 fn serve_one_connection(
@@ -1841,7 +1844,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
 
 fn serve_services_json(roots: &ServeRoots) -> String {
     if roots.wanix_services {
-        "{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\"]}".to_owned()
+        "{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\",\"qjs\"]}".to_owned()
     } else {
         "null".to_owned()
     }
@@ -2071,18 +2074,20 @@ mod tests {
     use tungstenite::{Message, connect, stream::MaybeTlsStream};
     use wanix_protocol::{
         P9_RATTACH, P9_RGETATTR, P9_RLERROR, P9_RLOPEN, P9_RREAD, P9_RREMOVE, P9_RRENAME,
-        P9_RSETATTR, P9_RVERSION, P9_RWALK, P9_RWALKGETATTR, P9_SETATTR_GID, P9_SETATTR_UID,
-        P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_2, P9Frame, P9SetAttr, p9_decode_rgetattr,
-        p9_decode_rlerror, p9_decode_rread, p9_decode_rremove, p9_decode_rrename, p9_decode_rwalk,
-        p9_decode_rwalkgetattr, p9_tattach, p9_tauth, p9_tgetattr, p9_tlink, p9_tlopen, p9_tmknod,
-        p9_tread, p9_tremove, p9_trename, p9_tsetattr, p9_tversion, p9_twalk, p9_twalkgetattr,
-        p9_txattrcreate, p9_txattrwalk,
+        P9_RSETATTR, P9_RVERSION, P9_RWALK, P9_RWALKGETATTR, P9_RWRITE, P9_SETATTR_GID,
+        P9_SETATTR_UID, P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_2, P9Frame, P9SetAttr,
+        p9_decode_rgetattr, p9_decode_rlerror, p9_decode_rread, p9_decode_rremove,
+        p9_decode_rrename, p9_decode_rwalk, p9_decode_rwalkgetattr, p9_decode_rwrite, p9_tattach,
+        p9_tauth, p9_tgetattr, p9_tlink, p9_tlopen, p9_tmknod, p9_tread, p9_tremove, p9_trename,
+        p9_tsetattr, p9_tversion, p9_twalk, p9_twalkgetattr, p9_twrite, p9_txattrcreate,
+        p9_txattrwalk,
     };
 
     use super::*;
 
     const EBADF: u32 = 9;
     const ENOSYS: u32 = 38;
+    const P9_O_WRONLY: u32 = 0o1;
     const EOPNOTSUPP: u32 = 95;
 
     #[test]
@@ -2868,7 +2873,8 @@ mod tests {
         );
         assert!(
             discovery.contains(
-                "\"services\":{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\"]}"
+                "\"services\":{\"task\":\"#task\",\"term\":\"#term\",\
+                 \"drivers\":[\"noop\",\"qjs\"]}"
             ),
             "{discovery}"
         );
@@ -2904,7 +2910,7 @@ mod tests {
         assert_eq!(p9_decode_rread(&response).unwrap(), b"1\n");
 
         let response = server
-            .handle_frame(&p9_twalk(5, 1, 3, &["#task", "new", "noop"]).unwrap())
+            .handle_frame(&p9_twalk(5, 1, 3, &["#task", "self", "id"]).unwrap())
             .unwrap();
         assert_eq!(response.message_type(), P9_RWALK);
         assert_eq!(p9_decode_rwalk(&response).unwrap().len(), 3);
@@ -2917,7 +2923,84 @@ mod tests {
         );
         let response = server.handle_frame(&p9_tread(7, 3, 0, 64)).unwrap();
         assert_eq!(response.message_type(), P9_RREAD);
+        assert_eq!(p9_decode_rread(&response).unwrap(), b"1\n");
+
+        let response = server
+            .handle_frame(&p9_twalk(8, 1, 4, &["#task", "new", "noop"]).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWALK);
+        assert_eq!(p9_decode_rwalk(&response).unwrap().len(), 3);
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(9, 4, 0))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+        let response = server.handle_frame(&p9_tread(10, 4, 0, 64)).unwrap();
+        assert_eq!(response.message_type(), P9_RREAD);
         assert_eq!(p9_decode_rread(&response).unwrap(), b"2\n");
+    }
+
+    #[test]
+    fn serve_wanix_services_can_start_qjs_task_through_9p_task_service() {
+        let root = temp_dir("wanix-cli-serve-services-qjs-task");
+        fs::write(
+            root.join("main.js"),
+            br##"
+import * as std from "qjs:std";
+
+const id = std.loadFile("#task/self/id").trim();
+std.out.puts("serve qjs task " + id + "\n");
+std.writeFile("generated.txt", "generated by task " + id);
+"##,
+        )
+        .unwrap();
+        fs::write(root.join("stdout.txt"), b"").unwrap();
+        let roots = ServeRoots::new(
+            &root,
+            "127.0.0.1:7654".parse().unwrap(),
+            Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+            true,
+        )
+        .unwrap();
+        let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
+
+        assert_eq!(
+            server
+                .handle_frame(&p9_tattach(1, 1, 0xffff_ffff, "workbench", "", 0).unwrap())
+                .unwrap()
+                .message_type(),
+            P9_RATTACH
+        );
+        assert_eq!(
+            p9_read_file(&mut server, 1, 2, 100, &["#task", "new", "qjs"]),
+            b"2\n"
+        );
+        p9_write_file(&mut server, 1, 3, 110, &["#task", "2", "cmd"], b"main.js\n");
+        p9_write_file(&mut server, 1, 4, 120, &["#task", "2", "dir"], b".\n");
+        p9_write_file(
+            &mut server,
+            1,
+            5,
+            130,
+            &["#task", "2", "ctl"],
+            b"bind stdout.txt fd/1\n",
+        );
+        p9_write_file(&mut server, 1, 6, 140, &["#task", "2", "ctl"], b"start\n");
+
+        assert_eq!(
+            p9_read_file(&mut server, 1, 7, 150, &["#task", "2", "exit"]),
+            b"0\n"
+        );
+        assert_eq!(
+            fs::read(root.join("stdout.txt")).unwrap(),
+            b"serve qjs task 2\n"
+        );
+        assert_eq!(
+            fs::read(root.join("generated.txt")).unwrap(),
+            b"generated by task 2"
+        );
     }
 
     #[test]
@@ -3532,6 +3615,59 @@ mod tests {
             "{response}"
         );
         assert!(!response.contains("not static"), "{response}");
+    }
+
+    fn p9_read_file(
+        server: &mut wanix_9p::P9Server,
+        root_fid: u32,
+        fid: u32,
+        tag_base: u16,
+        path: &[&str],
+    ) -> Vec<u8> {
+        let response = server
+            .handle_frame(&p9_twalk(tag_base, root_fid, fid, path).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWALK);
+        assert_eq!(p9_decode_rwalk(&response).unwrap().len(), path.len());
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(tag_base + 1, fid, 0))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+        let response = server
+            .handle_frame(&p9_tread(tag_base + 2, fid, 0, 4096))
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RREAD);
+        p9_decode_rread(&response).unwrap()
+    }
+
+    fn p9_write_file(
+        server: &mut wanix_9p::P9Server,
+        root_fid: u32,
+        fid: u32,
+        tag_base: u16,
+        path: &[&str],
+        bytes: &[u8],
+    ) {
+        let response = server
+            .handle_frame(&p9_twalk(tag_base, root_fid, fid, path).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWALK);
+        assert_eq!(p9_decode_rwalk(&response).unwrap().len(), path.len());
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(tag_base + 1, fid, P9_O_WRONLY))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+        let response = server
+            .handle_frame(&p9_twrite(tag_base + 2, fid, 0, bytes).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+        assert_eq!(p9_decode_rwrite(&response).unwrap(), bytes.len() as u32);
     }
 
     fn read_binary_frames<S: Read + Write>(

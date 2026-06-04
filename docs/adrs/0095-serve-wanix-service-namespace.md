@@ -27,6 +27,10 @@ export root is a Wanix namespace instead of a bare `LocalFs`:
 - the first exposed driver is `noop`, so service allocation can be tested
   without implying that browser-started QuickJS shells are ready.
 
+ADR 0097 later registers a real `qjs` task driver and exports `#task` from a
+service-root task context so service-created child tasks inherit the served
+namespace.
+
 The discovery document advertises these service roots as:
 
 ```json
