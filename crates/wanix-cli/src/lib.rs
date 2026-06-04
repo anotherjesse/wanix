@@ -6,6 +6,7 @@ mod native;
 mod p9_listen;
 mod p9_stdio;
 mod p9_ws;
+mod process_io;
 mod qemu;
 mod qjs_args;
 mod qjs_restore;
@@ -168,53 +169,12 @@ where
     E: Write,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
-    match args.as_slice() {
-        [command, rest @ ..] if command == "qjs-term" => qjs_term::run_qjs_term_streaming(
-            qjs_term::parse_qjs_term_command(rest)?,
-            &mut process_stdin,
-            &mut process_stdout,
-            &mut process_stderr,
-        ),
-        [command, rest @ ..] if command == "qjs-shell" => qjs_term::run_qjs_shell_streaming(
-            qjs_term::parse_qjs_shell_command(rest)?,
-            &mut process_stdin,
-            &mut process_stdout,
-            &mut process_stderr,
-        ),
-        [command, rest @ ..] if command == "p9-stdio" => p9_stdio::run_p9_stdio_streaming(
-            p9_stdio::parse_p9_stdio_command(rest)?,
-            &mut process_stdin,
-            &mut process_stdout,
-            &mut process_stderr,
-        ),
-        [command, rest @ ..] if command == "p9-listen" => p9_listen::run_p9_listen_streaming(
-            p9_listen::parse_p9_listen_command(rest)?,
-            &mut process_stderr,
-        ),
-        [command, rest @ ..] if command == "p9-ws" => {
-            p9_ws::run_p9_ws_streaming(p9_ws::parse_p9_ws_command(rest)?, &mut process_stderr)
-        }
-        [command, rest @ ..] if command == "qemu" => {
-            let command = qemu::parse_qemu_command(rest)?;
-            if qemu::qemu_command_exec(&command) {
-                qemu::run_qemu_streaming(command, &mut process_stderr)
-            } else {
-                let output = qemu::run_qemu_command(command)?;
-                write_process_output(&mut process_stdout, "stdout", output.stdout())?;
-                write_process_output(&mut process_stderr, "stderr", output.stderr())?;
-                Ok(output.exit_code())
-            }
-        }
-        [command, rest @ ..] if command == "serve" => {
-            serve::run_serve_streaming(serve::parse_serve_command(rest)?, &mut process_stderr)
-        }
-        _ => {
-            let output = run_collected(args, &mut process_stdin)?;
-            write_process_output(&mut process_stdout, "stdout", output.stdout())?;
-            write_process_output(&mut process_stderr, "stderr", output.stderr())?;
-            Ok(output.exit_code())
-        }
-    }
+    process_io::run_with_process_io(
+        args,
+        &mut process_stdin,
+        &mut process_stdout,
+        &mut process_stderr,
+    )
 }
 
 /// Runs the native CLI command against supplied process IO streams and a
