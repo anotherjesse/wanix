@@ -45,7 +45,28 @@ pub(crate) fn configure_qjs_task(
     env: &[String],
     cwd: &NormalizedPath,
 ) -> Result<(), CliError> {
+    configure_qjs_task_spec(task, program, args, env, cwd)?;
+    configure_qjs_task_observability(task, program, args, env, cwd)
+}
+
+fn configure_qjs_task_spec(
+    task: &Task,
+    program: &str,
+    args: &[String],
+    env: &[String],
+    cwd: &NormalizedPath,
+) -> Result<(), CliError> {
     task.set_spec(qjs_task_spec(program, args, env, cwd)?)?;
+    Ok(())
+}
+
+fn configure_qjs_task_observability(
+    task: &Task,
+    program: &str,
+    args: &[String],
+    env: &[String],
+    cwd: &NormalizedPath,
+) -> Result<(), CliError> {
     task.set_cmd(task_cmd(program, args))?;
     task.set_env_lines(env.join("\n"))?;
     task.set_dir(cwd.to_string())?;
@@ -64,33 +85,40 @@ pub(crate) fn attach_task_stdio(
     stdin_bytes: Option<Vec<u8>>,
 ) -> Result<(Arc<MemFs>, Arc<MemFs>), CliError> {
     attach_task_stdin(task, stdin_bytes)?;
-    let stdout = Arc::new(MemFs::new());
-    stdout.write_file("stdout", b"")?;
-    task.insert_fd(
-        Fd::STDOUT,
-        stdout.open(&NormalizedPath::new("stdout")?, OpenOptions::read_write())?,
-        NormalizedPath::new("stdout")?,
-    )?;
-    let stderr = Arc::new(MemFs::new());
-    stderr.write_file("stderr", b"")?;
-    task.insert_fd(
-        Fd::STDERR,
-        stderr.open(&NormalizedPath::new("stderr")?, OpenOptions::read_write())?,
-        NormalizedPath::new("stderr")?,
-    )?;
+    let stdout = attach_output_file(task, Fd::STDOUT, "stdout")?;
+    let stderr = attach_output_file(task, Fd::STDERR, "stderr")?;
     Ok((stdout, stderr))
 }
 
 fn attach_task_stdin(task: &Task, stdin_bytes: Option<Vec<u8>>) -> Result<(), CliError> {
-    if let Some(stdin_bytes) = stdin_bytes {
-        let stdin = Arc::new(MemFs::new());
-        stdin.write_file("stdin", stdin_bytes)?;
-        task.insert_fd(
-            Fd::STDIN,
-            stdin.open(&NormalizedPath::new("stdin")?, OpenOptions::read())?,
-            NormalizedPath::new("stdin")?,
-        )?;
-    }
+    let Some(stdin_bytes) = stdin_bytes else {
+        return Ok(());
+    };
+    let stdin = mem_file("stdin", stdin_bytes)?;
+    insert_task_mem_file(task, Fd::STDIN, &stdin, "stdin", OpenOptions::read())
+}
+
+fn attach_output_file(task: &Task, fd: Fd, name: &str) -> Result<Arc<MemFs>, CliError> {
+    let fs = mem_file(name, b"")?;
+    insert_task_mem_file(task, fd, &fs, name, OpenOptions::read_write())?;
+    Ok(fs)
+}
+
+fn mem_file(name: &str, bytes: impl AsRef<[u8]>) -> Result<Arc<MemFs>, CliError> {
+    let fs = Arc::new(MemFs::new());
+    fs.write_file(name, bytes.as_ref())?;
+    Ok(fs)
+}
+
+fn insert_task_mem_file(
+    task: &Task,
+    fd: Fd,
+    fs: &Arc<MemFs>,
+    path: &str,
+    options: OpenOptions,
+) -> Result<(), CliError> {
+    let path = NormalizedPath::new(path)?;
+    task.insert_fd(fd, fs.open(&path, options)?, path)?;
     Ok(())
 }
 
@@ -101,18 +129,34 @@ pub(crate) fn finish_cli_task_output(
     stdout: &Arc<MemFs>,
     stderr: &Arc<MemFs>,
 ) -> Result<CliOutput, CliError> {
-    let stdout = read_file(stdout.as_ref(), "stdout")?;
-    let mut stderr = read_file(stderr.as_ref(), "stderr")?;
-    match result {
-        Ok(()) => Ok(CliOutput::new(stdout, stderr, parse_exit(&task.exit()))),
-        Err(error) => {
-            if !stderr.is_empty() && !stderr.ends_with(b"\n") {
-                stderr.push(b'\n');
-            }
-            stderr.extend_from_slice(format!("wanix-rust {command}: {error}\n").as_bytes());
-            Ok(CliOutput::new(stdout, stderr, 1))
-        }
+    let (stdout, stderr) = read_task_output(stdout, stderr)?;
+    Ok(match result {
+        Ok(()) => CliOutput::new(stdout, stderr, parse_exit(&task.exit())),
+        Err(error) => error_task_output(command, error, stdout, stderr),
+    })
+}
+
+fn read_task_output(
+    stdout: &Arc<MemFs>,
+    stderr: &Arc<MemFs>,
+) -> Result<(Vec<u8>, Vec<u8>), CliError> {
+    Ok((
+        read_file(stdout.as_ref(), "stdout")?,
+        read_file(stderr.as_ref(), "stderr")?,
+    ))
+}
+
+fn error_task_output(
+    command: &str,
+    error: CliError,
+    stdout: Vec<u8>,
+    mut stderr: Vec<u8>,
+) -> CliOutput {
+    if !stderr.is_empty() && !stderr.ends_with(b"\n") {
+        stderr.push(b'\n');
     }
+    stderr.extend_from_slice(format!("wanix-rust {command}: {error}\n").as_bytes());
+    CliOutput::new(stdout, stderr, 1)
 }
 
 pub(crate) fn bind_host_mounts(task: &Task, mounts: &[HostMount]) -> Result<(), CliError> {

@@ -107,15 +107,40 @@ fn copy_host_file(
     cwd: &NormalizedPath,
     guest_dir: &NormalizedPath,
 ) -> Result<(), CliError> {
+    let guest_path = guest_file_path(base, path, cwd, guest_dir)?;
+    copy_host_file_if_mapped(path, root, guest_path)
+}
+
+fn guest_file_path(
+    base: &Path,
+    path: &Path,
+    cwd: &NormalizedPath,
+    guest_dir: &NormalizedPath,
+) -> Result<Option<String>, CliError> {
     let Some(guest_path) = guest_path_for_host_file(base, path)? else {
-        return Ok(());
+        return Ok(None);
     };
-    let bytes = std::fs::read(path)
-        .map_err(|error| CliError::new(format!("failed to read {}: {error}", path.display()), 1))?;
     let guest_path = guest_path_under_dir(guest_dir, &guest_path)?;
     let guest_path = guest_path_in_cwd(cwd, &guest_path)?;
+    Ok(Some(guest_path))
+}
+
+fn copy_host_file_if_mapped(
+    path: &Path,
+    root: &MemFs,
+    guest_path: Option<String>,
+) -> Result<(), CliError> {
+    let Some(guest_path) = guest_path else {
+        return Ok(());
+    };
+    let bytes = read_host_file(path)?;
     root.write_file(guest_path, bytes)?;
     Ok(())
+}
+
+fn read_host_file(path: &Path) -> Result<Vec<u8>, CliError> {
+    std::fs::read(path)
+        .map_err(|error| CliError::new(format!("failed to read {}: {error}", path.display()), 1))
 }
 
 fn guest_path_under_dir(guest_dir: &NormalizedPath, path: &str) -> Result<String, CliError> {
