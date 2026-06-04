@@ -22,6 +22,10 @@ use crate::qjs_term::QjsShellSession;
 use crate::rootfs::rootfs_json_handoff_for_prepared_root;
 use crate::{CliError, quickjs_runner, write_process_output};
 
+mod terminal_ws;
+
+use terminal_ws::close_terminal_websocket_if_finished;
+
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
 const DIRECT_V86_BUNDLE: &str = "direct-v86";
@@ -599,27 +603,6 @@ fn qjs_shell_cwd_from_query_value(value: &str) -> Result<NormalizedPath, StaticR
 fn query_percent_decode(value: &str) -> Result<String, StaticResponse> {
     percent_decode(&value.replace('+', " "))
         .map_err(|_| StaticResponse::plain(HttpStatus::BadRequest, "invalid query string"))
-}
-
-fn close_terminal_websocket_if_finished(
-    socket: &mut WebSocket<TcpStream>,
-    session: &mut QjsShellSession,
-) -> Result<bool, ServeConnectionError> {
-    if !session.is_finished() {
-        return Ok(false);
-    }
-    let exit_code = session
-        .exit_code()
-        .map_err(ServeConnectionError::Terminal)?
-        .unwrap_or(0);
-    send_terminal_exit(socket, exit_code)?;
-    session
-        .close_terminal_resource()
-        .map_err(ServeConnectionError::Terminal)?;
-    socket
-        .close(None)
-        .map_err(|error| ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error)))?;
-    Ok(true)
 }
 
 fn send_terminal_output(
