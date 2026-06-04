@@ -2,12 +2,19 @@
 //! a qjs task. It reads an input file, prints what it saw, and writes an output
 //! file with transformed content — all through plain `std::fs` (WASI syscalls).
 //!
-//! Usage: `guest <input-path> <output-path>`
+//! Usage:
+//!   `guest <input-path> <output-path>` — copy/transform a file.
+//!   `guest --list <dir>`               — list a directory's entries + types.
 
 use std::fs;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--list") {
+        list_dir(args.get(2).map_or("/", String::as_str));
+        return;
+    }
+
     let input = args.get(1).cloned().unwrap_or_else(|| "/shared/in.txt".to_string());
     let output = args.get(2).cloned().unwrap_or_else(|| "/shared/out.txt".to_string());
 
@@ -26,5 +33,40 @@ fn main() {
     match fs::write(&output, payload.as_bytes()) {
         Ok(()) => println!("rust-wasm: wrote {} bytes to {output}", payload.len()),
         Err(err) => println!("rust-wasm: could not write {output}: {err}"),
+    }
+}
+
+/// Lists `dir`'s entries, printing one sorted `name type` line each.
+fn list_dir(dir: &str) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            println!("rust-wasm: could not list {dir}: {err}");
+            return;
+        }
+    };
+
+    let mut rows: Vec<(String, &'static str)> = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                println!("rust-wasm: bad entry in {dir}: {err}");
+                return;
+            }
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let kind = match entry.file_type() {
+            Ok(ft) if ft.is_dir() => "dir",
+            Ok(ft) if ft.is_symlink() => "symlink",
+            Ok(_) => "file",
+            Err(_) => "unknown",
+        };
+        rows.push((name, kind));
+    }
+    rows.sort();
+    println!("rust-wasm: {dir} has {} entries", rows.len());
+    for (name, kind) in rows {
+        println!("{name} {kind}");
     }
 }

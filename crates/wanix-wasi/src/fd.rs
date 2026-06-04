@@ -59,7 +59,8 @@ impl WasiFileType {
         }
     }
 
-    pub(crate) const fn from_wanix(file_type: FileType) -> Self {
+    /// Converts a Wanix [`FileType`] into its WASI Preview 1 equivalent.
+    pub const fn from_file_type(file_type: FileType) -> Self {
         match file_type {
             FileType::File => Self::RegularFile,
             FileType::Directory => Self::Directory,
@@ -719,7 +720,7 @@ impl FileStat {
     /// Returns the corresponding WASI Preview 1 file type.
     #[must_use]
     pub const fn wasi_file_type(&self) -> WasiFileType {
-        WasiFileType::from_wanix(self.file_type)
+        WasiFileType::from_file_type(self.file_type)
     }
 
     /// Returns the byte length.

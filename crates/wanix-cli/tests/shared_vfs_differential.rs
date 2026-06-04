@@ -1,0 +1,173 @@
+//! Cross-engine differential tests over ONE shared Wanix VFS.
+//!
+//! These automate the `shared_vfs` example proof: a QuickJS task and a compiled
+//! Rust `wasm32-wasi` task both run against the same [`MemFs`] namespace and must
+//! observe identical filesystem state. The directory-listing test is a true
+//! differential: qjs (`os.readdir` + `os.stat`) and rust-wasm (`std::fs::read_dir`)
+//! each produce a sorted `name type` listing of the same directory, and the two
+//! listings must match byte-for-byte — proving both engines route through the
+//! same `WasiCtx::fd_read_dir` backend on the same VFS.
+
+use std::sync::Arc;
+
+use wanix_fs::MemFs;
+use wanix_qjs::{QuickJsRunner, QuickJsWanixConfig};
+use wanix_vfs::{BindOptions, Namespace};
+use wanix_wasi::WasiConfig;
+use wanix_wasm::{CaptureFile, WasiRunner};
+
+const RUST_GUEST: &[u8] = include_bytes!("../../wanix-wasm/fixtures/rust-guest.wasm");
+
+fn namespace_on(fs: &Arc<MemFs>) -> Namespace {
+    let mut ns = Namespace::new();
+    ns.bind(fs.clone(), ".", ".", BindOptions::default())
+        .expect("bind shared fs at root");
+    ns
+}
+
+fn run_qjs(qjs: &QuickJsRunner, fs: &Arc<MemFs>, source: &str) -> String {
+    let stdout = CaptureFile::new();
+    let wasi = WasiConfig::new(namespace_on(fs)).with_stdout(Box::new(stdout.clone()), "stdout");
+    let config = QuickJsWanixConfig::new(wasi);
+    qjs.run_source_with_wanix_config(source, config)
+        .expect("qjs task ran");
+    stdout.contents()
+}
+
+fn run_rust(rust: &WasiRunner, fs: &Arc<MemFs>, args: &[&str]) -> (i32, String) {
+    let stdout = CaptureFile::new();
+    let config = WasiConfig::new(namespace_on(fs))
+        .with_args(args.iter().copied())
+        .with_stdout(Box::new(stdout.clone()), "stdout");
+    let exit = rust.run(config).expect("rust wasm task ran");
+    (exit, stdout.contents())
+}
+
+/// Parses the rust guest's `--list` output into sorted `name type` rows,
+/// dropping the leading summary line.
+fn rust_listing(out: &str) -> Vec<String> {
+    let mut rows: Vec<String> = out
+        .lines()
+        .filter(|l| !l.starts_with("rust-wasm:"))
+        .map(str::to_string)
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// QuickJS program that prints one sorted `name type` line per entry in `dir`,
+/// matching the rust guest's vocabulary (`dir` / `symlink` / `file`).
+fn qjs_list_source(dir: &str) -> String {
+    format!(
+        r#"import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+const dir = {dir:?};
+const [names, err] = os.readdir(dir);
+if (err !== 0) {{ throw new Error("readdir " + dir + ": " + err); }}
+const rows = [];
+for (const name of names) {{
+  if (name === "." || name === "..") continue;
+  const [st, serr] = os.lstat(dir + "/" + name);
+  if (serr !== 0) {{ throw new Error("lstat " + name + ": " + serr); }}
+  const fmt = st.mode & os.S_IFMT;
+  let kind = "file";
+  if (fmt === os.S_IFDIR) kind = "dir";
+  else if (fmt === os.S_IFLNK) kind = "symlink";
+  rows.push(name + " " + kind);
+}}
+rows.sort();
+for (const row of rows) std.out.puts(row + "\n");
+std.out.flush();
+"#
+    )
+}
+
+#[test]
+fn qjs_and_rust_wasm_see_identical_directory_listing() {
+    let fs = Arc::new(MemFs::new());
+    fs.create_dir_all("dir/sub").expect("make /dir/sub");
+    fs.create_dir_all("dir/empty").expect("make /dir/empty");
+    fs.write_file("dir/alpha.txt", b"a").expect("write alpha");
+    fs.write_file("dir/beta.txt", b"bb").expect("write beta");
+    fs.write_file("dir/gamma", b"ccc").expect("write gamma");
+
+    let qjs = QuickJsRunner::from_bundled_wasm().expect("qjs runner");
+    let rust = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+
+    let (exit, rust_out) = run_rust(&rust, &fs, &["guest", "--list", "/dir"]);
+    assert_eq!(exit, 0, "rust guest should exit cleanly: {rust_out:?}");
+    let rust_rows = rust_listing(&rust_out);
+
+    let qjs_out = run_qjs(&qjs, &fs, &qjs_list_source("/dir"));
+    let qjs_rows: Vec<String> = qjs_out.lines().map(str::to_string).collect();
+
+    // The differential assertion: both engines, over the SAME namespace, must
+    // report exactly the same entries with the same types.
+    assert_eq!(
+        rust_rows, qjs_rows,
+        "qjs and rust-wasm disagree on /dir listing\nrust={rust_out:?}\nqjs={qjs_out:?}"
+    );
+
+    // And the concrete expected listing, so a backend change can't silently make
+    // both engines agree on the WRONG answer.
+    assert_eq!(
+        rust_rows,
+        vec![
+            "alpha.txt file".to_string(),
+            "beta.txt file".to_string(),
+            "empty dir".to_string(),
+            "gamma file".to_string(),
+            "sub dir".to_string(),
+        ],
+        "unexpected shared listing: {rust_out:?}"
+    );
+}
+
+#[test]
+fn qjs_and_rust_wasm_share_one_vfs_two_way() {
+    // Backs the `shared_vfs` example as a real automated test: qjs writes a file,
+    // rust-wasm reads it and writes its own, qjs reads that back.
+    let fs = Arc::new(MemFs::new());
+    fs.create_dir_all("shared").expect("make /shared");
+
+    let qjs = QuickJsRunner::from_bundled_wasm().expect("qjs runner");
+    let rust = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+
+    let qjs_out = run_qjs(
+        &qjs,
+        &fs,
+        r#"import * as std from "qjs:std";
+std.writeFile("/shared/from_qjs.txt", "hello from qjs");
+std.out.puts("qjs: wrote\n");
+std.out.flush();
+"#,
+    );
+    assert!(
+        qjs_out.contains("qjs: wrote"),
+        "qjs write step: {qjs_out:?}"
+    );
+
+    let (exit, rust_out) = run_rust(
+        &rust,
+        &fs,
+        &["guest", "/shared/from_qjs.txt", "/shared/from_rust.txt"],
+    );
+    assert_eq!(exit, 0, "rust step exit: {rust_out:?}");
+
+    let back = run_qjs(
+        &qjs,
+        &fs,
+        r#"import * as std from "qjs:std";
+std.out.puts(std.loadFile("/shared/from_rust.txt"));
+std.out.flush();
+"#,
+    );
+    assert_eq!(back, "rust-wasm saw: hello from qjs");
+
+    // Host-side confirmation straight from the shared backing filesystem.
+    let qjs_file = String::from_utf8(fs.read_file("shared/from_qjs.txt").unwrap()).unwrap();
+    let rust_file = String::from_utf8(fs.read_file("shared/from_rust.txt").unwrap()).unwrap();
+    assert_eq!(qjs_file, "hello from qjs");
+    assert_eq!(rust_file, "rust-wasm saw: hello from qjs");
+}

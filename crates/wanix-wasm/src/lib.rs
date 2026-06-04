@@ -117,3 +117,103 @@ impl File for CaptureFile {
         Ok(Metadata::new(FileType::File, 0, 0o644))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use wanix_fs::MemFs;
+    use wanix_vfs::{BindOptions, Namespace};
+    use wanix_wasi::WasiConfig;
+
+    use super::{CaptureFile, WasiRunner};
+
+    const RUST_GUEST: &[u8] = include_bytes!("../fixtures/rust-guest.wasm");
+
+    fn namespace_on(fs: &Arc<MemFs>) -> Namespace {
+        let mut ns = Namespace::new();
+        ns.bind(fs.clone(), ".", ".", BindOptions::default())
+            .expect("bind shared fs at root");
+        ns
+    }
+
+    fn list(fs: &Arc<MemFs>, dir: &str) -> (i32, String) {
+        let runner = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+        let stdout = CaptureFile::new();
+        let config = WasiConfig::new(namespace_on(fs))
+            .with_args(["guest", "--list", dir])
+            .with_stdout(Box::new(stdout.clone()), "stdout");
+        let exit = runner.run(config).expect("rust wasm task ran");
+        (exit, stdout.contents())
+    }
+
+    #[test]
+    fn fd_readdir_lists_directory_entries() {
+        let fs = Arc::new(MemFs::new());
+        fs.create_dir_all("dir/sub").expect("make /dir/sub");
+        fs.write_file("dir/alpha.txt", b"a").expect("write alpha");
+        fs.write_file("dir/beta.txt", b"bb").expect("write beta");
+
+        let (exit, out) = list(&fs, "/dir");
+        assert_eq!(exit, 0, "guest should exit cleanly");
+
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                "rust-wasm: /dir has 3 entries",
+                "alpha.txt file",
+                "beta.txt file",
+                "sub dir",
+            ],
+            "unexpected readdir output: {out:?}"
+        );
+    }
+
+    #[test]
+    fn fd_readdir_returns_each_entry_exactly_once_for_many_entries() {
+        // A wide directory makes libstd's dirent buffer fill and re-issue
+        // fd_readdir with advancing cookies; every entry must appear once with
+        // no duplication or omission.
+        let fs = Arc::new(MemFs::new());
+        fs.create_dir_all("dir").expect("make /dir");
+        let mut expected: Vec<String> = Vec::new();
+        for i in 0..200 {
+            let name = format!("entry-{i:04}.txt");
+            fs.write_file(format!("dir/{name}"), b"x")
+                .expect("write entry");
+            expected.push(format!("{name} file"));
+        }
+        expected.sort();
+
+        let (exit, out) = list(&fs, "/dir");
+        assert_eq!(exit, 0, "guest should exit cleanly: {out:?}");
+
+        let mut rows: Vec<&str> = out
+            .lines()
+            .filter(|l| !l.starts_with("rust-wasm:"))
+            .collect();
+        rows.sort_unstable();
+        let expected_refs: Vec<&str> = expected.iter().map(String::as_str).collect();
+        assert_eq!(rows, expected_refs, "missing/duplicated entries: {out:?}");
+        assert!(
+            out.contains("/dir has 200 entries"),
+            "wrong entry count: {out:?}"
+        );
+    }
+
+    #[test]
+    fn fd_readdir_on_regular_file_reports_error() {
+        // Calling readdir on a non-directory fd must surface as an error
+        // (Preview1 ENOTDIR) rather than succeeding or trapping.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("file.txt", b"hi").expect("write file");
+
+        let (exit, out) = list(&fs, "/file.txt");
+        assert_eq!(exit, 0, "guest itself exits cleanly: {out:?}");
+        assert!(
+            out.contains("could not list /file.txt"),
+            "expected readdir error on a regular file, got: {out:?}"
+        );
+    }
+}
