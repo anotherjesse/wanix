@@ -377,61 +377,62 @@ where
 }
 
 fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
-    match args.as_slice() {
-        [] => Ok(help_output()),
-        [help] if help == "--help" || help == "-h" => Ok(help_output()),
-        [command, rest @ ..] if command == "qjs" => {
-            run_qjs(parse_qjs_command(rest)?, process_stdin)
-        }
-        [command, rest @ ..] if command == "qjs-term" => {
+    let Some((command, rest)) = args.split_first() else {
+        return Ok(help_output());
+    };
+    if command == "--help" || command == "-h" {
+        return Ok(help_output());
+    }
+    run_collected_command(command, rest, process_stdin)
+}
+
+fn run_collected_command(
+    command: &OsString,
+    rest: &[OsString],
+    process_stdin: &mut dyn Read,
+) -> Result<CliOutput, CliError> {
+    match command.to_string_lossy().as_ref() {
+        "qjs" => run_qjs(parse_qjs_command(rest)?, process_stdin),
+        "qjs-term" => {
             qjs_term::run_qjs_term(qjs_term::parse_qjs_term_command(rest)?, process_stdin)
         }
-        [command, rest @ ..] if command == "qjs-shell" => {
+        "qjs-shell" => {
             qjs_term::run_qjs_shell(qjs_term::parse_qjs_shell_command(rest)?, process_stdin)
         }
-        [command, rest @ ..] if command == "qjs-snapshot" => run_qjs_snapshot(
+        "qjs-snapshot" => run_qjs_snapshot(
             parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?,
             process_stdin,
         ),
-        [command, rest @ ..] if command == "qjs-resume" => run_qjs_resume(
+        "qjs-resume" => run_qjs_resume(
             parse_qjs_snapshot_file_command(rest, "qjs-resume")?,
             process_stdin,
         ),
-        [command, rest @ ..] if command == "qjs-restore" => {
-            run_qjs_restore(parse_qjs_restore_command(rest)?)
-        }
-        [command, rest @ ..] if command == "p9-stdio" => {
+        "qjs-restore" => run_qjs_restore(parse_qjs_restore_command(rest)?),
+        "p9-stdio" => {
             p9_stdio::run_p9_stdio(p9_stdio::parse_p9_stdio_command(rest)?, process_stdin)
         }
-        [command, rest @ ..] if command == "rootfs" => {
-            rootfs::run_rootfs_command(rootfs::parse_rootfs_command(rest)?)
+        "rootfs" => rootfs::run_rootfs_command(rootfs::parse_rootfs_command(rest)?),
+        "p9-listen" => {
+            require_live_process_io(p9_listen::parse_p9_listen_command(rest), "p9-listen")
         }
-        [command, rest @ ..] if command == "p9-listen" => {
-            let _ = p9_listen::parse_p9_listen_command(rest)?;
-            Err(CliError::usage(
-                "p9-listen requires live process IO; use the wanix-rust binary",
-            ))
-        }
-        [command, rest @ ..] if command == "p9-ws" => {
-            let _ = p9_ws::parse_p9_ws_command(rest)?;
-            Err(CliError::usage(
-                "p9-ws requires live process IO; use the wanix-rust binary",
-            ))
-        }
-        [command, rest @ ..] if command == "qemu" => {
-            qemu::run_qemu_command(qemu::parse_qemu_command(rest)?)
-        }
-        [command, rest @ ..] if command == "serve" => {
-            let _ = serve::parse_serve_command(rest)?;
-            Err(CliError::usage(
-                "serve requires live process IO; use the wanix-rust binary",
-            ))
-        }
-        [command, ..] => Err(CliError::usage(format!(
+        "p9-ws" => require_live_process_io(p9_ws::parse_p9_ws_command(rest), "p9-ws"),
+        "qemu" => qemu::run_qemu_command(qemu::parse_qemu_command(rest)?),
+        "serve" => require_live_process_io(serve::parse_serve_command(rest), "serve"),
+        _ => Err(CliError::usage(format!(
             "unknown wanix-rust command: {}",
             command.to_string_lossy()
         ))),
     }
+}
+
+fn require_live_process_io<T>(
+    parsed: Result<T, CliError>,
+    command_name: &str,
+) -> Result<CliOutput, CliError> {
+    let _ = parsed?;
+    Err(CliError::usage(format!(
+        "{command_name} requires live process IO; use the wanix-rust binary"
+    )))
 }
 
 fn write_process_output(output: &mut dyn Write, label: &str, bytes: &[u8]) -> Result<(), CliError> {

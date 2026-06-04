@@ -7,7 +7,10 @@ use std::time::Duration;
 
 use super::{ServeConnectionError, ServeRoots};
 
+mod response;
 mod routes;
+
+pub(super) use response::{HttpStatus, StaticResponse};
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 
@@ -220,81 +223,5 @@ fn content_type(path: &Path) -> &'static str {
         Some("wasm") => "application/wasm",
         Some("txt") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
-    }
-}
-
-pub(super) struct StaticResponse {
-    pub(super) status: HttpStatus,
-    pub(super) content_type: &'static str,
-    pub(super) body: Vec<u8>,
-}
-
-impl StaticResponse {
-    pub(super) fn plain(status: HttpStatus, body: &str) -> Self {
-        Self {
-            status,
-            content_type: "text/plain; charset=utf-8",
-            body: body.as_bytes().to_vec(),
-        }
-    }
-
-    pub(super) fn encode(&self) -> Vec<u8> {
-        let mut response = format!(
-            "HTTP/1.1 {}\r\n\
-             Content-Length: {}\r\n\
-             Content-Type: {}\r\n\
-             Cross-Origin-Opener-Policy: same-origin\r\n\
-             Cross-Origin-Embedder-Policy: require-corp\r\n\
-             Access-Control-Allow-Origin: *\r\n\
-             Connection: close\r\n\
-             \r\n",
-            self.status.status_line(),
-            self.body.len(),
-            self.content_type
-        )
-        .into_bytes();
-        response.extend_from_slice(&self.body);
-        response
-    }
-}
-
-#[derive(Copy, Clone)]
-#[repr(usize)]
-pub(super) enum HttpStatus {
-    Ok,
-    BadRequest,
-    Conflict,
-    Forbidden,
-    NotFound,
-    MethodNotAllowed,
-    NotImplemented,
-}
-
-impl HttpStatus {
-    const REASONS: [&'static str; 7] = [
-        "ok",
-        "bad request",
-        "conflict",
-        "forbidden",
-        "not found",
-        "method not allowed",
-        "not implemented",
-    ];
-    const STATUS_LINES: [&'static str; 7] = [
-        "200 OK",
-        "400 Bad Request",
-        "409 Conflict",
-        "403 Forbidden",
-        "404 Not Found",
-        "405 Method Not Allowed",
-        "501 Not Implemented",
-    ];
-
-    pub(super) fn status_line(self) -> &'static str {
-        Self::STATUS_LINES[self as usize]
-    }
-
-    pub(super) fn reason(self) -> &'static str {
-        Self::REASONS[self as usize]
     }
 }
