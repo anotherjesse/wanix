@@ -256,6 +256,68 @@ mod tests {
         );
     }
 
+    fn truncate(fs: &Arc<MemFs>, path: &str, len: u64) -> (i32, String) {
+        let runner = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+        let stdout = CaptureFile::new();
+        let len = len.to_string();
+        let config = WasiConfig::new(namespace_on(fs))
+            .with_args(["guest", "--truncate", path, &len])
+            .with_stdout(Box::new(stdout.clone()), "stdout");
+        let exit = runner.run(config).expect("rust wasm task ran");
+        (exit, stdout.contents())
+    }
+
+    #[test]
+    fn fd_filestat_set_size_shrinks_file() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("data.txt", b"hello world")
+            .expect("seed data.txt");
+
+        let (exit, out) = truncate(&fs, "/data.txt", 5);
+        assert_eq!(exit, 0, "guest should exit cleanly: {out:?}");
+        assert!(
+            out.contains("truncated /data.txt to 5"),
+            "unexpected truncate output: {out:?}"
+        );
+        assert_eq!(
+            fs.read_file("data.txt").expect("data.txt exists"),
+            b"hello",
+            "shrunk file should keep only the leading bytes"
+        );
+    }
+
+    #[test]
+    fn fd_filestat_set_size_extends_file_with_zeros() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("data.txt", b"hi").expect("seed data.txt");
+
+        let (exit, out) = truncate(&fs, "/data.txt", 5);
+        assert_eq!(exit, 0, "guest should exit cleanly: {out:?}");
+        assert!(
+            out.contains("truncated /data.txt to 5"),
+            "unexpected truncate output: {out:?}"
+        );
+        assert_eq!(
+            fs.read_file("data.txt").expect("data.txt exists"),
+            b"hi\0\0\0",
+            "extended file should be zero-padded"
+        );
+    }
+
+    #[test]
+    fn fd_filestat_set_size_missing_file_reports_error() {
+        // Truncating a path that cannot be opened must surface as the guest's
+        // error line, not panic or trap the runner.
+        let fs = Arc::new(MemFs::new());
+
+        let (exit, out) = truncate(&fs, "/missing.txt", 4);
+        assert_eq!(exit, 0, "guest itself exits cleanly: {out:?}");
+        assert!(
+            out.contains("truncate failed to open /missing.txt"),
+            "expected open error on missing file, got: {out:?}"
+        );
+    }
+
     #[test]
     fn fd_readdir_on_regular_file_reports_error() {
         // Calling readdir on a non-directory fd must surface as an error

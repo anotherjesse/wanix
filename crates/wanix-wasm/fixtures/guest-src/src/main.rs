@@ -7,8 +7,10 @@
 //!   `guest --list <dir>`               — list a directory's entries + types.
 //!   `guest --rename <src> <dst>`       — atomically move a file/dir.
 //!   `guest --rmdir <dir>`              — remove an empty directory.
+//!   `guest --truncate <path> <len>`    — set a file's length (ftruncate).
 
 use std::fs;
+use std::fs::OpenOptions;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -25,6 +27,13 @@ fn main() {
     }
     if args.get(1).map(String::as_str) == Some("--rmdir") {
         rmdir(args.get(2).map_or("", String::as_str));
+        return;
+    }
+    if args.get(1).map(String::as_str) == Some("--truncate") {
+        truncate(
+            args.get(2).map_or("", String::as_str),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0),
+        );
         return;
     }
 
@@ -63,6 +72,22 @@ fn rmdir(dir: &str) {
     match fs::remove_dir(dir) {
         Ok(()) => println!("rust-wasm: removed dir {dir}"),
         Err(err) => println!("rust-wasm: rmdir failed {dir}: {err}"),
+    }
+}
+
+/// Sets `path`'s length to `len` via `File::set_len` (the
+/// `fd_filestat_set_size` syscall), opening it for writing first.
+fn truncate(path: &str, len: u64) {
+    let file = match OpenOptions::new().write(true).open(path) {
+        Ok(file) => file,
+        Err(err) => {
+            println!("rust-wasm: truncate failed to open {path}: {err}");
+            return;
+        }
+    };
+    match file.set_len(len) {
+        Ok(()) => println!("rust-wasm: truncated {path} to {len}"),
+        Err(err) => println!("rust-wasm: truncate failed {path}: {err}"),
     }
 }
 

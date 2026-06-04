@@ -181,6 +181,18 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     )?;
     linker.func_wrap(
         m,
+        "fd_filestat_set_size",
+        |mut caller: Caller<'_, WasiState>, fd: i32, size: i64| {
+            code(
+                caller
+                    .data_mut()
+                    .ctx
+                    .fd_filestat_set_size(WasiFd::new(fd as u32), size as u64),
+            )
+        },
+    )?;
+    linker.func_wrap(
+        m,
         "fd_filestat_get",
         |mut caller: Caller<'_, WasiState>, fd: i32, out: i32| -> Result<i32> {
             match caller.data().ctx.fd_filestat_get(WasiFd::new(fd as u32)) {
