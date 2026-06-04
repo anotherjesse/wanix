@@ -222,6 +222,125 @@ function runWrite(words) {
   prompt();
 }
 
+function runMkdir(words) {
+  if (words.length < 2) {
+    std.out.puts("mkdir: missing path\n");
+    prompt();
+    return;
+  }
+  for (const requested of words.slice(1)) {
+    const path = resolveShellPath(requested);
+    if (path[0] === "#") {
+      std.out.puts("mkdir: " + requested + ": service paths are not namespace directories\n");
+      continue;
+    }
+    const result = os.mkdir(path, 0o777);
+    if (result !== 0) {
+      std.out.puts("mkdir: " + requested + ": errno " + result + "\n");
+    }
+  }
+  prompt();
+}
+
+function runRm(words) {
+  if (words.length < 2) {
+    std.out.puts("rm: missing path\n");
+    prompt();
+    return;
+  }
+  for (const requested of words.slice(1)) {
+    const path = resolveShellPath(requested);
+    if (path[0] === "#") {
+      std.out.puts("rm: " + requested + ": service paths are not removed by shell commands\n");
+      continue;
+    }
+    const result = os.remove(path);
+    if (result !== 0) {
+      std.out.puts("rm: " + requested + ": errno " + result + "\n");
+    }
+  }
+  prompt();
+}
+
+function runRmdir(words) {
+  if (words.length < 2) {
+    std.out.puts("rmdir: missing path\n");
+    prompt();
+    return;
+  }
+  for (const requested of words.slice(1)) {
+    const path = resolveShellPath(requested);
+    if (path[0] === "#") {
+      std.out.puts("rmdir: " + requested + ": service paths are not namespace directories\n");
+      continue;
+    }
+    const result = visibleEntries(path);
+    if (result.err !== undefined) {
+      std.out.puts("rmdir: " + requested + ": not a directory\n");
+      continue;
+    }
+    if (result.entries.length > 0) {
+      std.out.puts("rmdir: " + requested + ": directory not empty\n");
+      continue;
+    }
+    const removeResult = os.remove(path);
+    if (removeResult !== 0) {
+      std.out.puts("rmdir: " + requested + ": errno " + removeResult + "\n");
+    }
+  }
+  prompt();
+}
+
+function runMv(words) {
+  if (words.length !== 3) {
+    std.out.puts("mv: usage: mv OLD NEW\n");
+    prompt();
+    return;
+  }
+  const oldPath = resolveShellPath(words[1]);
+  const newPath = resolveShellPath(words[2]);
+  if (oldPath[0] === "#" || newPath[0] === "#") {
+    std.out.puts("mv: service paths are not renamed by shell commands\n");
+    prompt();
+    return;
+  }
+  const result = os.rename(oldPath, newPath);
+  if (result !== 0) {
+    std.out.puts("mv: " + words[1] + ": errno " + result + "\n");
+  }
+  prompt();
+}
+
+function runCp(words) {
+  if (words.length !== 3) {
+    std.out.puts("cp: usage: cp SOURCE DEST\n");
+    prompt();
+    return;
+  }
+  const source = resolveShellPath(words[1]);
+  const destination = resolveShellPath(words[2]);
+  if (destination[0] === "#") {
+    std.out.puts("cp: " + words[2] + ": service paths are not written by shell commands\n");
+    prompt();
+    return;
+  }
+  try {
+    const text = std.loadFile(source);
+    if (text === null || text === undefined) {
+      std.out.puts("cp: " + words[1] + ": not found\n");
+      prompt();
+      return;
+    }
+    const count = writeText(destination, text);
+    if (count < 0) {
+      std.out.puts("cp: " + words[2] + ": errno " + count + "\n");
+    }
+  } catch (error) {
+    std.out.puts("cp: " + words[1] + ": " + error.message + "\n");
+  }
+  prompt();
+}
+
 function runCommand(line) {
   const trimmed = line.trim();
   if (trimmed === "") {
@@ -270,6 +389,26 @@ function runCommand(line) {
   }
   if (words[0] === "write") {
     runWrite(words);
+    return;
+  }
+  if (words[0] === "mkdir") {
+    runMkdir(words);
+    return;
+  }
+  if (words[0] === "rm") {
+    runRm(words);
+    return;
+  }
+  if (words[0] === "rmdir") {
+    runRmdir(words);
+    return;
+  }
+  if (words[0] === "mv") {
+    runMv(words);
+    return;
+  }
+  if (words[0] === "cp") {
+    runCp(words);
     return;
   }
   if (trimmed === "size") {

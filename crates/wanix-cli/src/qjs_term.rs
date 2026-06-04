@@ -1696,18 +1696,20 @@ mod tests {
         assert_eq!(initial_output, b"shell task: 1\r\n$ ");
         let output = session
             .input(
-                b"ls\ncat visible.txt\ncd app\npwd\nls\ncat note.txt\nwrite made.txt made by shell\ncat made.txt\ncat missing.txt\ncd ..\npwd\nexit\n",
+                b"ls\ncat visible.txt\ncd app\npwd\nls\ncat note.txt\nwrite made.txt made by shell\ncat made.txt\nmkdir docs\nwrite docs/readme.txt copied note\ncp docs/readme.txt copy.txt\ncat copy.txt\nmv copy.txt moved.txt\ncat moved.txt\nrm moved.txt\ncat moved.txt\nrmdir docs\nrm docs/readme.txt\nrmdir docs\nls\ncat missing.txt\ncd ..\npwd\nexit\n",
             )
             .unwrap();
 
         assert_eq!(
             output,
-            b"ls\r\napp visible.txt\r\n$ cat visible.txt\r\nserved root\r\n$ cd app\r\n$ pwd\r\napp\r\n$ ls\r\nnote.txt\r\n$ cat note.txt\r\nfrom app\r\n$ write made.txt made by shell\r\nwrote made.txt\r\n$ cat made.txt\r\nmade by shell\r\n$ cat missing.txt\r\ncat: missing.txt: not found\r\n$ cd ..\r\n$ pwd\r\n.\r\n$ exit\r\nbye\r\n"
+            b"ls\r\napp visible.txt\r\n$ cat visible.txt\r\nserved root\r\n$ cd app\r\n$ pwd\r\napp\r\n$ ls\r\nnote.txt\r\n$ cat note.txt\r\nfrom app\r\n$ write made.txt made by shell\r\nwrote made.txt\r\n$ cat made.txt\r\nmade by shell\r\n$ mkdir docs\r\n$ write docs/readme.txt copied note\r\nwrote docs/readme.txt\r\n$ cp docs/readme.txt copy.txt\r\n$ cat copy.txt\r\ncopied note\r\n$ mv copy.txt moved.txt\r\n$ cat moved.txt\r\ncopied note\r\n$ rm moved.txt\r\n$ cat moved.txt\r\ncat: moved.txt: not found\r\n$ rmdir docs\r\nrmdir: docs: directory not empty\r\n$ rm docs/readme.txt\r\n$ rmdir docs\r\n$ ls\r\nmade.txt note.txt\r\n$ cat missing.txt\r\ncat: missing.txt: not found\r\n$ cd ..\r\n$ pwd\r\n.\r\n$ exit\r\nbye\r\n"
         );
         assert_eq!(
             fs::read_to_string(root.join("app").join("made.txt")).unwrap(),
             "made by shell\n"
         );
+        assert!(!root.join("app").join("docs").exists());
+        assert!(!root.join("app").join("moved.txt").exists());
         assert!(session.is_finished());
     }
 

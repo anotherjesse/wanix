@@ -356,8 +356,8 @@ wanix-rust qjs-shell --raw
 terminal. It can feed input after eval, feed line-by-line scripts, pump
 ready-IO handlers, and send deterministic resize events. `qjs-shell` runs the
 bundled QuickJS shell source through the same terminal-backed task runtime,
-including a small `cd`/`ls`/`cat`/`write` filesystem command set for served
-namespace and workbench demos.
+including a small `cd`/`ls`/`cat`/`write`/`mkdir`/`rm`/`rmdir`/`mv`/`cp`
+filesystem command set for served namespace and workbench demos.
 
 This is not yet a fully concurrent, production interactive scheduler. Raw mode
 still relies on the native host to put stdin into raw mode, but bytes then flow
