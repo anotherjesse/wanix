@@ -358,15 +358,16 @@ ready-IO handlers, and send deterministic resize events. `qjs-shell` runs the
 bundled QuickJS shell source through the same terminal-backed task runtime,
 including a small filesystem command set (`cd`, `ls`, `cat`, `write`, `mkdir`,
 `rm`, `rmdir`, `mv`, `cp`, `ln -s`, and `readlink`), `env`/`setenv`/
-`unsetenv` task-environment commands, and a synchronous
-`qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]` launcher for served
-namespace and workbench demos. The launcher uses `#task/new/qjs`, service-file
-`cmd`/`env`/`dir`, fd binds, `start`, and `exit` rather than a host-side
-shortcut; child stdio can flow through the parent terminal fds, file
+`unsetenv` task-environment commands, `ps` task-table inspection, and a
+synchronous `qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]` launcher
+for served namespace and workbench demos. The launcher uses `#task/new/qjs`,
+service-file `cmd`/`env`/`dir`, fd binds, `start`, and `exit` rather than a
+host-side shortcut; child stdio can flow through the parent terminal fds, file
 redirection can bind child fd `0`/`1`/`2` through the Wanix namespace, buffered
 terminal input after the qjs command line can be handed to the child fd `0`,
-the shell task's env flows into child `qjs` tasks, and `status` reports the last
-child `qjs` exit code observed from the child's `exit` service file.
+the shell task's env flows into child `qjs` tasks, `ps` lists task metadata from
+`#task`, and `status` reports the last child `qjs` exit code observed from the
+child's `exit` service file.
 
 This is not yet a fully concurrent, production interactive scheduler. Raw mode
 still relies on the native host to put stdin into raw mode, but bytes then flow

@@ -257,6 +257,40 @@ function readEnvLines() {
     .filter((line) => line.length > 0);
 }
 
+function readTaskField(id, field) {
+  try {
+    return readServiceText("#task/" + id + "/" + field).trim();
+  } catch (_) {
+    return "?";
+  }
+}
+
+function runPs(words) {
+  if (words.length !== 1) {
+    std.out.puts("ps: usage: ps\n");
+    prompt();
+    return;
+  }
+  const [entries, err] = os.readdir("#task");
+  if (err !== 0) {
+    std.out.puts("ps: #task: errno " + err + "\n");
+    prompt();
+    return;
+  }
+  std.out.puts("id kind exit dir cmd\n");
+  const taskIds = entries
+    .filter((name) => /^[0-9]+$/.test(name))
+    .sort((a, b) => Number(a) - Number(b));
+  for (const id of taskIds) {
+    const kind = readTaskField(id, "kind") || "-";
+    const exit = readTaskField(id, "exit") || "-";
+    const dir = readTaskField(id, "dir") || ".";
+    const cmd = readTaskField(id, "cmd") || "-";
+    std.out.puts(id + " " + kind + " " + exit + " " + dir + " " + cmd + "\n");
+  }
+  prompt();
+}
+
 function envKey(line) {
   const equals = line.indexOf("=");
   return equals < 0 ? line : line.slice(0, equals);
@@ -681,6 +715,10 @@ function runCommand(line) {
   if (trimmed === "status") {
     std.out.puts("status " + lastStatus + "\n");
     prompt();
+    return;
+  }
+  if (words[0] === "ps") {
+    runPs(words);
     return;
   }
   if (words[0] === "env") {

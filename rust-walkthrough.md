@@ -335,7 +335,7 @@ terminal stderr: same screen
 Run the bundled QuickJS shell through the same terminal-backed task path:
 
 ```sh
-printf 'write note.txt hello shell\nls\ncat note.txt\nid\npwd\nexit\n' | $WANIX qjs-shell
+printf 'write note.txt hello shell\nls\ncat note.txt\nid\npwd\nps\nexit\n' | $WANIX qjs-shell
 ```
 
 Expected output:
@@ -347,6 +347,8 @@ $ note.txt
 $ hello shell
 $ 1
 $ .
+$ id kind exit dir cmd
+1 qjs - . __wanix_qjs_shell.js
 $ bye
 ```
 
@@ -358,13 +360,15 @@ $ bye
 > The bundled shell has a small filesystem command set (`cd`, `ls`, `cat`,
 > `write`, `mkdir`, `rm`, `rmdir`, `mv`, `cp`, `ln -s`, and `readlink`) for
 > Wanix namespace demos, `env`/`setenv`/`unsetenv` commands that edit the shell
-> task's `#task/self/env`, plus a synchronous
+> task's `#task/self/env`, `ps` task-table inspection through `#task`, plus a
+> synchronous
 > `qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]`
 > launcher that allocates a child `qjs` task through `#task/new/qjs`, wires
 > terminal stdio or namespace files to fd `0`/`1`/`2`, copies the shell task
 > environment into the child task, hands buffered terminal input after the qjs
 > command line to the child fd `0`, and waits on the child's `exit` file. The
-> `status` command reports the last child `qjs` exit code.
+> `status` command reports the last child `qjs` exit code, while `ps` shows
+> shell and child task metadata from service files.
 > Served/workbench shell sessions keep WASI rooted at the served namespace root
 > while `#task/self/dir` tracks the logical shell cwd, so `cd` can navigate the
 > served tree without changing normal qjs script cwd semantics.
