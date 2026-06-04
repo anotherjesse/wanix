@@ -45,7 +45,15 @@ impl ServeRoots {
 }
 
 fn serve_p9_root(root_path: &Path, wanix_services: bool) -> Result<Arc<dyn FileSystem>, CliError> {
-    let host_root = Arc::new(LocalFs::new(root_path).map_err(|error| {
+    let host_root = open_host_p9_root(root_path)?;
+    match wanix_services {
+        true => serve_services_root(host_root),
+        false => Ok(host_root),
+    }
+}
+
+fn open_host_p9_root(root_path: &Path) -> Result<Arc<dyn FileSystem>, CliError> {
+    Ok(Arc::new(LocalFs::new(root_path).map_err(|error| {
         CliError::new(
             format!(
                 "failed to open serve 9P root {}: {error}",
@@ -53,16 +61,36 @@ fn serve_p9_root(root_path: &Path, wanix_services: bool) -> Result<Arc<dyn FileS
             ),
             1,
         )
-    })?);
-    if !wanix_services {
-        return Ok(host_root);
-    }
+    })?))
+}
 
+fn serve_services_root(host_root: Arc<dyn FileSystem>) -> Result<Arc<dyn FileSystem>, CliError> {
     let table = serve_task_table()?;
-    let terminal = Arc::new(TermDevice::new());
+    let namespace = serve_services_namespace(host_root, &table)?;
+    Ok(Arc::new(namespace))
+}
+
+fn serve_services_namespace(
+    host_root: Arc<dyn FileSystem>,
+    table: &TaskTable,
+) -> Result<Namespace, CliError> {
     let mut namespace = Namespace::new();
+    bind_host_and_terminal(&mut namespace, host_root)?;
+    bind_task_service(&mut namespace, table)?;
+    Ok(namespace)
+}
+
+fn bind_host_and_terminal(
+    namespace: &mut Namespace,
+    host_root: Arc<dyn FileSystem>,
+) -> Result<(), CliError> {
+    let terminal = Arc::new(TermDevice::new());
     namespace.bind(host_root, ".", ".", BindOptions::default())?;
     namespace.bind(terminal, ".", "#term", BindOptions::default())?;
+    Ok(())
+}
+
+fn bind_task_service(namespace: &mut Namespace, table: &TaskTable) -> Result<(), CliError> {
     let root_task = table.allocate_root_with_namespace("noop", namespace.clone())?;
     namespace.bind(
         Arc::new(table.filesystem_for(root_task.id())),
@@ -72,7 +100,7 @@ fn serve_p9_root(root_path: &Path, wanix_services: bool) -> Result<Arc<dyn FileS
             position: BindPosition::Replace,
         },
     )?;
-    Ok(Arc::new(namespace))
+    Ok(())
 }
 
 fn serve_task_table() -> Result<TaskTable, CliError> {
