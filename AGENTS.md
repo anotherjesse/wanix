@@ -87,6 +87,9 @@ same terminal-backed Wanix task runtime with line-oriented native input.
 `qjs-shell --raw` adds native raw-mode setup and feeds native bytes directly
 through the terminal device, letting the bundled QuickJS shell own echo, simple
 editing, Ctrl-D, and command dispatch inside the Wanix task.
+When given `--event-loop-ms`, native `qjs-shell` also pumps bounded QuickJS
+event-loop work after each terminal input batch, so delayed shell output can
+surface before the next scripted input line.
 `qjs-term --resize-after-eval COLSxROWS` sends a deterministic post-eval
 resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
 can observe terminal resize broadcasts through live Wanix-backed fd readiness.
@@ -567,9 +570,9 @@ direction.
 - Run a dedicated ADR librarian pass: delete or consolidate superseded bridge
   records, fixture rebuild notes, per-WASI-call records, and per-9P-op records
   into subsystem-level decisions.
-- Continue `qjs-shell` interactivity with a host loop that can wait on native
-  input and guest output concurrently, signal handling, and live native resize
-  propagation.
+- Continue `qjs-shell` interactivity with a native fd-aware idle loop that can
+  pump guest output while blocked waiting for process stdin, plus signal
+  handling and live native resize propagation.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
   integration, then extend the direct-v86 route into a complete qemu/v86 bundle,
   `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`

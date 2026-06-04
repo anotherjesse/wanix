@@ -164,6 +164,12 @@ struct TermResize {
     rows: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminalPumpLimits {
+    ready_io_turns: usize,
+    event_loop_wait_budget: Duration,
+}
+
 impl TermResize {
     fn payload(&self) -> Vec<u8> {
         format!("{} {}\n", self.columns, self.rows).into_bytes()
@@ -452,7 +458,10 @@ fn run_qjs_term_program_streaming(
                 &terminal,
                 &terminal_id,
                 &mut runtime,
-                qjs_command.ready_io_turns,
+                TerminalPumpLimits {
+                    ready_io_turns: qjs_command.ready_io_turns,
+                    event_loop_wait_budget: qjs_command.event_loop_wait_budget,
+                },
                 process_stdout,
             )?;
         }
@@ -485,7 +494,7 @@ fn run_post_eval_feeds(
     terminal: &TermDevice,
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
-    ready_io_turns: usize,
+    limits: TerminalPumpLimits,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let mut current_batch = Vec::new();
@@ -520,7 +529,8 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     &mut current_batch,
-                    ready_io_turns,
+                    limits.ready_io_turns,
+                    limits.event_loop_wait_budget,
                     process_stdout,
                 )?;
                 if task_exited(runtime)? {
@@ -541,7 +551,8 @@ fn run_post_eval_feeds(
                         terminal_id,
                         runtime,
                         &[line],
-                        ready_io_turns,
+                        limits.ready_io_turns,
+                        limits.event_loop_wait_budget,
                         process_stdout,
                     )?;
                     if task_exited(runtime)? {
@@ -555,7 +566,8 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     &mut current_batch,
-                    ready_io_turns,
+                    limits.ready_io_turns,
+                    limits.event_loop_wait_budget,
                     process_stdout,
                 )?;
                 if task_exited(runtime)? {
@@ -566,7 +578,8 @@ fn run_post_eval_feeds(
                     terminal,
                     terminal_id,
                     runtime,
-                    ready_io_turns,
+                    limits.ready_io_turns,
+                    limits.event_loop_wait_budget,
                     process_stdout,
                 )?;
             }
@@ -576,7 +589,8 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     &mut current_batch,
-                    ready_io_turns,
+                    limits.ready_io_turns,
+                    limits.event_loop_wait_budget,
                     process_stdout,
                 )?;
                 if task_exited(runtime)? {
@@ -587,7 +601,8 @@ fn run_post_eval_feeds(
                     terminal,
                     terminal_id,
                     runtime,
-                    ready_io_turns,
+                    limits.ready_io_turns,
+                    limits.event_loop_wait_budget,
                     process_stdout,
                 )?;
             }
@@ -597,7 +612,8 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     &mut current_batch,
-                    ready_io_turns,
+                    limits.ready_io_turns,
+                    limits.event_loop_wait_budget,
                     process_stdout,
                 )?;
                 if task_exited(runtime)? {
@@ -608,7 +624,8 @@ fn run_post_eval_feeds(
                     terminal_id,
                     runtime,
                     &resize,
-                    ready_io_turns,
+                    limits.ready_io_turns,
+                    limits.event_loop_wait_budget,
                     process_stdout,
                 )?;
                 if task_exited(runtime)? {
@@ -622,7 +639,8 @@ fn run_post_eval_feeds(
         terminal_id,
         runtime,
         &mut current_batch,
-        ready_io_turns,
+        limits.ready_io_turns,
+        limits.event_loop_wait_budget,
         process_stdout,
     )
 }
@@ -633,6 +651,7 @@ fn run_process_raw_byte_feed_session_after_eval(
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
     ready_io_turns: usize,
+    event_loop_wait_budget: Duration,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let mut byte = [0; 1];
@@ -652,6 +671,7 @@ fn run_process_raw_byte_feed_session_after_eval(
             runtime,
             &byte[..count],
             ready_io_turns,
+            event_loop_wait_budget,
             process_stdout,
         )?;
         if task_exited(runtime)? {
@@ -682,6 +702,7 @@ fn run_process_line_feed_session_after_eval(
     terminal_id: &str,
     runtime: &mut QuickJsTaskRuntime,
     ready_io_turns: usize,
+    event_loop_wait_budget: Duration,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let mut line = Vec::new();
@@ -692,6 +713,7 @@ fn run_process_line_feed_session_after_eval(
             runtime,
             &[line.clone()],
             ready_io_turns,
+            event_loop_wait_budget,
             process_stdout,
         )?;
         if task_exited(runtime)? {
@@ -730,6 +752,7 @@ fn flush_terminal_feed_batch(
     runtime: &mut QuickJsTaskRuntime,
     batch: &mut Vec<Vec<u8>>,
     ready_io_turns: usize,
+    event_loop_wait_budget: Duration,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     if batch.is_empty() {
@@ -742,6 +765,7 @@ fn flush_terminal_feed_batch(
         runtime,
         &flushed,
         ready_io_turns,
+        event_loop_wait_budget,
         process_stdout,
     )
 }
@@ -752,13 +776,14 @@ fn feed_terminal_batch_and_pump(
     runtime: &mut QuickJsTaskRuntime,
     batch: &[Vec<u8>],
     ready_io_turns: usize,
+    event_loop_wait_budget: Duration,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let result = (|| -> Result<(), CliError> {
         for chunk in batch {
             feed_terminal_after_eval(terminal, terminal_id, chunk)?;
         }
-        runtime.run_ready_io_turns(ready_io_turns)?;
+        runtime.run_event_loop_turns(event_loop_wait_budget, ready_io_turns)?;
         Ok(())
     })();
     drain_terminal_output(terminal, terminal_id, process_stdout)?;
@@ -771,11 +796,12 @@ fn feed_terminal_chunk_and_pump(
     runtime: &mut QuickJsTaskRuntime,
     chunk: &[u8],
     ready_io_turns: usize,
+    event_loop_wait_budget: Duration,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let result = (|| -> Result<(), CliError> {
         feed_terminal_after_eval(terminal, terminal_id, chunk)?;
-        runtime.run_ready_io_turns(ready_io_turns)?;
+        runtime.run_event_loop_turns(event_loop_wait_budget, ready_io_turns)?;
         Ok(())
     })();
     drain_terminal_output(terminal, terminal_id, process_stdout)?;
@@ -788,11 +814,12 @@ fn feed_terminal_resize_and_pump(
     runtime: &mut QuickJsTaskRuntime,
     resize: &TermResize,
     ready_io_turns: usize,
+    event_loop_wait_budget: Duration,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let result = (|| -> Result<(), CliError> {
         feed_terminal_resize_after_eval(terminal, terminal_id, resize)?;
-        runtime.run_ready_io_turns(ready_io_turns)?;
+        runtime.run_event_loop_turns(event_loop_wait_budget, ready_io_turns)?;
         Ok(())
     })();
     drain_terminal_output(terminal, terminal_id, process_stdout)?;

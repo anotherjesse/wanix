@@ -2928,6 +2928,27 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_shell_pumps_delayed_output_after_native_input_when_budgeted() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io(
+            ["qjs-shell", "--event-loop-ms", "20"],
+            EofForbiddenStdin::new(b"later tick\nexit\n"),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            stdout,
+            b"shell task: 1\r\n$ scheduled\r\nlater: tick\r\n$ bye\r\n"
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
     fn qjs_shell_raw_mode_echoes_and_edits_native_input() {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
