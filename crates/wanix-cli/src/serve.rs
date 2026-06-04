@@ -52,6 +52,26 @@ fn run_serve_with_listener_inner(
     process_stderr: &mut dyn Write,
     concurrent_connection_limit: Option<usize>,
 ) -> Result<i32, CliError> {
+    let (local_addr, roots) = serve_roots_for_listener(&command, &listener)?;
+    write_serve_startup_status(
+        &roots,
+        local_addr,
+        command.bundle.as_deref(),
+        process_stderr,
+    )?;
+    serve_listener_connections(
+        command,
+        listener,
+        roots,
+        process_stderr,
+        concurrent_connection_limit,
+    )
+}
+
+fn serve_roots_for_listener(
+    command: &ServeCommand,
+    listener: &TcpListener,
+) -> Result<(SocketAddr, ServeRoots), CliError> {
     let local_addr = listener
         .local_addr()
         .map_err(|error| CliError::new(format!("failed to inspect serve address: {error}"), 1))?;
@@ -61,7 +81,15 @@ fn run_serve_with_listener_inner(
         command.bundle.clone(),
         command.wanix_services,
     )?;
+    Ok((local_addr, roots))
+}
 
+fn write_serve_startup_status(
+    roots: &ServeRoots,
+    local_addr: SocketAddr,
+    bundle: Option<&str>,
+    process_stderr: &mut dyn Write,
+) -> Result<(), CliError> {
     write_process_output(
         process_stderr,
         "stderr",
@@ -74,9 +102,17 @@ fn run_serve_with_listener_inner(
     write_process_output(
         process_stderr,
         "stderr",
-        serve_url_status(local_addr, command.bundle.as_deref()).as_bytes(),
-    )?;
+        serve_url_status(local_addr, bundle).as_bytes(),
+    )
+}
 
+fn serve_listener_connections(
+    command: ServeCommand,
+    listener: TcpListener,
+    roots: ServeRoots,
+    process_stderr: &mut dyn Write,
+    concurrent_connection_limit: Option<usize>,
+) -> Result<i32, CliError> {
     if command.once {
         return serve_one_connection(&listener, &roots, process_stderr);
     }
