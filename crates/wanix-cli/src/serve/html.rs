@@ -1,6 +1,6 @@
 use crate::json::json_string;
 
-use super::{
+use super::direct_v86::{
     DIRECT_V86_DEFAULT_CMDLINE, DIRECT_V86_DEFAULT_KERNEL_PATH, DIRECT_V86_MEMORY_SIZE,
     DIRECT_V86_VGA_MEMORY_SIZE,
 };

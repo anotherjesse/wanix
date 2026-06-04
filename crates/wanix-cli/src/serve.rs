@@ -9,7 +9,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use tungstenite::{Error as WsError, Message, WebSocket, accept};
+use tungstenite::accept;
 use wanix_fs::{FileSystem, LocalFs, NormalizedPath};
 use wanix_qjs::QuickJsTaskDriver;
 use wanix_task::TaskTable;
@@ -18,85 +18,35 @@ use wanix_vfs::{BindOptions, BindPosition, Namespace};
 
 use crate::json::json_string;
 use crate::p9_ws::{P9WsConnectionError, serve_websocket_connection};
-use crate::qemu::DEFAULT_P9_MSIZE;
-use crate::qjs_term::QjsShellSession;
 use crate::rootfs::rootfs_json_handoff_for_prepared_root;
 use crate::{CliError, quickjs_runner, write_process_output};
 
 mod boot;
+mod direct_v86;
 mod html;
 mod http;
 mod terminal_ws;
 
-use boot::{first_executable_init_route, first_existing_static_route};
+use direct_v86::{
+    DIRECT_V86_BIOS_PATH, DIRECT_V86_BUNDLE, DIRECT_V86_DEFAULT_CMDLINE,
+    DIRECT_V86_DEFAULT_P9_MSIZE, DIRECT_V86_MEMORY_SIZE, DIRECT_V86_MOD_REEXPORT_PATH,
+    DIRECT_V86_MODULE_PATH, DIRECT_V86_OFFSCREEN_PATH, DIRECT_V86_VGA_BIOS_PATH,
+    DIRECT_V86_VGA_MEMORY_SIZE, DIRECT_V86_WASM_PATH, direct_v86_asset_response,
+    direct_v86_boot_json, rootfs_handoff_readiness,
+};
 use html::{direct_v86_bundle_html, fs9p_bundle_html, workbench_fs9p_bundle_html};
 use http::{
     HttpStatus, StaticResponse, header_end, parse_http_request, percent_decode,
     read_static_response,
 };
-use terminal_ws::close_terminal_websocket_if_finished;
+use terminal_ws::serve_terminal_websocket_connection;
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
-const DIRECT_V86_BUNDLE: &str = "direct-v86";
 const FS9P_BUNDLE: &str = "fs9p";
 const WORKBENCH_FS9P_BUNDLE: &str = "workbench-fs9p";
 const QJS_SHELL_WEBSOCKET_PATH: &str = "/.well-known/qjs-shell";
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
-const DIRECT_V86_DEFAULT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,aname=,cache=none,msize=131072 loglevel=3";
-const DIRECT_V86_DEFAULT_P9_MSIZE: u32 = DEFAULT_P9_MSIZE;
-const DIRECT_V86_DEFAULT_KERNEL_PATH: &str = "/boot/bzImage";
-const DIRECT_V86_INIT_PATH: &str = "/bin/init";
-const DIRECT_V86_MEMORY_SIZE: u32 = 1024 * 1024 * 1024;
-const DIRECT_V86_VGA_MEMORY_SIZE: u32 = 8 * 1024 * 1024;
-const DIRECT_V86_MODULE_PATH: &str = "/v86/lib/libv86.mjs";
-const DIRECT_V86_MOD_REEXPORT_PATH: &str = "/v86/lib/mod.js";
-const DIRECT_V86_OFFSCREEN_PATH: &str = "/v86/lib/offscreen.js";
-const DIRECT_V86_WASM_PATH: &str = "/v86/bundle/v86.wasm";
-const DIRECT_V86_BIOS_PATH: &str = "/v86/bundle/seabios.bin";
-const DIRECT_V86_VGA_BIOS_PATH: &str = "/v86/bundle/vgabios.bin";
-const DIRECT_V86_KERNEL_CANDIDATES: &[&str] = &[DIRECT_V86_DEFAULT_KERNEL_PATH, "/bzImage"];
-const DIRECT_V86_INITRD_CANDIDATES: &[&str] =
-    &["/boot/initrd", "/boot/initrd.img", "/initrd", "/initrd.img"];
-
-struct BuiltinAsset {
-    route: &'static str,
-    content_type: &'static str,
-    bytes: &'static [u8],
-}
-
-const DIRECT_V86_ASSETS: &[BuiltinAsset] = &[
-    BuiltinAsset {
-        route: DIRECT_V86_MOD_REEXPORT_PATH,
-        content_type: "text/javascript; charset=utf-8",
-        bytes: include_bytes!("../../../v86/lib/mod.js"),
-    },
-    BuiltinAsset {
-        route: DIRECT_V86_MODULE_PATH,
-        content_type: "text/javascript; charset=utf-8",
-        bytes: include_bytes!("../../../v86/lib/libv86.mjs"),
-    },
-    BuiltinAsset {
-        route: DIRECT_V86_OFFSCREEN_PATH,
-        content_type: "text/javascript; charset=utf-8",
-        bytes: include_bytes!("../../../v86/lib/offscreen.js"),
-    },
-    BuiltinAsset {
-        route: DIRECT_V86_WASM_PATH,
-        content_type: "application/wasm",
-        bytes: include_bytes!("../../../v86/bundle/v86.wasm"),
-    },
-    BuiltinAsset {
-        route: DIRECT_V86_BIOS_PATH,
-        content_type: "application/octet-stream",
-        bytes: include_bytes!("../../../v86/bundle/seabios.bin"),
-    },
-    BuiltinAsset {
-        route: DIRECT_V86_VGA_BIOS_PATH,
-        content_type: "application/octet-stream",
-        bytes: include_bytes!("../../../v86/bundle/vgabios.bin"),
-    },
-];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ServeCommand {
@@ -108,79 +58,116 @@ pub(super) struct ServeCommand {
 }
 
 pub(super) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, CliError> {
-    let mut root_path = None;
-    let mut addr = None;
-    let mut bundle = None;
-    let mut wanix_services = false;
-    let mut once = false;
+    let mut parts = ServeCommandParts::default();
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--root" {
-            i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage("serve --root expects DIR"))?;
-            if root_path.is_some() {
-                return Err(CliError::usage("serve accepts only one --root"));
-            }
-            root_path = Some(PathBuf::from(value));
-            i += 1;
+            i = parts.parse_root(args, i)?;
         } else if args[i] == "--addr" || args[i] == "--listen" {
-            let option = args[i].to_string_lossy();
-            i += 1;
-            let raw_value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage(format!("serve {option} expects HOST:PORT")))?;
-            if addr.is_some() {
-                return Err(CliError::usage("serve accepts only one --addr or --listen"));
-            }
-            let value = raw_value.to_string_lossy();
-            addr = Some(normalize_listen_addr(&value));
-            i += 1;
+            i = parts.parse_addr(args, i)?;
         } else if args[i] == "--bundle" {
-            i += 1;
-            let value = args
-                .get(i)
-                .ok_or_else(|| CliError::usage("serve --bundle expects NAME"))?;
-            if bundle.is_some() {
-                return Err(CliError::usage("serve accepts only one --bundle"));
-            }
-            bundle = Some(value.to_string_lossy().into_owned());
-            i += 1;
+            i = parts.parse_bundle(args, i)?;
         } else if args[i] == "--once" {
-            if once {
-                return Err(CliError::usage("serve accepts only one --once"));
-            }
-            once = true;
+            parts.set_once()?;
             i += 1;
         } else if args[i] == "--wanix-services" {
-            if wanix_services {
-                return Err(CliError::usage("serve accepts only one --wanix-services"));
-            }
-            wanix_services = true;
+            parts.set_wanix_services()?;
             i += 1;
         } else if args[i].to_string_lossy().starts_with('-') {
             return Err(CliError::usage(format!(
                 "unexpected serve argument: {}",
                 args[i].to_string_lossy()
             )));
-        } else if root_path.is_some() {
-            return Err(CliError::usage("serve accepts only one directory"));
         } else {
-            root_path = Some(PathBuf::from(&args[i]));
+            parts.set_positional_root(&args[i])?;
             i += 1;
         }
     }
 
-    let root_path = root_path.unwrap_or_else(|| PathBuf::from("."));
-    let addr = addr.unwrap_or_else(|| DEFAULT_SERVE_ADDR.to_owned());
-    Ok(ServeCommand {
-        root_path,
-        addr,
-        bundle,
-        wanix_services,
-        once,
-    })
+    Ok(parts.finish())
+}
+
+#[derive(Default)]
+struct ServeCommandParts {
+    root_path: Option<PathBuf>,
+    addr: Option<String>,
+    bundle: Option<String>,
+    wanix_services: bool,
+    once: bool,
+}
+
+impl ServeCommandParts {
+    fn parse_root(&mut self, args: &[OsString], option_index: usize) -> Result<usize, CliError> {
+        let value_index = option_index + 1;
+        let value = args
+            .get(value_index)
+            .ok_or_else(|| CliError::usage("serve --root expects DIR"))?;
+        if self.root_path.is_some() {
+            return Err(CliError::usage("serve accepts only one --root"));
+        }
+        self.root_path = Some(PathBuf::from(value));
+        Ok(value_index + 1)
+    }
+
+    fn parse_addr(&mut self, args: &[OsString], option_index: usize) -> Result<usize, CliError> {
+        let option = args[option_index].to_string_lossy();
+        let value_index = option_index + 1;
+        let raw_value = args
+            .get(value_index)
+            .ok_or_else(|| CliError::usage(format!("serve {option} expects HOST:PORT")))?;
+        if self.addr.is_some() {
+            return Err(CliError::usage("serve accepts only one --addr or --listen"));
+        }
+        let value = raw_value.to_string_lossy();
+        self.addr = Some(normalize_listen_addr(&value));
+        Ok(value_index + 1)
+    }
+
+    fn parse_bundle(&mut self, args: &[OsString], option_index: usize) -> Result<usize, CliError> {
+        let value_index = option_index + 1;
+        let value = args
+            .get(value_index)
+            .ok_or_else(|| CliError::usage("serve --bundle expects NAME"))?;
+        if self.bundle.is_some() {
+            return Err(CliError::usage("serve accepts only one --bundle"));
+        }
+        self.bundle = Some(value.to_string_lossy().into_owned());
+        Ok(value_index + 1)
+    }
+
+    fn set_once(&mut self) -> Result<(), CliError> {
+        if self.once {
+            return Err(CliError::usage("serve accepts only one --once"));
+        }
+        self.once = true;
+        Ok(())
+    }
+
+    fn set_wanix_services(&mut self) -> Result<(), CliError> {
+        if self.wanix_services {
+            return Err(CliError::usage("serve accepts only one --wanix-services"));
+        }
+        self.wanix_services = true;
+        Ok(())
+    }
+
+    fn set_positional_root(&mut self, value: &OsString) -> Result<(), CliError> {
+        if self.root_path.is_some() {
+            return Err(CliError::usage("serve accepts only one directory"));
+        }
+        self.root_path = Some(PathBuf::from(value));
+        Ok(())
+    }
+
+    fn finish(self) -> ServeCommand {
+        ServeCommand {
+            root_path: self.root_path.unwrap_or_else(|| PathBuf::from(".")),
+            addr: self.addr.unwrap_or_else(|| DEFAULT_SERVE_ADDR.to_owned()),
+            bundle: self.bundle,
+            wanix_services: self.wanix_services,
+            once: self.once,
+        }
+    }
 }
 
 fn normalize_listen_addr(addr: &str) -> String {
@@ -496,88 +483,6 @@ fn is_qjs_shell_websocket_path(raw_path: Option<&str>) -> bool {
         == Some(QJS_SHELL_WEBSOCKET_PATH)
 }
 
-fn serve_terminal_websocket_connection(
-    root_path: &Path,
-    cwd: &NormalizedPath,
-    mut socket: WebSocket<TcpStream>,
-) -> Result<(), ServeConnectionError> {
-    socket
-        .get_mut()
-        .set_read_timeout(Some(Duration::from_millis(
-            QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS,
-        )))?;
-    let (mut session, initial_output) =
-        QjsShellSession::start_in_cwd(root_path, cwd).map_err(ServeConnectionError::Terminal)?;
-    send_terminal_output(&mut socket, initial_output)?;
-    loop {
-        let message = match socket.read() {
-            Ok(message) => message,
-            Err(WsError::ConnectionClosed) => return Ok(()),
-            Err(error) if is_terminal_websocket_idle_tick(&error) => {
-                let output = session.pump().map_err(ServeConnectionError::Terminal)?;
-                send_terminal_output(&mut socket, output)?;
-                if close_terminal_websocket_if_finished(&mut socket, &mut session)? {
-                    return Ok(());
-                }
-                continue;
-            }
-            Err(error) => {
-                return Err(ServeConnectionError::WebSocket(
-                    P9WsConnectionError::WebSocket(error),
-                ));
-            }
-        };
-        match message {
-            Message::Binary(bytes) => {
-                let output = session
-                    .input(bytes.as_ref())
-                    .map_err(ServeConnectionError::Terminal)?;
-                send_terminal_output(&mut socket, output)?;
-                if close_terminal_websocket_if_finished(&mut socket, &mut session)? {
-                    return Ok(());
-                }
-            }
-            Message::Text(text) => {
-                let text = text.as_str();
-                let output = if let Some((columns, rows)) = parse_terminal_resize_message(text) {
-                    session
-                        .resize(columns, rows)
-                        .map_err(ServeConnectionError::Terminal)?
-                } else {
-                    session
-                        .input(text.as_bytes())
-                        .map_err(ServeConnectionError::Terminal)?
-                };
-                send_terminal_output(&mut socket, output)?;
-                if close_terminal_websocket_if_finished(&mut socket, &mut session)? {
-                    return Ok(());
-                }
-            }
-            Message::Close(_) => {
-                session
-                    .close_terminal_resource()
-                    .map_err(ServeConnectionError::Terminal)?;
-                return Ok(());
-            }
-            Message::Ping(bytes) => socket.send(Message::Pong(bytes)).map_err(|error| {
-                ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error))
-            })?,
-            Message::Pong(_) | Message::Frame(_) => {}
-        }
-    }
-}
-
-fn is_terminal_websocket_idle_tick(error: &WsError) -> bool {
-    matches!(
-        error,
-        WsError::Io(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-            )
-    )
-}
-
 fn qjs_shell_cwd_from_target(raw_path: Option<&str>) -> Result<NormalizedPath, StaticResponse> {
     let raw_path =
         raw_path.ok_or_else(|| StaticResponse::plain(HttpStatus::BadRequest, "bad request"))?;
@@ -614,72 +519,6 @@ fn qjs_shell_cwd_from_query_value(value: &str) -> Result<NormalizedPath, StaticR
 fn query_percent_decode(value: &str) -> Result<String, StaticResponse> {
     percent_decode(&value.replace('+', " "))
         .map_err(|_| StaticResponse::plain(HttpStatus::BadRequest, "invalid query string"))
-}
-
-fn send_terminal_output(
-    socket: &mut WebSocket<TcpStream>,
-    output: Vec<u8>,
-) -> Result<(), ServeConnectionError> {
-    if output.is_empty() {
-        return Ok(());
-    }
-    socket
-        .send(Message::binary(output))
-        .map_err(|error| ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error)))
-}
-
-fn send_terminal_exit(
-    socket: &mut WebSocket<TcpStream>,
-    code: i32,
-) -> Result<(), ServeConnectionError> {
-    socket
-        .send(Message::text(format!(
-            "{{\"type\":\"exit\",\"code\":{code}}}"
-        )))
-        .map_err(|error| ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error)))
-}
-
-fn parse_terminal_resize_message(text: &str) -> Option<(u16, u16)> {
-    if let Some(resize) = parse_terminal_resize_json(text) {
-        return Some(resize);
-    }
-    let mut parts = text.split_whitespace();
-    if parts.next()? != "resize" {
-        return None;
-    }
-    let columns = parts.next()?.parse().ok()?;
-    let rows = parts.next()?.parse().ok()?;
-    if parts.next().is_some() || columns == 0 || rows == 0 {
-        return None;
-    }
-    Some((columns, rows))
-}
-
-fn parse_terminal_resize_json(text: &str) -> Option<(u16, u16)> {
-    let compact = text
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    if !compact.contains("\"type\":\"resize\"") {
-        return None;
-    }
-    let columns = json_u16_field(&compact, "columns")?;
-    let rows = json_u16_field(&compact, "rows")?;
-    Some((columns, rows))
-}
-
-fn json_u16_field(compact_json: &str, field: &str) -> Option<u16> {
-    let marker = format!("\"{field}\":");
-    let start = compact_json.find(&marker)? + marker.len();
-    let digits = compact_json[start..]
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    if digits.is_empty() {
-        return None;
-    }
-    let value = digits.parse().ok()?;
-    (value != 0).then_some(value)
 }
 
 fn peek_request_target(header_bytes: &[u8]) -> Option<&str> {
@@ -854,21 +693,6 @@ fn bundle_response(
     }
 }
 
-fn direct_v86_asset_response(roots: &ServeRoots, relative_path: &Path) -> Option<StaticResponse> {
-    if roots.bundle.as_deref() != Some(DIRECT_V86_BUNDLE) {
-        return None;
-    }
-    let route = format!("/{}", relative_path.to_str()?);
-    let asset = DIRECT_V86_ASSETS
-        .iter()
-        .find(|asset| asset.route == route)?;
-    Some(StaticResponse {
-        status: HttpStatus::Ok,
-        content_type: asset.content_type,
-        body: asset.bytes.to_vec(),
-    })
-}
-
 fn http_request_target(header_bytes: &[u8]) -> Option<&str> {
     let header_end = header_end(header_bytes)?;
     let header = std::str::from_utf8(&header_bytes[..header_end]).ok()?;
@@ -1034,23 +858,6 @@ fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr)
     format!("{{{}}}", fields.join(","))
 }
 
-struct RootfsHandoffReadiness {
-    missing: Vec<&'static str>,
-}
-
-fn rootfs_handoff_readiness(static_root: &Path) -> RootfsHandoffReadiness {
-    let kernel = first_existing_static_route(static_root, DIRECT_V86_KERNEL_CANDIDATES);
-    let init = first_executable_init_route(static_root, DIRECT_V86_INIT_PATH);
-    let mut missing = Vec::new();
-    if kernel.is_none() {
-        missing.push(DIRECT_V86_DEFAULT_KERNEL_PATH);
-    }
-    if init.is_none() {
-        missing.push(DIRECT_V86_INIT_PATH);
-    }
-    RootfsHandoffReadiness { missing }
-}
-
 fn is_loopback_peer(peer_addr: SocketAddr) -> bool {
     peer_addr.ip().is_loopback()
 }
@@ -1078,34 +885,6 @@ fn serve_qjs_shell_route_json(roots: &ServeRoots, websocket_url: &str) -> String
     } else {
         "{\"status\":\"disabled\"}".to_owned()
     }
-}
-
-fn direct_v86_boot_json(static_root: &Path) -> String {
-    let readiness = rootfs_handoff_readiness(static_root);
-    let mut fields = Vec::new();
-    let kernel = first_existing_static_route(static_root, DIRECT_V86_KERNEL_CANDIDATES);
-    let initrd = first_existing_static_route(static_root, DIRECT_V86_INITRD_CANDIDATES);
-    let init = first_executable_init_route(static_root, DIRECT_V86_INIT_PATH);
-    if let Some(kernel) = kernel {
-        fields.push(format!("\"kernel\":{}", json_string(kernel)));
-    }
-    if let Some(initrd) = initrd {
-        fields.push(format!("\"initrd\":{}", json_string(initrd)));
-    }
-    if let Some(init) = init {
-        fields.push(format!("\"init\":{}", json_string(init)));
-    }
-    fields.push(format!("\"ready\":{}", readiness.missing.is_empty()));
-    if !readiness.missing.is_empty() {
-        let missing = readiness
-            .missing
-            .into_iter()
-            .map(json_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        fields.push(format!("\"missing\":[{missing}]"));
-    }
-    format!("{{{}}}", fields.join(","))
 }
 
 fn request_host(request: &[u8]) -> Option<String> {
