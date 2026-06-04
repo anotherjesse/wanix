@@ -7,6 +7,7 @@ function stringFromBytes(bytes, count) {
 
 let pending = "";
 let running = true;
+const rawInput = std.getenv("WANIX_QJS_SHELL_RAW") === "1";
 
 function prompt() {
   if (running) {
@@ -47,6 +48,51 @@ function runCommand(line) {
   prompt();
 }
 
+function handleRawByte(byte) {
+  if (byte === 0x04 && pending.length === 0) {
+    runCommand("exit");
+    return;
+  }
+  if (byte === 0x08 || byte === 0x7f) {
+    if (pending.length > 0) {
+      pending = pending.slice(0, -1);
+      std.out.puts("\x08 \x08");
+    }
+    return;
+  }
+  if (byte === 0x0d || byte === 0x0a) {
+    std.out.puts("\n");
+    const line = pending;
+    pending = "";
+    runCommand(line);
+    return;
+  }
+  if (byte === 0x09 || byte >= 0x20) {
+    const char = String.fromCharCode(byte);
+    pending += char;
+    std.out.puts(char);
+  }
+}
+
+function handleRawInput(bytes, count) {
+  for (let i = 0; i < count; i++) {
+    if (!running) {
+      return;
+    }
+    handleRawByte(bytes[i]);
+  }
+}
+
+function handleLineInput(bytes, count) {
+  pending += stringFromBytes(bytes, count);
+  let newline;
+  while ((newline = pending.indexOf("\n")) >= 0) {
+    const line = pending.slice(0, newline);
+    pending = pending.slice(newline + 1);
+    runCommand(line);
+  }
+}
+
 std.out.puts("shell task: " + std.loadFile("#task/self/id").trim() + "\n");
 prompt();
 
@@ -56,12 +102,10 @@ os.setReadHandler(0, () => {
   if (count < 0) {
     throw new Error("shell terminal read failed: " + count);
   }
-  pending += stringFromBytes(bytes, count);
-  let newline;
-  while ((newline = pending.indexOf("\n")) >= 0) {
-    const line = pending.slice(0, newline);
-    pending = pending.slice(newline + 1);
-    runCommand(line);
+  if (rawInput) {
+    handleRawInput(bytes, count);
+  } else {
+    handleLineInput(bytes, count);
   }
   std.out.flush();
 });

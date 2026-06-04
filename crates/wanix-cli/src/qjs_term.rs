@@ -51,7 +51,7 @@ enum PostEvalFeed {
     Process,
     LinesFile(PathBuf),
     LinesProcess,
-    RawLinesProcess,
+    RawBytesProcess,
     Resize(TermResize),
 }
 
@@ -141,7 +141,7 @@ pub(super) fn parse_qjs_shell_command(args: &[OsString]) -> Result<QjsShellComma
     }
     if qjs.stdin.is_some() {
         return Err(CliError::usage(
-            "qjs-shell reads native stdin line-by-line; use qjs-term for explicit stdin fixtures",
+            "qjs-shell reads native stdin as terminal input; use qjs-term for explicit stdin fixtures",
         ));
     }
     Ok(QjsShellCommand { qjs, raw })
@@ -229,9 +229,9 @@ pub(super) fn run_qjs_shell_streaming(
     process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
     run_qjs_term_program_streaming(
-        command.qjs,
+        qjs_shell_command(command.qjs, command.raw),
         vec![if command.raw {
-            PostEvalFeed::RawLinesProcess
+            PostEvalFeed::RawBytesProcess
         } else {
             PostEvalFeed::LinesProcess
         }],
@@ -240,6 +240,13 @@ pub(super) fn run_qjs_shell_streaming(
         process_stdout,
         process_stderr,
     )
+}
+
+fn qjs_shell_command(mut command: QjsCommand, raw: bool) -> QjsCommand {
+    if raw {
+        command.env.push("WANIX_QJS_SHELL_RAW=1".to_owned());
+    }
+    command
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -437,7 +444,7 @@ fn run_post_eval_feeds(
                     process_stdout,
                 )?;
             }
-            PostEvalFeed::RawLinesProcess => {
+            PostEvalFeed::RawBytesProcess => {
                 flush_terminal_feed_batch(
                     terminal,
                     terminal_id,
@@ -449,7 +456,7 @@ fn run_post_eval_feeds(
                 if task_exited(runtime)? {
                     return Ok(());
                 }
-                run_process_raw_line_feed_session_after_eval(
+                run_process_raw_byte_feed_session_after_eval(
                     process_stdin,
                     terminal,
                     terminal_id,
@@ -494,7 +501,7 @@ fn run_post_eval_feeds(
     )
 }
 
-fn run_process_raw_line_feed_session_after_eval(
+fn run_process_raw_byte_feed_session_after_eval(
     process_stdin: &mut dyn Read,
     terminal: &TermDevice,
     terminal_id: &str,
@@ -502,13 +509,22 @@ fn run_process_raw_line_feed_session_after_eval(
     ready_io_turns: usize,
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
-    let mut line = Vec::new();
-    while read_process_raw_line_after_eval(process_stdin, process_stdout, &mut line)? {
-        feed_terminal_batch_and_pump(
+    let mut byte = [0; 1];
+    loop {
+        let count = process_stdin.read(&mut byte).map_err(|error| {
+            CliError::new(
+                format!("failed to read process stdin raw bytes after eval: {error}"),
+                1,
+            )
+        })?;
+        if count == 0 {
+            return Ok(());
+        }
+        feed_terminal_chunk_and_pump(
             terminal,
             terminal_id,
             runtime,
-            &[line.clone()],
+            &byte[..count],
             ready_io_turns,
             process_stdout,
         )?;
@@ -582,53 +598,6 @@ fn read_process_line_after_eval(
     }
 }
 
-fn read_process_raw_line_after_eval(
-    process_stdin: &mut dyn Read,
-    process_stdout: &mut dyn Write,
-    line: &mut Vec<u8>,
-) -> Result<bool, CliError> {
-    line.clear();
-    let mut byte = [0; 1];
-    loop {
-        let count = process_stdin.read(&mut byte).map_err(|error| {
-            CliError::new(
-                format!("failed to read process stdin raw lines after eval: {error}"),
-                1,
-            )
-        })?;
-        if count == 0 {
-            if line.is_empty() {
-                return Ok(false);
-            }
-            write_process_output(process_stdout, "stdout", b"\r\n")?;
-            line.push(b'\n');
-            return Ok(true);
-        }
-        match byte[0] {
-            b'\n' | b'\r' => {
-                write_process_output(process_stdout, "stdout", b"\r\n")?;
-                line.push(b'\n');
-                return Ok(true);
-            }
-            0x08 | 0x7f => {
-                if !line.is_empty() {
-                    line.pop();
-                    write_process_output(process_stdout, "stdout", b"\x08 \x08")?;
-                }
-            }
-            0x04 => {
-                if line.is_empty() {
-                    return Ok(false);
-                }
-            }
-            byte => {
-                line.push(byte);
-                write_process_output(process_stdout, "stdout", &[byte])?;
-            }
-        }
-    }
-}
-
 fn flush_terminal_feed_batch(
     terminal: &TermDevice,
     terminal_id: &str,
@@ -663,6 +632,23 @@ fn feed_terminal_batch_and_pump(
         for chunk in batch {
             feed_terminal_after_eval(terminal, terminal_id, chunk)?;
         }
+        runtime.run_ready_io_turns(ready_io_turns)?;
+        Ok(())
+    })();
+    drain_terminal_output(terminal, terminal_id, process_stdout)?;
+    result
+}
+
+fn feed_terminal_chunk_and_pump(
+    terminal: &TermDevice,
+    terminal_id: &str,
+    runtime: &mut QuickJsTaskRuntime,
+    chunk: &[u8],
+    ready_io_turns: usize,
+    process_stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    let result = (|| -> Result<(), CliError> {
+        feed_terminal_after_eval(terminal, terminal_id, chunk)?;
         runtime.run_ready_io_turns(ready_io_turns)?;
         Ok(())
     })();
@@ -955,7 +941,7 @@ mod tests {
         assert!(
             stdin_error
                 .to_string()
-                .contains("qjs-shell reads native stdin line-by-line")
+                .contains("qjs-shell reads native stdin as terminal input")
         );
     }
 }

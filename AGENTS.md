@@ -81,8 +81,9 @@ Wanix process exit, which lets the shell demo's `exit` command return without
 waiting for native stdin EOF. The user-facing shell demo is now
 `wanix-rust qjs-shell`, which runs the bundled QuickJS shell source through the
 same terminal-backed Wanix task runtime with line-oriented native input.
-`qjs-shell --raw` adds native raw-mode setup plus host-side local echo and simple
-line editing while still delivering complete lines to the guest task.
+`qjs-shell --raw` adds native raw-mode setup and feeds native bytes directly
+through the terminal device, letting the bundled QuickJS shell own echo, simple
+editing, Ctrl-D, and command dispatch inside the Wanix task.
 `qjs-term --resize-after-eval COLSxROWS` sends a deterministic post-eval
 resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
 can observe terminal resize broadcasts through live Wanix-backed fd readiness.
@@ -336,8 +337,8 @@ cargo test --workspace --locked
   `wanix-rust qjs-shell` runs the bundled QuickJS shell through the
   terminal-backed qjs task runtime as the direct native shell demo.
 - [ADR 0056](docs/adrs/0056-qjs-shell-native-raw-mode.md):
-  `qjs-shell --raw` disables host canonical input/echo when stdin is a TTY and
-  uses a small host line discipline before feeding Wanix terminal lines.
+  `qjs-shell --raw` first disabled host canonical input/echo and used a small
+  host line discipline; ADR 0091 supersedes its guest input boundary.
 - [ADR 0057](docs/adrs/0057-qjs-term-post-eval-resize-feed.md):
   `qjs-term --resize-after-eval` writes textual resize events to `#term/winch`
   and pumps ready-IO so QuickJS tasks can observe resize broadcasts.
@@ -443,6 +444,9 @@ cargo test --workspace --locked
 - [ADR 0090](docs/adrs/0090-direct-v86-hvc0-console-bridge.md):
   Rust direct-v86 pages expose the guest `hvc0` virtio-console stream for
   visible browser boot and shell interaction.
+- [ADR 0091](docs/adrs/0091-qjs-shell-raw-byte-pump.md):
+  `qjs-shell --raw` feeds native bytes directly to the guest shell so QuickJS
+  owns visible echo/editing behavior.
 
 ## Cycle Rules
 
@@ -458,9 +462,9 @@ cycle before starting the next one.
   intentional runtime decision.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
-- Make `qjs-shell` genuinely interactive beyond line-oriented input by adding a
-  host loop that can wait on native input and guest output concurrently, signal
-  handling, and live native resize propagation.
+- Continue `qjs-shell` interactivity with a host loop that can wait on native
+  input and guest output concurrently, signal handling, and live native resize
+  propagation.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
   integration, then extend the direct-v86 route into a complete qemu/v86 bundle,
   `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`

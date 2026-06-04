@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0091](0091-qjs-shell-raw-byte-pump.md) for guest input
+delivery. Native raw-mode setup remains accepted.
 
 ## Context
 

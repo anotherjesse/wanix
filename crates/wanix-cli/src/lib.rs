@@ -2674,6 +2674,24 @@ std.out.flush();
     }
 
     #[test]
+    fn qjs_shell_raw_ctrl_d_reaches_guest_shell() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io(
+            ["qjs-shell", "--raw"],
+            EofForbiddenStdin::new(b"\x04"),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(stdout, b"shell task: 1\r\n$ bye\r\n");
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
     fn qjs_command_reads_script_sibling_with_quickjs_std_load_file() {
         let script = write_temp_script(
             "std-read-demo.js",
