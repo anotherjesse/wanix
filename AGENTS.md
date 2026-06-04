@@ -76,7 +76,7 @@ tests.
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
   shell modes and served shell sessions use the same `#term` device contract,
   with a small `cd`/`ls`/`cat`/`write`/`mkdir`/`rm`/`rmdir`/`mv`/`cp`
-  filesystem command set for demos.
+  filesystem command set and synchronous child `qjs` task launches for demos.
 - `wanix-rust p9-stdio`, `p9-listen`, `p9-ws`, and `serve`: the Rust 9P server
   exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
   layers, with binary protocol traffic kept separate from diagnostics.
@@ -208,7 +208,8 @@ more feature work.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
 - Continue `qjs-shell` interactivity with signal-driven resize wakeups,
-  cancellation, command execution beyond the current built-ins, and richer
+  foreground child-task input ownership, cancellation, command execution beyond
+  the current built-ins and synchronous `qjs` launcher, and richer
   terminal/session lifecycle control.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
   integration, then extend the direct-v86 route into a complete qemu/v86 bundle,

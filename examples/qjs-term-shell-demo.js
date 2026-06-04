@@ -48,6 +48,46 @@ function writeServiceText(path, text) {
   return count;
 }
 
+function readServiceText(path) {
+  const fd = os.open(path, os.O_RDONLY);
+  if (fd < 0) {
+    throw new Error("open " + path + ": " + fd);
+  }
+  const chunks = [];
+  let total = 0;
+  const bytes = new Uint8Array(4096);
+  while (true) {
+    const count = os.read(fd, bytes.buffer, 0, bytes.length);
+    if (count < 0) {
+      os.close(fd);
+      throw new Error("read " + path + ": " + count);
+    }
+    if (count === 0) {
+      break;
+    }
+    chunks.push(bytes.slice(0, count));
+    total += count;
+    if (count < bytes.length) {
+      break;
+    }
+  }
+  os.close(fd);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return stringFromBytes(output, output.length);
+}
+
+function writeRequiredServiceText(path, text) {
+  const count = writeServiceText(path, text);
+  if (count !== text.length) {
+    throw new Error("write " + path + ": " + count + "/" + text.length);
+  }
+}
+
 function parseWords(line) {
   const words = [];
   let current = "";
@@ -129,6 +169,29 @@ function normalizeNamespacePath(path, base) {
 
 function resolveShellPath(path) {
   return normalizeNamespacePath(path || ".", cwd);
+}
+
+function namespaceDir(path) {
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length <= 1) {
+    return ".";
+  }
+  return parts.slice(0, -1).join("/");
+}
+
+function namespaceBase(path) {
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length === 0) {
+    return ".";
+  }
+  return parts[parts.length - 1];
+}
+
+function quoteCommandWord(word) {
+  if (word.length > 0 && !/[\s'"\\]/.test(word)) {
+    return word;
+  }
+  return "'" + word.replace(/'/g, "'\"'\"'") + "'";
 }
 
 function visibleEntries(path) {
@@ -341,6 +404,42 @@ function runCp(words) {
   prompt();
 }
 
+function runQjs(words) {
+  if (words.length < 2) {
+    std.out.puts("qjs: usage: qjs SCRIPT [ARGS...]\n");
+    prompt();
+    return;
+  }
+  const scriptPath = resolveShellPath(words[1]);
+  if (scriptPath[0] === "#") {
+    std.out.puts("qjs: " + words[1] + ": service paths are not executable scripts\n");
+    prompt();
+    return;
+  }
+  const childDir = namespaceDir(scriptPath);
+  const scriptName = namespaceBase(scriptPath);
+  const command = [scriptName].concat(words.slice(2)).map(quoteCommandWord).join(" ") + "\n";
+  try {
+    const parent = readServiceText("#task/self/id").trim();
+    const child = readServiceText("#task/new/qjs").trim();
+    const taskPath = "#task/" + child;
+    writeRequiredServiceText(taskPath + "/cmd", command);
+    writeRequiredServiceText(taskPath + "/env", readServiceText("#task/self/env"));
+    writeRequiredServiceText(taskPath + "/dir", childDir + "\n");
+    writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/0 fd/0\n");
+    writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/1 fd/1\n");
+    writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/2 fd/2\n");
+    writeRequiredServiceText(taskPath + "/ctl", "start\n");
+    const exit = readServiceText(taskPath + "/exit").trim();
+    if (exit && exit !== "0") {
+      std.out.puts("qjs exit " + exit + "\n");
+    }
+  } catch (error) {
+    std.out.puts("qjs: " + error.message + "\n");
+  }
+  prompt();
+}
+
 function runCommand(line) {
   const trimmed = line.trim();
   if (trimmed === "") {
@@ -409,6 +508,10 @@ function runCommand(line) {
   }
   if (words[0] === "cp") {
     runCp(words);
+    return;
+  }
+  if (words[0] === "qjs") {
+    runQjs(words);
     return;
   }
   if (trimmed === "size") {

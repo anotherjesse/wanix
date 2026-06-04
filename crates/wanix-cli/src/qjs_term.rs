@@ -1686,6 +1686,35 @@ mod tests {
     }
 
     #[test]
+    fn qjs_shell_session_starts_child_qjs_task() {
+        let root = temp_dir("wanix-qjs-shell-session-child");
+        fs::write(
+            root.join("child.js"),
+            r##"import * as std from "qjs:std";
+
+std.out.puts("child task " + std.loadFile("#task/self/id").trim() + "\n");
+std.out.puts("child cwd " + std.loadFile("#task/self/dir").trim() + "\n");
+std.out.puts("child argv " + scriptArgs.join("|") + "\n");
+std.out.puts("child raw " + std.getenv("WANIX_QJS_SHELL_RAW") + "\n");
+std.out.flush();
+"##,
+        )
+        .unwrap();
+        let (mut session, initial_output) = QjsShellSession::start(&root).unwrap();
+
+        assert_eq!(initial_output, b"shell task: 1\r\n$ ");
+        let output = session
+            .input(b"qjs child.js alpha 'two words'\nexit\n")
+            .unwrap();
+
+        assert_eq!(
+            output,
+            b"qjs child.js alpha 'two words'\r\nchild task 2\r\nchild cwd .\r\nchild argv child.js|alpha|two words\r\nchild raw 1\r\n$ exit\r\nbye\r\n"
+        );
+        assert!(session.is_finished());
+    }
+
+    #[test]
     fn qjs_shell_session_navigates_and_edits_served_files() {
         let root = temp_dir("wanix-qjs-shell-session-files");
         fs::write(root.join("visible.txt"), "served root\n").unwrap();
