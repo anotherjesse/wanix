@@ -69,6 +69,151 @@ pub(super) struct QjsSnapshotFileCommand {
     pub(super) mounts: Vec<HostMount>,
 }
 
+struct QjsRunOptions {
+    env: Vec<String>,
+    cwd: NormalizedPath,
+    stdin: Option<QjsStdin>,
+    event_loop_wait_budget: Duration,
+    ready_io_turns: usize,
+    interrupt_poll_budget: Option<usize>,
+    memory_limit_bytes: Option<u32>,
+    mounts: Vec<HostMount>,
+}
+
+impl QjsRunOptions {
+    fn new() -> Result<Self, CliError> {
+        Ok(Self {
+            env: Vec::new(),
+            cwd: NormalizedPath::new(".")?,
+            stdin: None,
+            event_loop_wait_budget: Duration::ZERO,
+            ready_io_turns: 1,
+            interrupt_poll_budget: None,
+            memory_limit_bytes: None,
+            mounts: Vec::new(),
+        })
+    }
+
+    fn into_command(self, script_path: PathBuf, args: Vec<String>) -> QjsCommand {
+        QjsCommand {
+            script_path,
+            args,
+            env: self.env,
+            cwd: self.cwd,
+            stdin: self.stdin,
+            event_loop_wait_budget: self.event_loop_wait_budget,
+            ready_io_turns: self.ready_io_turns,
+            interrupt_poll_budget: self.interrupt_poll_budget,
+            memory_limit_bytes: self.memory_limit_bytes,
+            mounts: self.mounts,
+        }
+    }
+
+    fn into_snapshot_command(
+        self,
+        script_path: PathBuf,
+        snapshot_path: PathBuf,
+        args: Vec<String>,
+    ) -> QjsSnapshotFileCommand {
+        QjsSnapshotFileCommand {
+            script_path,
+            snapshot_path,
+            args,
+            env: self.env,
+            cwd: self.cwd,
+            stdin: self.stdin,
+            event_loop_wait_budget: self.event_loop_wait_budget,
+            ready_io_turns: self.ready_io_turns,
+            interrupt_poll_budget: self.interrupt_poll_budget,
+            memory_limit_bytes: self.memory_limit_bytes,
+            mounts: self.mounts,
+        }
+    }
+}
+
+enum QjsOptionParse {
+    Consumed,
+    Separator,
+    Unknown,
+}
+
+fn parse_common_qjs_option(
+    args: &[OsString],
+    index: &mut usize,
+    command: &str,
+    options: &mut QjsRunOptions,
+) -> Result<QjsOptionParse, CliError> {
+    if args[*index] == "--env" {
+        let value = qjs_option_value(args, index, command, "--env", "KEY=VALUE")?;
+        let value = os_arg_to_string(value, &format!("{command} --env"))?;
+        validate_env_line(&value, &format!("{command} --env"))?;
+        options.env.push(value);
+    } else if args[*index] == "--cwd" {
+        let value = qjs_option_value(args, index, command, "--cwd", "a Wanix path")?;
+        options.cwd = NormalizedPath::new(os_arg_to_string(
+            value,
+            &format!("{command} --cwd"),
+        )?)?;
+    } else if args[*index] == "--stdin" {
+        let value = qjs_option_value(args, index, command, "--stdin", "text")?;
+        set_qjs_stdin(
+            &mut options.stdin,
+            QjsStdin::Bytes(os_arg_to_string(value, &format!("{command} --stdin"))?.into_bytes()),
+            command,
+        )?;
+    } else if args[*index] == "--stdin-file" {
+        let value = qjs_option_value(args, index, command, "--stdin-file", "PATH or -")?;
+        let source = if value == "-" {
+            QjsStdin::Process
+        } else {
+            QjsStdin::File(PathBuf::from(value))
+        };
+        set_qjs_stdin(&mut options.stdin, source, command)?;
+    } else if args[*index] == "--event-loop-ms" {
+        let value = qjs_option_value(args, index, command, "--event-loop-ms", "milliseconds")?;
+        options.event_loop_wait_budget =
+            parse_duration_millis(value, &format!("{command} --event-loop-ms"))?;
+    } else if args[*index] == "--ready-io-turns" {
+        let value = qjs_option_value(args, index, command, "--ready-io-turns", "a count")?;
+        options.ready_io_turns = parse_usize(value, &format!("{command} --ready-io-turns"))?;
+    } else if args[*index] == "--interrupt-after" {
+        let value = qjs_option_value(args, index, command, "--interrupt-after", "a count")?;
+        options.interrupt_poll_budget =
+            Some(parse_usize(value, &format!("{command} --interrupt-after"))?);
+    } else if args[*index] == "--memory-limit-bytes" {
+        let value = qjs_option_value(args, index, command, "--memory-limit-bytes", "a byte count")?;
+        options.memory_limit_bytes =
+            Some(parse_u32(value, &format!("{command} --memory-limit-bytes"))?);
+    } else if args[*index] == "--mount" {
+        let value = qjs_option_value(args, index, command, "--mount", "HOST=GUEST")?;
+        options.mounts.push(parse_host_mount(
+            &os_arg_to_string(value, &format!("{command} --mount"))?,
+            &format!("{command} --mount"),
+        )?);
+    } else if args[*index] == "--" {
+        *index += 1;
+        return Ok(QjsOptionParse::Separator);
+    } else {
+        return Ok(QjsOptionParse::Unknown);
+    }
+    Ok(QjsOptionParse::Consumed)
+}
+
+fn qjs_option_value<'a>(
+    args: &'a [OsString],
+    index: &mut usize,
+    command: &str,
+    option: &str,
+    expected: &str,
+) -> Result<&'a OsString, CliError> {
+    *index += 1;
+    let value = args
+        .get(*index)
+        .ok_or_else(|| CliError::usage(format!("{command} {option} expects {expected}")))?;
+    *index += 1;
+    Ok(value)
+}
+
 pub(super) fn read_qjs_stdin(
     source: Option<QjsStdin>,
     process_stdin: &mut dyn Read,
