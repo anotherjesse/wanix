@@ -25,6 +25,10 @@ conversion guards, snapshot byte-format properties, and host import
 transfer/capture boundaries, copied scalar and binary values, host callback
 reattachment, and synchronous ES module loading.
 
+See [docs/architecture.md](docs/architecture.md) for the crate-local boundary
+summary. The old prototype ADRs were consolidated there; the root Wanix
+[ADR index](../../AGENTS.md#adr-index) is now the authoritative decision set.
+
 ## Quick Start
 
 Run the executable snapshot/restore example against the checked-in fixture from
@@ -158,13 +162,14 @@ let answer = runtime.call_global_function(
 assert_eq!(answer, QuickJsValue::Number(42.0));
 ```
 
-The copied scalar surface supports `undefined`, `null`, booleans, numbers, and
-strings for `eval_value`, global get/set, scalar function calls, and host
-callbacks. `call_global_function` invokes an extracted global function with
-`this = undefined`. Objects, arrays, functions, promises, symbols, and bigints
-remain private QuickJS handles until a future ownership-safe handle API is
-designed. Runtime-level scalar value support is a bundled optional capability:
-APIs fail early when the module lacks the needed helper exports.
+The copied scalar surface supports `undefined`, `null`, booleans, numbers,
+strings, and exact signed 64-bit BigInts for `eval_value`, global get/set,
+scalar function calls, and host callbacks. `call_global_function` invokes an
+extracted global function with `this = undefined`. Objects, arrays, functions,
+promises, symbols, boxed BigInt objects, and arbitrary-precision BigInts remain
+private QuickJS handles until a future ownership-safe handle API is designed.
+Runtime-level scalar value support is a bundled optional capability: APIs fail
+early when the module lacks the needed helper exports.
 
 ### Copied binary values
 
@@ -292,7 +297,7 @@ restored.register_host_callback("hostAdd", |args| match args {
 The callback value surface is intentionally scalar: `undefined`, `null`,
 booleans, numbers, and strings. Other JavaScript argument types are reported as
 guest-visible errors until a richer handle API exists. Callback support is an
-optional module capability in this prototype: ABI-v1 modules still preflight
+optional fixture capability: ABI-v1 modules still preflight
 without callback helper exports, and callback APIs fail early when those helper
 exports are unavailable.
 
@@ -345,8 +350,8 @@ runtime.eval_module_discard(
 Module loader closures are host state, like callback registries and host
 configuration. Loaded module state is part of the snapshotted QuickJS VM image,
 but restored runtimes must install a loader again before future imports can load
-Rust-provided source. Loader support is an optional module capability in this
-prototype; public loader APIs fail early when `qjs_set_module_loader` is not
+Rust-provided source. Loader support is an optional fixture capability; public
+loader APIs fail early when `qjs_set_module_loader` is not
 available. Rust loader and normalizer error details are currently collapsed to
 QuickJS module `ReferenceError`s such as `could not load module`.
 
@@ -392,8 +397,8 @@ heap accounting; they do not imply that WebAssembly linear memory shrinks after
 GC. GC threshold values live in QuickJS runtime memory and may be present in a
 snapshot, but hosts should set required GC policy explicitly after create and
 restore. Use `disable_automatic_gc()` when the host wants to turn off automatic
-GC entirely. Memory/GC support is an optional module capability in this
-prototype; public APIs fail early when the corresponding helper exports are
+GC entirely. Memory/GC support is an optional fixture capability; public APIs
+fail early when the corresponding helper exports are
 unavailable.
 
 ### Promise rejection tracking
@@ -415,7 +420,7 @@ The event contains a copied reason string and an `is_handled` flag. Raw QuickJS
 promise and reason handles stay private and are freed by the host import.
 Reasons that cannot be stringified are reported with a lossy fallback string.
 Rejection handlers are Rust host state and must be installed again after restore.
-Tracking support is an optional module capability in this prototype; public APIs
+Tracking support is an optional fixture capability; public APIs
 fail early when `qjs_set_promise_rejection_handler` is not available, and event
 delivery relies on the standard required value/string/free exports.
 
@@ -487,17 +492,16 @@ actual process, namespace, and fd policy.
 
 The Wanix workspace does not vendor the Vercel reference source or build tree.
 The checked-in reference WASM binary can be rebuilt from an external
-`vercel-labs/quickjs-wasi` checkout plus the libc fixture changes recorded in
-`docs/adrs/0012-quickjs-libc-std-fixture.md` and
-`docs/adrs/0038-quickjs-wasi-symlink-stdlib-fixture.md` and
-`docs/adrs/0039-quickjs-wasi-truncate-stdlib-fixture.md`:
+`vercel-labs/quickjs-wasi` checkout plus the libc fixture changes summarized in
+the root [QuickJS fixture ADR](../../docs/adrs/0012-quickjs-libc-std-fixture.md)
+and this crate's [architecture notes](docs/architecture.md):
 
 ```sh
 git clone https://github.com/vercel-labs/quickjs-wasi /tmp/quickjs-wasi
 cd /tmp/quickjs-wasi
 git checkout f26cf71
 make setup
-# Apply the ADR 0012, ADR 0038, and ADR 0039 source/build changes before rebuilding.
+# Apply the Wanix fixture source/build changes before rebuilding.
 make quickjs.wasm
 cp quickjs.wasm /path/to/wanix/crates/wanix-qjs-engine/fixtures/quickjs.wasm
 ```
@@ -513,7 +517,7 @@ QUICKJS_WASM=/path/to/quickjs.wasm cargo test
 Run the repository gate before committing changes:
 
 ```sh
-cargo fmt --package wanix-cli --package wanix-fs --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-vfs --package wanix-wasi --check
+cargo fmt --package wanix-9p --package wanix-cli --package wanix-fs --package wanix-protocol --package wanix-qjs --package wanix-qjs-engine --package wanix-task --package wanix-term --package wanix-vfs --package wanix-wasi --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 ```
@@ -588,4 +592,6 @@ Not implemented yet:
   future timer waits, timer-only sleeps, and immediately-ready live fd poll
   events.
 
-See `docs/investigation.md` for the investigation notes and implementation plan.
+See [docs/architecture.md](docs/architecture.md) for the current boundary
+summary and [docs/investigation.md](docs/investigation.md) for the historical
+snapshot investigation notes.

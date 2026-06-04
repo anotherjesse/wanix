@@ -23,8 +23,9 @@ The browser filesystem and workbench path uses Rust serve discovery and direct
   discovery, opens the direct 9P WebSocket route, and proves paginated
   browse/read/write operations against the served root.
 - The workbench extension can back its `wanix:` filesystem provider with direct
-  9P operations for stat, paginated directory listing, read, write, rename, and
-  delete, plus bounded client-side file and text search over `wanix:/`.
+  9P operations for stat, paginated directory listing, read, write, mkdir,
+  rename, copy, and removal, plus bounded client-side file and text search over
+  `wanix:/`.
 - `serve --bundle workbench-fs9p` is a local generated VS Code web workbench
   launch path that points the extension at Rust serve discovery.
 - When discovery advertises services, the workbench path can open a qjs shell

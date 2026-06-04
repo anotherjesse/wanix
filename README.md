@@ -26,20 +26,27 @@ This repository also contains the active Rust-native Wanix port. The north star
 for that work is a Wanix core that can run outside Chrome, with Wasmtime as the
 execution substrate and QuickJS/WASI as the first serious task runtime.
 
-The current Rust vertical slice can run JavaScript as a Wanix `qjs` task from a
-native CLI. Guest code uses QuickJS `qjs:std`, `qjs:os`, `scriptArgs`,
-`std.getenv(...)`, and `#task` service files. Wanix owns task identity,
+The Rust port now has native slices for QuickJS-backed Wanix tasks, terminal
+devices and `qjs-shell`, 9P exports over stdio/TCP/WebSocket, Rust `serve`
+discovery, browser filesystem and workbench demos, direct-v86 handoff, rootfs
+preparation, and native QEMU command handoff. Wanix owns task identity,
 namespaces, cwd/env/cmd, stdio/fds, exit status, and WASI filesystem semantics;
-QuickJS is the execution engine inside the task.
+QuickJS is the execution engine inside a `qjs` task.
 
 Try the native demo path from the workspace root:
 
 ```sh
 cargo run --locked --package wanix-cli -- qjs examples/qjs-demo.js
+cargo run --locked --package wanix-cli -- \
+  qjs-term --stdin "hello terminal" examples/qjs-term-demo.js
+printf 'echo hello shell\nid\npwd\nexit\n' | cargo run --locked --package wanix-cli -- qjs-shell
 cargo test --workspace --locked
 ```
 
-The Rust workspace crates are documented in [AGENTS.md](AGENTS.md). The
+The Rust workspace crates and active ADR index are documented in
+[AGENTS.md](AGENTS.md). For a hands-on path, see
+[rust-walkthrough.md](rust-walkthrough.md). For the Go/Rust architecture
+comparison, see [docs/rust-vs-go-wanix.md](docs/rust-vs-go-wanix.md). The
 QuickJS/Wasmtime engine mechanics live in
 [crates/wanix-qjs-engine](crates/wanix-qjs-engine), while Wanix process,
 namespace, fd, and WASI policy stay in the Wanix crates above it.

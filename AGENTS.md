@@ -33,7 +33,9 @@ integration.
   task fds supplied by adapter configuration.
 - `wanix-qjs-engine`: Wasmtime-hosted QuickJS/WASI engine mechanics relocated
   from the `rust-wasi-quickjs` prototype, keeping the existing Rust import path
-  while using the workspace-local QuickJS WASM fixture.
+  while using the workspace-local QuickJS WASM fixture. Crate-local engine
+  invariants live in `crates/wanix-qjs-engine/docs/architecture.md`; do not add
+  one Wanix ADR per engine helper.
 - `wanix-qjs`: QuickJS/WASI task driver that adapts the engine crate to Wanix
   task semantics.
 - `wanix-cli`: native CLI and demo runner.
@@ -68,10 +70,10 @@ Chrome, reads and writes files through a Wanix namespace, prints through
 task-backed stdio, exits with an observable status, and can read `#task/self/id`
 to prove task context crosses into QuickJS.
 
-The next terminal-facing demo is `wanix-rust qjs-term main.js`: JavaScript still
-runs as a Wanix `qjs` task, but fd 0/1/2 are bound through `#term/<id>/program`
-and the native binary streams terminal `data` output while the task runtime is
-live. The checked-in
+Terminal-facing demos now include `wanix-rust qjs-term main.js` and
+`wanix-rust qjs-shell`: JavaScript still runs as a Wanix `qjs` task, but fd
+0/1/2 are bound through `#term/<id>/program` and the native binary streams
+terminal `data` output while the task runtime is live. The checked-in
 `qjs-term-ready-io-demo.js` also proves QuickJS ready-IO handlers can consume
 terminal-backed fd 0 in bounded turns. The `--feed-after-eval`,
 `--feed-after-eval-file`, and `--feed-after-eval-lines` options prove terminal
@@ -98,11 +100,12 @@ bundled shell's `size` command.
 resize event to `#term/<id>/winch` as `columns rows\n`, proving QuickJS tasks
 can observe terminal resize broadcasts through live Wanix-backed fd readiness.
 
-The next 9P-facing demo target is wiring the native and browser listeners into
-serve/v86 experiments so external clients can browse a Wanix namespace. The
-server core already negotiates 9P2000.L and caps Google-extension negotiation
-at `9P2000.L.Google.2`, attaches, walks, opens regular files and read-only
-directories, reads/writes regular files, lists directories with `Treaddir`,
+The 9P-facing path now connects native stdio/TCP/WebSocket exports, Rust
+`serve`, browser filesystem smoke pages, workbench experiments, direct-v86, and
+native QEMU handoff work. The server core negotiates 9P2000.L and caps
+Google-extension negotiation at `9P2000.L.Google.2`, attaches, walks, opens
+regular files and read-only directories, reads/writes regular files, lists
+directories with `Treaddir`,
 clunks fids, reports no-follow metadata and host-backed link counts with
 `Tgetattr` and Google.2 `Twalkgetattr`, creates and reads symbolic links with
 `Tsymlink` and `Treadlink`, creates host-backed hard links with `Tlink` when the
@@ -124,10 +127,11 @@ for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
 --addr 127.0.0.1:5640` exposes the same `LocalFs` export over a native TCP
 listener. `wanix-rust p9-ws --root DIR --addr 127.0.0.1:7654` exposes the same
 server over binary WebSocket frames for browser/v86 experiments. `wanix-rust
-serve [DIR] [--listen HOST:PORT] [--bundle NAME] [--wanix-services]` serves static files with
-COOP/COEP/CORS headers and reuses the binary WebSocket 9P handler on the same
-listener, including the named `/.well-known/export9p` route, which is the first
-Rust-native serve shape for browser/v86/VS Code experiments.
+serve [DIR] [--listen HOST:PORT] [--bundle NAME] [--wanix-services]` serves
+static files with COOP/COEP/CORS headers and reuses the binary WebSocket 9P
+handler on the same listener, including the named `/.well-known/export9p`
+route, which is the Rust-native serve shape for browser/v86/VS Code
+experiments.
 Normal `serve` handles HTTP and direct 9P WebSocket connections concurrently so
 long-lived mounted clients do not block discovery or static assets; `--once`
 remains a deterministic single-connection mode for tests and scripted demos.
@@ -148,9 +152,8 @@ filesystem smoke page that fetches discovery, opens the direct binary 9P
 WebSocket route, negotiates 9P2000.L, and exposes list/read/write/rename/delete
 controls against the served root. Its browser-side client follows `Treaddir`
 offset cookies so large directories are listed across multiple response pages.
-This is the browser-side 9P transport proof
-for future workbench/VS Code filesystem integration, not the VS Code provider
-itself.
+This remains the standalone browser-side 9P transport smoke; the workbench
+provider below is the editor path.
 The web workbench extension now also has a direct 9P filesystem backend that
 matches the existing `WanixBridge` provider shape by consuming Rust serve
 discovery and issuing 9P operations for `stat`, paginated directory listing,
@@ -315,6 +318,10 @@ Treat ADRs like code. Add or update one only for durable architecture, API,
 format, trust-boundary, or workflow decisions. When touching a topic, review the
 related ADRs at the same time and consolidate, delete, or clearly retire records
 that no longer describe the current direction.
+
+The root ADR index is the active Wanix decision set. Imported prototype ADR
+archives should be consolidated into topic docs or deleted; do not let nested
+crates regrow progress-journal ADR series.
 
 Milestone proofs, fixture rebuild notes, per-syscall or per-operation coverage,
 CLI/demo slices, and smoke-test progress belong in tests, examples,

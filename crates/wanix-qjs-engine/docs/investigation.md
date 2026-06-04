@@ -49,7 +49,7 @@ Wasmtime exposes the primitives this design needs:
 - Access to exported mutable globals such as `__stack_pointer`.
 - Typed function calls into exported `qjs_*` functions.
 
-The prototype in `src/` validates the Rust path with Wasmtime `45.0.0`. The
+The crate in `src/` validates the Rust path with Wasmtime `45.0.0`. The
 runtime now loads through `QuickJsModule`, records a SHA-256 hash for the wasm
 bytes, and rejects snapshots whose hash, format version, ABI version, memory
 shape, or core pointers do not match.
@@ -127,15 +127,15 @@ let mut restored = module.restore_runtime_from_bytes(&snapshot_bytes)?;
 assert_eq!(restored.eval_number("counter")?, 42.0);
 ```
 
-## Host Callback Plan
+## Host Callback Boundary
 
 Upstream host callbacks are snapshot-friendly because the QuickJS C function
 stores a name string in QuickJS heap state. After restore, the host registers a
 new Rust callback under the same name.
 
-The Rust prototype now implements the first scalar global callback slice with
-`QuickJsHostValue`, `define_global_host_function`, and
-`register_host_callback`. See ADR 0007 for the public contract.
+The engine implements scalar and binary-capable global callback slices with
+stable names. See `docs/architecture.md` and the crate README for the current
+public contract.
 
 Rust implementation path:
 
@@ -149,9 +149,9 @@ Rust implementation path:
 Host callback closures themselves are not in the snapshot. Applications must
 re-register them after restore.
 
-## Module Loader Plan
+## Module Loader Boundary
 
-The Rust prototype now implements the first synchronous ES module loader slice
+The engine implements a synchronous ES module loader slice
 with `set_module_loader`, `set_module_loader_with_normalizer`, and
 `eval_module_discard`. The loader is intentionally host-owned state: module
 source and normalized names are copied into guest memory for each import, while
@@ -159,35 +159,33 @@ Rust closures and captured stores are not serialized into snapshot bytes.
 
 Already-loaded module state survives snapshot/restore because it lives in the
 QuickJS heap. Future imports after restore require the host to install a module
-loader again. See ADR 0008 for the public contract and the deferred async,
-filesystem, import-map, and richer value-handle work.
+loader again. Async loading, import maps, and richer value-handle work remain
+future engine API decisions.
 
-## Runtime Limits Plan
+## Runtime Limits Boundary
 
-The Rust prototype now exposes QuickJS runtime memory limits, stack limits,
+The engine exposes QuickJS runtime memory limits, stack limits,
 interrupt handlers, memory usage diagnostics, explicit GC, and automatic GC
 threshold controls. Interrupt closures are Rust host state and must be installed
 again after restore. Numeric memory, stack, and GC threshold controls are stored
 by QuickJS in runtime memory, so snapshots may carry their current values, but
-hosts should set required policies explicitly after create and restore. See ADR
-0009 and ADR 0013 for the public contracts and the deferred intrinsics work.
+hosts should set required policies explicitly after create and restore.
 
-## Promise Rejection Plan
+## Promise Rejection Boundary
 
-The Rust prototype now exposes copied promise rejection notifications with
+The engine exposes copied promise rejection notifications with
 `set_promise_rejection_handler` and `clear_promise_rejection_handler`. The host
 import stringifies the reason, frees QuickJS's duplicated promise/reason values,
 uses a lossy fallback when reason stringification fails, and catches Rust handler
-panics before returning to Wasm. Promise rejection handlers are restore-time Rust
-host state; see ADR 0011 for the public contract.
+panics before returning to Wasm. Promise rejection handlers are restore-time
+Rust host state.
 
-## Bytecode Plan
+## Bytecode Boundary
 
-The Rust prototype now exposes trusted QuickJS bytecode compilation and
+The engine exposes trusted QuickJS bytecode compilation and
 evaluation. Bytecode is copied into Rust-owned memory, bound to the producing
 module SHA-256, and rejected before evaluation if the runtime module identity
-differs. This is not an untrusted or portable interchange format; see ADR 0012
-for the public contract.
+differs. This is not an untrusted or portable interchange format.
 
 ## Extension Plan
 
@@ -254,11 +252,10 @@ memory contains large zero regions and should compress well with zstd or gzip.
   handlers, or interrupt handlers are actively on the stack should be avoided;
   snapshot at well-defined yield points.
 
-## Next Milestones
+## Open Work
 
 1. Promote the internal raw value helpers into a real ownership-safe
    `JSValueHandle` if user-facing handle APIs are needed.
-2. Extend host import configuration for filesystem and broader WASI policy.
-3. Move the QuickJS WASM build into this repo instead of relying on the reference
+2. Move the QuickJS WASM build into this repo instead of relying on the reference
    directory.
-4. Add extension dynamic linking only after the main runtime API is stable.
+3. Add extension dynamic linking only after the main runtime API is stable.
