@@ -59,6 +59,11 @@ fn main() {
         );
         return;
     }
+    if args.get(1).map(String::as_str) == Some("--pi") {
+        let n = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1_000_000);
+        println!("{:.10}", leibniz_pi(n));
+        return;
+    }
 
     let input = args.get(1).cloned().unwrap_or_else(|| "/shared/in.txt".to_string());
     let output = args.get(2).cloned().unwrap_or_else(|| "/shared/out.txt".to_string());
@@ -79,6 +84,19 @@ fn main() {
         Ok(()) => println!("rust-wasm: wrote {} bytes to {output}", payload.len()),
         Err(err) => println!("rust-wasm: could not write {output}: {err}"),
     }
+}
+
+/// Approximates pi with `n` Leibniz terms: 4 * sum (-1)^k / (2k+1).
+/// A pure floating-point hot loop — the CPU benchmark kernel, identical to the
+/// native Rust and QuickJS versions so the three execution paths are comparable.
+fn leibniz_pi(n: u64) -> f64 {
+    let mut acc = 0.0f64;
+    let mut sign = 1.0f64;
+    for k in 0..n {
+        acc += sign / (2 * k + 1) as f64;
+        sign = -sign;
+    }
+    4.0 * acc
 }
 
 /// Atomically moves `src` to `dst` via `fs::rename` (the `path_rename` syscall).
