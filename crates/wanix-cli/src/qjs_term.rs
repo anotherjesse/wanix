@@ -1709,6 +1709,8 @@ std.out.puts("child argv " + scriptArgs.join("|") + "\n");
 std.out.puts("child stdin " + readStdin().trimEnd() + "\n");
 std.out.puts("child raw " + std.getenv("WANIX_QJS_SHELL_RAW") + "\n");
 std.out.flush();
+std.err.puts("child stderr " + scriptArgs[1] + "\n");
+std.err.flush();
 "##,
         )
         .unwrap();
@@ -1716,12 +1718,14 @@ std.out.flush();
 
         assert_eq!(initial_output, b"shell task: 1\r\n$ ");
         let output = session
-            .input(b"qjs child.js alpha 'two words' < input.txt\nexit\n")
+            .input(
+                b"qjs child.js alpha 'two words' < input.txt > child-out.txt 2> child-err.txt\ncat child-out.txt\ncat child-err.txt\nexit\n",
+            )
             .unwrap();
 
         assert_eq!(
             output,
-            b"qjs child.js alpha 'two words' < input.txt\r\nchild task 2\r\nchild cwd .\r\nchild argv child.js|alpha|two words\r\nchild stdin redirected stdin\r\nchild raw 1\r\n$ exit\r\nbye\r\n"
+            b"qjs child.js alpha 'two words' < input.txt > child-out.txt 2> child-err.txt\r\n$ cat child-out.txt\r\nchild task 2\r\nchild cwd .\r\nchild argv child.js|alpha|two words\r\nchild stdin redirected stdin\r\nchild raw 1\r\n$ cat child-err.txt\r\nchild stderr alpha\r\n$ exit\r\nbye\r\n"
         );
         assert!(session.is_finished());
     }

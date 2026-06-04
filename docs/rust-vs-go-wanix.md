@@ -357,11 +357,12 @@ terminal. It can feed input after eval, feed line-by-line scripts, pump
 ready-IO handlers, and send deterministic resize events. `qjs-shell` runs the
 bundled QuickJS shell source through the same terminal-backed task runtime,
 including a small `cd`/`ls`/`cat`/`write`/`mkdir`/`rm`/`rmdir`/`mv`/`cp`
-filesystem command set and a synchronous `qjs SCRIPT [ARGS...] [< STDIN]`
-launcher for served namespace and workbench demos. The launcher uses
-`#task/new/qjs`, service-file `cmd`/`env`/`dir`, fd binds, `start`, and `exit`
-rather than a host-side shortcut, and `< STDIN` binds child fd `0` from the
-Wanix namespace.
+filesystem command set and a synchronous
+`qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]` launcher for served
+namespace and workbench demos. The launcher uses `#task/new/qjs`, service-file
+`cmd`/`env`/`dir`, fd binds, `start`, and `exit` rather than a host-side
+shortcut; file redirection binds child fd `0`/`1`/`2` through the Wanix
+namespace.
 
 This is not yet a fully concurrent, production interactive scheduler. Raw mode
 still relies on the native host to put stdin into raw mode, but bytes then flow

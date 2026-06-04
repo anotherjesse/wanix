@@ -195,28 +195,42 @@ function quoteCommandWord(word) {
 }
 
 function parseQjsLaunch(words) {
-  const redirect = words.indexOf("<");
-  if (redirect < 0) {
-    return {
-      script: words[1],
-      args: words.slice(2),
-      stdinPath: null
-    };
-  }
-  if (redirect === 0 || redirect === 1) {
-    return { error: "qjs: missing script before <" };
-  }
-  if (redirect + 1 >= words.length) {
-    return { error: "qjs: missing stdin path after <" };
-  }
-  if (redirect + 2 !== words.length) {
-    return { error: "qjs: expected a single stdin path after <" };
-  }
-  return {
+  const launch = {
     script: words[1],
-    args: words.slice(2, redirect),
-    stdinPath: resolveShellPath(words[redirect + 1])
+    args: [],
+    stdinPath: null,
+    stdoutPath: null,
+    stderrPath: null
   };
+  for (let i = 2; i < words.length; i++) {
+    const word = words[i];
+    if (word !== "<" && word !== ">" && word !== "2>") {
+      launch.args.push(word);
+      continue;
+    }
+    if (i + 1 >= words.length) {
+      return { error: "qjs: missing path after " + word };
+    }
+    const path = resolveShellPath(words[i + 1]);
+    if (word === "<") {
+      if (launch.stdinPath) {
+        return { error: "qjs: duplicate stdin redirection" };
+      }
+      launch.stdinPath = path;
+    } else if (word === ">") {
+      if (launch.stdoutPath) {
+        return { error: "qjs: duplicate stdout redirection" };
+      }
+      launch.stdoutPath = path;
+    } else {
+      if (launch.stderrPath) {
+        return { error: "qjs: duplicate stderr redirection" };
+      }
+      launch.stderrPath = path;
+    }
+    i += 1;
+  }
+  return launch;
 }
 
 function visibleEntries(path) {
@@ -431,7 +445,7 @@ function runCp(words) {
 
 function runQjs(words) {
   if (words.length < 2) {
-    std.out.puts("qjs: usage: qjs SCRIPT [ARGS...] [< STDIN]\n");
+    std.out.puts("qjs: usage: qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]\n");
     prompt();
     return;
   }
@@ -462,8 +476,22 @@ function runQjs(words) {
     } else {
       writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/0 fd/0\n");
     }
-    writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/1 fd/1\n");
-    writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/2 fd/2\n");
+    if (launch.stdoutPath) {
+      if (launch.stdoutPath[0] !== "#") {
+        writeText(launch.stdoutPath, "");
+      }
+      writeRequiredServiceText(taskPath + "/ctl", "bind " + quoteCommandWord(launch.stdoutPath) + " fd/1\n");
+    } else {
+      writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/1 fd/1\n");
+    }
+    if (launch.stderrPath) {
+      if (launch.stderrPath[0] !== "#") {
+        writeText(launch.stderrPath, "");
+      }
+      writeRequiredServiceText(taskPath + "/ctl", "bind " + quoteCommandWord(launch.stderrPath) + " fd/2\n");
+    } else {
+      writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/2 fd/2\n");
+    }
     writeRequiredServiceText(taskPath + "/ctl", "start\n");
     const exit = readServiceText(taskPath + "/exit").trim();
     if (exit && exit !== "0") {

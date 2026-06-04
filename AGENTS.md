@@ -77,7 +77,7 @@ tests.
   shell modes and served shell sessions use the same `#term` device contract,
   with a small `cd`/`ls`/`cat`/`write`/`mkdir`/`rm`/`rmdir`/`mv`/`cp`
   filesystem command set and synchronous child `qjs` task launches with
-  namespace stdin redirection for demos.
+  namespace stdio redirection for demos.
 - `wanix-rust p9-stdio`, `p9-listen`, `p9-ws`, and `serve`: the Rust 9P server
   exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
   layers, with binary protocol traffic kept separate from diagnostics.
@@ -210,7 +210,7 @@ more feature work.
   broad new behavior.
 - Continue `qjs-shell` interactivity with signal-driven resize wakeups,
   foreground child-task terminal ownership, cancellation, command execution
-  beyond the current built-ins and synchronous `qjs` launcher with file stdin
+  beyond the current built-ins and synchronous `qjs` launcher with file stdio
   redirection, and richer terminal/session lifecycle control.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
   integration, then extend the direct-v86 route into a complete qemu/v86 bundle,
