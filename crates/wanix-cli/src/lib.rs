@@ -3,6 +3,7 @@
 mod p9_listen;
 mod p9_stdio;
 mod p9_ws;
+mod qemu;
 mod qjs_term;
 mod serve;
 
@@ -53,6 +54,8 @@ const USAGE: &str = concat!(
     "       wanix-rust p9-stdio --root DIR\n",
     "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
+    "       wanix-rust qemu --root DIR --kernel PATH [--qemu-bin PATH] [--memory-mb N] ",
+    "[--no-kvm]\n",
     "       wanix-rust serve [--root DIR | DIR] [--addr HOST:PORT | --listen HOST:PORT] ",
     "[--bundle NAME] [--once]\n",
     "       wanix-rust --help",
@@ -269,6 +272,9 @@ fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<Cl
             Err(CliError::usage(
                 "p9-ws requires live process IO; use the wanix-rust binary",
             ))
+        }
+        [command, rest @ ..] if command == "qemu" => {
+            qemu::run_qemu_command(qemu::parse_qemu_command(rest)?)
         }
         [command, rest @ ..] if command == "serve" => {
             let _ = serve::parse_serve_command(rest)?;
@@ -1699,8 +1705,98 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-stdio"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-listen"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-ws"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qemu"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust serve"));
         assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qemu_command_prints_virtio9p_kvm_invocation() {
+        let root = temp_dir("wanix-cli-qemu-root");
+        let boot = root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        let kernel = boot.join("bzImage");
+        fs::write(&kernel, b"kernel").unwrap();
+
+        let output = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--kernel".to_owned(),
+            kernel.display().to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.stderr().is_empty());
+        let stdout = String::from_utf8(output.stdout().to_vec()).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let kernel = fs::canonicalize(kernel).unwrap();
+        assert!(stdout.starts_with("qemu-system-i386 -enable-kvm -cpu host -m 512 -smp 1 "));
+        assert!(stdout.contains(&format!("-kernel {}", kernel.display())));
+        assert!(stdout.contains("root=host9p rootfstype=9p"));
+        assert!(stdout.contains("rootflags=trans=virtio,version=9p2000.L,msize=131072"));
+        assert!(stdout.contains(&format!(
+            "-fsdev local,id=host9p,path={},security_model=mapped-xattr",
+            root.display()
+        )));
+        assert!(stdout.contains("-device virtio-9p-pci,fsdev=host9p,mount_tag=host9p"));
+        assert!(stdout.contains("-device virtio-serial-pci"));
+        assert!(stdout.contains("-device virtconsole,chardev=con"));
+        assert!(stdout.ends_with("-chardev stdio,id=con -nographic\n"));
+    }
+
+    #[test]
+    fn qemu_command_can_print_without_kvm_and_with_custom_memory() {
+        let root = temp_dir("wanix-cli-qemu-no-kvm-root");
+        let kernel = root.join("kernel");
+        fs::write(&kernel, b"kernel").unwrap();
+
+        let output = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--kernel".to_owned(),
+            kernel.display().to_string(),
+            "--qemu-bin".to_owned(),
+            "qemu-system-x86_64".to_owned(),
+            "--memory-mb".to_owned(),
+            "256".to_owned(),
+            "--no-kvm".to_owned(),
+        ])
+        .unwrap();
+
+        let stdout = String::from_utf8(output.stdout().to_vec()).unwrap();
+        assert!(stdout.starts_with("qemu-system-x86_64 -m 256 -smp 1 "));
+        assert!(!stdout.contains("-enable-kvm"));
+        assert!(!stdout.contains("-cpu host"));
+    }
+
+    #[test]
+    fn qemu_command_validates_required_paths_and_qemu_option_boundaries() {
+        let missing_kernel = run(["qemu", "--root", "."]).unwrap_err();
+        assert_eq!(missing_kernel.exit_code(), 2);
+        assert!(
+            missing_kernel
+                .to_string()
+                .contains("qemu requires --kernel PATH")
+        );
+
+        let root_parent = temp_dir("wanix-cli-qemu-comma-parent");
+        let root = root_parent.join("root,dir");
+        fs::create_dir_all(&root).unwrap();
+        let kernel = root_parent.join("bzImage");
+        fs::write(&kernel, b"kernel").unwrap();
+        let comma_root = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--kernel".to_owned(),
+            kernel.display().to_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(comma_root.exit_code(), 2);
+        assert!(comma_root.to_string().contains("cannot contain ','"));
     }
 
     #[test]

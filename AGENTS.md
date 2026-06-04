@@ -137,6 +137,10 @@ serve owns the embedded `/v86/lib/libv86.mjs`, `/v86/lib/mod.js`,
 does not have to live in the served root. The page accepts caller-supplied
 kernel/initrd/cmdline URLs or query overrides, so it is a boot handoff proof
 rather than a complete guest asset assembler.
+`wanix-rust qemu --root DIR --kernel PATH` prints a shell-quoted native
+QEMU/KVM virtio-9p command for the same Linux guest/rootfs shape, using base
+`9p2000.L` root flags and `hvc0` virtconsole while leaving actual QEMU process
+supervision for a later cycle.
 `/.well-known` routes are reserved for protocol endpoints;
 `/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
 lands. Listener commands accept `--once` for tests and scripted demos.
@@ -425,6 +429,9 @@ cargo test --workspace --locked
 - [ADR 0087](docs/adrs/0087-9p-google2-walkgetattr.md):
   `wanix-9p` negotiates Google.2 9P extensions for `Tflushf` and
   `Twalkgetattr` while keeping v86's default mount contract on base 9P.
+- [ADR 0088](docs/adrs/0088-native-qemu-virtio9p-handoff-command.md):
+  `wanix-rust qemu` prints a validated QEMU/KVM virtio-9p handoff command
+  without becoming a VM process supervisor yet.
 
 ## Cycle Rules
 
