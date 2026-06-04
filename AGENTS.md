@@ -38,6 +38,11 @@ integration.
   one Wanix ADR per engine helper.
 - `wanix-qjs`: QuickJS/WASI task driver that adapts the engine crate to Wanix
   task semantics.
+- `wanix-wasm`: generic WASI Preview 1 runner that instantiates an arbitrary
+  `wasm32-wasi` command module on Wasmtime with its syscalls backed directly by
+  `wanix-wasi`'s `WasiCtx`/`Namespace`. This is the compiled-to-wasm (Rust/Go/…)
+  task sibling of `wanix-qjs`: a Rust task and a `qjs` task built from the same
+  `Namespace` share one VFS. First-pass import subset (argv/env, stdio, file IO).
 - `wanix-cli`: native CLI and demo runner.
 - Future protocol work beyond the current 9P stack: CBOR/RPC, HTTPFS, and R2FS
   protocol pieces when those integrations need them.
@@ -57,6 +62,7 @@ wanix-term -> wanix-fs
 wanix-wasi -> wanix-fs + wanix-vfs
 wanix-qjs-engine -> Wasmtime + QuickJS WASM fixture
 wanix-qjs  -> wanix-task + wanix-wasi + wanix-qjs-engine
+wanix-wasm -> wanix-wasi + wanix-vfs + Wasmtime
 wanix-cli  -> runtime crates for orchestration
 ```
 

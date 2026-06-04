@@ -20,6 +20,7 @@ wanix-task = { path = "../wanix-task" }
 wanix-term = { path = "../wanix-term" }
 wanix-vfs = { path = "../wanix-vfs" }
 wanix-wasi = { path = "../wanix-wasi" }
+wanix-wasm = { path = "../wanix-wasm" }
 
 [dev-dependencies]
 serde_json = "1"

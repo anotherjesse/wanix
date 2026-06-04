@@ -1,0 +1,187 @@
+//! WASI Preview 1 `fd_*` imports.
+
+use super::WasiState;
+use super::mem::{
+    ERRNO_INVAL, ERRNO_SUCCESS, code, errno, memory, read_bytes, read_iovs, write_bytes, write_u32,
+    write_u64,
+};
+use wanix_wasi::{WasiFd, WasiWhence};
+use wasmtime::{Caller, Linker, Result};
+
+/// Registers the `fd_*` imports on `linker`.
+pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
+    let m = super::MODULE;
+
+    linker.func_wrap(
+        m,
+        "fd_write",
+        |mut caller: Caller<'_, WasiState>,
+         fd: i32,
+         iovs: i32,
+         iovs_len: i32,
+         nout: i32|
+         -> Result<i32> {
+            let mem = memory(&mut caller)?;
+            let mut written = 0usize;
+            for (ptr, len) in read_iovs(&mem, &mut caller, iovs, iovs_len)? {
+                let buf = read_bytes(&mem, &mut caller, ptr, len)?;
+                match caller.data_mut().ctx.fd_write(WasiFd::new(fd as u32), &buf) {
+                    Ok(n) => {
+                        written += n;
+                        if n < buf.len() {
+                            break;
+                        }
+                    }
+                    Err(e) => return errno(&mem, &mut caller, nout, written, e),
+                }
+            }
+            let mem = memory(&mut caller)?;
+            write_u32(&mem, &mut caller, nout, written as u32)?;
+            Ok(ERRNO_SUCCESS)
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "fd_read",
+        |mut caller: Caller<'_, WasiState>,
+         fd: i32,
+         iovs: i32,
+         iovs_len: i32,
+         nout: i32|
+         -> Result<i32> {
+            let mem = memory(&mut caller)?;
+            let mut total = 0usize;
+            for (ptr, len) in read_iovs(&mem, &mut caller, iovs, iovs_len)? {
+                let mut buf = vec![0u8; len];
+                match caller
+                    .data_mut()
+                    .ctx
+                    .fd_read(WasiFd::new(fd as u32), &mut buf)
+                {
+                    Ok(n) => {
+                        write_bytes(&mem, &mut caller, ptr, &buf[..n])?;
+                        total += n;
+                        if n < len {
+                            break;
+                        }
+                    }
+                    Err(e) => return errno(&mem, &mut caller, nout, total, e),
+                }
+            }
+            let mem = memory(&mut caller)?;
+            write_u32(&mem, &mut caller, nout, total as u32)?;
+            Ok(ERRNO_SUCCESS)
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "fd_close",
+        |mut caller: Caller<'_, WasiState>, fd: i32| {
+            code(caller.data_mut().ctx.fd_close(WasiFd::new(fd as u32)))
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "fd_seek",
+        |mut caller: Caller<'_, WasiState>,
+         fd: i32,
+         offset: i64,
+         whence: i32,
+         out: i32|
+         -> Result<i32> {
+            let w = match WasiWhence::from_preview1(whence) {
+                Ok(w) => w,
+                Err(_) => return Ok(ERRNO_INVAL),
+            };
+            match caller
+                .data_mut()
+                .ctx
+                .fd_seek(WasiFd::new(fd as u32), offset, w)
+            {
+                Ok(pos) => {
+                    let mem = memory(&mut caller)?;
+                    write_u64(&mem, &mut caller, out, pos)?;
+                    Ok(ERRNO_SUCCESS)
+                }
+                Err(e) => Ok(e.preview1_code() as i32),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "fd_fdstat_get",
+        |mut caller: Caller<'_, WasiState>, fd: i32, out: i32| -> Result<i32> {
+            match caller.data().ctx.fd_fdstat_get(WasiFd::new(fd as u32)) {
+                Ok(stat) => {
+                    let bytes = stat.to_preview1_bytes();
+                    let mem = memory(&mut caller)?;
+                    write_bytes(&mem, &mut caller, out, &bytes)?;
+                    Ok(ERRNO_SUCCESS)
+                }
+                Err(e) => Ok(e.preview1_code() as i32),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "fd_fdstat_set_flags",
+        |mut caller: Caller<'_, WasiState>, fd: i32, flags: i32| {
+            code(
+                caller
+                    .data_mut()
+                    .ctx
+                    .fd_fdstat_set_flags(WasiFd::new(fd as u32), flags as u16),
+            )
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "fd_prestat_get",
+        |mut caller: Caller<'_, WasiState>, fd: i32, out: i32| -> Result<i32> {
+            match caller.data().ctx.fd_prestat_get(WasiFd::new(fd as u32)) {
+                Ok(prestat) => {
+                    let bytes = prestat.to_preview1_bytes();
+                    let mem = memory(&mut caller)?;
+                    write_bytes(&mem, &mut caller, out, &bytes)?;
+                    Ok(ERRNO_SUCCESS)
+                }
+                Err(e) => Ok(e.preview1_code() as i32),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "fd_prestat_dir_name",
+        |mut caller: Caller<'_, WasiState>, fd: i32, path: i32, path_len: i32| -> Result<i32> {
+            let mut buf = vec![0u8; path_len.max(0) as usize];
+            match caller
+                .data()
+                .ctx
+                .fd_prestat_dir_name(WasiFd::new(fd as u32), &mut buf)
+            {
+                Ok(n) => {
+                    let mem = memory(&mut caller)?;
+                    write_bytes(&mem, &mut caller, path, &buf[..n])?;
+                    Ok(ERRNO_SUCCESS)
+                }
+                Err(e) => Ok(e.preview1_code() as i32),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "fd_filestat_get",
+        |mut caller: Caller<'_, WasiState>, fd: i32, out: i32| -> Result<i32> {
+            match caller.data().ctx.fd_filestat_get(WasiFd::new(fd as u32)) {
+                Ok(stat) => {
+                    let bytes = stat.to_preview1_bytes();
+                    let mem = memory(&mut caller)?;
+                    write_bytes(&mem, &mut caller, out, &bytes)?;
+                    Ok(ERRNO_SUCCESS)
+                }
+                Err(e) => Ok(e.preview1_code() as i32),
+            }
+        },
+    )?;
+    Ok(())
+}
