@@ -522,9 +522,12 @@ types, and can run the current JavaScript file as a real Wanix `qjs` task by
 driving `#task` and `#term` over 9P. The served qjs-shell WebSocket route gives
 the workbench a terminal/session path backed by the same native task and
 terminal model; it can start in the configured Wanix cwd and deliver terminal
-resize frames through `#term/<id>/winch`. Direct workbench terminals dispose of
-owned terminal resources through `#term/<id>/ctl`, and served shell sessions
-close their owned terminal resource as part of session cleanup.
+resize frames through `#term/<id>/winch`. Discovery advertises the qjs-shell
+cwd query, resize message formats, JSON exit frame, and owned-terminal cleanup
+policy so browser/editor clients do not have to infer those details from demo
+code. Direct workbench terminals dispose of owned terminal resources through
+`#term/<id>/ctl`, and served shell sessions close their owned terminal resource
+as part of session cleanup.
 
 With `--bundle direct-v86`, Rust `serve` generates a browser page that fetches
 the discovery document and configures v86 `filesystem.proxy_url` to the Rust 9P

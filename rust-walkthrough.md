@@ -379,7 +379,9 @@ $ bye
 > Clients that own a terminal resource can release it by writing `close` to
 > `#term/<id>/ctl`; that cleans up the terminal resource without pretending to
 > be task cancellation. Served qjs-shell sessions apply the same lifecycle rule
-> to their owned terminal resource when the session closes.
+> to their owned terminal resource when the session closes, and discovery
+> advertises the qjs-shell cwd query, resize message forms, JSON exit frame,
+> and lifecycle behavior.
 
 ## 9. Inspect Protocol, Editor, And VM Entrypoints
 
@@ -457,9 +459,11 @@ cmdline. If you replace the full cmdline with `--cmdline`, include the matching
 > symlink/readlink and preserve symlink metadata over the same 9P route, and
 > `serve --wanix-services` exports `#task` and `#term` so those clients can
 > start qjs tasks, attach terminals, start served qjs-shell sessions in the
-> requested Wanix cwd, forward resizes through `#term/<id>/winch`, close owned
-> terminals through `#term/<id>/ctl`, forward Ctrl-C/Ctrl-D as terminal bytes,
-> expose scriptable hvc0 sends for direct-v86 pages, and observe exit state.
+> requested Wanix cwd using the discovered `cwd` query contract, forward
+> resizes through the discovered qjs-shell resize message formats and
+> `#term/<id>/winch`, close owned terminals through `#term/<id>/ctl`, forward
+> Ctrl-C/Ctrl-D as terminal bytes, expose scriptable hvc0 sends for direct-v86
+> pages, and observe exit state.
 > `rootfs` and `qemu` are the native VM handoff path, not a VM manager yet.
 > `rootfs --json` emits `wanix-rootfs.v1` with the prepared root, boot markers,
 > default QEMU manifest, and direct-v86 serve argv. `/.well-known/rootfs.json`

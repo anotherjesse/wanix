@@ -2244,7 +2244,13 @@ fn serve_services_json(roots: &ServeRoots) -> String {
 fn serve_qjs_shell_route_json(roots: &ServeRoots, websocket_url: &str) -> String {
     if roots.wanix_services {
         format!(
-            "{{\"websocket\":{},\"protocol\":\"wanix-qjs-shell.v1\",\"mode\":\"raw-bytes\",\"status\":\"available\"}}",
+            "{{\"websocket\":{},\"protocol\":\"wanix-qjs-shell.v1\",\
+             \"mode\":\"raw-bytes\",\"status\":\"available\",\
+             \"cwdQuery\":\"cwd\",\"defaultCwd\":\".\",\
+             \"resize\":[\"{{\\\"type\\\":\\\"resize\\\",\\\"columns\\\":COLS,\\\"rows\\\":ROWS}}\",\
+             \"resize COLS ROWS\"],\
+             \"exitMessage\":\"{{\\\"type\\\":\\\"exit\\\",\\\"code\\\":N}}\",\
+             \"terminalLifecycle\":\"owned-resource-closed-on-session-close\"}}",
             json_string(websocket_url)
         )
     } else {
@@ -3532,13 +3538,26 @@ mod tests {
             ),
             "{discovery}"
         );
-        assert!(
-            discovery.contains(
-                "\"qjsShell\":{\"websocket\":\"ws://demo.local:7654/.well-known/qjs-shell\",\
-                 \"protocol\":\"wanix-qjs-shell.v1\",\"mode\":\"raw-bytes\",\
-                 \"status\":\"available\"}"
-            ),
-            "{discovery}"
+        let discovery_json: serde_json::Value = serde_json::from_str(&discovery).unwrap();
+        let qjs_shell = &discovery_json["routes"]["qjsShell"];
+        assert_eq!(
+            qjs_shell["websocket"],
+            "ws://demo.local:7654/.well-known/qjs-shell"
+        );
+        assert_eq!(qjs_shell["protocol"], "wanix-qjs-shell.v1");
+        assert_eq!(qjs_shell["mode"], "raw-bytes");
+        assert_eq!(qjs_shell["status"], "available");
+        assert_eq!(qjs_shell["cwdQuery"], "cwd");
+        assert_eq!(qjs_shell["defaultCwd"], ".");
+        assert_eq!(
+            qjs_shell["resize"][0],
+            "{\"type\":\"resize\",\"columns\":COLS,\"rows\":ROWS}"
+        );
+        assert_eq!(qjs_shell["resize"][1], "resize COLS ROWS");
+        assert_eq!(qjs_shell["exitMessage"], "{\"type\":\"exit\",\"code\":N}");
+        assert_eq!(
+            qjs_shell["terminalLifecycle"],
+            "owned-resource-closed-on-session-close"
         );
 
         let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());

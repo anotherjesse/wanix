@@ -33,7 +33,8 @@ task launches, namespace stdio redirection, direct terminal stdio with buffered 
 stdin handoff, queued resize tracking from `#term/<id>/winch`, `ps` task
 inspection, child exit status inspection, and served shell terminal cleanup, 9P
 exports over stdio/TCP/WebSocket, Rust `serve` discovery, browser filesystem
-and workbench demos, direct-v86 handoff with tunable 9P `msize`, rootfs
+and workbench demos, qjs-shell discovery metadata for cwd, resize, exit, and
+session lifecycle, direct-v86 handoff with tunable 9P `msize`, rootfs
 preparation with shell/JSON handoffs, trusted-local served prepared-root
 handoff discovery with copyable browser commands, hvc0 Ctrl-C/Ctrl-D forwarding
 plus a scriptable send hook, and initrd-aware native QEMU command/JSON handoff
