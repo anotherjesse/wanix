@@ -1731,13 +1731,13 @@ std.exit(7);
         assert_eq!(initial_output, b"shell task: 1\r\n$ ");
         let output = session
             .input(
-                b"qjs terminal-child.js\nenv\nsetenv MODE shell-mode\nenv MODE\nqjs child.js alpha 'two words' < input.txt > child-out.txt 2> child-err.txt\nstatus\ncat child-out.txt\ncat child-err.txt\nexit\n",
+                b"qjs terminal-child.js\nenv\nsetenv MODE throwaway\nenv MODE\nunsetenv MODE\nenv MODE\nsetenv MODE shell-mode\nenv MODE\nqjs child.js alpha 'two words' < input.txt > child-out.txt 2> child-err.txt\nstatus\ncat child-out.txt\ncat child-err.txt\nexit\n",
             )
             .unwrap();
 
         assert_eq!(
             output,
-            b"qjs terminal-child.js\r\nterminal child stdout\r\nterminal child stderr\r\n$ env\r\nWANIX_QJS_SHELL_RAW=1\r\n$ setenv MODE shell-mode\r\n$ env MODE\r\nMODE=shell-mode\r\n$ qjs child.js alpha 'two words' < input.txt > child-out.txt 2> child-err.txt\r\nqjs exit 7\r\n$ status\r\nstatus 7\r\n$ cat child-out.txt\r\nchild task 3\r\nchild cwd .\r\nchild argv child.js|alpha|two words\r\nchild stdin redirected stdin\r\nchild raw 1\r\nchild mode shell-mode\r\n$ cat child-err.txt\r\nchild stderr alpha\r\n$ exit\r\nbye\r\n"
+            b"qjs terminal-child.js\r\nterminal child stdout\r\nterminal child stderr\r\n$ env\r\nWANIX_QJS_SHELL_RAW=1\r\n$ setenv MODE throwaway\r\n$ env MODE\r\nMODE=throwaway\r\n$ unsetenv MODE\r\n$ env MODE\r\n$ setenv MODE shell-mode\r\n$ env MODE\r\nMODE=shell-mode\r\n$ qjs child.js alpha 'two words' < input.txt > child-out.txt 2> child-err.txt\r\nqjs exit 7\r\n$ status\r\nstatus 7\r\n$ cat child-out.txt\r\nchild task 3\r\nchild cwd .\r\nchild argv child.js|alpha|two words\r\nchild stdin redirected stdin\r\nchild raw 1\r\nchild mode shell-mode\r\n$ cat child-err.txt\r\nchild stderr alpha\r\n$ exit\r\nbye\r\n"
         );
         assert!(session.is_finished());
     }
