@@ -1,7 +1,8 @@
 use super::super::super::{
     ERRNO_BADF, ERRNO_SUCCESS, HostState, caller_memory, checked_wasi_path_len, preview1_fd,
-    read_guest_path, unsupported_path_mutation, with_wasi_host_u32,
+    read_guest_path, with_wasi_host_u32,
 };
+use super::super::unsupported_path_mutation;
 use wasmtime::Caller;
 
 pub(in crate::host::fs) fn path_symlink(

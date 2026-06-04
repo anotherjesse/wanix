@@ -1,8 +1,8 @@
+use super::path::unsupported_lookupflags;
 use super::{
     ALLOWED_FILE_RIGHTS, ERRNO_BADF, ERRNO_INVAL, ERRNO_NOENT, ERRNO_NOTCAPABLE, ERRNO_SUCCESS,
     HostState, WASI_U32_SIZE, caller_memory, checked_wasi_path_len, preview1_fd,
-    preview1_u16_flags, read_absolute_virtual_path, read_guest_path, unsupported_lookupflags,
-    with_wasi_host_u32,
+    preview1_u16_flags, read_absolute_virtual_path, read_guest_path, with_wasi_host_u32,
 };
 use crate::guest::guest_offset;
 use wasmtime::Caller;

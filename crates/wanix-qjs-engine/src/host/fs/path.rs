@@ -1,9 +1,9 @@
 use super::{
     ERRNO_BADF, ERRNO_NOENT, ERRNO_NOSYS, ERRNO_NOTCAPABLE, ERRNO_SUCCESS, FILESTAT_SIZE,
-    FILETYPE_DIRECTORY, FILETYPE_REGULAR_FILE, FilestatFields, HostState, WASI_U32_SIZE,
-    caller_memory, checked_wasi_path_len, guest_len, guest_range, preview1_fd,
-    read_absolute_virtual_path, read_guest_path, unsupported_lookupflags,
-    unsupported_path_mutation, with_wasi_host_u32, write_filestat, write_wasi_filestat,
+    FILETYPE_DIRECTORY, FILETYPE_REGULAR_FILE, FilestatFields, HostState,
+    LOOKUPFLAGS_SYMLINK_FOLLOW, WASI_U32_SIZE, caller_memory, checked_wasi_path_len, guest_len,
+    guest_range, preview1_fd, read_absolute_virtual_path, read_guest_path, with_wasi_host,
+    with_wasi_host_u32, write_filestat, write_wasi_filestat,
 };
 use crate::guest::guest_offset;
 use wasmtime::Caller;
@@ -13,6 +13,35 @@ pub(super) use mutation::{
     path_create_directory, path_filestat_set_times, path_remove_directory, path_rename,
     path_symlink, path_unlink_file,
 };
+
+pub(in crate::host::fs) fn unsupported_lookupflags(flags: i32) -> bool {
+    flags.cast_unsigned() & !LOOKUPFLAGS_SYMLINK_FOLLOW != 0
+}
+
+fn unsupported_path_mutation(
+    caller: &Caller<'_, HostState>,
+    dirfd: i32,
+    path_ptr: i32,
+    path_len: i32,
+) -> wasmtime::Result<i32> {
+    if let Err(errno) = preview1_fd(dirfd) {
+        return Ok(errno);
+    }
+    if let Some(result) = with_wasi_host(caller, dirfd, |host, fd| host.fd_fdstat_get(fd))? {
+        if let Err(errno) = result {
+            return Ok(errno.preview1_result());
+        }
+    } else if !caller.data().is_virtual_preopen_fd(dirfd) {
+        return Ok(ERRNO_BADF);
+    }
+    let path_len = match checked_wasi_path_len(path_len)? {
+        Ok(path_len) => path_len,
+        Err(errno) => return Ok(errno),
+    };
+    let memory = caller_memory(caller)?;
+    let _path = read_guest_path(&memory, caller, path_ptr, path_len)?;
+    Ok(ERRNO_NOSYS)
+}
 
 pub(super) fn path_filestat_get(
     mut caller: Caller<'_, HostState>,

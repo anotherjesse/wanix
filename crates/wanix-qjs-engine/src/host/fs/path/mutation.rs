@@ -1,8 +1,9 @@
 use super::super::{
     ERRNO_BADF, ERRNO_NOSYS, ERRNO_NOTCAPABLE, ERRNO_SUCCESS, HostState, caller_memory,
     checked_wasi_path_len, preview1_fd, preview1_u16_filestat_flags, read_guest_path,
-    unsupported_lookupflags, unsupported_path_mutation, with_wasi_host_u32,
+    with_wasi_host_u32,
 };
+use super::{unsupported_lookupflags, unsupported_path_mutation};
 use wasmtime::Caller;
 
 mod symlink;

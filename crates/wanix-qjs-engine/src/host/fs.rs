@@ -11,9 +11,10 @@ use super::{
 use crate::allocation::try_copy_bytes;
 use crate::guest::guest_offset;
 use std::sync::Arc;
-use wasmtime::{Caller, Linker, Memory};
+use wasmtime::{Caller, Memory};
 
 mod fd;
+mod imports;
 mod layout;
 mod open;
 mod path;
@@ -21,6 +22,7 @@ use fd::{
     fd_close, fd_fdstat_get, fd_fdstat_set_flags, fd_filestat_get, fd_filestat_set_size,
     fd_filestat_set_times, fd_prestat_dir_name, fd_prestat_get, fd_readdir, fd_seek, fd_tell,
 };
+pub(super) use imports::define_imports;
 use layout::{
     FilestatFields, write_filestat, write_prestat, write_wasi_direntries, write_wasi_fdstat,
     write_wasi_filestat,
@@ -81,95 +83,6 @@ pub(super) struct VirtualFileHandle {
     pub(super) bytes: Arc<[u8]>,
     pub(super) offset: u64,
     pub(super) rights_base: u64,
-}
-
-pub(super) fn define_imports(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
-    linker.func_wrap("wasi_snapshot_preview1", "fd_prestat_get", fd_prestat_get)?;
-    linker.func_wrap(
-        "wasi_snapshot_preview1",
-        "fd_prestat_dir_name",
-        fd_prestat_dir_name,
-    )?;
-    linker.func_wrap("wasi_snapshot_preview1", "path_open", path_open)?;
-    linker.func_wrap("wasi_snapshot_preview1", "fd_readdir", fd_readdir)?;
-    linker.func_wrap("wasi_snapshot_preview1", "fd_seek", fd_seek)?;
-    linker.func_wrap("wasi_snapshot_preview1", "fd_tell", fd_tell)?;
-    linker.func_wrap("wasi_snapshot_preview1", "fd_close", fd_close)?;
-    linker.func_wrap("wasi_snapshot_preview1", "fd_fdstat_get", fd_fdstat_get)?;
-    linker.func_wrap(
-        "wasi_snapshot_preview1",
-        "fd_fdstat_set_flags",
-        fd_fdstat_set_flags,
-    )?;
-    linker.func_wrap("wasi_snapshot_preview1", "fd_filestat_get", fd_filestat_get)?;
-    linker.func_wrap(
-        "wasi_snapshot_preview1",
-        "fd_filestat_set_times",
-        fd_filestat_set_times,
-    )?;
-    linker.func_wrap(
-        "wasi_snapshot_preview1",
-        "fd_filestat_set_size",
-        fd_filestat_set_size,
-    )?;
-    linker.func_wrap(
-        "wasi_snapshot_preview1",
-        "path_create_directory",
-        path_create_directory,
-    )?;
-    linker.func_wrap("wasi_snapshot_preview1", "path_readlink", path_readlink)?;
-    linker.func_wrap("wasi_snapshot_preview1", "path_symlink", path_symlink)?;
-    linker.func_wrap(
-        "wasi_snapshot_preview1",
-        "path_filestat_get",
-        path_filestat_get,
-    )?;
-    linker.func_wrap(
-        "wasi_snapshot_preview1",
-        "path_filestat_set_times",
-        path_filestat_set_times,
-    )?;
-    linker.func_wrap(
-        "wasi_snapshot_preview1",
-        "path_remove_directory",
-        path_remove_directory,
-    )?;
-    linker.func_wrap("wasi_snapshot_preview1", "path_rename", path_rename)?;
-    linker.func_wrap(
-        "wasi_snapshot_preview1",
-        "path_unlink_file",
-        path_unlink_file,
-    )?;
-    Ok(())
-}
-
-fn unsupported_lookupflags(flags: i32) -> bool {
-    flags.cast_unsigned() & !LOOKUPFLAGS_SYMLINK_FOLLOW != 0
-}
-
-fn unsupported_path_mutation(
-    caller: &Caller<'_, HostState>,
-    dirfd: i32,
-    path_ptr: i32,
-    path_len: i32,
-) -> wasmtime::Result<i32> {
-    if let Err(errno) = preview1_fd(dirfd) {
-        return Ok(errno);
-    }
-    if let Some(result) = with_wasi_host(caller, dirfd, |host, fd| host.fd_fdstat_get(fd))? {
-        if let Err(errno) = result {
-            return Ok(errno.preview1_result());
-        }
-    } else if !caller.data().is_virtual_preopen_fd(dirfd) {
-        return Ok(ERRNO_BADF);
-    }
-    let path_len = match checked_wasi_path_len(path_len)? {
-        Ok(path_len) => path_len,
-        Err(errno) => return Ok(errno),
-    };
-    let memory = caller_memory(caller)?;
-    let _path = read_guest_path(&memory, caller, path_ptr, path_len)?;
-    Ok(ERRNO_NOSYS)
 }
 
 fn read_absolute_virtual_path(
@@ -233,15 +146,18 @@ fn preview1_u16_filestat_flags(flags: i32) -> Result<u16, i32> {
 }
 
 fn preview1_errno(errno: i32) -> QuickJsWasiErrno {
-    match errno {
-        ERRNO_BADF => QuickJsWasiErrno::Badf,
-        ERRNO_INVAL => QuickJsWasiErrno::Inval,
-        ERRNO_NAMETOOLONG => QuickJsWasiErrno::Nametoolong,
-        ERRNO_NOENT => QuickJsWasiErrno::Noent,
-        ERRNO_NOSYS => QuickJsWasiErrno::Nosys,
-        ERRNO_NOTCAPABLE => QuickJsWasiErrno::Notcapable,
-        _ => QuickJsWasiErrno::Io,
-    }
+    const ERRNO_MAP: &[(i32, QuickJsWasiErrno)] = &[
+        (ERRNO_BADF, QuickJsWasiErrno::Badf),
+        (ERRNO_INVAL, QuickJsWasiErrno::Inval),
+        (ERRNO_NAMETOOLONG, QuickJsWasiErrno::Nametoolong),
+        (ERRNO_NOENT, QuickJsWasiErrno::Noent),
+        (ERRNO_NOSYS, QuickJsWasiErrno::Nosys),
+        (ERRNO_NOTCAPABLE, QuickJsWasiErrno::Notcapable),
+    ];
+    ERRNO_MAP
+        .iter()
+        .find_map(|(raw, mapped)| (*raw == errno).then_some(*mapped))
+        .unwrap_or(QuickJsWasiErrno::Io)
 }
 
 fn read_guest_path(
