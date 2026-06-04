@@ -112,6 +112,12 @@ Rust-native serve shape for browser/v86/VS Code experiments.
 `/.well-known/wanix.json` describes the direct binary 9P WebSocket route, the
 optional bundle hint, and the explicitly unimplemented Ethernet route so
 browser/v86/VS Code clients can discover the current Rust serve contract.
+When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
+browser page that fetches the discovery document and configures v86
+`filesystem.proxy_url` with the Rust direct 9P WebSocket route. The page assumes
+the served root contains the v86 browser assets and accepts caller-supplied
+kernel/initrd URLs, so it is a route wiring proof rather than a complete VM
+bundle assembler.
 `/.well-known` routes are reserved for protocol endpoints;
 `/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
 lands. Listener commands accept `--once` for tests and scripted demos.
@@ -366,6 +372,9 @@ cargo test --workspace --locked
 - [ADR 0078](docs/adrs/0078-9p-setattr-permissions.md):
   `wanix-9p` routes `Tsetattr(PERMISSIONS)` through Wanix filesystem permission
   mutation for chmod-compatible mounted workflows.
+- [ADR 0079](docs/adrs/0079-rust-serve-direct-v86-bundle.md):
+  `wanix-rust serve --bundle direct-v86` serves a browser page that wires the
+  discovery document's direct 9P WebSocket route into v86 `filesystem.proxy_url`.
 
 ## Cycle Rules
 
@@ -385,6 +394,6 @@ cycle before starting the next one.
   host loop that can wait on native input and guest output concurrently, signal
   handling, and live native resize propagation.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
-  integration, then wire qemu/v86 bundles through the serve discovery document,
-  `/.well-known/ethernet`, vnet, and VS Code routes onto the Rust `serve`
+  integration, then extend the direct-v86 route into a complete qemu/v86 bundle,
+  `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`
   endpoint.

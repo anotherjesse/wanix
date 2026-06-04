@@ -17,6 +17,7 @@ use crate::{CliError, write_process_output};
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
+const DIRECT_V86_BUNDLE: &str = "direct-v86";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ServeCommand {
@@ -287,6 +288,7 @@ fn serve_http_connection(
     let request = read_http_request(&mut stream)?;
     let response = match parse_http_request(&request) {
         Ok(path) => well_known_response(roots, &path, &request)
+            .or_else(|| bundle_response(roots, &path, &request))
             .unwrap_or_else(|| read_static_response(&roots.static_root, &path)),
         Err(status) => StaticResponse::plain(status, status.reason()),
     };
@@ -471,6 +473,139 @@ fn well_known_response(
         _ => Some(StaticResponse::plain(HttpStatus::NotFound, "not found")),
     }
 }
+
+fn bundle_response(
+    roots: &ServeRoots,
+    relative_path: &Path,
+    request: &[u8],
+) -> Option<StaticResponse> {
+    if roots.bundle.as_deref() != Some(DIRECT_V86_BUNDLE)
+        || relative_path != Path::new("index.html")
+    {
+        return None;
+    }
+    let target = http_request_target(request)?;
+    let (_, query) = target.split_once('?')?;
+    if query_param(query, "bundle") != Some(DIRECT_V86_BUNDLE) {
+        return None;
+    }
+    Some(direct_v86_bundle_response())
+}
+
+fn http_request_target(header_bytes: &[u8]) -> Option<&str> {
+    let header_end = header_end(header_bytes)?;
+    let header = std::str::from_utf8(&header_bytes[..header_end]).ok()?;
+    let request_line = header.lines().next()?;
+    let mut parts = request_line.split_whitespace();
+    parts.next()?;
+    parts.next()
+}
+
+fn query_param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key == name {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn direct_v86_bundle_response() -> StaticResponse {
+    StaticResponse {
+        status: HttpStatus::Ok,
+        content_type: "text/html; charset=utf-8",
+        body: DIRECT_V86_BUNDLE_HTML.as_bytes().to_vec(),
+    }
+}
+
+const DIRECT_V86_BUNDLE_HTML: &str = r##"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wanix Rust direct v86</title>
+  <style>
+    body { margin: 0; font: 14px system-ui, sans-serif; color: #f4f4f0; background: #171a1f; }
+    main { display: grid; grid-template-columns: minmax(280px, 420px) 1fr; min-height: 100vh; }
+    aside { padding: 20px; border-right: 1px solid #363b44; background: #20242b; }
+    #screen { min-height: 100vh; background: #080a0d; }
+    #screen canvas { display: block; max-width: 100%; }
+    #screen div { white-space: pre; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    #serial { min-height: 180px; resize: vertical; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #11141a; padding: 12px; border: 1px solid #363b44; }
+    label { display: block; margin: 12px 0 4px; color: #c9d3e0; }
+    input, textarea { box-sizing: border-box; width: 100%; padding: 8px; color: #f4f4f0; background: #11141a; border: 1px solid #4b5563; }
+    button { margin-top: 14px; padding: 8px 12px; color: #11141a; background: #d8e8a2; border: 0; cursor: pointer; }
+    @media (max-width: 760px) { main { grid-template-columns: 1fr; } #screen { min-height: 55vh; } }
+  </style>
+</head>
+<body>
+  <main>
+    <aside>
+      <h1>Wanix Rust direct v86</h1>
+      <p id="status">Loading Wanix discovery...</p>
+      <label for="kernel">bzImage URL</label>
+      <input id="kernel" value="/bzImage">
+      <label for="initrd">initrd URL</label>
+      <input id="initrd" value="">
+      <button id="start" disabled>Start VM</button>
+      <pre id="config"></pre>
+    </aside>
+    <div id="screen"><canvas></canvas><div></div></div>
+    <textarea id="serial" spellcheck="false"></textarea>
+  </main>
+  <script type="module">
+    import { V86 } from "/v86/lib/mod.js";
+
+    const status = document.querySelector("#status");
+    const start = document.querySelector("#start");
+    const configOutput = document.querySelector("#config");
+    const kernel = document.querySelector("#kernel");
+    const initrd = document.querySelector("#initrd");
+    const params = new URLSearchParams(location.search);
+    if (params.get("bzimage")) kernel.value = params.get("bzimage");
+    if (params.get("initrd")) initrd.value = params.get("initrd");
+
+    const discovery = await fetch("/.well-known/wanix.json", { cache: "no-store" }).then(response => response.json());
+    const proxyUrl = discovery.routes.p9.websocket;
+    status.textContent = "9P proxy: " + proxyUrl;
+
+    function buildConfig() {
+      const config = {
+        wasm_path: "/v86/bundle/v86.wasm",
+        bios: { url: "/v86/bundle/seabios.bin" },
+        vga_bios: { url: "/v86/bundle/vgabios.bin" },
+        filesystem: { proxy_url: proxyUrl },
+        autostart: true,
+        disable_speaker: true,
+        screen_container: document.querySelector("#screen"),
+        serial_container: document.querySelector("#serial")
+      };
+      if (kernel.value) config.bzimage = { url: kernel.value };
+      if (initrd.value) config.initrd = { url: initrd.value };
+      return config;
+    }
+
+    function refreshConfig() {
+      configOutput.textContent = JSON.stringify(buildConfig(), (key, value) => {
+        if (key.endsWith("_container")) return "#" + value.id;
+        return value;
+      }, 2);
+    }
+
+    kernel.addEventListener("input", refreshConfig);
+    initrd.addEventListener("input", refreshConfig);
+    refreshConfig();
+    start.disabled = false;
+    start.addEventListener("click", () => {
+      start.disabled = true;
+      new V86(buildConfig());
+    });
+  </script>
+</body>
+</html>
+"##;
 
 fn serve_discovery_response(roots: &ServeRoots, request: &[u8]) -> StaticResponse {
     StaticResponse {
@@ -807,6 +942,100 @@ mod tests {
             "{stderr}"
         );
         assert!(stderr.contains("/?bundle=vm-workbench"), "{stderr}");
+    }
+
+    #[test]
+    fn serve_once_returns_direct_v86_bundle_page() {
+        let root = temp_dir("wanix-cli-serve-direct-v86");
+        fs::write(root.join("index.html"), b"static index").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /?bundle=direct-v86&bzimage=/boot/kernel HTTP/1.1\r\n\
+              Host: demo.local:7654\r\n\
+              \r\n",
+        );
+        let (exit_code, stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stderr.contains("/?bundle=direct-v86"), "{stderr}");
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(
+            response.contains("Content-Type: text/html; charset=utf-8\r\n"),
+            "{response}"
+        );
+        assert!(
+            response.contains("import { V86 } from \"/v86/lib/mod.js\";"),
+            "{response}"
+        );
+        assert!(
+            response.contains("fetch(\"/.well-known/wanix.json\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("filesystem: { proxy_url: proxyUrl }"),
+            "{response}"
+        );
+        assert!(
+            response.contains("wasm_path: \"/v86/bundle/v86.wasm\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("<div id=\"screen\"><canvas></canvas><div></div></div>"),
+            "{response}"
+        );
+        assert!(
+            response.contains("<textarea id=\"serial\" spellcheck=\"false\"></textarea>"),
+            "{response}"
+        );
+        assert!(!response.contains("static index"), "{response}");
+    }
+
+    #[test]
+    fn serve_once_keeps_other_bundles_on_static_root() {
+        let root = temp_dir("wanix-cli-serve-other-bundle");
+        fs::write(root.join("index.html"), b"static bundle index").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some("vm-workbench".to_owned()),
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /?bundle=direct-v86 HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        );
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.ends_with("static bundle index"), "{response}");
+        assert!(!response.contains("filesystem: { proxy_url: proxyUrl }"));
     }
 
     #[test]
