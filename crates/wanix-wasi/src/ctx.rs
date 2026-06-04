@@ -153,45 +153,65 @@ impl WasiCtx {
         if let Ok(metadata) = self.namespace.metadata(&resolved)
             && metadata.file_type() == FileType::Directory
         {
-            if options.write || options.create || options.truncate {
-                return Err(Errno::Isdir);
-            }
-            if options.append {
-                return Err(Errno::Notcapable);
-            }
-            let (rights_base, rights_inheriting) = request.map_or_else(
-                || {
-                    (
-                        WasiRights::DIRECTORY_BASE.intersection(parent_rights_inheriting),
-                        WasiRights::DIRECTORY_INHERITING.intersection(parent_rights_inheriting),
-                    )
-                },
-                |request| (request.rights_base(), request.rights_inheriting()),
-            );
-            let supported_directory_rights = if request.is_some() {
-                WasiRights::DIRECTORY_INHERITING
-            } else {
-                WasiRights::DIRECTORY_BASE
-            };
-            if !supported_directory_rights.contains(rights_base) {
-                return Err(Errno::Notcapable);
-            }
-            if let Some(request) = request
-                && (!parent_rights_inheriting.contains(request.rights_base())
-                    || !parent_rights_inheriting.contains(request.rights_inheriting()))
-            {
-                return Err(Errno::Notcapable);
-            }
-            return Ok(self.insert_handle(Handle::Directory {
-                path: resolved,
-                rights_base,
-                rights_inheriting,
-            }));
+            return self.open_directory_path(resolved, options, request, parent_rights_inheriting);
         }
         if request.is_some_and(WasiPathOpen::directory) {
             return Err(Errno::Notdir);
         }
 
+        self.open_file_path(resolved, options, request, parent_rights_inheriting)
+    }
+
+    fn open_directory_path(
+        &mut self,
+        resolved: NormalizedPath,
+        options: WasiOpenOptions,
+        request: Option<WasiPathOpen>,
+        parent_rights_inheriting: WasiRights,
+    ) -> Result<WasiFd, Errno> {
+        if options.write || options.create || options.truncate {
+            return Err(Errno::Isdir);
+        }
+        if options.append {
+            return Err(Errno::Notcapable);
+        }
+        let (rights_base, rights_inheriting) = request.map_or_else(
+            || {
+                (
+                    WasiRights::DIRECTORY_BASE.intersection(parent_rights_inheriting),
+                    WasiRights::DIRECTORY_INHERITING.intersection(parent_rights_inheriting),
+                )
+            },
+            |request| (request.rights_base(), request.rights_inheriting()),
+        );
+        let supported_directory_rights = if request.is_some() {
+            WasiRights::DIRECTORY_INHERITING
+        } else {
+            WasiRights::DIRECTORY_BASE
+        };
+        if !supported_directory_rights.contains(rights_base) {
+            return Err(Errno::Notcapable);
+        }
+        if let Some(request) = request
+            && (!parent_rights_inheriting.contains(request.rights_base())
+                || !parent_rights_inheriting.contains(request.rights_inheriting()))
+        {
+            return Err(Errno::Notcapable);
+        }
+        Ok(self.insert_handle(Handle::Directory {
+            path: resolved,
+            rights_base,
+            rights_inheriting,
+        }))
+    }
+
+    fn open_file_path(
+        &mut self,
+        resolved: NormalizedPath,
+        options: WasiOpenOptions,
+        request: Option<WasiPathOpen>,
+        parent_rights_inheriting: WasiRights,
+    ) -> Result<WasiFd, Errno> {
         let requested_file_rights = open_file_rights(options.read, options.write, true);
         let default_file_rights = requested_file_rights.intersection(parent_rights_inheriting);
         if request.is_none()
