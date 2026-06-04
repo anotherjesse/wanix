@@ -29,6 +29,11 @@ local listener:
 - `/.well-known/wanix.json` is the reserved discovery document for direct 9P,
   selected bundles, service availability, direct-v86 boot hints, and explicit
   placeholders for unimplemented routes such as Ethernet/vnet.
+- `/.well-known/rootfs.json` is the reserved prepared-root handoff document for
+  served guest roots. Discovery reports its `ready`, `missing`, and `status`
+  fields. Because the manifest includes absolute local paths and launch argv,
+  the route returns `wanix-rootfs.v1` only to loopback clients when the served
+  root has the VM boot markers required by the rootfs/QEMU/direct-v86 contract.
 - `--once` remains a deterministic single-connection mode for tests and
   scripted clients; normal serve accepts concurrent HTTP and 9P WebSocket
   clients.
@@ -73,6 +78,8 @@ Native QEMU is a validated command handoff:
   prepared root as a machine-readable `wanix-rootfs.v1` manifest, including
   root path, boot marker routes, a nested default native QEMU handoff, and
   direct-v86 serve argv.
+- `wanix-rust serve DIR` can expose that same prepared-root manifest at
+  `/.well-known/rootfs.json` for trusted local browser, editor, or VM launchers.
 - `wanix-rust qemu --root DIR` canonicalizes and validates the guest root,
   discovers VM boot markers, applies explicit command overrides, validates local
   9P security policy, and prints a shell-quoted QEMU/KVM virtio-9p command by

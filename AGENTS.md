@@ -92,6 +92,9 @@ tests.
   rejects unsafe archive paths, validates VM boot markers, and emits shell or
   `wanix-rootfs.v1` JSON handoffs for QEMU and direct-v86 without owning rootfs
   build or VM lifecycle.
+- `/.well-known/rootfs.json`: when loopback clients access `serve` on a
+  prepared guest root, exposes the same `wanix-rootfs.v1` handoff for trusted
+  local browser/editor/VM launchers.
 - `wanix-rust qemu --root DIR`: validates the same guest-root shape and emits a
   shell or `wanix-qemu-virtio9p.v1` JSON handoff; `--exec` is an explicit
   foreground launch, not a Wanix VM supervisor.

@@ -82,6 +82,17 @@ pub(super) fn run_rootfs_command(command: RootfsCommand) -> Result<CliOutput, Cl
     Ok(CliOutput::new(stdout.into_bytes(), Vec::new(), 0))
 }
 
+pub(crate) fn rootfs_json_handoff_for_prepared_root(out_path: &Path) -> Result<String, CliError> {
+    let out_path = fs::canonicalize(out_path).map_err(|error| {
+        CliError::new(
+            format!("rootfs {} is not readable: {error}", out_path.display()),
+            1,
+        )
+    })?;
+    qemu_validate_root_path_for_handoff(&out_path)?;
+    rootfs_json_handoff(&prepared_rootfs_report(out_path)?)
+}
+
 fn rootfs_text_handoff(report: &RootfsReport) -> String {
     let out = report.out_path.to_string_lossy().into_owned();
     let qemu = quote_cmd_argv(["wanix-rust", "qemu", "--root", &out, "--exec"]);
@@ -148,6 +159,10 @@ fn prepare_rootfs(command: RootfsCommand) -> Result<RootfsReport, CliError> {
         qemu_validate_root_path_for_handoff(&out_path)?;
     }
     extract_tgz(&archive_path, &out_path)?;
+    prepared_rootfs_report(out_path)
+}
+
+fn prepared_rootfs_report(out_path: PathBuf) -> Result<RootfsReport, CliError> {
     let kernel_route = first_existing(&out_path, KERNEL_CANDIDATES).ok_or_else(|| {
         CliError::new(
             format!(

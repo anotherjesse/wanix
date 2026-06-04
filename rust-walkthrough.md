@@ -383,6 +383,15 @@ ask `rootfs` for JSON:
 $WANIX rootfs --archive extras/dist/alpine-linux.tgz --out /tmp/wanix-rootfs-json --json
 ```
 
+When `serve` points at a prepared root, loopback clients can discover the same
+trusted-local handoff through HTTP:
+
+```sh
+$WANIX serve --root /tmp/wanix-rootfs --listen 127.0.0.1:7654 --bundle direct-v86
+curl http://127.0.0.1:7654/.well-known/wanix.json
+curl http://127.0.0.1:7654/.well-known/rootfs.json
+```
+
 For host-specific 9P policy, tune the generated QEMU command before launching:
 
 ```sh
@@ -406,9 +415,12 @@ the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
 > Wanix cwd, forward resizes through `#term/<id>/winch`, and observe exit state.
 > `rootfs` and `qemu` are the native VM handoff path, not a VM manager yet.
 > `rootfs --json` emits `wanix-rootfs.v1` with the prepared root, boot markers,
-> default QEMU manifest, and direct-v86 serve argv. The shell and JSON QEMU
-> outputs share one validated argv so scripts and future UI surfaces can consume
-> the handoff without reinterpreting a shell string.
+> default QEMU manifest, and direct-v86 serve argv. `/.well-known/rootfs.json`
+> publishes that prepared-root handoff from `serve` for loopback clients; the
+> route is trusted-local because the manifest includes host paths and launch
+> argv. The shell and JSON QEMU outputs share one validated argv so scripts and
+> future UI surfaces can consume the handoff without reinterpreting a shell
+> string.
 > QEMU mount tags and local 9P security models stay explicit because they
 > affect the guest boot contract and host filesystem trust boundary.
 

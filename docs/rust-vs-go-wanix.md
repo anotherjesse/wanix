@@ -470,6 +470,18 @@ the optional bundle hint, the reserved Ethernet route, and v86 boot hints. The
 Ethernet route is explicitly reported as not implemented. That is not as flashy
 as pretending everything works, but it is a better contract.
 
+When the served root is a prepared Linux guest root, `serve` also reserves:
+
+```text
+/.well-known/rootfs.json
+```
+
+For loopback clients, that route publishes the same `wanix-rootfs.v1` handoff
+that `wanix-rust rootfs --json` emits, so browser pages, editor integrations,
+and VM launchers can consume the prepared-root contract without scraping shell
+output. Discovery also reports whether the route is ready, unprepared, or
+local-only for the current client.
+
 With `--wanix-services`, `serve` exports more than a host directory. It builds a
 Wanix namespace that binds the served root at `/` and exposes `#task` and
 `#term` through the same direct 9P route. The service table advertises `noop`
@@ -540,8 +552,10 @@ It can tune the generated guest mount tag and QEMU local 9P `security_model`
 without changing the default `host9p`/`mapped-xattr` handoff; a fully replaced
 kernel cmdline remains caller-owned. `wanix-rust rootfs --json` can package the
 prepared root, boot markers, default QEMU manifest, and direct-v86 serve argv in
-a `wanix-rootfs.v1` manifest, while `wanix-rust qemu --json` renders just the
-validated QEMU argv and boot policy for scripts or future editor/serve surfaces.
+a `wanix-rootfs.v1` manifest. A served prepared root publishes the same manifest
+at `/.well-known/rootfs.json` to loopback clients, while
+`wanix-rust qemu --json` renders just the validated QEMU argv and boot policy
+for scripts or future editor/serve surfaces.
 That path is closer to "use the hardware when available." Today it is a validated
 handoff command, not a
 supervised Wanix VM process, but it is the right native parity path for serious

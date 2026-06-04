@@ -16,8 +16,10 @@ use wanix_task::TaskTable;
 use wanix_term::TermDevice;
 use wanix_vfs::{BindOptions, BindPosition, Namespace};
 
+use crate::json::json_string;
 use crate::p9_ws::{P9WsConnectionError, serve_websocket_connection};
 use crate::qjs_term::QjsShellSession;
+use crate::rootfs::rootfs_json_handoff_for_prepared_root;
 use crate::{CliError, quickjs_runner, write_process_output};
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
@@ -281,7 +283,7 @@ fn serve_concurrent_connections(
                 let connection_roots = Arc::clone(&roots);
                 let connection_errors = error_sender.clone();
                 let handle = thread::spawn(move || {
-                    if let Err(error) = serve_connection(&connection_roots, stream) {
+                    if let Err(error) = serve_connection(&connection_roots, stream, peer_addr) {
                         let _ = connection_errors.send(format!(
                             "wanix-rust serve: connection {peer_addr} failed: {error}\n"
                         ));
@@ -424,7 +426,7 @@ fn serve_one_connection(
     let (stream, peer_addr) = listener
         .accept()
         .map_err(|error| CliError::new(format!("serve accept failed: {error}"), 1))?;
-    match serve_connection(roots, stream) {
+    match serve_connection(roots, stream, peer_addr) {
         Ok(()) => Ok(0),
         Err(error) => {
             write_process_output(
@@ -437,7 +439,11 @@ fn serve_one_connection(
     }
 }
 
-fn serve_connection(roots: &ServeRoots, stream: TcpStream) -> Result<(), ServeConnectionError> {
+fn serve_connection(
+    roots: &ServeRoots,
+    stream: TcpStream,
+    peer_addr: SocketAddr,
+) -> Result<(), ServeConnectionError> {
     let request = peek_request_headers(&stream)?;
     if is_websocket_upgrade(&request) {
         let target = peek_request_target(&request);
@@ -467,7 +473,7 @@ fn serve_connection(roots: &ServeRoots, stream: TcpStream) -> Result<(), ServeCo
             .map_err(ServeConnectionError::WebSocket);
     }
 
-    serve_http_connection(roots, stream)
+    serve_http_connection(roots, stream, peer_addr)
 }
 
 fn is_qjs_shell_websocket_path(raw_path: Option<&str>) -> bool {
@@ -716,10 +722,11 @@ fn is_websocket_upgrade(header_bytes: &[u8]) -> bool {
 fn serve_http_connection(
     roots: &ServeRoots,
     mut stream: TcpStream,
+    peer_addr: SocketAddr,
 ) -> Result<(), ServeConnectionError> {
     let request = read_http_request(&mut stream)?;
     let response = match parse_http_request(&request) {
-        Ok(path) => well_known_response(roots, &path, &request)
+        Ok(path) => well_known_response(roots, &path, &request, peer_addr)
             .or_else(|| bundle_response(roots, &path, &request))
             .or_else(|| direct_v86_asset_response(roots, &path))
             .unwrap_or_else(|| read_static_response(&roots.static_root, &path)),
@@ -875,6 +882,7 @@ fn well_known_response(
     roots: &ServeRoots,
     relative_path: &Path,
     request: &[u8],
+    peer_addr: SocketAddr,
 ) -> Option<StaticResponse> {
     let mut components = relative_path.components();
     match components.next() {
@@ -888,7 +896,14 @@ fn well_known_response(
             if has_extra_components {
                 Some(StaticResponse::plain(HttpStatus::NotFound, "not found"))
             } else {
-                Some(serve_discovery_response(roots, request))
+                Some(serve_discovery_response(roots, request, peer_addr))
+            }
+        }
+        Some(Component::Normal(component)) if component == "rootfs.json" => {
+            if has_extra_components {
+                Some(StaticResponse::plain(HttpStatus::NotFound, "not found"))
+            } else {
+                Some(rootfs_handoff_response(roots, peer_addr))
             }
         }
         Some(Component::Normal(component)) if component == "export9p" && !has_extra_components => {
@@ -1945,17 +1960,22 @@ fn workbench_fs9p_bundle_html() -> String {
     )
 }
 
-fn serve_discovery_response(roots: &ServeRoots, request: &[u8]) -> StaticResponse {
+fn serve_discovery_response(
+    roots: &ServeRoots,
+    request: &[u8],
+    peer_addr: SocketAddr,
+) -> StaticResponse {
     StaticResponse {
         status: HttpStatus::Ok,
         content_type: "application/json",
-        body: serve_discovery_json(roots, request).into_bytes(),
+        body: serve_discovery_json(roots, request, peer_addr).into_bytes(),
     }
 }
 
-fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
+fn serve_discovery_json(roots: &ServeRoots, request: &[u8], peer_addr: SocketAddr) -> String {
     let host = request_host(request).unwrap_or_else(|| display_host(roots.local_addr));
     let p9_url = format!("ws://{host}/.well-known/export9p");
+    let rootfs_url = format!("http://{host}/.well-known/rootfs.json");
     let qjs_shell_url = format!("ws://{host}{QJS_SHELL_WEBSOCKET_PATH}");
     let ethernet_url = format!("ws://{host}/.well-known/ethernet");
     let bundle = roots
@@ -1965,6 +1985,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
         .unwrap_or_else(|| "null".to_owned());
     let services = serve_services_json(roots);
     let qjs_shell_route = serve_qjs_shell_route_json(roots, &qjs_shell_url);
+    let rootfs_route = serve_rootfs_route_json(&roots.static_root, &rootfs_url, peer_addr);
     let direct_v86_boot = direct_v86_boot_json(&roots.static_root);
     format!(
         "{{\"version\":1,\
@@ -1972,6 +1993,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
          \"routes\":{{\
          \"p9\":{{\"websocket\":{},\"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\",\
          \"supportedProtocols\":[\"9P2000.L\",\"9P2000.L.Google.2\"]}},\
+         \"rootfs\":{},\
          \"qjsShell\":{},\
          \"ethernet\":{{\"websocket\":{},\"status\":\"not-implemented\"}}\
          }},\
@@ -1981,6 +2003,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
          \"services\":{},\
          \"bundle\":{}}}",
         json_string(&p9_url),
+        rootfs_route,
         qjs_shell_route,
         json_string(&ethernet_url),
         json_string(DIRECT_V86_MODULE_PATH),
@@ -1996,6 +2019,78 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
         services,
         bundle
     )
+}
+
+fn rootfs_handoff_response(roots: &ServeRoots, peer_addr: SocketAddr) -> StaticResponse {
+    if !is_loopback_peer(peer_addr) {
+        return StaticResponse::plain(
+            HttpStatus::Forbidden,
+            "rootfs handoff is available only to loopback clients",
+        );
+    }
+    match rootfs_json_handoff_for_prepared_root(&roots.static_root) {
+        Ok(body) => StaticResponse {
+            status: HttpStatus::Ok,
+            content_type: "application/json",
+            body: body.into_bytes(),
+        },
+        Err(error) if error.exit_code() == 2 => {
+            StaticResponse::plain(HttpStatus::BadRequest, &error.to_string())
+        }
+        Err(error) => StaticResponse::plain(HttpStatus::Conflict, &error.to_string()),
+    }
+}
+
+fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr) -> String {
+    let readiness = rootfs_handoff_readiness(static_root);
+    let status = if !is_loopback_peer(peer_addr) {
+        "local-only"
+    } else if readiness.ready {
+        "available"
+    } else {
+        "unprepared"
+    };
+    let mut fields = vec![
+        format!("\"url\":{}", json_string(url)),
+        "\"kind\":\"wanix-rootfs.v1\"".to_owned(),
+        format!("\"status\":{}", json_string(status)),
+        format!("\"ready\":{}", readiness.ready),
+    ];
+    if !readiness.missing.is_empty() {
+        let missing = readiness
+            .missing
+            .iter()
+            .map(|route| json_string(route))
+            .collect::<Vec<_>>()
+            .join(",");
+        fields.push(format!("\"missing\":[{missing}]"));
+    }
+    format!("{{{}}}", fields.join(","))
+}
+
+struct RootfsHandoffReadiness {
+    ready: bool,
+    missing: Vec<&'static str>,
+}
+
+fn rootfs_handoff_readiness(static_root: &Path) -> RootfsHandoffReadiness {
+    let kernel = first_existing_static_route(static_root, DIRECT_V86_KERNEL_CANDIDATES);
+    let init = first_existing_static_route(static_root, &[DIRECT_V86_INIT_PATH]);
+    let mut missing = Vec::new();
+    if kernel.is_none() {
+        missing.push(DIRECT_V86_DEFAULT_KERNEL_PATH);
+    }
+    if init.is_none() {
+        missing.push(DIRECT_V86_INIT_PATH);
+    }
+    RootfsHandoffReadiness {
+        ready: missing.is_empty(),
+        missing,
+    }
+}
+
+fn is_loopback_peer(peer_addr: SocketAddr) -> bool {
+    peer_addr.ip().is_loopback()
 }
 
 fn serve_services_json(roots: &ServeRoots) -> String {
@@ -2106,24 +2201,6 @@ fn display_host(local_addr: SocketAddr) -> String {
     format!("{host}:{}", local_addr.port())
 }
 
-fn json_string(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len() + 2);
-    escaped.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            ch if ch.is_control() => escaped.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => escaped.push(ch),
-        }
-    }
-    escaped.push('"');
-    escaped
-}
-
 fn content_type(path: &Path) -> &'static str {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("html") => "text/html; charset=utf-8",
@@ -2175,6 +2252,7 @@ impl StaticResponse {
 enum HttpStatus {
     Ok,
     BadRequest,
+    Conflict,
     Forbidden,
     NotFound,
     MethodNotAllowed,
@@ -2186,6 +2264,7 @@ impl HttpStatus {
         match self {
             Self::Ok => "200 OK",
             Self::BadRequest => "400 Bad Request",
+            Self::Conflict => "409 Conflict",
             Self::Forbidden => "403 Forbidden",
             Self::NotFound => "404 Not Found",
             Self::MethodNotAllowed => "405 Method Not Allowed",
@@ -2197,6 +2276,7 @@ impl HttpStatus {
         match self {
             Self::Ok => "ok",
             Self::BadRequest => "bad request",
+            Self::Conflict => "conflict",
             Self::Forbidden => "forbidden",
             Self::NotFound => "not found",
             Self::MethodNotAllowed => "method not allowed",
@@ -3028,6 +3108,13 @@ mod tests {
         );
         assert!(
             response.contains(
+                "\"rootfs\":{\"url\":\"http://demo.local:7654/.well-known/rootfs.json\",\
+                 \"kind\":\"wanix-rootfs.v1\",\"status\":\"available\",\"ready\":true}"
+            ),
+            "{response}"
+        );
+        assert!(
+            response.contains(
                 "\"ethernet\":{\"websocket\":\"ws://demo.local:7654/.well-known/ethernet\",\
                  \"status\":\"not-implemented\"}"
             ),
@@ -3084,6 +3171,122 @@ mod tests {
     }
 
     #[test]
+    fn serve_once_returns_rootfs_handoff_manifest() {
+        let root = temp_dir("wanix-cli-serve-rootfs-handoff");
+        fs::create_dir_all(root.join("boot")).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
+        fs::write(root.join("bin/init"), b"init").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root.clone(),
+            addr: addr.to_string(),
+            bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
+            wanix_services: true,
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /.well-known/rootfs.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+        );
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let (headers, body) = http_response_parts(&response);
+        assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+        assert!(
+            headers.contains("Content-Type: application/json\r\n"),
+            "{headers}"
+        );
+        let manifest: serde_json::Value = serde_json::from_slice(body).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let kernel = root.join("boot/bzImage");
+        let init = root.join("bin/init");
+        let qemu = &manifest["qemu"];
+        let serve = &manifest["serveDirectV86"];
+
+        assert_eq!(manifest["kind"], "wanix-rootfs.v1");
+        assert_eq!(manifest["rootPath"], root.display().to_string());
+        assert_eq!(manifest["kernelRoute"], "/boot/bzImage");
+        assert_eq!(manifest["kernelPath"], kernel.display().to_string());
+        assert_eq!(manifest["initRoute"], "/bin/init");
+        assert_eq!(manifest["initPath"], init.display().to_string());
+        assert_eq!(qemu["kind"], "wanix-qemu-virtio9p.v1");
+        assert_eq!(qemu["rootPath"], root.display().to_string());
+        assert_eq!(qemu["kernelPath"], kernel.display().to_string());
+        assert_eq!(qemu["mountTag"], "host9p");
+        assert_eq!(qemu["securityModel"], "mapped-xattr");
+        assert_eq!(serve["bundle"], "direct-v86");
+        assert_eq!(serve["wanixServices"], true);
+        assert_eq!(serve["argv"][0], "wanix-rust");
+        assert_eq!(serve["argv"][1], "serve");
+        assert_eq!(serve["argv"][2], root.display().to_string());
+    }
+
+    #[test]
+    fn serve_rootfs_handoff_reports_unprepared_roots_and_reserves_route() {
+        let root = temp_dir("wanix-cli-serve-rootfs-handoff-missing");
+        fs::create_dir_all(root.join(".well-known")).unwrap();
+        fs::write(root.join(".well-known/rootfs.json"), b"not static").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
+            wanix_services: false,
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /.well-known/rootfs.json HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        );
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let response = String::from_utf8(response).unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 409 Conflict\r\n"),
+            "{response}"
+        );
+        assert!(response.contains("missing a guest kernel"), "{response}");
+        assert!(!response.contains("not static"), "{response}");
+    }
+
+    #[test]
+    fn serve_rootfs_handoff_rejects_non_loopback_peers_without_paths() {
+        let root = temp_dir("wanix-cli-serve-rootfs-handoff-remote");
+        fs::create_dir_all(root.join("boot")).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
+        fs::write(root.join("bin/init"), b"init").unwrap();
+        let roots = ServeRoots::new(&root, "0.0.0.0:7654".parse().unwrap(), None, false).unwrap();
+        let response = rootfs_handoff_response(&roots, "192.0.2.1:12345".parse().unwrap());
+        let status = response.status.status_line();
+        let body = String::from_utf8(response.body).unwrap();
+
+        assert_eq!(status, "403 Forbidden");
+        assert!(body.contains("loopback clients"), "{body}");
+        assert!(!body.contains(&fs::canonicalize(root).unwrap().display().to_string()));
+        assert!(!body.contains("bzImage"), "{body}");
+    }
+
+    #[test]
     fn serve_wanix_services_root_exports_task_and_terminal_services() {
         let root = temp_dir("wanix-cli-serve-services-root");
         fs::write(root.join("host.txt"), b"host file").unwrap();
@@ -3098,6 +3301,7 @@ mod tests {
         let discovery = serve_discovery_json(
             &roots,
             b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+            "127.0.0.1:12345".parse().unwrap(),
         );
         assert!(
             discovery.contains(
@@ -3301,7 +3505,11 @@ std.writeFile("generated.txt", "generated by task " + id);
             false,
         )
         .unwrap();
-        let body = serve_discovery_json(&roots, b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n");
+        let body = serve_discovery_json(
+            &roots,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n",
+            "127.0.0.1:12345".parse().unwrap(),
+        );
 
         assert!(
             body.contains("\"websocket\":\"ws://localhost:7654/.well-known/export9p\""),
@@ -3315,8 +3523,11 @@ std.writeFile("generated.txt", "generated by task " + id);
 
         let ipv6_roots =
             ServeRoots::new(&root, "[::1]:7654".parse().unwrap(), None, false).unwrap();
-        let ipv6_body =
-            serve_discovery_json(&ipv6_roots, b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n");
+        let ipv6_body = serve_discovery_json(
+            &ipv6_roots,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n",
+            "[::1]:12345".parse().unwrap(),
+        );
         assert!(
             ipv6_body.contains("\"websocket\":\"ws://[::1]:7654/.well-known/export9p\""),
             "{ipv6_body}"
@@ -3338,6 +3549,7 @@ std.writeFile("generated.txt", "generated by task " + id);
         let body = serve_discovery_json(
             &roots,
             b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+            "127.0.0.1:12345".parse().unwrap(),
         );
 
         assert!(
@@ -3364,6 +3576,7 @@ std.writeFile("generated.txt", "generated by task " + id);
         let body = serve_discovery_json(
             &roots,
             b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+            "127.0.0.1:12345".parse().unwrap(),
         );
 
         assert!(
@@ -3375,12 +3588,51 @@ std.writeFile("generated.txt", "generated by task " + id);
     }
 
     #[test]
+    fn serve_discovery_reports_rootfs_handoff_status() {
+        let root = temp_dir("wanix-cli-serve-discovery-rootfs-status");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("bin/init"), b"init").unwrap();
+        let roots = ServeRoots::new(
+            &root,
+            "0.0.0.0:7654".parse().unwrap(),
+            Some(DIRECT_V86_BUNDLE.to_owned()),
+            false,
+        )
+        .unwrap();
+
+        let body = serve_discovery_json(
+            &roots,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+            "127.0.0.1:12345".parse().unwrap(),
+        );
+        let discovery: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let rootfs = &discovery["routes"]["rootfs"];
+        assert_eq!(
+            rootfs["url"],
+            "http://demo.local:7654/.well-known/rootfs.json"
+        );
+        assert_eq!(rootfs["kind"], "wanix-rootfs.v1");
+        assert_eq!(rootfs["status"], "unprepared");
+        assert_eq!(rootfs["ready"], false);
+        assert_eq!(rootfs["missing"][0], "/boot/bzImage");
+
+        let remote_body = serve_discovery_json(
+            &roots,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+            "192.0.2.1:12345".parse().unwrap(),
+        );
+        let remote_discovery: serde_json::Value = serde_json::from_str(&remote_body).unwrap();
+        assert_eq!(remote_discovery["routes"]["rootfs"]["status"], "local-only");
+    }
+
+    #[test]
     fn serve_discovery_ignores_unsafe_host_header() {
         let root = temp_dir("wanix-cli-serve-discovery-unsafe-host");
         let roots = ServeRoots::new(&root, "127.0.0.1:7654".parse().unwrap(), None, false).unwrap();
         let body = serve_discovery_json(
             &roots,
             b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654/escape\r\n\r\n",
+            "127.0.0.1:12345".parse().unwrap(),
         );
 
         assert!(
@@ -4083,6 +4335,18 @@ std.writeFile("generated.txt", "generated by task " + id);
             Err(error) => panic!("failed to read HTTP response: {error}"),
         }
         response
+    }
+
+    fn http_response_parts(response: &[u8]) -> (String, &[u8]) {
+        let header_end = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        (
+            String::from_utf8_lossy(&response[..header_end]).into_owned(),
+            &response[header_end..],
+        )
     }
 
     fn temp_dir(name: &str) -> PathBuf {
