@@ -131,6 +131,13 @@ WebSocket route, negotiates 9P2000.L, and exposes list/read/write/rename/delete
 controls against the served root. This is the browser-side 9P transport proof
 for future workbench/VS Code filesystem integration, not the VS Code provider
 itself.
+The web workbench extension now also has a direct 9P filesystem backend that
+matches the existing `WanixBridge` provider shape by consuming Rust serve
+discovery and issuing 9P operations for `stat`, directory listing, file
+read/write, mkdir, rename, copy, and removal. The classic MessagePort/CBOR
+backend remains preferred when an embedding browser Wanix system supplies one,
+and terminal creation still depends on a real `#task`/`#term` namespace rather
+than a plain served 9P directory.
 When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86
 `filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also
@@ -456,6 +463,9 @@ cargo test --workspace --locked
 - [ADR 0092](docs/adrs/0092-serve-fs9p-browser-filesystem-bundle.md):
   `wanix-rust serve --bundle fs9p` serves a browser 9P filesystem smoke page
   for future workbench/VS Code filesystem integration.
+- [ADR 0093](docs/adrs/0093-workbench-direct-9p-filesystem-backend.md):
+  The web workbench can back its existing `wanix:` filesystem provider with
+  Rust serve discovery and direct 9P while leaving task/terminal semantics out.
 
 ## Cycle Rules
 

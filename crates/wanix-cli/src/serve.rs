@@ -1509,7 +1509,7 @@ fn json_string(value: &str) -> String {
 fn content_type(path: &Path) -> &'static str {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("html") => "text/html; charset=utf-8",
-        Some("js") => "text/javascript; charset=utf-8",
+        Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json",
         Some("wasm") => "application/wasm",
@@ -1722,6 +1722,41 @@ mod tests {
             "{response}"
         );
         assert!(response.ends_with("wanix serve"), "{response}");
+    }
+
+    #[test]
+    fn serve_once_returns_mjs_static_file_as_javascript() {
+        let root = temp_dir("wanix-cli-serve-mjs");
+        fs::write(root.join("client.mjs"), b"export const ok = true;\n").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: None,
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(addr, b"GET /client.mjs HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(
+            response.contains("Content-Type: text/javascript; charset=utf-8\r\n"),
+            "{response}"
+        );
+        assert!(
+            response.ends_with("export const ok = true;\n"),
+            "{response}"
+        );
     }
 
     #[test]

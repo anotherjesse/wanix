@@ -1,8 +1,9 @@
 
 import * as vscode from 'vscode';
 import { WanixBridge } from './bridge.js';
+import { WanixP9Handle } from '../wanix/p9.js';
 //@ts-ignore
-import { WanixHandle } from "../wanix/fs.js";
+import { WanixHandle } from '../wanix/fs.js';
 
 declare const navigator: unknown;
 
@@ -27,20 +28,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 	
 	let config: Config = {};
-	const channel = new MessageChannel();
-	const wanix = new Promise((resolve) => {
-		channel.port2.onmessage = async (event) => {
-			if (event.data.wanix) {
-				config = event.data.config;
-				resolve(new WanixHandle(event.data.wanix));
-			}
-		}
+	const wanix = createWanixHandle(context, (nextConfig) => {
+		config = nextConfig;
 	});
 	const bridge = new WanixBridge(wanix, "");
 	context.subscriptions.push(bridge);
-
-	const port = (context as any).messagePassingProtocol;
-	port.postMessage({type: "_port", port: channel.port1}, [channel.port1]);
 
 	bridge.ready.then((fsys) => {
 		fsys.logger = (...args: any[]) => {
@@ -63,6 +55,42 @@ export async function activate(context: vscode.ExtensionContext) {
 	});
 	
 	console.log('System extension activated');
+}
+
+function createWanixHandle(context: vscode.ExtensionContext, setConfig: (config: Config) => void): Promise<any> {
+	const channel = new MessageChannel();
+	return new Promise<any>((resolve) => {
+		let settled = false;
+		const resolveHandle = (handle: any, nextConfig: Config) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			setConfig(nextConfig);
+			resolve(handle);
+		};
+
+		channel.port2.onmessage = async (event) => {
+			if (event.data.wanix) {
+				resolveHandle(new WanixHandle(event.data.wanix), event.data.config || {});
+			}
+		};
+
+		const port = (context as any).messagePassingProtocol;
+		if (port?.postMessage) {
+			port.postMessage({type: "_port", port: channel.port1}, [channel.port1]);
+		}
+
+		delay(100).then(() => WanixP9Handle.fromDiscovery()).then((handle) => {
+			resolveHandle(handle, {});
+		}).catch(() => {
+			// The classic workbench embedding does not expose Rust serve discovery.
+		});
+	});
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function createTerminal(fsys: any, config: Config) {
