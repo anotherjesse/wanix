@@ -1,6 +1,8 @@
 //! Native CLI plumbing for Rust Wanix demos.
 
+mod help;
 mod json;
+mod native;
 mod p9_listen;
 mod p9_stdio;
 mod p9_ws;
@@ -12,9 +14,7 @@ mod rootfs;
 mod serve;
 mod terminal_mode;
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,54 +27,13 @@ use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
 use wanix_task::{Fd, Task, TaskSpec, TaskTable, quote_cmd_argv};
 use wanix_vfs::BindOptions;
 
+pub use native::run_native_process;
 use qjs_args::{
     HostMount, QjsCommand, QjsSnapshotFileCommand, os_arg_to_string, parse_qjs_command,
-    parse_qjs_command_for, parse_qjs_restore_command, parse_qjs_snapshot_file_command,
-    read_qjs_stdin,
+    parse_qjs_command_for, parse_qjs_snapshot_file_command, read_qjs_stdin,
 };
 pub use terminal_mode::{NativeRawTerminalMode, command_requests_raw_tty};
 
-const USAGE: &str = concat!(
-    "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
-    "[--interrupt-after N] [--memory-limit-bytes N] ",
-    "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
-    "       wanix-rust qjs-term [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
-    "[--feed-after-eval TEXT ...] [--feed-after-eval-file PATH|- ...] ",
-    "[--feed-after-eval-lines PATH|- ...] ",
-    "[--resize-after-eval COLSxROWS ...] ",
-    "[--interrupt-after N] [--memory-limit-bytes N] ",
-    "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
-    "       wanix-rust qjs-shell [--raw] [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--event-loop-ms N] [--ready-io-turns N] ",
-    "[--interrupt-after N] [--memory-limit-bytes N] ",
-    "[--mount HOST=GUEST ...]\n",
-    "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--stdin TEXT | --stdin-file PATH|-] [--interrupt-after N] ",
-    "[--memory-limit-bytes N] [--event-loop-ms N] [--ready-io-turns N] ",
-    "[--mount HOST=GUEST ...] ",
-    "--snapshot FILE <script.js> [-- arg ...]\n",
-    "       wanix-rust qjs-resume [--env KEY=VALUE ...] [--cwd DIR] ",
-    "[--stdin TEXT | --stdin-file PATH|-] [--interrupt-after N] ",
-    "[--memory-limit-bytes N] [--event-loop-ms N] [--ready-io-turns N] ",
-    "[--mount HOST=GUEST ...] ",
-    "--snapshot FILE <script.js> [-- arg ...]\n",
-    "       wanix-rust qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
-    "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
-    "[--mount HOST=GUEST ...] <before.js> <after.js>\n",
-    "       wanix-rust p9-stdio --root DIR\n",
-    "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
-    "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
-    "       wanix-rust rootfs --archive FILE.tgz --out DIR [--json]\n",
-    "       wanix-rust qemu --root DIR [--kernel PATH] [--initrd PATH] [--cmdline TEXT] [--append TEXT ...] ",
-    "[--qemu-bin PATH] [--memory-mb N] ",
-    "[--mount-tag TAG] [--security-model MODEL] [--p9-msize N] ",
-    "[--json] [--no-kvm] [--exec]\n",
-    "       wanix-rust serve [--root DIR | DIR] [--addr HOST:PORT | --listen HOST:PORT] ",
-    "[--bundle NAME] [--wanix-services] [--once]\n",
-    "       wanix-rust --help",
-);
 const QJS_GUEST_SCRIPT: &str = "main.js";
 
 /// Captured native CLI output.
@@ -129,7 +88,7 @@ impl CliError {
     }
 
     fn usage(message: impl AsRef<str>) -> Self {
-        Self::new(format!("{}\n\n{USAGE}", message.as_ref()), 2)
+        Self::new(format!("{}\n\n{}", message.as_ref(), help::USAGE), 2)
     }
 
     /// Returns the native process exit code for this error.
@@ -139,8 +98,8 @@ impl CliError {
     }
 }
 
-impl fmt::Display for CliError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for CliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
@@ -381,10 +340,10 @@ where
 
 fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
     let Some((command, rest)) = args.split_first() else {
-        return Ok(help_output());
+        return Ok(help::help_output());
     };
     if command == "--help" || command == "-h" {
-        return Ok(help_output());
+        return Ok(help::help_output());
     }
     run_collected_command(command, rest, process_stdin)
 }
@@ -410,7 +369,7 @@ fn run_collected_command(
             parse_qjs_snapshot_file_command(rest, "qjs-resume")?,
             process_stdin,
         ),
-        "qjs-restore" => qjs_restore::run_qjs_restore(parse_qjs_restore_command(rest)?),
+        "qjs-restore" => qjs_restore::parse_and_run_qjs_restore(rest),
         "p9-stdio" => {
             p9_stdio::run_p9_stdio(p9_stdio::parse_p9_stdio_command(rest)?, process_stdin)
         }
@@ -445,14 +404,6 @@ fn write_process_output(output: &mut dyn Write, label: &str, bytes: &[u8]) -> Re
     output
         .flush()
         .map_err(|error| CliError::new(format!("failed to flush process {label}: {error}"), 1))
-}
-
-fn help_output() -> CliOutput {
-    CliOutput::new(
-        format!("wanix-rust: {}\n{USAGE}\n", wanix_qjs::FIRST_DEMO_TARGET).into_bytes(),
-        Vec::new(),
-        0,
-    )
 }
 
 fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
@@ -804,7 +755,7 @@ fn uses_module_syntax(source: &str) -> bool {
     })
 }
 
-fn env_map(lines: &[String]) -> BTreeMap<String, String> {
+fn env_map(lines: &[String]) -> std::collections::BTreeMap<String, String> {
     lines
         .iter()
         .filter_map(|line| {

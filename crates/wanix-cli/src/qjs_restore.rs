@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,7 +7,7 @@ use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver};
 use wanix_task::{Task, TaskTable};
 use wanix_vfs::BindOptions;
 
-use super::qjs_args::QjsRestoreCommand;
+use super::qjs_args::{QjsRestoreCommand, parse_qjs_restore_command};
 use super::{
     CliError, CliOutput, attach_task_stdio, bind_child_output_to_parent, bind_host_mounts,
     configure_qjs_task, copy_script_directory_into, ensure_snapshot_task_fds_closed,
@@ -18,7 +19,11 @@ const QJS_RESTORE_AFTER_SCRIPT: &str = "__wanix_restore/after/main.js";
 const QJS_RESTORE_BEFORE_DIR: &str = "__wanix_restore/before";
 const QJS_RESTORE_AFTER_DIR: &str = "__wanix_restore/after";
 
-pub(super) fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
+pub(super) fn parse_and_run_qjs_restore(args: &[OsString]) -> Result<CliOutput, CliError> {
+    run_qjs_restore(parse_qjs_restore_command(args)?)
+}
+
+fn run_qjs_restore(command: QjsRestoreCommand) -> Result<CliOutput, CliError> {
     let workspace = prepare_qjs_restore_workspace(&command)?;
     let restore_result = run_qjs_restore_workspace(&workspace, &command);
     finish_qjs_restore_output(restore_result, &workspace.stdout, &workspace.stderr)

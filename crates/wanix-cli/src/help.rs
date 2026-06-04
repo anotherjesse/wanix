@@ -1,0 +1,51 @@
+use super::CliOutput;
+
+pub(super) const USAGE: &str = concat!(
+    "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
+    "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
+    "[--interrupt-after N] [--memory-limit-bytes N] ",
+    "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
+    "       wanix-rust qjs-term [--env KEY=VALUE ...] [--cwd DIR] ",
+    "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
+    "[--feed-after-eval TEXT ...] [--feed-after-eval-file PATH|- ...] ",
+    "[--feed-after-eval-lines PATH|- ...] ",
+    "[--resize-after-eval COLSxROWS ...] ",
+    "[--interrupt-after N] [--memory-limit-bytes N] ",
+    "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
+    "       wanix-rust qjs-shell [--raw] [--env KEY=VALUE ...] [--cwd DIR] ",
+    "[--event-loop-ms N] [--ready-io-turns N] ",
+    "[--interrupt-after N] [--memory-limit-bytes N] ",
+    "[--mount HOST=GUEST ...]\n",
+    "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
+    "[--stdin TEXT | --stdin-file PATH|-] [--interrupt-after N] ",
+    "[--memory-limit-bytes N] [--event-loop-ms N] [--ready-io-turns N] ",
+    "[--mount HOST=GUEST ...] ",
+    "--snapshot FILE <script.js> [-- arg ...]\n",
+    "       wanix-rust qjs-resume [--env KEY=VALUE ...] [--cwd DIR] ",
+    "[--stdin TEXT | --stdin-file PATH|-] [--interrupt-after N] ",
+    "[--memory-limit-bytes N] [--event-loop-ms N] [--ready-io-turns N] ",
+    "[--mount HOST=GUEST ...] ",
+    "--snapshot FILE <script.js> [-- arg ...]\n",
+    "       wanix-rust qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
+    "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
+    "[--mount HOST=GUEST ...] <before.js> <after.js>\n",
+    "       wanix-rust p9-stdio --root DIR\n",
+    "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
+    "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
+    "       wanix-rust rootfs --archive FILE.tgz --out DIR [--json]\n",
+    "       wanix-rust qemu --root DIR [--kernel PATH] [--initrd PATH] [--cmdline TEXT] [--append TEXT ...] ",
+    "[--qemu-bin PATH] [--memory-mb N] ",
+    "[--mount-tag TAG] [--security-model MODEL] [--p9-msize N] ",
+    "[--json] [--no-kvm] [--exec]\n",
+    "       wanix-rust serve [--root DIR | DIR] [--addr HOST:PORT | --listen HOST:PORT] ",
+    "[--bundle NAME] [--wanix-services] [--once]\n",
+    "       wanix-rust --help",
+);
+
+pub(super) fn help_output() -> CliOutput {
+    CliOutput::new(
+        format!("wanix-rust: {}\n{USAGE}\n", wanix_qjs::FIRST_DEMO_TARGET).into_bytes(),
+        Vec::new(),
+        0,
+    )
+}

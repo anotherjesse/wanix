@@ -1,0 +1,49 @@
+use std::ffi::OsString;
+use std::io;
+
+#[cfg(not(unix))]
+use super::run_with_process_io;
+#[cfg(unix)]
+use super::run_with_process_io_and_terminal_fds;
+use super::{CliError, NativeRawTerminalMode, command_requests_raw_tty};
+
+/// Runs the native CLI against the current process stdio handles.
+///
+/// This is the entrypoint used by the `wanix-rust` binary. It keeps raw terminal
+/// mode scoped to command execution so terminal state is restored before the
+/// process exits.
+///
+/// # Errors
+///
+/// Returns a CLI error when raw terminal mode cannot be entered or command
+/// execution fails before command-managed output is available.
+pub fn run_native_process<I, S>(args: I) -> Result<i32, CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+{
+    let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    let _raw_mode = if command_requests_raw_tty(&args) {
+        NativeRawTerminalMode::enter_stdin_if_tty()?
+    } else {
+        None
+    };
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let stderr = io::stderr();
+    #[cfg(unix)]
+    {
+        run_with_process_io_and_terminal_fds(
+            args,
+            stdin.lock(),
+            libc::STDIN_FILENO,
+            libc::STDOUT_FILENO,
+            stdout.lock(),
+            stderr.lock(),
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        run_with_process_io(args, stdin.lock(), stdout.lock(), stderr.lock())
+    }
+}
