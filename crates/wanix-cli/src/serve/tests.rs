@@ -16,6 +16,7 @@ use wanix_protocol::{
     p9_tversion, p9_twalk, p9_twalkgetattr, p9_twrite, p9_txattrcreate, p9_txattrwalk,
 };
 
+use super::discovery::serve_discovery_json;
 use super::terminal_ws::parse_terminal_resize_message;
 use super::*;
 
