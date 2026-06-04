@@ -8,6 +8,8 @@
 //!   `guest --rename <src> <dst>`       — atomically move a file/dir.
 //!   `guest --rmdir <dir>`              — remove an empty directory.
 //!   `guest --truncate <path> <len>`    — set a file's length (ftruncate).
+//!   `guest --symlink <target> <link>`  — create a symbolic link.
+//!   `guest --readlink <link>`          — print a symbolic link's target.
 
 use std::fs;
 use std::fs::OpenOptions;
@@ -27,6 +29,17 @@ fn main() {
     }
     if args.get(1).map(String::as_str) == Some("--rmdir") {
         rmdir(args.get(2).map_or("", String::as_str));
+        return;
+    }
+    if args.get(1).map(String::as_str) == Some("--symlink") {
+        symlink(
+            args.get(2).map_or("", String::as_str),
+            args.get(3).map_or("", String::as_str),
+        );
+        return;
+    }
+    if args.get(1).map(String::as_str) == Some("--readlink") {
+        readlink(args.get(2).map_or("", String::as_str));
         return;
     }
     if args.get(1).map(String::as_str) == Some("--truncate") {
@@ -72,6 +85,48 @@ fn rmdir(dir: &str) {
     match fs::remove_dir(dir) {
         Ok(()) => println!("rust-wasm: removed dir {dir}"),
         Err(err) => println!("rust-wasm: rmdir failed {dir}: {err}"),
+    }
+}
+
+// Raw WASI `path_symlink` import (the stable std wrapper is nightly-only).
+#[link(wasm_import_module = "wasi_snapshot_preview1")]
+extern "C" {
+    fn path_symlink(
+        old_path: *const u8,
+        old_path_len: usize,
+        fd: u32,
+        new_path: *const u8,
+        new_path_len: usize,
+    ) -> u16;
+}
+
+/// Creates a symbolic link `link` pointing at `target` via the `path_symlink`
+/// syscall, then prints `ok`. Resolves `link` against the preopened root (fd 3)
+/// so the absolute `link` path becomes namespace-relative.
+fn symlink(target: &str, link: &str) {
+    let rel = link.strip_prefix('/').unwrap_or(link);
+    let errno = unsafe {
+        path_symlink(
+            target.as_ptr(),
+            target.len(),
+            3,
+            rel.as_ptr(),
+            rel.len(),
+        )
+    };
+    if errno == 0 {
+        println!("ok");
+    } else {
+        println!("rust-wasm: symlink failed {link} -> {target}: errno {errno}");
+    }
+}
+
+/// Prints the target of the symbolic link `link` via `fs::read_link` (the
+/// `path_readlink` syscall).
+fn readlink(link: &str) {
+    match fs::read_link(link) {
+        Ok(target) => println!("{}", target.to_string_lossy()),
+        Err(err) => println!("rust-wasm: readlink failed {link}: {err}"),
     }
 }
 

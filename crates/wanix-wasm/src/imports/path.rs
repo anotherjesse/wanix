@@ -1,7 +1,7 @@
 //! WASI Preview 1 `path_*` imports.
 
 use super::WasiState;
-use super::mem::{ERRNO_SUCCESS, code, memory, read_str, write_bytes, write_u32};
+use super::mem::{ERRNO_SUCCESS, code, memory, read_bytes, read_str, write_bytes, write_u32};
 use wanix_wasi::{WasiFd, WasiRights};
 use wasmtime::{Caller, Linker, Result};
 
@@ -130,6 +130,57 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
                 WasiFd::new(old_fd as u32),
                 &old_name,
                 WasiFd::new(new_fd as u32),
+                &new_name,
+            )))
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "path_readlink",
+        |mut caller: Caller<'_, WasiState>,
+         dirfd: i32,
+         path: i32,
+         path_len: i32,
+         buf: i32,
+         buf_len: i32,
+         bufused: i32|
+         -> Result<i32> {
+            let mem = memory(&mut caller)?;
+            let name = read_str(&mem, &mut caller, path, path_len)?;
+            match caller
+                .data()
+                .ctx
+                .path_readlink(WasiFd::new(dirfd as u32), &name)
+            {
+                Ok(target) => {
+                    let count = target.len().min(buf_len.max(0) as usize);
+                    let mem = memory(&mut caller)?;
+                    write_bytes(&mem, &mut caller, buf, &target[..count])?;
+                    write_u32(&mem, &mut caller, bufused, count as u32)?;
+                    Ok(ERRNO_SUCCESS)
+                }
+                Err(e) => Ok(e.preview1_code() as i32),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "path_symlink",
+        // WASI ABI: the link target (old_path) precedes `dirfd`.
+        |mut caller: Caller<'_, WasiState>,
+         old_path: i32,
+         old_path_len: i32,
+         dirfd: i32,
+         new_path: i32,
+         new_path_len: i32|
+         -> Result<i32> {
+            let mem = memory(&mut caller)?;
+            // Targets need not be UTF-8, so read raw bytes (matching qjs).
+            let target = read_bytes(&mem, &mut caller, old_path, old_path_len.max(0) as usize)?;
+            let new_name = read_str(&mem, &mut caller, new_path, new_path_len)?;
+            Ok(code(caller.data().ctx.path_symlink(
+                &target,
+                WasiFd::new(dirfd as u32),
                 &new_name,
             )))
         },

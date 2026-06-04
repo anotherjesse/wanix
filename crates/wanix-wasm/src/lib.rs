@@ -318,6 +318,76 @@ mod tests {
         );
     }
 
+    fn symlink(fs: &Arc<MemFs>, target: &str, link: &str) -> (i32, String) {
+        let runner = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+        let stdout = CaptureFile::new();
+        let config = WasiConfig::new(namespace_on(fs))
+            .with_args(["guest", "--symlink", target, link])
+            .with_stdout(Box::new(stdout.clone()), "stdout");
+        let exit = runner.run(config).expect("rust wasm task ran");
+        (exit, stdout.contents())
+    }
+
+    fn readlink(fs: &Arc<MemFs>, link: &str) -> (i32, String) {
+        let runner = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+        let stdout = CaptureFile::new();
+        let config = WasiConfig::new(namespace_on(fs))
+            .with_args(["guest", "--readlink", link])
+            .with_stdout(Box::new(stdout.clone()), "stdout");
+        let exit = runner.run(config).expect("rust wasm task ran");
+        (exit, stdout.contents())
+    }
+
+    #[test]
+    fn path_symlink_then_readlink_roundtrips_target() {
+        use wanix_fs::{FileSystem, FileType, MetadataLookup, NormalizedPath};
+
+        let fs = Arc::new(MemFs::new());
+        fs.create_dir_all("shared").expect("make /shared");
+        fs.write_file("shared/real.txt", b"payload")
+            .expect("seed real.txt");
+
+        let (exit, out) = symlink(&fs, "real.txt", "/shared/link.txt");
+        assert_eq!(exit, 0, "guest should exit cleanly: {out:?}");
+        assert!(
+            out.lines().any(|l| l == "ok"),
+            "expected symlink success line, got: {out:?}"
+        );
+
+        // The namespace must record a symlink (not following it when stat'd).
+        let link_path = NormalizedPath::new("shared/link.txt").expect("valid path");
+        let meta = fs
+            .metadata_with_lookup(&link_path, MetadataLookup::NoFollow)
+            .expect("stat link");
+        assert_eq!(
+            meta.file_type(),
+            FileType::Symlink,
+            "link.txt should be a symlink in the namespace"
+        );
+
+        let (exit, out) = readlink(&fs, "/shared/link.txt");
+        assert_eq!(exit, 0, "guest should exit cleanly: {out:?}");
+        assert!(
+            out.lines().any(|l| l == "real.txt"),
+            "readlink should print the stored target, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn path_readlink_on_regular_file_reports_error() {
+        // Reading a link on a non-symlink path must surface as the guest's error
+        // line (Preview1 EINVAL), not panic or trap the runner.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("plain.txt", b"hi").expect("seed plain.txt");
+
+        let (exit, out) = readlink(&fs, "/plain.txt");
+        assert_eq!(exit, 0, "guest itself exits cleanly: {out:?}");
+        assert!(
+            out.contains("readlink failed /plain.txt"),
+            "expected readlink error on a regular file, got: {out:?}"
+        );
+    }
+
     #[test]
     fn fd_readdir_on_regular_file_reports_error() {
         // Calling readdir on a non-directory fd must surface as an error

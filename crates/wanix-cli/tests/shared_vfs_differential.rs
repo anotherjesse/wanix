@@ -306,6 +306,107 @@ std.out.flush();
 }
 
 #[test]
+fn qjs_creates_symlink_rust_wasm_readlinks_same_target() {
+    // Differential proof for the new path_readlink import: qjs creates a symlink
+    // on the SHARED namespace, and rust-wasm (`fs::read_link`) reads back the
+    // exact same target bytes. Both engines route symlink/readlink through one
+    // WasiCtx VFS, so the targets must match byte-for-byte.
+    let fs = Arc::new(MemFs::new());
+    fs.create_dir_all("shared").expect("make /shared");
+    fs.write_file("shared/real.txt", b"payload")
+        .expect("seed real.txt");
+
+    let qjs = QuickJsRunner::from_bundled_wasm().expect("qjs runner");
+    let rust = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+
+    // 1. qjs creates the symlink (target is relative `real.txt`).
+    let qjs_out = run_qjs(
+        &qjs,
+        &fs,
+        r#"import * as std from "qjs:std";
+import * as os from "qjs:os";
+const err = os.symlink("real.txt", "/shared/qjs-link.txt");
+std.out.puts("symlink_err " + err + "\n");
+std.out.flush();
+"#,
+    );
+    assert!(
+        qjs_out.contains("symlink_err 0"),
+        "qjs symlink should succeed: {qjs_out:?}"
+    );
+
+    // 2. rust-wasm reads the link back through path_readlink.
+    let (exit, rust_out) = run_rust(&rust, &fs, &["guest", "--readlink", "/shared/qjs-link.txt"]);
+    assert_eq!(exit, 0, "rust readlink step exit: {rust_out:?}");
+    assert!(
+        rust_out.lines().any(|l| l == "real.txt"),
+        "rust-wasm should read qjs's symlink target: {rust_out:?}"
+    );
+
+    // Host-side confirmation: the backing fs stores the exact target bytes.
+    let np = NormalizedPath::new("shared/qjs-link.txt").expect("normalize");
+    assert_eq!(
+        fs.read_link(&np).expect("link exists"),
+        b"real.txt",
+        "backing fs should store the qjs symlink target"
+    );
+}
+
+#[test]
+fn rust_wasm_creates_symlink_qjs_readlinks_same_target() {
+    // The reverse direction: rust-wasm creates a symlink via path_symlink and
+    // qjs (`os.readlink`) reads back the identical target on the same namespace.
+    let fs = Arc::new(MemFs::new());
+    fs.create_dir_all("shared").expect("make /shared");
+    fs.write_file("shared/real.txt", b"payload")
+        .expect("seed real.txt");
+
+    let qjs = QuickJsRunner::from_bundled_wasm().expect("qjs runner");
+    let rust = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+
+    // 1. rust-wasm creates the symlink through path_symlink.
+    let (exit, rust_out) = run_rust(
+        &rust,
+        &fs,
+        &["guest", "--symlink", "real.txt", "/shared/rust-link.txt"],
+    );
+    assert_eq!(exit, 0, "rust symlink step exit: {rust_out:?}");
+    assert!(
+        rust_out.lines().any(|l| l == "ok"),
+        "rust-wasm symlink should succeed: {rust_out:?}"
+    );
+
+    // 2. qjs reads the link back; os.readlink returns [target, errno].
+    let qjs_out = run_qjs(
+        &qjs,
+        &fs,
+        r#"import * as std from "qjs:std";
+import * as os from "qjs:os";
+const [target, err] = os.readlink("/shared/rust-link.txt");
+std.out.puts("readlink_err " + err + "\n");
+std.out.puts("target " + target + "\n");
+std.out.flush();
+"#,
+    );
+    assert!(
+        qjs_out.contains("readlink_err 0"),
+        "qjs readlink should succeed: {qjs_out:?}"
+    );
+    assert!(
+        qjs_out.contains("target real.txt"),
+        "qjs should read rust-wasm's symlink target byte-for-byte: {qjs_out:?}"
+    );
+
+    // Host-side confirmation: the backing fs stores the exact target bytes.
+    let np = NormalizedPath::new("shared/rust-link.txt").expect("normalize");
+    assert_eq!(
+        fs.read_link(&np).expect("link exists"),
+        b"real.txt",
+        "backing fs should store the rust-wasm symlink target"
+    );
+}
+
+#[test]
 fn qjs_and_rust_wasm_share_one_vfs_two_way() {
     // Backs the `shared_vfs` example as a real automated test: qjs writes a file,
     // rust-wasm reads it and writes its own, qjs reads that back.
