@@ -26,6 +26,7 @@ const QJS_SHELL_READY_IO_TURNS: usize = 2;
 const QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS: u64 = 20;
 
 mod command;
+mod post_eval;
 mod process;
 mod session;
 
@@ -33,12 +34,9 @@ use command::{PostEvalFeed, qjs_shell_command};
 pub(super) use command::{
     QjsShellCommand, QjsTermCommand, parse_qjs_shell_command, parse_qjs_term_command,
 };
+use post_eval::run_post_eval_feeds;
 #[cfg(unix)]
 use process::terminal_size_for_fd;
-use process::{
-    run_process_line_feed_session_after_eval, run_process_raw_byte_feed_session_after_eval,
-    split_feed_lines,
-};
 pub(crate) use session::QjsShellSession;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -448,162 +446,6 @@ fn read_qjs_term_program(script_path: &Path, program: QjsTermProgram) -> Result<
         QjsTermProgram::HostScript => read_utf8_script(script_path),
         QjsTermProgram::BundledShell => Ok(QJS_SHELL_SOURCE.to_owned()),
     }
-}
-
-fn run_post_eval_feeds(
-    feeds: Vec<PostEvalFeed>,
-    process_stdin: &mut dyn Read,
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
-    mut pump_state: TerminalPumpState,
-    process_stdout: &mut dyn Write,
-) -> Result<(), CliError> {
-    let policy = pump_state.policy;
-    let mut current_batch = Vec::new();
-    for feed in feeds {
-        match feed {
-            PostEvalFeed::Bytes(bytes) => current_batch.push(bytes),
-            PostEvalFeed::File(path) => {
-                let bytes = std::fs::read(&path).map_err(|error| {
-                    CliError::new(
-                        format!(
-                            "failed to read post-eval feed file {}: {error}",
-                            path.display()
-                        ),
-                        1,
-                    )
-                })?;
-                current_batch.push(bytes);
-            }
-            PostEvalFeed::Process => {
-                let mut bytes = Vec::new();
-                process_stdin.read_to_end(&mut bytes).map_err(|error| {
-                    CliError::new(
-                        format!("failed to read process stdin after eval: {error}"),
-                        1,
-                    )
-                })?;
-                current_batch.push(bytes);
-            }
-            PostEvalFeed::LinesFile(path) => {
-                flush_terminal_feed_batch(
-                    terminal,
-                    terminal_id,
-                    runtime,
-                    &mut current_batch,
-                    policy.ready_io_turns,
-                    policy.event_loop_wait_budget,
-                    process_stdout,
-                )?;
-                if task_exited(runtime)? {
-                    return Ok(());
-                }
-                let bytes = std::fs::read(&path).map_err(|error| {
-                    CliError::new(
-                        format!(
-                            "failed to read post-eval feed lines file {}: {error}",
-                            path.display()
-                        ),
-                        1,
-                    )
-                })?;
-                for line in split_feed_lines(bytes) {
-                    feed_terminal_batch_and_pump(
-                        terminal,
-                        terminal_id,
-                        runtime,
-                        &[line],
-                        policy.ready_io_turns,
-                        policy.event_loop_wait_budget,
-                        process_stdout,
-                    )?;
-                    if task_exited(runtime)? {
-                        return Ok(());
-                    }
-                }
-            }
-            PostEvalFeed::LinesProcess => {
-                flush_terminal_feed_batch(
-                    terminal,
-                    terminal_id,
-                    runtime,
-                    &mut current_batch,
-                    policy.ready_io_turns,
-                    policy.event_loop_wait_budget,
-                    process_stdout,
-                )?;
-                if task_exited(runtime)? {
-                    return Ok(());
-                }
-                run_process_line_feed_session_after_eval(
-                    process_stdin,
-                    terminal,
-                    terminal_id,
-                    runtime,
-                    &mut pump_state,
-                    process_stdout,
-                )?;
-            }
-            PostEvalFeed::RawBytesProcess => {
-                flush_terminal_feed_batch(
-                    terminal,
-                    terminal_id,
-                    runtime,
-                    &mut current_batch,
-                    policy.ready_io_turns,
-                    policy.event_loop_wait_budget,
-                    process_stdout,
-                )?;
-                if task_exited(runtime)? {
-                    return Ok(());
-                }
-                run_process_raw_byte_feed_session_after_eval(
-                    process_stdin,
-                    terminal,
-                    terminal_id,
-                    runtime,
-                    &mut pump_state,
-                    process_stdout,
-                )?;
-            }
-            PostEvalFeed::Resize(resize) => {
-                flush_terminal_feed_batch(
-                    terminal,
-                    terminal_id,
-                    runtime,
-                    &mut current_batch,
-                    policy.ready_io_turns,
-                    policy.event_loop_wait_budget,
-                    process_stdout,
-                )?;
-                if task_exited(runtime)? {
-                    return Ok(());
-                }
-                feed_terminal_resize_and_pump(
-                    terminal,
-                    terminal_id,
-                    runtime,
-                    &resize,
-                    policy.ready_io_turns,
-                    policy.event_loop_wait_budget,
-                    process_stdout,
-                )?;
-                if task_exited(runtime)? {
-                    return Ok(());
-                }
-            }
-        }
-    }
-    flush_terminal_feed_batch(
-        terminal,
-        terminal_id,
-        runtime,
-        &mut current_batch,
-        policy.ready_io_turns,
-        policy.event_loop_wait_budget,
-        process_stdout,
-    )
 }
 
 fn flush_terminal_feed_batch(
