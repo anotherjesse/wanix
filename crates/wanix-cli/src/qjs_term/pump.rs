@@ -1,10 +1,4 @@
-#[cfg(all(test, unix))]
-use std::collections::VecDeque;
 use std::io::Write;
-#[cfg(all(test, unix))]
-use std::sync::Arc;
-#[cfg(all(test, unix))]
-use std::sync::Mutex;
 use std::time::Duration;
 
 use wanix_fs::{FileSystem, NormalizedPath, OpenOptions};
@@ -14,139 +8,12 @@ use wanix_term::TermDevice;
 use crate::write_process_output;
 
 use super::CliError;
-#[cfg(unix)]
-use super::process::terminal_size_for_fd;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TermResize {
-    pub(super) columns: u16,
-    pub(super) rows: u16,
-}
+mod events;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ProcessInputMode {
-    Blocking,
-    #[cfg(unix)]
-    PollFd(libc::c_int),
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum ProcessResizeSource {
-    None,
-    #[cfg(unix)]
-    TerminalSizeFd(TerminalSizeSource),
-    #[cfg(all(test, unix))]
-    Queue(Arc<Mutex<VecDeque<(u16, u16)>>>),
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ProcessEventSources {
-    pub(super) input_mode: ProcessInputMode,
-    pub(super) resize_source: ProcessResizeSource,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TerminalPumpPolicy {
-    pub(super) ready_io_turns: usize,
-    pub(super) event_loop_wait_budget: Duration,
-    pub(super) input_mode: ProcessInputMode,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct TerminalPumpState {
-    pub(super) policy: TerminalPumpPolicy,
-    pub(super) resize_source: ProcessResizeSource,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TerminalSizeSource {
-    fd: libc::c_int,
-    last: Option<TermResize>,
-}
-
-impl ProcessResizeSource {
-    pub(super) fn next_resize(&mut self) -> Result<Option<TermResize>, CliError> {
-        match self {
-            Self::None => Ok(None),
-            #[cfg(unix)]
-            Self::TerminalSizeFd(source) => source.next_resize(),
-            #[cfg(all(test, unix))]
-            Self::Queue(queue) => {
-                let Some((columns, rows)) = queue
-                    .lock()
-                    .map_err(|_| CliError::new("test resize queue lock poisoned", 1))?
-                    .pop_front()
-                else {
-                    return Ok(None);
-                };
-                Ok(Some(TermResize { columns, rows }))
-            }
-        }
-    }
-}
-
-impl ProcessEventSources {
-    pub(super) fn blocking() -> Self {
-        Self {
-            input_mode: ProcessInputMode::Blocking,
-            resize_source: ProcessResizeSource::None,
-        }
-    }
-
-    #[cfg(unix)]
-    pub(super) fn input_fd(input_fd: libc::c_int) -> Self {
-        Self {
-            input_mode: ProcessInputMode::PollFd(input_fd),
-            resize_source: ProcessResizeSource::None,
-        }
-    }
-
-    #[cfg(unix)]
-    pub(super) fn terminal_fds(input_fd: libc::c_int, terminal_size_fd: libc::c_int) -> Self {
-        Self {
-            input_mode: ProcessInputMode::PollFd(input_fd),
-            resize_source: ProcessResizeSource::TerminalSizeFd(TerminalSizeSource::new(
-                terminal_size_fd,
-            )),
-        }
-    }
-
-    #[cfg(all(test, unix))]
-    pub(super) fn resize_queue(
-        input_fd: libc::c_int,
-        resize_queue: Arc<Mutex<VecDeque<(u16, u16)>>>,
-    ) -> Self {
-        Self {
-            input_mode: ProcessInputMode::PollFd(input_fd),
-            resize_source: ProcessResizeSource::Queue(resize_queue),
-        }
-    }
-}
-
-#[cfg(unix)]
-impl TerminalSizeSource {
-    fn new(fd: libc::c_int) -> Self {
-        Self { fd, last: None }
-    }
-
-    fn next_resize(&mut self) -> Result<Option<TermResize>, CliError> {
-        let Some(resize) = terminal_size_for_fd(self.fd)? else {
-            return Ok(None);
-        };
-        if self.last == Some(resize) {
-            return Ok(None);
-        }
-        self.last = Some(resize);
-        Ok(Some(resize))
-    }
-}
-
-impl TermResize {
-    pub(super) fn payload(&self) -> Vec<u8> {
-        format!("{} {}\n", self.columns, self.rows).into_bytes()
-    }
-}
+pub(super) use events::{
+    ProcessEventSources, ProcessInputMode, TermResize, TerminalPumpPolicy, TerminalPumpState,
+};
 
 pub(super) fn flush_terminal_feed_batch(
     terminal: &TermDevice,

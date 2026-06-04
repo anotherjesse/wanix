@@ -9,55 +9,16 @@ use crate::p9_ws::P9WsConnectionError;
 use crate::qjs_term::QjsShellSession;
 
 use super::connection::ServeConnectionError;
-use super::http::{HttpStatus, StaticResponse, percent_decode};
 
-pub(super) const QJS_SHELL_WEBSOCKET_PATH: &str = "/.well-known/qjs-shell";
+mod message;
+mod request;
+
+pub(super) use message::parse_terminal_resize_message;
+pub(super) use request::{
+    QJS_SHELL_WEBSOCKET_PATH, is_qjs_shell_websocket_path, qjs_shell_cwd_from_target,
+};
+
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
-
-pub(super) fn is_qjs_shell_websocket_path(raw_path: Option<&str>) -> bool {
-    raw_path.map(|path| path.split_once('?').map_or(path, |(path, _)| path))
-        == Some(QJS_SHELL_WEBSOCKET_PATH)
-}
-
-pub(super) fn qjs_shell_cwd_from_target(
-    raw_path: Option<&str>,
-) -> Result<NormalizedPath, StaticResponse> {
-    let raw_path =
-        raw_path.ok_or_else(|| StaticResponse::plain(HttpStatus::BadRequest, "bad request"))?;
-    let Some((_path, query)) = raw_path.split_once('?') else {
-        return Ok(NormalizedPath::new(".").expect("default cwd is valid"));
-    };
-    for pair in query.split('&') {
-        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
-        let key = query_percent_decode(raw_key)?;
-        if key == "cwd" {
-            let value = query_percent_decode(raw_value)?;
-            return qjs_shell_cwd_from_query_value(&value);
-        }
-    }
-    Ok(NormalizedPath::new(".").expect("default cwd is valid"))
-}
-
-fn qjs_shell_cwd_from_query_value(value: &str) -> Result<NormalizedPath, StaticResponse> {
-    let path = match value {
-        "" => {
-            return Err(StaticResponse::plain(
-                HttpStatus::BadRequest,
-                "invalid qjs shell cwd",
-            ));
-        }
-        "/" => ".",
-        path => path.strip_prefix('/').unwrap_or(path),
-    };
-    let path = if path.is_empty() { "." } else { path };
-    NormalizedPath::new(path)
-        .map_err(|_| StaticResponse::plain(HttpStatus::BadRequest, "invalid qjs shell cwd"))
-}
-
-fn query_percent_decode(value: &str) -> Result<String, StaticResponse> {
-    percent_decode(&value.replace('+', " "))
-        .map_err(|_| StaticResponse::plain(HttpStatus::BadRequest, "invalid query string"))
-}
 
 pub(super) fn serve_terminal_websocket_connection(
     root_path: &Path,
@@ -193,47 +154,4 @@ fn send_terminal_exit(
             "{{\"type\":\"exit\",\"code\":{code}}}"
         )))
         .map_err(|error| ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error)))
-}
-
-pub(super) fn parse_terminal_resize_message(text: &str) -> Option<(u16, u16)> {
-    if let Some(resize) = parse_terminal_resize_json(text) {
-        return Some(resize);
-    }
-    let mut parts = text.split_whitespace();
-    if parts.next()? != "resize" {
-        return None;
-    }
-    let columns = parts.next()?.parse().ok()?;
-    let rows = parts.next()?.parse().ok()?;
-    if parts.next().is_some() || columns == 0 || rows == 0 {
-        return None;
-    }
-    Some((columns, rows))
-}
-
-fn parse_terminal_resize_json(text: &str) -> Option<(u16, u16)> {
-    let compact = text
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    if !compact.contains("\"type\":\"resize\"") {
-        return None;
-    }
-    let columns = json_u16_field(&compact, "columns")?;
-    let rows = json_u16_field(&compact, "rows")?;
-    Some((columns, rows))
-}
-
-fn json_u16_field(compact_json: &str, field: &str) -> Option<u16> {
-    let marker = format!("\"{field}\":");
-    let start = compact_json.find(&marker)? + marker.len();
-    let digits = compact_json[start..]
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    if digits.is_empty() {
-        return None;
-    }
-    let value = digits.parse().ok()?;
-    (value != 0).then_some(value)
 }
