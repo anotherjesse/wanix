@@ -158,8 +158,9 @@ enables the matching VS Code proposed APIs. The classic MessagePort/CBOR
 backend remains preferred when an embedding browser Wanix system supplies one.
 When discovery advertises services, the Rust-served launcher passes `#task` and
 `#term` paths into the extension and the direct 9P client can write existing
-service files and keep `#term/...` streams open. This proves service reachability
-over the workbench path. The same `--wanix-services` mode also exposes
+service files, keep `#term/...` streams open, and forward workbench
+pseudoterminal resizes through `#term/<id>/winch`. This proves service
+reachability over the workbench path. The same `--wanix-services` mode also exposes
 `/.well-known/qjs-shell`, a Rust-owned terminal/session WebSocket route that
 starts the bundled QuickJS shell as a Wanix task, pumps guest ready-IO while
 browser terminal input arrives, returns terminal output as binary WebSocket
@@ -179,7 +180,8 @@ The first browser smoke now proves the Rust-served page boots Code OSS to the
 the Rust direct 9P WebSocket, and populates Explorer from the served root.
 `--wanix-services` adds a test-covered service namespace export, a qjs-backed
 terminal route for the workbench pseudoterminal, and real one-shot qjs task
-startup through `#task`. Richer task/session lifecycle controls remain
+startup through `#task`; direct service-backed workbench terminals also forward
+resize events to the terminal `winch` file. Richer task/session lifecycle controls remain
 follow-ups.
 When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86

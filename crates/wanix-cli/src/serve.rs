@@ -2209,6 +2209,7 @@ mod tests {
     const EBADF: u32 = 9;
     const ENOSYS: u32 = 38;
     const P9_O_WRONLY: u32 = 0o1;
+    const P9_O_RDWR: u32 = 0o2;
     const EOPNOTSUPP: u32 = 95;
 
     #[test]
@@ -3104,6 +3105,66 @@ mod tests {
         let response = server.handle_frame(&p9_tread(10, 4, 0, 64)).unwrap();
         assert_eq!(response.message_type(), P9_RREAD);
         assert_eq!(p9_decode_rread(&response).unwrap(), b"2\n");
+    }
+
+    #[test]
+    fn serve_wanix_services_terminal_winch_broadcasts_over_9p() {
+        let root = temp_dir("wanix-cli-serve-services-winch");
+        let roots = ServeRoots::new(
+            &root,
+            "127.0.0.1:7654".parse().unwrap(),
+            Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+            true,
+        )
+        .unwrap();
+        let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
+
+        assert_eq!(
+            server
+                .handle_frame(&p9_tattach(1, 1, 0xffff_ffff, "workbench", "", 0).unwrap())
+                .unwrap()
+                .message_type(),
+            P9_RATTACH
+        );
+        assert_eq!(
+            p9_read_file(&mut server, 1, 2, 100, &["#term", "new"]),
+            b"1\n"
+        );
+
+        let response = server
+            .handle_frame(&p9_twalk(110, 1, 3, &["#term", "1", "winch"]).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWALK);
+        assert_eq!(p9_decode_rwalk(&response).unwrap().len(), 3);
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(111, 3, 0))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+
+        let response = server
+            .handle_frame(&p9_twalk(120, 1, 4, &["#term", "1", "winch"]).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWALK);
+        assert_eq!(p9_decode_rwalk(&response).unwrap().len(), 3);
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(121, 4, P9_O_RDWR))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+        let response = server
+            .handle_frame(&p9_twrite(122, 4, 0, b"100 40\n").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+        assert_eq!(p9_decode_rwrite(&response).unwrap(), 7);
+
+        let response = server.handle_frame(&p9_tread(130, 3, 0, 64)).unwrap();
+        assert_eq!(response.message_type(), P9_RREAD);
+        assert_eq!(p9_decode_rread(&response).unwrap(), b"100 40\n");
     }
 
     #[test]

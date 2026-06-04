@@ -79,7 +79,9 @@ For terminal resize:
 - deterministic fixtures write `columns rows\n` to `#term/<id>/winch`;
 - served shell sessions forward browser resize messages through `winch`;
 - native Unix shell sessions poll the host terminal size and deliver changed
-  dimensions through `winch`; and
+  dimensions through `winch`;
+- direct service-backed workbench pseudoterminals forward VS Code dimensions
+  through `winch`; and
 - signal-driven resize wakeups may be added later without changing the terminal
   device contract.
 

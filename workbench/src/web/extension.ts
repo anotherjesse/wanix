@@ -250,7 +250,25 @@ async function createTerminal(fsys: any, config: Config) {
 	const enc = new TextEncoder();
 	const readable = await fsys.openReadable(`${termPath}/data`);
 	const writable = (await fsys.openWritable(`${termPath}/data`)).getWriter();
+	let pendingResize: Promise<void> = Promise.resolve();
+	let closed = false;
 	let buffer = '';
+	const sendResize = (dimensions: vscode.TerminalDimensions) => {
+		if (dimensions.columns <= 0 || dimensions.rows <= 0 || closed) {
+			return;
+		}
+		const payload = enc.encode(`${dimensions.columns} ${dimensions.rows}\n`);
+		pendingResize = pendingResize.then(async () => {
+			const winch = (await fsys.openWritable(`${termPath}/winch`)).getWriter();
+			try {
+				await winch.write(payload);
+			} finally {
+				await winch.close();
+			}
+		}).catch((error) => {
+			console.warn("Wanix terminal resize failed", error);
+		});
+	};
 	return {
 		onDidWrite: writeEmitter.event,
 		open: () => {
@@ -261,6 +279,7 @@ async function createTerminal(fsys: any, config: Config) {
 			})();
 		},
 		close: () => {
+			closed = true;
 			writable.close();
 		},
 		handleInput: async (data: string) => {
@@ -284,10 +303,8 @@ async function createTerminal(fsys: any, config: Config) {
 				writeEmitter.fire(data);             // echo
 			}
 		},
-		setDimensions: async (dimensions: vscode.TerminalDimensions) => {
-			// const winch = (await fsys.openWritable(`${termPath}/winch`)).getWriter();
-			// await winch.write(enc.encode(`${dimensions.columns} ${dimensions.rows}\n`));
-			// await winch.close();
+		setDimensions: (dimensions: vscode.TerminalDimensions) => {
+			sendResize(dimensions);
 		}
 	};
 }
