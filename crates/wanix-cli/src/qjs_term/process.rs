@@ -8,11 +8,11 @@ mod unix;
 #[cfg(unix)]
 pub(super) use unix::terminal_size_for_fd;
 
+use super::CliError;
 #[cfg(unix)]
-use super::ProcessInputMode;
-use super::{
-    CliError, TerminalPumpState, feed_terminal_batch_and_pump, feed_terminal_chunk_and_pump,
-    task_exited,
+use super::pump::ProcessInputMode;
+use super::pump::{
+    TerminalPumpState, feed_terminal_batch_and_pump, feed_terminal_chunk_and_pump, task_exited,
 };
 
 pub(super) fn run_process_raw_byte_feed_session_after_eval(

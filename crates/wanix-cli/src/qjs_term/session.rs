@@ -8,11 +8,13 @@ use wanix_task::{Task, TaskTable};
 use wanix_term::TermDevice;
 use wanix_vfs::BindOptions;
 
+use super::pump::{
+    TermResize, drain_terminal_output_bytes, feed_terminal_after_eval,
+    feed_terminal_resize_after_eval,
+};
 use super::{
     QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS, QJS_SHELL_READY_IO_TURNS, QJS_SHELL_SCRIPT_SENTINEL,
-    QJS_SHELL_SOURCE, TermResize, attach_task_terminal, configure_qjs_task,
-    drain_terminal_output_bytes, eval_qjs_source, feed_terminal_after_eval,
-    feed_terminal_resize_after_eval,
+    QJS_SHELL_SOURCE, attach_task_terminal, configure_qjs_task, eval_qjs_source,
 };
 use crate::{CliError, parse_exit, quickjs_runner};
 

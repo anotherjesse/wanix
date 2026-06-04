@@ -4,10 +4,11 @@ use std::time::Duration;
 use wanix_qjs::QuickJsTaskRuntime;
 use wanix_term::TermDevice;
 
-use super::super::{
-    CliError, QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS, TermResize, TerminalPumpState,
-    feed_terminal_chunk_and_pump, pump_terminal_idle, pump_terminal_resize_if_changed, task_exited,
+use super::super::pump::{
+    TermResize, TerminalPumpState, feed_terminal_chunk_and_pump, pump_terminal_idle,
+    pump_terminal_resize_if_changed, task_exited,
 };
+use super::super::{CliError, QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS};
 
 pub(super) fn run_process_polled_feed_session_after_eval(
     process_stdin: &mut dyn Read,

@@ -1,7 +1,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use super::{CliError, QJS_SHELL_READY_IO_TURNS, QJS_SHELL_SCRIPT_SENTINEL, TermResize};
+use super::pump::TermResize;
+use super::{CliError, QJS_SHELL_READY_IO_TURNS, QJS_SHELL_SCRIPT_SENTINEL};
 use crate::{QjsCommand, os_arg_to_string, parse_qjs_command_for};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

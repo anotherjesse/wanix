@@ -4,14 +4,15 @@ use std::path::Path;
 use wanix_qjs::QuickJsTaskRuntime;
 use wanix_term::TermDevice;
 
+use super::CliError;
 use super::command::PostEvalFeed;
 use super::process::{
     run_process_line_feed_session_after_eval, run_process_raw_byte_feed_session_after_eval,
     split_feed_lines,
 };
-use super::{
-    CliError, TermResize, TerminalPumpState, feed_terminal_batch_and_pump,
-    feed_terminal_resize_and_pump, flush_terminal_feed_batch, task_exited,
+use super::pump::{
+    TermResize, TerminalPumpState, feed_terminal_batch_and_pump, feed_terminal_resize_and_pump,
+    flush_terminal_feed_batch, task_exited,
 };
 
 pub(super) fn run_post_eval_feeds(
