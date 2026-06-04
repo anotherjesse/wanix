@@ -1,4 +1,4 @@
-# ADR 0058: Rust 9P Protocol Framing
+# ADR 0058: Rust 9P Protocol And Server Contract
 
 ## Status
 
@@ -6,36 +6,67 @@ Accepted
 
 ## Context
 
-The Go/browser Wanix path already uses 9P in several places: the browser
-system element exposes `_open9P`, the WASM bridge buffers 9P frames by size and
-correlates replies by tag, and the v86 path uses 9P2000.L over virtio to mount
-Wanix filesystems into a Linux guest.
+9P is the main protocol path for Linux/v86/editor clients to browse and mutate a
+Wanix namespace from outside the runtime. The Rust port needs a protocol stack
+that keeps wire codecs, server fid state, filesystem semantics, and transports
+separate enough to evolve safely.
 
-The Rust port needs 9P for the larger serve/v86/VS Code integration path, but
-starting with a full server would mix wire framing, task namespace policy, and
-filesystem export decisions too early.
+The old ADR set recorded many individual operation milestones. Those tests are
+valuable, but the durable decision is the Rust-owned 9P contract and the
+boundaries around it.
 
 ## Decision
 
-Add a dependency-free `wanix-protocol` crate and start it with 9P wire helpers:
+`wanix-protocol` owns dependency-free 9P frame splitting, tag extraction,
+version negotiation, and typed operation codecs. It covers the server-facing
+9P2000.L surface plus selected Google.2 compatibility codecs when clients need
+them.
 
-- generic frame encode/decode for `size[4] type[1] tag[2] payload`;
-- tag extraction from raw frame bytes for v86-style request/reply routing;
-- a stream frame buffer for partial writes and multiple frames per chunk; and
-- typed `Tversion`/`Rversion` helpers for `msize` and version-string
-  negotiation, including the existing `9P2000.L` version string.
+`wanix-9p` owns the server state that maps fids to Wanix filesystem objects and
+open-file state. It translates filesystem results into 9P replies and Linux-ish
+errno errors while leaving listener, socket, stdio, and browser policy to
+adapters.
 
-Generic frames preserve unknown message types so transport code can split and
-route messages before the Rust port implements every 9P2000.L operation.
+The supported contract includes:
+
+- version negotiation for 9P2000.L, capped compatibility for
+  `9P2000.L.Google.2`, and explicit rejection of unsupported versions;
+- attach, walk, clunk, open, create, read, write, and error replies;
+- directory reads using opaque one-based cookies;
+- metadata through `Tgetattr`, POSIX file-type mode bits, virtual uid/gid, and
+  permission updates where Wanix filesystems support them;
+- `Tstatfs` synthetic mount probes;
+- file and directory mutations including create, mkdir, unlink, remove,
+  rename, legacy fid-oriented rename/remove, symlink, and readlink;
+- setattr for size, access/modification times, and permissions;
+- append mode as opened-fid state, so writes append at EOF regardless of client
+  offsets;
+- compatibility probe handling for `Tflush`, `Tfsync`, lock/getlock, auth,
+  mknod, hard-link, and xattr requests; and
+- Google.2 `Twalkgetattr`/`Rwalkgetattr` and `Tflushf`/`Rflushf` compatibility
+  where useful for v86/Linux clients.
+
+Stdio, TCP, WebSocket, and `serve` transports are adapters over the same server
+contract. They must preserve binary frame boundaries and keep diagnostic/status
+output out of binary response streams.
+
+Unsupported features should return deliberate protocol errors until Wanix has a
+backing contract. In particular, Rust Wanix does not currently require a
+separate 9P auth phase, special-file creation, hard links, or extended
+attributes.
 
 ## Consequences
 
-Rust Wanix now has an owned 9P wire boundary that can be reused by future native
-server/client work without pulling in Wasmtime, QuickJS, task, namespace, or
-filesystem policy.
+External 9P clients can mount or browse a Wanix namespace through native,
+browser, v86, and editor paths without each transport inventing filesystem
+semantics. The compatibility surface is testable at the codec, server, CLI, and
+serve layers.
 
-The next 9P steps are to add typed request/response payloads for the operations
-Wanix must serve first, then build a `wanix-fs`/`wanix-vfs` backed server and
-wire it into native serve/v86 demos. This ADR does not decide the 9P server
-authorization model, fid lifetime policy, directory entry format details, or
-how HTTPFS/R2FS protocol pieces should share the crate.
+Future 9P work should add ADRs only when it changes the protocol contract,
+authentication/trust boundary, transport multiplexing model, or backing Wanix
+filesystem semantics.
+
+## Replaces
+
+This ADR consolidates ADRs 0059 through 0067, ADRs 0072 through 0082, and
+ADR 0087 into the Rust 9P protocol and server contract.

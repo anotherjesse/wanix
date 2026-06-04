@@ -1,4 +1,4 @@
-# ADR 0092: Serve fs9p Browser Filesystem Bundle
+# ADR 0092: Browser Filesystem And Workbench Integration
 
 ## Status
 
@@ -6,41 +6,47 @@ Accepted
 
 ## Context
 
-Rust `serve` already exposes static HTTP, `/.well-known/wanix.json`, and the
-direct binary 9P WebSocket route used by v86. That proves the server side of the
-browser-facing filesystem contract, but the Rust port still lacked a small
-browser client that consumes the discovery document and speaks that 9P route
-directly.
+VS Code/workbench integration is a client path for Rust Wanix, not a separate
+runtime foundation. It should discover Rust serve routes, talk direct 9P, and
+drive Wanix service files when it needs tasks or terminals.
 
-The eventual VS Code/web workbench path needs the same shape: discover a Wanix
-runtime from the page origin, open a browser-safe filesystem transport, and map
-file operations onto Wanix-owned filesystem semantics. Naming this proof
-`vscode` would overstate the current capability because it is not a VS Code
-`FileSystemProvider` yet.
+The old MessagePort filesystem bridge was useful for the browser-era runtime,
+but the Rust path should prefer direct 9P and the same `#task`/`#term` service
+contracts used by native clients.
 
 ## Decision
 
-Add `wanix-rust serve --bundle fs9p` as a generated browser filesystem smoke
-bundle. The generated page:
+The browser filesystem and workbench path uses Rust serve discovery and direct
+9P:
 
-- fetches `/.well-known/wanix.json`;
-- opens `discovery.routes.p9.websocket` as a binary WebSocket;
-- negotiates and attaches a 9P2000.L session; and
-- exposes basic directory listing, read, write/create/truncate, rename, and
-  delete operations through 9P messages.
+- `serve --bundle fs9p` can expose a browser filesystem smoke page that fetches
+  discovery, opens the direct 9P WebSocket route, and proves browse/read/write
+  operations against the served root.
+- The workbench extension can back its `wanix:` filesystem provider with direct
+  9P operations for stat, directory listing, read, write, rename, and delete.
+- `serve --bundle workbench-fs9p` is a local generated VS Code web workbench
+  launch path that points the extension at Rust serve discovery.
+- When discovery advertises services, the workbench path can open a qjs shell
+  terminal route and can start a `qjs` Wanix task by driving `#task` and
+  `#term` over direct 9P.
+- Running the active `wanix:` JavaScript file as a `qjs` task should use the
+  same task command/env/dir/fd service files as native clients.
 
-Other bundle names still fall through to the static root. The bundle is a
-browser-side integration proof over the existing `serve` 9P route, not a new
-filesystem policy layer and not a replacement for the future VS Code workbench
-extension.
+Generated launcher details, activation timing, and browser-smoke warnings live
+in tests and current-state docs unless they change the route or service
+contract.
 
 ## Consequences
 
-The Rust port now has a browser-visible filesystem demo that exercises the same
-discovery and 9P transport surface a VS Code/web workbench integration can build
-on. It also gives qemu/v86/editor work a smaller debugging target than a full VM
-boot when the issue is the browser filesystem transport itself.
+The editor path validates the same big pieces as the native path: serve
+discovery, direct 9P, service namespaces, terminal routes, and QuickJS-backed
+Wanix tasks. It also keeps browser/editor integration as a frontend to Rust
+Wanix rather than a replacement runtime model.
 
-Future cycles can factor the page's 9P client into a reusable workbench module,
-add richer error/status mapping, and implement a VS Code `FileSystemProvider`
-against the same discovery and direct 9P route.
+Future workbench work should add ADRs only for durable API, route, auth, trust,
+or lifecycle changes.
+
+## Replaces
+
+This ADR consolidates ADR 0093, ADR 0094, and ADR 0098 into the browser
+filesystem and workbench integration contract.

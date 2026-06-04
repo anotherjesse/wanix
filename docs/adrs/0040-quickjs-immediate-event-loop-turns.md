@@ -1,4 +1,4 @@
-# ADR 0040: QuickJS Immediate Event Loop Turns
+# ADR 0040: Bounded QuickJS Guest Execution Policy
 
 ## Status
 
@@ -6,44 +6,46 @@ Accepted
 
 ## Context
 
-ADR 0031 made synchronous `qjs:os.sleep(...)` work by backing timer
-`poll_oneoff`, and ADR 0035 added immediately-ready fd poll events through live
-WASI providers. The bundled QuickJS fixture also exports async timer-shaped
-APIs such as `os.sleepAsync(...)` and `os.setTimeout(...)`, but ordinary Wanix
-`qjs` task execution only drained QuickJS promise jobs after evaluating the
-script.
+QuickJS has timers, promise jobs, fd readiness handlers, interrupt callbacks,
+and heap limits. Wanix needs enough host policy to run useful JavaScript demos
+without accidentally defining a general scheduler, signal system, cancellation
+model, or serialized resource-policy format.
 
-QuickJS-NG exposes `js_std_loop_once(ctx)`, which runs pending jobs, fires at
-most one expired timer, and reports whether the runtime is idle, has immediate
-work, or is waiting for a future timer.
+The policy belongs to the task creation/restoration or composition layer. It is
+host lifecycle state, not guest VM memory and not deterministic fixture config.
 
 ## Decision
 
-Expose a Rust engine API for `js_std_loop_once`:
+Expose bounded guest execution knobs as explicit Wanix host policy:
 
-- `QuickJsRuntime::execute_event_loop_once()` returns an idle, pending, or
-  future-wait status.
-- `QuickJsRuntime::execute_immediate_event_loop_with_limit(max_turns)` drains
-  bounded immediate work without sleeping for future timers.
+- synchronous WASI timer sleep is implemented with timer-only `poll_oneoff`;
+- due async timers and promise jobs may run through bounded immediate event-loop
+  turns after task evaluation;
+- future timers may run only when the composition layer grants an explicit wait
+  budget;
+- `setReadHandler` and `setWriteHandler` callbacks may run for explicit
+  nonblocking ready-fd turn budgets;
+- self-clearing intervals run inside those bounded timer/event-loop pumps;
+- CPU-bound guest code may be stopped by an explicit QuickJS interrupt-poll
+  budget; and
+- allocation-heavy guest code may be stopped by an explicit QuickJS heap memory
+  limit.
 
-Use that bounded immediate event-loop pump after `qjs` task/script evaluation.
-This lets due async timer callbacks, such as `os.sleepAsync(0)`, run and write
-through Wanix-owned stdio/fds before the task exits.
+CLI and serve surfaces can expose these knobs for deterministic demos and tests.
+Create/restore paths must reattach them explicitly rather than serializing them
+inside snapshots.
 
 ## Consequences
 
-JavaScript running as a Wanix `qjs` task can now demonstrate a first async
-lifecycle slice outside Chrome. The proof covers the engine API, the qjs task
-driver, and a native CLI example. QuickJS clamps `setTimeout(..., 0)` to a
-future timer, so ordinary timeout wakeups remain part of scheduler and clock
-policy rather than this immediate pump.
+Wanix qjs tasks can run useful async JavaScript, ready-IO handlers, and bounded
+resource tests while staying honest about what is not implemented yet. These
+knobs are not a process scheduler, async runtime, signal delivery mechanism,
+kill/cancel API, or durable task checkpoint format.
 
-Future timers are initially reported as a wait status rather than slept in the
-immediate task pump. ADR 0042 later adds an explicit bounded wait budget for
-future timer demos, and ADR 0044 proves self-clearing intervals inside that
-bounded pump. Long-lived timers, open-ended intervals, fd handler scheduling,
-signals, cancellation, and a Wanix task scheduler remain future lifecycle work.
+Future lifecycle work should either extend Wanix task semantics broadly or add
+a new ADR for the changed scheduler/cancellation boundary.
 
-The event-loop state remains QuickJS VM state. Snapshot bytes continue to be VM
-images only; callers still need to reject or deliberately define policy for
-open host resources and future scheduled work before snapshotting richer tasks.
+## Replaces
+
+This ADR consolidates ADRs 0031 and 0041 through 0046 into the bounded guest
+execution policy. Snapshot reattachment for these knobs is covered by ADR 0003.

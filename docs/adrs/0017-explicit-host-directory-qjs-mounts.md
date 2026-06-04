@@ -1,4 +1,4 @@
-# ADR 0017: Explicit Host Directory Mounts for Native qjs Demos
+# ADR 0017: Explicit Host Directory Mounts
 
 ## Status
 
@@ -6,51 +6,33 @@ Accepted
 
 ## Context
 
-The native Rust CLI can now run QuickJS/WASI tasks outside Chrome with a Wanix
-namespace, task service files, stdio fds, and snapshot/restore demos. Until now
-the CLI copied the selected script directory into an in-memory Wanix namespace,
-which proved Wanix-owned semantics but left no simple way for a demo task to
-read or write real host files through the namespace.
+Native demos and tests need to expose selected host files to Wanix tasks.
+Treating the host filesystem as the default Wanix namespace would erase the
+runtime boundary the Rust port is meant to preserve.
 
-Wanix still must not delegate process or WASI semantics to host WASI. Host files
-should appear only when the native composition layer explicitly grants them.
+Host access is a trust boundary: paths must not escape the selected root, and
+guest code should see an explicit Wanix mount rather than ambient host state.
 
 ## Decision
 
-Add `wanix_fs::LocalFs`, a `FileSystem` implementation rooted at one canonical
-host directory. It maps normalized Wanix relative paths under that root,
-supports ordinary file open/read/write/seek/tell/metadata/readdir behavior, and
-rejects paths that resolve outside the configured root.
+Expose host directories only through explicit rooted `LocalFs` mounts into a
+Wanix namespace.
 
-Expose host access in the native CLI through explicit qjs mounts:
+Host roots are canonicalized before use, and filesystem operations are checked
+so guest paths cannot escape the configured root through `..`, symlink traversal
+where escape protection applies, or absolute host paths. CLI demos bind those
+roots at explicit guest paths and pass those guest paths to Wanix tasks.
 
-```sh
-wanix-rust qjs --mount HOST=GUEST script.js
-wanix-rust qjs-restore --mount HOST=GUEST before.js after.js
-```
-
-The CLI binds each host root at the requested non-root Wanix guest path. Guest
-path `.` is intentionally rejected for this demo surface so the synthetic
-`main.js` script loader remains unambiguous and mounted host directories cannot
-accidentally replace the CLI's task root.
+No core Wanix task, WASI, or namespace path should implicitly mean "open this
+host path" unless a `LocalFs` mount was configured at that point in the
+namespace.
 
 ## Consequences
 
-QuickJS/WASI tasks can now demonstrate durable reads and writes against a real
-host directory while still going through Wanix namespace resolution, task fd
-state, and Wanix-owned WASI adapters.
+Native qjs, 9P, serve, v86, and workbench demos can use real host files without
+making the host filesystem the runtime foundation. The same path-resolution
+rules apply whether the caller is JavaScript through WASI, a 9P client, a CLI
+command, or a service-file workflow.
 
-For snapshot/restore demos, the QuickJS VM image keeps guest memory while the
-mounted host directory is live namespace state cloned onto the restored Wanix
-task. This keeps host resources outside the snapshot bytes while making the
-reattachment visible through host filesystem writes.
-
-For task-spawn demos, child tasks allocated through `#task/new/qjs` clone the
-parent Wanix namespace, so explicit host mounts can provide both child program
-source and child-visible storage without giving QuickJS its own process or host
-filesystem policy.
-
-This is a native CLI composition feature, not a change to core task identity or
-QuickJS engine policy. Browser deployments and future persisted namespace
-formats must choose their own host-resource attachment policy instead of
-assuming local host paths are always available.
+Future host exposure such as network filesystems, R2FS, HTTPFS, or wider native
+mount policies should preserve the explicit-root trust boundary.

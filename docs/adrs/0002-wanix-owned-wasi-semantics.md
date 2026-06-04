@@ -1,4 +1,4 @@
-# ADR 0002: Wanix-Owned WASI Semantics
+# ADR 0002: Live Wanix-Owned WASI Semantics
 
 ## Status
 
@@ -6,50 +6,57 @@ Accepted
 
 ## Context
 
-Wanix filesystem behavior includes virtual resources, per-task namespaces,
-Plan 9-style bind and union resolution, `#task`, pipes, signals, terminals,
-and other capability-oriented services. Generic host WASI filesystem adapters
-usually model host paths and preopens, which would hide or flatten Wanix
-semantics at the trust boundary.
+QuickJS runs in Wasmtime as a WASI guest, but Wanix cannot delegate process or
+filesystem meaning to host WASI. Host WASI would expose the host filesystem,
+rights model, clocks, fd table, and path rules instead of the namespace and task
+state that Wanix owns.
+
+Wanix tasks need Preview 1 calls to observe the same namespace, cwd, service
+paths, stdio, fd table, metadata, and mutation behavior that native Wanix code
+observes. The engine crate should decode guest memory and call a provider; it
+should not decide Wanix filesystem or task policy.
 
 ## Decision
 
-The Rust port will provide custom WASI Preview 1 imports backed by Wanix
-namespaces and task file descriptors. Wasmtime remains the engine, but Wanix
-owns syscall semantics for filesystem and fd behavior.
+`wanix-wasi` owns the generic Preview 1 semantics used by Rust Wanix tasks.
+It is backed by Wanix namespaces, task file descriptors, explicit preopens, and
+Wanix filesystem traits rather than by host WASI filesystem semantics.
 
-`wanix-wasi` accepts standard fd attachments as generic `wanix_fs::File`
-handles with explicit read/write access. Task-specific adapters, such as
-`wanix-qjs`, are responsible for supplying task fd proxy files so the WASI crate
-does not depend upward on `wanix-task`.
+The Wanix WASI boundary includes:
+
+- root and cwd handling through task namespaces;
+- service paths such as `#task` staying rooted at the service namespace even
+  when the ordinary root preopen maps to a task cwd;
+- fd reads, writes, seek/tell, fd metadata, fd flags, and fd close behavior;
+- rights projection that lets broad libc open requests become the Wanix-enforced
+  rights reported on the opened fd;
+- path open, stat, directory listing, directory create/remove, file unlink,
+  same-filesystem rename, append mode, fdflag mutation, timestamp mutation,
+  truncate, symlink metadata, readlink, and symlink creation;
+- deterministic clock policy for `clock_time_get` and timestamp `*_NOW`
+  updates;
+- timer-only `poll_oneoff` plus fd readiness reporting through Wanix readiness
+  hooks; and
+- explicit unsupported errors for Preview 1 behavior without a Wanix contract.
+
+When a QuickJS task opens dynamic regular-file WASI fds, the adapter mirrors the
+visible fd into the Wanix task fd table at the same number and removes it when
+WASI closes the fd. Directory fds can stay WASI-internal until a Wanix task fd
+contract needs them. Snapshot logic rejects open dynamic WASI fds unless a
+future ADR defines serializable virtual fd state.
 
 ## Consequences
 
-- WASI `path_*` and `fd_*` calls resolve through Wanix task state.
-- Host paths are exposed only through explicit Wanix resources such as a future
-  local filesystem adapter.
-- Stdio defaults to closed; fd 0/1/2 become available only when the composition
-  layer attaches explicit Wanix file handles.
-- `wanix-wasi` exposes typed Preview 1 import metadata such as preopen names,
-  fdstat file types/rights, and numeric errno codes without depending on
-  Wasmtime guest memory. Engine-specific import providers translate those typed
-  results and byte-layout encoders into guest ABI structs.
-- Engine-specific providers translate guest-memory ABI records into typed host
-  calls. Runtime adapters such as `wanix-qjs` convert those calls into
-  `wanix-wasi` path/fd operations. Unsupported Preview 1 modes remain explicit
-  errors until Wanix owns their semantics.
-- Preview 1 `path_open` requests preserve reduced base and inheriting rights on
-  opened file and directory fds. `fdstat` and later fd/path operations report
-  and enforce those effective rights instead of re-advertising broader defaults.
-- Directory fdstat rights should describe the operations Wanix already allows:
-  directory reads, recursive path opens, file creation, and truncation during
-  path open. Directory fds inherit both regular-file and child-directory rights.
-- File handles advertise seek/tell rights only when the underlying Wanix file
-  reports that capability. `fd_seek`/`fd_tell` are backed by the Wanix file
-  contract for seekable fds, while non-seekable valid fds report insufficient
-  capability and bad fds are still reported as `badf`.
-- Early WASI support can start narrow and read-only, but the API boundary should
-  be designed for full Wanix filesystem behavior.
-- `wanix-wasi` depends on `wanix-fs` and `wanix-vfs`; task-fd attachment is
-  wired by `wanix-cli`, `wanix-qjs`, or another composition layer so the core
-  crate graph stays acyclic.
+JavaScript running through `qjs:std` and `qjs:os` reaches Wanix-owned
+filesystem and fd semantics without `globalThis.Wanix` helpers and without a
+read-only virtual projection bridge. Exact syscall behavior is pinned by
+`wanix-wasi`, `wanix-qjs`, and CLI tests instead of by one ADR per operation.
+
+Future WASI Preview 1 additions should extend this contract when they expose a
+durable Wanix semantic boundary. Routine syscall coverage milestones should
+live in tests, examples, and commit messages.
+
+## Replaces
+
+This ADR consolidates ADR 0013, ADR 0014, ADR 0020, and ADRs 0023 through 0037
+into the live Wanix-owned WASI boundary.

@@ -1,49 +1,49 @@
-# ADR 0088: Native QEMU Virtio-9P Handoff Command
+# ADR 0088: Native QEMU Handoff
 
 ## Status
 
-Accepted.
+Accepted
 
 ## Context
 
-Wanix now has a Rust `serve` path for browser/v86 experiments, but the same tiny
-Linux guest should also be runnable outside Chrome on Linux hosts with QEMU/KVM.
-The current guest boot model already matches a virtio-9p root: kernel
-`/boot/bzImage`, `console=hvc0`, `root=host9p`, and a host directory exported as
-the root filesystem.
+Native QEMU is another client of the Rust Wanix filesystem and boot workflow.
+It should be easy to launch a guest root with virtio-9p, but the Rust port is
+not yet a full VM manager.
 
-Actually supervising QEMU is a larger workflow decision: process lifecycle,
-host TTY handling, KVM availability, rootfs extraction, and future image modes
-all need more design.
+The important boundary is that Wanix can construct a validated handoff command
+and optionally supervise a foreground process, while leaving daemonization,
+terminal multiplexing, rootfs assembly, network bridging, and lifecycle policy
+for later decisions.
 
 ## Decision
 
-Add `wanix-rust qemu --root DIR --kernel PATH`, a native CLI handoff command
-that prints a shell-quoted `qemu-system-i386` virtio-9p command instead of
-executing it. The printed command uses:
+`wanix-rust qemu --root DIR` builds a validated native QEMU/KVM virtio-9p
+handoff command:
 
-- `-enable-kvm -cpu host` by default, with `--no-kvm` for non-KVM hosts.
-- A configurable memory size with `--memory-mb`, defaulting to `512`.
-- `-fsdev local,id=host9p,path=DIR,security_model=mapped-xattr`.
-- `virtio-9p-pci` with `mount_tag=host9p`.
-- `virtio-serial-pci` plus `virtconsole,chardev=con`.
-- `-chardev stdio,id=con -nographic`.
+- it canonicalizes and validates the guest root;
+- it discovers kernel and optional initrd paths from the root when present;
+- it supports explicit kernel/initrd paths, cmdline override, and cmdline
+  append options;
+- it prints a shell-quoted command by default, preserving reviewable
+  print-only behavior; and
+- it advertises the same guest-root shape used by the direct-v86 route where
+  practical.
 
-The command validates that `DIR` exists and is a directory and that `PATH`
-exists and is a file. It canonicalizes both paths before printing. It rejects a
-root path containing `,` because QEMU `-fsdev` options are comma-separated and a
-comma would change the option boundary.
-
-The guest root flags stay on base `version=9p2000.L`. Google.2 9P negotiation is
-implemented in the Rust server, but the QEMU guest path should not switch
-dialects until a boot proof shows the kernel and userspace accept it.
+`wanix-rust qemu --exec` is an explicit foreground launch mode. It spawns the
+validated argv, inherits stdin/stdout/stderr, reports the child exit status, and
+does not turn Wanix into a background VM supervisor.
 
 ## Consequences
 
-Rust Wanix now has a tested native QEMU handoff artifact that points the same
-guest/rootfs story outside the browser without committing to a VM supervisor.
+Developers can move from Rust-generated guest-root artifacts to native QEMU
+without hand-writing fragile commands, while the default mode remains inspectable
+and safe to paste or modify.
 
-Later cycles added `--exec` and `wanix-rust rootfs` archive extraction. Future
-cycles can add QEMU binary discovery, rootfs build automation, btrfs image
-generation, microvm/qboot variants, or process/terminal supervision on top of
-this stable generated argv contract.
+Future QEMU work that adds daemon mode, persistent VM management, network/vnet,
+terminal multiplexing, or rootfs assembly should get its own ADR because it
+changes the ownership boundary.
+
+## Replaces
+
+This ADR consolidates ADR 0089 and ADR 0101 into the native QEMU handoff
+contract.

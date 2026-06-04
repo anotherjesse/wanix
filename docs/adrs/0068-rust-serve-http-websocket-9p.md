@@ -1,53 +1,59 @@
-# ADR 0068: Rust Serve HTTP and WebSocket 9P
+# ADR 0068: Serve Discovery And Route Policy
 
 ## Status
 
-Accepted.
+Accepted
 
 ## Context
 
-Rust Wanix now has a filesystem-backed 9P server plus stdio, TCP, and binary
-WebSocket exports. The Go `wanix serve` path is still the reference for browser
-and v86 composition: it serves static assets with browser isolation headers and
-uses WebSocket upgrades as 9P sessions.
+`wanix-rust serve` is the local composition surface for browser, v86,
+workbench, VS Code, and local tool clients. It needs to serve static assets and
+protocol routes from one listener without making the 9P server or core runtime
+own HTTP, WebSocket, browser isolation, or demo-page policy.
 
-The next big-piece milestone should not be another cleanup pass. Browser v86
-and VS Code-style integrations need one native endpoint that can deliver assets
-and expose the Wanix filesystem transport shape they can actually reach from a
-browser.
+The durable decision is the discovery and route contract, not every generated
+page or smoke workflow that proved a route.
 
 ## Decision
 
-Add `wanix-rust serve --root DIR --addr HOST:PORT [--once]` in `wanix-cli`
-(ADR 0070 later adds Go-like defaults and aliases):
+Rust `serve` combines static HTTP and direct protocol routes on one local
+listener:
 
-- ordinary HTTP `GET` requests serve files from the host-root directory;
-- static responses include `Cross-Origin-Opener-Policy: same-origin`,
-  `Cross-Origin-Embedder-Policy: require-corp`, and
-  `Access-Control-Allow-Origin: *`;
-- directory requests use `index.html`;
-- path traversal and escaped separators are rejected before host files are read;
-- WebSocket upgrade requests are handed to the existing binary 9P WebSocket
-  connection handler, so `serve` and `p9-ws` share request framing and response
-  behavior;
-- each WebSocket connection gets a fresh `P9Server`, preserving connection-local
-  fid state;
-- `--once` serves one HTTP request or one WebSocket session and exits for tests
-  and scripted demos.
+- `wanix-rust serve [DIR] [--listen HOST:PORT] [--once] [--bundle NAME]
+  [--wanix-services]` serves a selected root, defaulting to the current
+  directory and a demo-friendly local address.
+- Static HTTP responses use the browser headers needed by local v86 and
+  workbench demos.
+- `/.well-known/export9p` is the reserved direct binary 9P WebSocket route.
+- `/.well-known/wanix.json` advertises discovery data: direct 9P routes,
+  selected bundles, service availability, direct-v86 boot hints, and explicitly
+  unimplemented routes such as Ethernet/vnet until those contracts exist.
+- `--once` remains a deterministic single-connection mode for tests and
+  scripted smokes; normal serve accepts concurrent HTTP and 9P WebSocket
+  clients.
+- `--wanix-services` exports a Wanix namespace containing `#task` and `#term`
+  through direct 9P from a service-root task context.
+- In service mode, the task table registers at least `noop` and `qjs`, so
+  direct 9P clients can allocate a QuickJS task, set `cmd`/`env`/`dir`, bind
+  fds, and start it through `#task`.
+- In service mode, `/.well-known/qjs-shell` exposes a terminal/session
+  WebSocket route for browser/workbench pseudoterminals to drive a
+  terminal-backed QuickJS task.
 
-The command is intentionally a CLI/composition feature. `wanix-9p` continues to
-own only the frame-to-filesystem server core, while static asset policy,
-WebSocket exposure, and future v86/VS Code routing remain outside core crates.
+Generated bundle pages and browser smokes should consume the discovery document
+rather than hard-coding route assumptions.
 
 ## Consequences
 
-Rust Wanix now has the first native serve shape that can host browser assets and
-the browser-reachable 9P export on the same listener. This makes qemu/v86 and
-VS Code experiments a question of asset/routing/client policy rather than a
-missing transport.
+Serve is the visible local entrypoint for the bigger pieces without turning into
+a VM manager, editor host, network bridge, or core filesystem crate. Browser,
+v86, and workbench clients can share route discovery and direct 9P semantics.
 
-ADR 0069 later reserves the well-known route surface and maps
-`/.well-known/export9p` to the same direct binary 9P WebSocket handler. This ADR
-does not decide public auth, writable export exposure, vnet bridging, qemu/v86
-bundle assembly, HTTPS, or VS Code-specific routes. Those should be added
-deliberately once the clients are wired to this endpoint.
+Future auth, remote exposure, Ethernet/vnet, multiplexing, or persistent
+session policy should be recorded as new decisions because they change the
+serve trust boundary.
+
+## Replaces
+
+This ADR consolidates ADRs 0069 through 0071, ADR 0086, and ADRs 0095 through
+0097 into the Rust serve route and discovery contract.

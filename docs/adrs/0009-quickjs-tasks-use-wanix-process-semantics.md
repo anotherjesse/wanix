@@ -1,4 +1,4 @@
-# ADR 0009: QuickJS Tasks Use Wanix Process Semantics
+# ADR 0009: QuickJS Runs As A Wanix Task
 
 ## Status
 
@@ -6,64 +6,49 @@ Accepted
 
 ## Context
 
-QuickJS makes JavaScript execution possible outside Chrome, but Wanix already
-has the process-shaped concepts that should define runtime identity and
-capability boundaries: task id, `#task`, command, environment, working
-directory, exit state, namespace, file descriptors, and driver registration.
+JavaScript should run outside Chrome, but that does not make QuickJS a separate
+process model. Wanix already has task identity, `#task`, command files, env,
+cwd, fd tables, fd binding, stdio, exit state, and driver registration. QuickJS
+is the execution engine inside one task kind.
 
-Treating QuickJS as its own process model would split those semantics and make
-WASI/fd behavior harder to reason about.
+The important boundary is that Wanix owns process semantics even when the guest
+language is JavaScript.
 
 ## Decision
 
-JavaScript running in QuickJS is modeled as a Wanix task with task kind `qjs`.
-QuickJS is the execution engine inside that task. Wanix owns task identity,
-namespace, cwd/env/cmd, stdio/fds, and exit state.
+Treat `qjs` as a real Wanix task driver. A QuickJS-backed task uses the same
+task model as other Wanix tasks:
 
-`wanix-task` owns process/task semantics. `wanix-qjs` implements the adapter and
-driver for `qjs` tasks. `wanix-wasi` provides Wanix-owned WASI syscall semantics
-backed by task namespaces and fds. CLI and other composition layers wire the
-driver into a task table.
+- `#task/new/qjs` allocates a task identity and service tree.
+- `cmd` stores shell-quoted argv so paths, spaces, quotes, and empty arguments
+  survive file-controlled task setup.
+- `env`, `dir`, and cwd are Wanix task metadata, not QuickJS global state.
+- `ctl bind` uses the same shell-word grammar as `cmd` for wiring fds and
+  preserving Wanix paths with spaces.
+- fd 0/1/2 and later fds are Wanix task fds that may be backed by memory files,
+  namespace files, host mounts, terminal devices, or service-file handoffs.
+- opening `#task/<id>/fd/<n>` captures a shared open-file handle so fd binds
+  remain usable after the source task closes its fd.
+- native qjs entrypoints can seed stdin from text, host files, or native stdin,
+  but the resulting input is still installed as Wanix task fd 0.
+- exit status is observable through Wanix task state.
+
+The QuickJS adapter flows task argv, env, cwd, stdio, and fd state into the live
+WASI provider and engine create/restore path. It does not expose a parallel
+JavaScript process object.
 
 ## Consequences
 
-- QuickJS must not own global process identity or fd semantics.
-- Near-term `qjs` work should flow task `cmd`, `env`, and `dir` into
-  QuickJS/WASI, then back WASI path/fd calls with the task namespace and fd
-  table.
-- QuickJS fd behavior now flows through live Wanix-backed WASI. Dynamic regular
-  file fds opened by `qjs:os` are mirrored into the Wanix task fd table as
-  described in ADR 0020, rather than using separate helper-only fd semantics.
-- QuickJS task setup consumes `QuickJsWanixConfig`, which wraps
-  `wanix_wasi::WasiConfig` for live Wanix-backed WASI imports. Those imports
-  attach to Wanix task identity and fds rather than exposing QuickJS as an
-  independent process model.
-- `wanix-qjs` attaches open task stdio fds to `QuickJsWanixConfig` through
-  private `wanix_fs::File` proxy handles. That keeps `wanix-wasi` generic while
-  preserving Wanix task fd ownership for the live WASI import path.
-- `wanix-qjs` maps the task cwd to WASI fd 3 as the guest root preopen. The
-  preopen still reports `/`, but bare WASI path calls resolve from the Wanix
-  task cwd so `path_open("main.js")` matches `std.loadFile("main.js")`.
-- The qjs stdio proxies are live views by Wanix task fd number. Closing a task
-  stdio fd affects the WASI attachment, while WASI `fd_close` still rejects
-  stdio fds so lifecycle remains owned by Wanix task/fd APIs.
-- `wanix-qjs` installs a qjs-compatible `scriptArgs` global from Wanix task
-  argv. `scriptArgs[0]` is the program name and later entries are script
-  arguments.
-- A parent `qjs` task may allocate and start a child `qjs` task by using
-  Wanix-backed WASI calls against `#task/new/qjs` and `#task/<id>/cmd`,
-  `env`, `dir`, `ctl`, and `exit`. The child still gets Wanix task identity,
-  namespace, argv/env/cwd, and exit state from `wanix-task`; QuickJS only
-  executes the task driver. Child tasks do not implicitly inherit parent stdio
-  fds. A parent wires child stdio explicitly before `start` by writing
-  `bind <src> fd/<n>` to the child's `ctl` file. Rust resolves `<src>` in the
-  target task namespace and installs it in the target task fd table; use an
-  explicit source such as `#task/1/fd/1` when the child should write through a
-  parent fd, because `#task/self` is target-task-relative.
-- The synchronous process demo comes before richer lifecycle work. Later ADRs
-  add bounded event-loop slices, ADR 0045 adds an interrupt-poll budget for
-  CPU-bound JavaScript, and ADR 0046 adds a QuickJS heap memory limit for
-  allocation-heavy JavaScript, but full signals, asynchronous cancellation, and
-  scheduler policy remain future work.
-- A useful demo should show JavaScript reading `#task/self/id`, using stdio,
-  and leaving an observable task exit status.
+QuickJS can provide the first serious Wanix runtime outside Chrome while the
+task table remains the source of truth for process identity and lifecycle.
+Tests and demos should prefer `qjs:std`, `qjs:os`, `scriptArgs`, stdio, and
+`#task` service files over temporary helper globals.
+
+Future lifecycle features such as async scheduling, cancellation, signals,
+process groups, and snapshot-aware fd policies should extend Wanix task
+semantics rather than QuickJS-specific process state.
+
+## Replaces
+
+This ADR consolidates ADR 0015, ADR 0019, ADR 0021, and ADR 0022 into the
+QuickJS-as-Wanix-task process model.

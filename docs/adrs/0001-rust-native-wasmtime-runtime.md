@@ -6,33 +6,53 @@ Accepted
 
 ## Context
 
-Wanix currently runs its primary runtime through Go compiled to browser wasm,
-with browser and `syscall/js` assumptions close to the core execution model.
-The Rust port should run outside Chrome and make browser support a frontend or
-deployment option rather than the foundation.
+Wanix began as a browser-centered Go and JavaScript runtime. The Rust port is
+not a line-by-line translation of that tree; it is a chance to restate the
+runtime contracts that make Wanix useful outside Chrome.
 
-The `rust-wasi-quickjs` prototype proves that a QuickJS runtime can run as a
-WASI Preview 1 WebAssembly reactor under Wasmtime, with host policy supplied by
-Rust and VM state captured through linear-memory snapshots.
+The durable goal is a Rust-native Wanix core that acts as the host or
+microkernel runtime. Wasmtime is the guest execution substrate, and
+QuickJS/WASI is the first serious task runtime. Browser support, v86, VS Code,
+and other clients become frontends or deployment surfaces of that Rust runtime
+rather than the foundation that defines process, filesystem, or namespace
+semantics.
+
+The Go implementation remains valuable because it records existing Wanix
+behavior, especially filesystem, namespace, service-file, task, terminal, and
+9P semantics. It should be treated as a semantic oracle during migration, not
+as a package structure or API surface to copy blindly.
 
 ## Decision
 
-Rust Wanix will act as the host/microkernel. Wasmtime will be the execution
-substrate for guest programs. QuickJS/WASI will be the first serious task
-runtime for the port, and the first externally visible demo target is:
+Build Rust Wanix around the Wanix contracts rather than around the old
+implementation layout:
 
-> Run JavaScript outside Chrome with access to a Wanix namespace.
+- Wanix owns filesystem behavior, namespace binding and resolution, task
+  identity, task service files, fd tables, terminal devices, and externally
+  visible process state.
+- Wasmtime hosts guest runtimes. It is not allowed to inherit host filesystem or
+  process semantics by default.
+- QuickJS/WASI is the initial task runtime and the proof that JavaScript can run
+  as a Wanix process outside Chrome.
+- Browser, workbench, v86, native QEMU, and CLI paths compose with the Rust
+  runtime through explicit protocols and service files.
+- Migration uses Go behavior and tests as references when semantics are
+  ambiguous, but Rust crate boundaries should follow the contracts being
+  rebuilt.
 
 ## Consequences
 
-- Browser APIs are not part of the core runtime contract.
-- Wasmtime integration is core infrastructure, not an optional adapter.
-- The Go implementation remains a behavior oracle during migration.
-- The Rust port should recreate Wanix contracts instead of translating Go files
-  package by package.
+The Rust port can make progress by rebuilding externally visible capability
+instead of translating every Go file. Architectural choices should favor
+Wanix-owned semantics at trust boundaries, even when host or Wasmtime defaults
+would be easier.
 
-## First Slice Acceptance Criteria
+This ADR is intentionally broad. More specific ADRs record crate boundaries,
+QuickJS task semantics, Wanix-owned WASI, snapshots, terminals, 9P, serve,
+workbench, v86, and QEMU handoff contracts.
 
-The first vertical slice should run JavaScript outside Chrome, load source from
-a Wanix namespace, expose a small JS-visible Wanix filesystem API or module,
-write output through task stdio, and return an observable exit status.
+## Replaces
+
+This ADR absorbs the durable direction from ADR 0004. The separate Go-oracle
+record was removed because the oracle rule is part of the runtime direction,
+not a standalone architecture boundary.
