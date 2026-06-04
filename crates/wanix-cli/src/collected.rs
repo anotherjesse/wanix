@@ -3,8 +3,7 @@ use std::io::Read;
 
 use crate::{
     CliError, CliOutput, p9_listen, p9_stdio, p9_ws, parse_qjs_command,
-    parse_qjs_snapshot_file_command, qemu, qjs_restore, qjs_term, rootfs, run_qjs, run_qjs_resume,
-    run_qjs_snapshot, serve,
+    parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term, rootfs, serve,
 };
 
 type CollectedHandler = fn(&[OsString], &mut dyn Read) -> Result<CliOutput, CliError>;
@@ -49,7 +48,7 @@ fn run_qjs_collected(
     rest: &[OsString],
     process_stdin: &mut dyn Read,
 ) -> Result<CliOutput, CliError> {
-    run_qjs(parse_qjs_command(rest)?, process_stdin)
+    qjs::run_qjs(parse_qjs_command(rest)?, process_stdin)
 }
 
 fn run_qjs_term_collected(
@@ -70,7 +69,7 @@ fn run_qjs_snapshot_collected(
     rest: &[OsString],
     process_stdin: &mut dyn Read,
 ) -> Result<CliOutput, CliError> {
-    run_qjs_snapshot(
+    qjs::run_qjs_snapshot(
         parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?,
         process_stdin,
     )
@@ -80,7 +79,7 @@ fn run_qjs_resume_collected(
     rest: &[OsString],
     process_stdin: &mut dyn Read,
 ) -> Result<CliOutput, CliError> {
-    run_qjs_resume(
+    qjs::run_qjs_resume(
         parse_qjs_snapshot_file_command(rest, "qjs-resume")?,
         process_stdin,
     )

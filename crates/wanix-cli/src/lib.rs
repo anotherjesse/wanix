@@ -9,6 +9,7 @@ mod p9_stdio;
 mod p9_ws;
 mod process_io;
 mod qemu;
+mod qjs;
 mod qjs_args;
 mod qjs_restore;
 mod qjs_support;
@@ -19,16 +20,12 @@ mod terminal_mode;
 
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
-use std::sync::Arc;
 
-use wanix_fs::{FsError, MemFs};
-use wanix_qjs::QuickJsTaskDriver;
-use wanix_task::TaskTable;
-use wanix_vfs::BindOptions;
+use wanix_fs::FsError;
 
 pub use native::run_native_process;
 use qjs_args::{
-    QjsCommand, QjsSnapshotFileCommand, os_arg_to_string, parse_qjs_command, parse_qjs_command_for,
+    QjsCommand, os_arg_to_string, parse_qjs_command, parse_qjs_command_for,
     parse_qjs_snapshot_file_command, read_qjs_stdin,
 };
 pub(crate) use qjs_support::{
@@ -294,173 +291,6 @@ fn write_process_output(output: &mut dyn Write, label: &str, bytes: &[u8]) -> Re
     output
         .flush()
         .map_err(|error| CliError::new(format!("failed to flush process {label}: {error}"), 1))
-}
-
-fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
-    let script_path = command.script_path.as_path();
-    let script = read_utf8_script(script_path)?;
-    let stdin_bytes = read_qjs_stdin(command.stdin, process_stdin)?;
-
-    let table = TaskTable::new();
-    let runner = quickjs_runner()?;
-    let mut driver = QuickJsTaskDriver::new(runner)
-        .with_event_loop_wait_budget(command.event_loop_wait_budget)
-        .with_ready_io_turns(command.ready_io_turns);
-    if let Some(budget) = command.interrupt_poll_budget {
-        driver = driver.with_interrupt_poll_budget(budget);
-    }
-    if let Some(bytes) = command.memory_limit_bytes {
-        driver = driver.with_memory_limit_bytes(bytes);
-    }
-    table.register_driver("qjs", Arc::new(driver))?;
-    let task = table.allocate_root("qjs")?;
-    let root = Arc::new(MemFs::new());
-    copy_script_directory(script_path, &root, &command.cwd)?;
-    let guest_script = guest_path_in_cwd(&command.cwd, QJS_GUEST_SCRIPT)?;
-    root.write_file(guest_script.as_str(), script.as_bytes())?;
-    task.bind(root, ".", ".", BindOptions::default())?;
-    bind_host_mounts(&task, &command.mounts)?;
-    let (stdout, stderr) = attach_task_stdio(&task, stdin_bytes)?;
-    configure_qjs_task(
-        &task,
-        QJS_GUEST_SCRIPT,
-        &command.args,
-        &command.env,
-        &command.cwd,
-    )?;
-
-    let start_result = table.start(task.id());
-    let stdout = read_file(&*stdout, "stdout")?;
-    let mut stderr = read_file(&*stderr, "stderr")?;
-    match start_result {
-        Ok(()) => Ok(CliOutput::new(stdout, stderr, parse_exit(&task.exit()))),
-        Err(error) => {
-            if !stderr.is_empty() && !stderr.ends_with(b"\n") {
-                stderr.push(b'\n');
-            }
-            stderr.extend_from_slice(format!("wanix-rust qjs: {error}\n").as_bytes());
-            Ok(CliOutput::new(stdout, stderr, 1))
-        }
-    }
-}
-
-fn run_qjs_snapshot(
-    command: QjsSnapshotFileCommand,
-    process_stdin: &mut dyn Read,
-) -> Result<CliOutput, CliError> {
-    let script_path = command.script_path.as_path();
-    let script = read_utf8_script(script_path)?;
-    let stdin_bytes = read_qjs_stdin(command.stdin, process_stdin)?;
-
-    let runner = quickjs_runner()?;
-    let table = TaskTable::new();
-    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(Arc::clone(&runner))))?;
-    let task = table.allocate_root("qjs")?;
-    let root = Arc::new(MemFs::new());
-    copy_script_directory(script_path, &root, &command.cwd)?;
-    let guest_script = guest_path_in_cwd(&command.cwd, QJS_GUEST_SCRIPT)?;
-    root.write_file(guest_script.as_str(), script.as_bytes())?;
-    task.bind(root, ".", ".", BindOptions::default())?;
-    bind_host_mounts(&task, &command.mounts)?;
-    let (stdout, stderr) = attach_task_stdio(&task, stdin_bytes)?;
-    configure_qjs_task(
-        &task,
-        QJS_GUEST_SCRIPT,
-        &command.args,
-        &command.env,
-        &command.cwd,
-    )?;
-
-    let snapshot_result = (|| -> Result<(), CliError> {
-        let mut runtime = runner.create_task_runtime(&task)?;
-        apply_qjs_task_runtime_limits(
-            &mut runtime,
-            command.interrupt_poll_budget,
-            command.memory_limit_bytes,
-        )?;
-        eval_qjs_source(
-            &mut runtime,
-            &script,
-            &guest_script,
-            command.event_loop_wait_budget,
-            command.ready_io_turns,
-        )?;
-        ensure_snapshot_task_fds_closed(&task)?;
-        let snapshot = runtime.snapshot_bytes()?;
-        std::fs::write(&command.snapshot_path, snapshot).map_err(|error| {
-            CliError::new(
-                format!(
-                    "failed to write snapshot {}: {error}",
-                    command.snapshot_path.display()
-                ),
-                1,
-            )
-        })?;
-        runtime.finish()?;
-        Ok(())
-    })();
-
-    finish_cli_task_output("qjs-snapshot", snapshot_result, &task, &stdout, &stderr)
-}
-
-fn run_qjs_resume(
-    command: QjsSnapshotFileCommand,
-    process_stdin: &mut dyn Read,
-) -> Result<CliOutput, CliError> {
-    let script_path = command.script_path.as_path();
-    let script = read_utf8_script(script_path)?;
-    let snapshot = std::fs::read(&command.snapshot_path).map_err(|error| {
-        CliError::new(
-            format!(
-                "failed to read snapshot {}: {error}",
-                command.snapshot_path.display()
-            ),
-            1,
-        )
-    })?;
-    let stdin_bytes = read_qjs_stdin(command.stdin, process_stdin)?;
-
-    let runner = quickjs_runner()?;
-    let table = TaskTable::new();
-    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(Arc::clone(&runner))))?;
-    let task = table.allocate_root("qjs")?;
-    let root = Arc::new(MemFs::new());
-    copy_script_directory(script_path, &root, &command.cwd)?;
-    let guest_script = guest_path_in_cwd(&command.cwd, QJS_GUEST_SCRIPT)?;
-    root.write_file(guest_script.as_str(), script.as_bytes())?;
-    task.bind(root, ".", ".", BindOptions::default())?;
-    bind_host_mounts(&task, &command.mounts)?;
-    let (stdout, stderr) = attach_task_stdio(&task, stdin_bytes)?;
-    configure_qjs_task(
-        &task,
-        QJS_GUEST_SCRIPT,
-        &command.args,
-        &command.env,
-        &command.cwd,
-    )?;
-
-    let resume_result = (|| -> Result<(), CliError> {
-        let mut runtime = runner.restore_task_runtime_from_bytes(&task, &snapshot)?;
-        apply_qjs_task_runtime_limits(
-            &mut runtime,
-            command.interrupt_poll_budget,
-            command.memory_limit_bytes,
-        )?;
-        if let Err(error) = eval_qjs_source(
-            &mut runtime,
-            &script,
-            &guest_script,
-            command.event_loop_wait_budget,
-            command.ready_io_turns,
-        ) {
-            let _ = task.set_exit("1");
-            return Err(error);
-        }
-        runtime.finish()?;
-        Ok(())
-    })();
-
-    finish_cli_task_output("qjs-resume", resume_result, &task, &stdout, &stderr)
 }
 
 #[cfg(test)]
