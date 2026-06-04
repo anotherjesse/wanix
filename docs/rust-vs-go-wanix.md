@@ -362,7 +362,8 @@ filesystem command set and a synchronous
 namespace and workbench demos. The launcher uses `#task/new/qjs`, service-file
 `cmd`/`env`/`dir`, fd binds, `start`, and `exit` rather than a host-side
 shortcut; file redirection binds child fd `0`/`1`/`2` through the Wanix
-namespace.
+namespace, and `status` reports the last child `qjs` exit code observed from
+the child's `exit` service file.
 
 This is not yet a fully concurrent, production interactive scheduler. Raw mode
 still relies on the native host to put stdin into raw mode, but bytes then flow

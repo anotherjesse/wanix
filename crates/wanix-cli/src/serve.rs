@@ -4189,6 +4189,7 @@ std.out.puts("served child stdin " + readStdin().trimEnd() + "\n");
 std.out.flush();
 std.err.puts("served child stderr " + scriptArgs[1] + "\n");
 std.err.flush();
+std.exit(6);
 "##,
         )
         .unwrap();
@@ -4248,7 +4249,7 @@ std.err.flush();
 
         socket
             .send(Message::binary(
-                b"qjs ../child.js from ws < inside.txt > child-out.txt 2> child-err.txt\ncat child-out.txt\ncat child-err.txt\nexit\n".as_slice(),
+                b"qjs ../child.js from ws < inside.txt > child-out.txt 2> child-err.txt\nstatus\ncat child-out.txt\ncat child-err.txt\nexit\n".as_slice(),
             ))
             .unwrap();
         let mut transcript = Vec::new();
@@ -4269,7 +4270,7 @@ std.err.flush();
         assert_eq!(exit_code, 0, "{stderr}");
         assert_eq!(
             transcript,
-            b"qjs ../child.js from ws < inside.txt > child-out.txt 2> child-err.txt\r\n$ cat child-out.txt\r\nserved child task 2\r\nserved child cwd .\r\nserved child argv child.js|from|ws\r\nserved child stdin inside app\r\n$ cat child-err.txt\r\nserved child stderr from\r\n$ exit\r\nbye\r\n"
+            b"qjs ../child.js from ws < inside.txt > child-out.txt 2> child-err.txt\r\nqjs exit 6\r\n$ status\r\nstatus 6\r\n$ cat child-out.txt\r\nserved child task 2\r\nserved child cwd .\r\nserved child argv child.js|from|ws\r\nserved child stdin inside app\r\n$ cat child-err.txt\r\nserved child stderr from\r\n$ exit\r\nbye\r\n"
         );
         assert_eq!(exit.as_deref(), Some("{\"type\":\"exit\",\"code\":0}"));
     }

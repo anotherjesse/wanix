@@ -8,6 +8,7 @@ function stringFromBytes(bytes, count) {
 let pending = "";
 let running = true;
 let terminalSize = "";
+let lastStatus = 0;
 const rawInput = std.getenv("WANIX_QJS_SHELL_RAW") === "1";
 const termId = std.getenv("WANIX_TERM_ID") || "1";
 let cwd = normalizeNamespacePath(std.loadFile("#task/self/dir").trim() || ".");
@@ -494,10 +495,15 @@ function runQjs(words) {
     }
     writeRequiredServiceText(taskPath + "/ctl", "start\n");
     const exit = readServiceText(taskPath + "/exit").trim();
-    if (exit && exit !== "0") {
+    lastStatus = exit ? Number(exit) : 0;
+    if (!Number.isFinite(lastStatus)) {
+      lastStatus = 1;
+    }
+    if (lastStatus !== 0) {
       std.out.puts("qjs exit " + exit + "\n");
     }
   } catch (error) {
+    lastStatus = 1;
     std.out.puts("qjs: " + error.message + "\n");
   }
   prompt();
@@ -534,6 +540,11 @@ function runCommand(line) {
   }
   if (trimmed === "pwd") {
     std.out.puts(cwd + "\n");
+    prompt();
+    return;
+  }
+  if (trimmed === "status") {
+    std.out.puts("status " + lastStatus + "\n");
     prompt();
     return;
   }

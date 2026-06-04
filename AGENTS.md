@@ -77,7 +77,7 @@ tests.
   shell modes and served shell sessions use the same `#term` device contract,
   with a small `cd`/`ls`/`cat`/`write`/`mkdir`/`rm`/`rmdir`/`mv`/`cp`
   filesystem command set and synchronous child `qjs` task launches with
-  namespace stdio redirection for demos.
+  namespace stdio redirection and observable child exit status for demos.
 - `wanix-rust p9-stdio`, `p9-listen`, `p9-ws`, and `serve`: the Rust 9P server
   exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
   layers, with binary protocol traffic kept separate from diagnostics.
