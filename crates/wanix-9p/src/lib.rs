@@ -19,19 +19,20 @@ use wanix_fs::{
 use wanix_protocol::{
     P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_CTIME, P9_SETATTR_GID,
     P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
-    P9_SETATTR_UID, P9_TATTACH, P9_TCLUNK, P9_TFLUSH, P9_TFSYNC, P9_TGETATTR, P9_TGETLOCK,
-    P9_TLCREATE, P9_TLOCK, P9_TLOPEN, P9_TMKDIR, P9_TREAD, P9_TREADDIR, P9_TREADLINK, P9_TRENAMEAT,
-    P9_TSETATTR, P9_TSTATFS, P9_TSYMLINK, P9_TUNLINKAT, P9_TVERSION, P9_TWALK, P9_TWRITE,
-    P9_VERSION_9P2000_L, P9Attr, P9DirEntry, P9Error, P9Frame, P9FsStat, P9Lock, P9Qid, P9SetAttr,
-    P9Version, p9_decode_tattach, p9_decode_tclunk, p9_decode_tflush, p9_decode_tfsync,
-    p9_decode_tgetattr, p9_decode_tgetlock, p9_decode_tlcreate, p9_decode_tlock, p9_decode_tlopen,
-    p9_decode_tmkdir, p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink,
+    P9_SETATTR_UID, P9_TATTACH, P9_TAUTH, P9_TCLUNK, P9_TFLUSH, P9_TFSYNC, P9_TGETATTR,
+    P9_TGETLOCK, P9_TLCREATE, P9_TLINK, P9_TLOCK, P9_TLOPEN, P9_TMKDIR, P9_TMKNOD, P9_TREAD,
+    P9_TREADDIR, P9_TREADLINK, P9_TRENAMEAT, P9_TSETATTR, P9_TSTATFS, P9_TSYMLINK, P9_TUNLINKAT,
+    P9_TVERSION, P9_TWALK, P9_TWRITE, P9_TXATTRCREATE, P9_TXATTRWALK, P9_VERSION_9P2000_L, P9Attr,
+    P9DirEntry, P9Error, P9Frame, P9FsStat, P9Lock, P9Qid, P9SetAttr, P9Version, p9_decode_tattach,
+    p9_decode_tauth, p9_decode_tclunk, p9_decode_tflush, p9_decode_tfsync, p9_decode_tgetattr,
+    p9_decode_tgetlock, p9_decode_tlcreate, p9_decode_tlink, p9_decode_tlock, p9_decode_tlopen,
+    p9_decode_tmkdir, p9_decode_tmknod, p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink,
     p9_decode_trenameat, p9_decode_tsetattr, p9_decode_tstatfs, p9_decode_tsymlink,
     p9_decode_tunlinkat, p9_decode_tversion, p9_decode_twalk, p9_decode_twrite,
-    p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rflush, p9_rfsync, p9_rgetattr,
-    p9_rgetlock, p9_rlcreate, p9_rlerror, p9_rlock, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir,
-    p9_rreadlink, p9_rrenameat, p9_rsetattr, p9_rstatfs, p9_rsymlink, p9_runlinkat, p9_rversion,
-    p9_rwalk, p9_rwrite,
+    p9_decode_txattrcreate, p9_decode_txattrwalk, p9_dir_entry_encoded_len, p9_rattach, p9_rclunk,
+    p9_rflush, p9_rfsync, p9_rgetattr, p9_rgetlock, p9_rlcreate, p9_rlerror, p9_rlock, p9_rlopen,
+    p9_rmkdir, p9_rread, p9_rreaddir, p9_rreadlink, p9_rrenameat, p9_rsetattr, p9_rstatfs,
+    p9_rsymlink, p9_runlinkat, p9_rversion, p9_rwalk, p9_rwrite,
 };
 
 pub use transport::{P9TransportError, P9TransportStats};
@@ -52,6 +53,7 @@ const EEXIST: u32 = 17;
 const ENOTDIR: u32 = 20;
 const EISDIR: u32 = 21;
 const EINVAL: u32 = 22;
+const ENOSYS: u32 = 38;
 const ENOTEMPTY: u32 = 39;
 const EOPNOTSUPP: u32 = 95;
 
@@ -163,21 +165,26 @@ impl P9Server {
         match frame.message_type() {
             P9_TVERSION => self.handle_version(frame),
             P9_TSTATFS => self.handle_statfs(frame),
+            P9_TAUTH => self.handle_auth(frame),
             P9_TATTACH => self.handle_attach(frame),
             P9_TFLUSH => self.handle_flush(frame),
             P9_TWALK => self.handle_walk(frame),
             P9_TLOPEN => self.handle_open(frame),
             P9_TLCREATE => self.handle_create(frame),
             P9_TSYMLINK => self.handle_symlink(frame),
+            P9_TMKNOD => self.handle_mknod(frame),
             P9_TREADLINK => self.handle_readlink(frame),
             P9_TGETATTR => self.handle_getattr(frame),
             P9_TSETATTR => self.handle_setattr(frame),
+            P9_TXATTRWALK => self.handle_xattrwalk(frame),
+            P9_TXATTRCREATE => self.handle_xattrcreate(frame),
             P9_TREADDIR => self.handle_readdir(frame),
             P9_TFSYNC => self.handle_fsync(frame),
             P9_TLOCK => self.handle_lock(frame),
             P9_TGETLOCK => self.handle_getlock(frame),
             P9_TREAD => self.handle_read(frame),
             P9_TWRITE => self.handle_write(frame),
+            P9_TLINK => self.handle_link(frame),
             P9_TMKDIR => self.handle_mkdir(frame),
             P9_TRENAMEAT => self.handle_renameat(frame),
             P9_TUNLINKAT => self.handle_unlinkat(frame),
@@ -231,6 +238,11 @@ impl P9Server {
             return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
         }
         Ok(p9_rstatfs(frame.tag(), fs_stat()))
+    }
+
+    fn handle_auth(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        p9_decode_tauth(frame)?;
+        Ok(p9_rlerror(frame.tag(), ENOSYS))
     }
 
     fn handle_walk(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -348,6 +360,19 @@ impl P9Server {
         Ok(p9_rsymlink(frame.tag(), qid_for_metadata(&path, metadata)))
     }
 
+    fn handle_mknod(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let mknod = p9_decode_tmknod(frame)?;
+        let Some(dir_path) = self
+            .fids
+            .get(&mknod.dir_fid)
+            .map(|entry| entry.path.clone())
+        else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        let _path = join_walk_component(&dir_path, &mknod.name)?;
+        Ok(p9_rlerror(frame.tag(), EOPNOTSUPP))
+    }
+
     fn handle_readlink(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let readlink = p9_decode_treadlink(frame)?;
         let Some(path) = self.fids.get(&readlink.fid).map(|entry| entry.path.clone()) else {
@@ -420,6 +445,24 @@ impl P9Server {
             self.set_owner_attrs(&path, setattr.valid, &setattr.attr);
         }
         Ok(p9_rsetattr(frame.tag()))
+    }
+
+    fn handle_xattrwalk(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let xattr = p9_decode_txattrwalk(frame)?;
+        if self.fids.contains_key(&xattr.fid) {
+            Ok(p9_rlerror(frame.tag(), EOPNOTSUPP))
+        } else {
+            Ok(p9_rlerror(frame.tag(), EBADF))
+        }
+    }
+
+    fn handle_xattrcreate(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let xattr = p9_decode_txattrcreate(frame)?;
+        if self.fids.contains_key(&xattr.fid) {
+            Ok(p9_rlerror(frame.tag(), EOPNOTSUPP))
+        } else {
+            Ok(p9_rlerror(frame.tag(), EBADF))
+        }
     }
 
     fn handle_readdir(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -543,6 +586,18 @@ impl P9Server {
             Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         };
         Ok(p9_rwrite(frame.tag(), count as u32))
+    }
+
+    fn handle_link(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
+        let link = p9_decode_tlink(frame)?;
+        let Some(dir_path) = self.fids.get(&link.dir_fid).map(|entry| entry.path.clone()) else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        if !self.fids.contains_key(&link.fid) {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        }
+        let _path = join_walk_component(&dir_path, &link.name)?;
+        Ok(p9_rlerror(frame.tag(), EOPNOTSUPP))
     }
 
     fn handle_mkdir(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -937,10 +992,10 @@ mod tests {
         p9_decode_rlerror, p9_decode_rlock, p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread,
         p9_decode_rreaddir, p9_decode_rreadlink, p9_decode_rsetattr, p9_decode_rstatfs,
         p9_decode_rsymlink, p9_decode_rversion, p9_decode_rwalk, p9_decode_rwrite,
-        p9_dir_entry_encoded_len, p9_tattach, p9_tclunk, p9_tflush, p9_tfsync, p9_tgetattr,
-        p9_tgetlock, p9_tlcreate, p9_tlock, p9_tlopen, p9_tmkdir, p9_tread, p9_treaddir,
-        p9_treadlink, p9_trenameat, p9_tsetattr, p9_tstatfs, p9_tsymlink, p9_tunlinkat,
-        p9_tversion, p9_twalk, p9_twrite,
+        p9_dir_entry_encoded_len, p9_tattach, p9_tauth, p9_tclunk, p9_tflush, p9_tfsync,
+        p9_tgetattr, p9_tgetlock, p9_tlcreate, p9_tlink, p9_tlock, p9_tlopen, p9_tmkdir, p9_tmknod,
+        p9_tread, p9_treaddir, p9_treadlink, p9_trenameat, p9_tsetattr, p9_tstatfs, p9_tsymlink,
+        p9_tunlinkat, p9_tversion, p9_twalk, p9_twrite, p9_txattrcreate, p9_txattrwalk,
     };
 
     use super::*;
@@ -1032,6 +1087,19 @@ mod tests {
     }
 
     #[test]
+    fn auth_probe_returns_enosys_without_binding_fid() {
+        let mut server = server(Arc::new(MemFs::new()));
+
+        let response = server
+            .handle_frame(&p9_tauth(2, 9, "root", "", 0).unwrap())
+            .unwrap();
+
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, ENOSYS);
+        assert!(!server.fids.contains_key(&9));
+    }
+
+    #[test]
     fn fsync_existing_fid_returns_success() {
         let mut server = server(Arc::new(MemFs::new()));
 
@@ -1120,6 +1188,73 @@ mod tests {
 
         let response = server
             .handle_frame(&p9_tgetlock(4, 99, &lock).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+    }
+
+    #[test]
+    fn compatibility_probes_return_typed_lerrors() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("target.txt", b"target").unwrap();
+        let mut server = server(fs);
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["target.txt"]);
+
+        let response = server
+            .handle_frame(&p9_tmknod(3, 1, "tty0", 0o020620, 4, 0, 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EOPNOTSUPP);
+
+        let response = server
+            .handle_frame(&p9_tmknod(4, 99, "tty0", 0o020620, 4, 0, 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+
+        let response = server
+            .handle_frame(&p9_tlink(5, 1, 2, "hard.txt").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EOPNOTSUPP);
+
+        let response = server
+            .handle_frame(&p9_tlink(6, 1, 99, "hard.txt").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+
+        let response = server
+            .handle_frame(&p9_txattrwalk(7, 2, 3, "user.foo").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EOPNOTSUPP);
+        assert!(!server.fids.contains_key(&3));
+
+        walk(&mut server, 1, 4, &[]);
+        let response = server
+            .handle_frame(&p9_txattrwalk(8, 2, 4, "user.foo").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EOPNOTSUPP);
+        assert_eq!(server.fids.get(&4).unwrap().path.as_str(), ".");
+
+        let response = server
+            .handle_frame(&p9_txattrwalk(9, 99, 3, "user.foo").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+
+        let response = server
+            .handle_frame(&p9_txattrcreate(10, 2, "user.foo", 12, 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EOPNOTSUPP);
+
+        let response = server
+            .handle_frame(&p9_txattrcreate(11, 99, "user.foo", 12, 0).unwrap())
             .unwrap();
         assert_eq!(response.message_type(), P9_RLERROR);
         assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);

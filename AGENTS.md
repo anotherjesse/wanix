@@ -98,8 +98,11 @@ and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, `Trenameat`, and
 session-virtual uid/gid ownership through `Tsetattr`/`Tgetattr`,
 advisory-lock compatibility probes with `Tlock`/`Tgetlock`, synchronous
 compatibility probes with `Tflush` and `Tfsync`, and append-open write
-semantics for `O_APPEND` fids; it also serves encoded request/response frames
-through a synchronous stream loop.
+semantics for `O_APPEND` fids; it also decodes `Tmknod`, `Tlink`, and xattr
+probes as typed compatibility requests and returns intentional unsupported
+errors until Wanix grows backing contracts, while `Tauth` returns explicit
+`ENOSYS` because Rust Wanix does not require a separate 9P auth phase yet. It
+serves encoded request/response frames through a synchronous stream loop.
 `wanix-rust p9-stdio --root DIR` exposes that server over process
 stdin/stdout, with stdout reserved for binary 9P responses and stderr reserved
 for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
@@ -363,7 +366,7 @@ cargo test --workspace --locked
   clients can pass common sync and cancelation probes.
 - [ADR 0075](docs/adrs/0075-9p-setattr-size-times.md):
   `wanix-9p` supports the `Tsetattr` size and access/modification time subset
-  while returning explicit unsupported errors for ownership and ctime changes.
+  while returning explicit unsupported errors for ctime changes.
 - [ADR 0076](docs/adrs/0076-9p-lock-probe-compatibility.md):
   `wanix-9p` answers `Tlock` and `Tgetlock` as compatibility probes without a
   persistent advisory-lock manager.
@@ -379,6 +382,10 @@ cargo test --workspace --locked
 - [ADR 0080](docs/adrs/0080-9p-virtual-ownership.md):
   `wanix-9p` stores uid/gid as session-virtual metadata so mounted clients can
   observe chown-style changes without adding a filesystem-wide ownership API.
+- [ADR 0081](docs/adrs/0081-9p-compatibility-probe-codecs.md):
+  `wanix-9p` decodes auth, mknod, hard-link, and xattr probes as typed 9P
+  requests and returns deliberate errno responses until backing contracts
+  exist.
 
 ## Cycle Rules
 
@@ -401,7 +408,7 @@ cycle before starting the next one.
   integration, then extend the direct-v86 route into a complete qemu/v86 bundle,
   `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`
   endpoint.
-- Add typed 9P2000.L codecs for still-missing Linux/editor probes such as
-  `Tmknod`, `Tlink`, and xattrs; route them to intentional compatibility
-  responses until Wanix grows backing contracts for special files, hard links,
-  or extended attributes.
+- Add backing contracts for 9P special files, hard links, or extended
+  attributes only when a Linux/v86/editor workflow proves they are required;
+  consider remaining legacy probes such as `Tremove` and `Trename` when real
+  clients hit them.
