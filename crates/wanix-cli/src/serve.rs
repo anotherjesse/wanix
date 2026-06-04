@@ -822,15 +822,17 @@ mod tests {
 
     use tungstenite::{Message, connect};
     use wanix_protocol::{
-        P9_RATTACH, P9_RGETATTR, P9_RLERROR, P9_RLOPEN, P9_RREAD, P9_RSETATTR, P9_RVERSION,
-        P9_RWALK, P9_SETATTR_GID, P9_SETATTR_UID, P9_VERSION_9P2000_L, P9Frame, P9SetAttr,
-        p9_decode_rgetattr, p9_decode_rlerror, p9_decode_rread, p9_tattach, p9_tauth, p9_tgetattr,
-        p9_tlink, p9_tlopen, p9_tmknod, p9_tread, p9_tsetattr, p9_tversion, p9_twalk,
+        P9_RATTACH, P9_RGETATTR, P9_RLERROR, P9_RLOPEN, P9_RREAD, P9_RREMOVE, P9_RRENAME,
+        P9_RSETATTR, P9_RVERSION, P9_RWALK, P9_SETATTR_GID, P9_SETATTR_UID, P9_VERSION_9P2000_L,
+        P9Frame, P9SetAttr, p9_decode_rgetattr, p9_decode_rlerror, p9_decode_rread,
+        p9_decode_rremove, p9_decode_rrename, p9_tattach, p9_tauth, p9_tgetattr, p9_tlink,
+        p9_tlopen, p9_tmknod, p9_tread, p9_tremove, p9_trename, p9_tsetattr, p9_tversion, p9_twalk,
         p9_txattrcreate, p9_txattrwalk,
     };
 
     use super::*;
 
+    const EBADF: u32 = 9;
     const ENOSYS: u32 = 38;
     const EOPNOTSUPP: u32 = 95;
 
@@ -1258,6 +1260,7 @@ mod tests {
     fn serve_once_exports_9p_compatibility_probes_on_well_known_path() {
         let root = temp_dir("wanix-cli-serve-export9p-compat-probes");
         fs::write(root.join("target.txt"), b"target").unwrap();
+        let root_check = root.clone();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let command = ServeCommand {
@@ -1285,10 +1288,14 @@ mod tests {
             p9_tlink(6, 1, 2, "hard.txt").unwrap(),
             p9_txattrwalk(7, 2, 3, "user.foo").unwrap(),
             p9_txattrcreate(8, 2, "user.foo", 12, 0).unwrap(),
+            p9_trename(9, 2, 1, "renamed.txt").unwrap(),
+            p9_tgetattr(10, 2, u64::MAX),
+            p9_tremove(11, 2),
+            p9_tgetattr(12, 2, u64::MAX),
         ]);
         socket.send(Message::binary(requests)).unwrap();
 
-        let frames = read_binary_frames(&mut socket, 8);
+        let frames = read_binary_frames(&mut socket, 12);
         socket.close(None).unwrap();
         let (exit_code, _stderr) = handle.join().unwrap();
 
@@ -1303,18 +1310,28 @@ mod tests {
                 P9_RLERROR,
                 P9_RLERROR,
                 P9_RLERROR,
+                P9_RLERROR,
+                P9_RRENAME,
+                P9_RGETATTR,
+                P9_RREMOVE,
                 P9_RLERROR
             ]
         );
         assert_eq!(
             frames.iter().map(P9Frame::tag).collect::<Vec<_>>(),
-            vec![1, 2, 3, 4, 5, 6, 7, 8]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         );
         assert_eq!(p9_decode_rlerror(&frames[1]).unwrap().ecode, ENOSYS);
         assert_eq!(p9_decode_rlerror(&frames[4]).unwrap().ecode, EOPNOTSUPP);
         assert_eq!(p9_decode_rlerror(&frames[5]).unwrap().ecode, EOPNOTSUPP);
         assert_eq!(p9_decode_rlerror(&frames[6]).unwrap().ecode, EOPNOTSUPP);
         assert_eq!(p9_decode_rlerror(&frames[7]).unwrap().ecode, EOPNOTSUPP);
+        p9_decode_rrename(&frames[8]).unwrap();
+        assert_eq!(p9_decode_rgetattr(&frames[9]).unwrap().size, 6);
+        p9_decode_rremove(&frames[10]).unwrap();
+        assert_eq!(p9_decode_rlerror(&frames[11]).unwrap().ecode, EBADF);
+        assert!(!root_check.join("target.txt").exists());
+        assert!(!root_check.join("renamed.txt").exists());
     }
 
     #[test]

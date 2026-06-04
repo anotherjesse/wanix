@@ -93,8 +93,9 @@ server core already negotiates 9P2000.L, attaches, walks, opens regular files
 and read-only directories, reads/writes regular files, lists directories with
 `Treaddir`, clunks fids, reports no-follow metadata with `Tgetattr`, creates
 and reads symbolic links with `Tsymlink` and `Treadlink`, and handles core mount
-and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, `Trenameat`, and
-`Tunlinkat`, file size, permission, and timestamp mutation with `Tsetattr`,
+and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, legacy `Trename` and
+`Tremove`, `Trenameat`, and `Tunlinkat`, file size, permission, and timestamp
+mutation with `Tsetattr`,
 session-virtual uid/gid ownership through `Tsetattr`/`Tgetattr`,
 advisory-lock compatibility probes with `Tlock`/`Tgetlock`, synchronous
 compatibility probes with `Tflush` and `Tfsync`, and append-open write
@@ -126,8 +127,9 @@ bundle assembler.
 `/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
 lands. Listener commands accept `--once` for tests and scripted demos.
 `p9-stdio` and the `serve` well-known WebSocket route both have compatibility
-probe smokes for auth, mknod, hard-link, and xattr requests, pinning the
-externally visible errno contract used by Linux/v86/editor clients.
+probe smokes for auth, mknod, hard-link, xattr, legacy rename, and legacy
+remove requests, pinning the externally visible contract used by
+Linux/v86/editor clients.
 
 ## Code Quality Guardrails
 
@@ -389,6 +391,10 @@ cargo test --workspace --locked
   `wanix-9p` decodes auth, mknod, hard-link, and xattr probes as typed 9P
   requests and returns deliberate errno responses until backing contracts
   exist.
+- [ADR 0082](docs/adrs/0082-9p-legacy-rename-remove.md):
+  `wanix-9p` supports legacy fid-oriented `Trename` and `Tremove`, including
+  rename fid rebasing and remove clunk semantics, for mounted-client
+  compatibility.
 
 ## Cycle Rules
 
@@ -412,6 +418,4 @@ cycle before starting the next one.
   `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`
   endpoint.
 - Add backing contracts for 9P special files, hard links, or extended
-  attributes only when a Linux/v86/editor workflow proves they are required;
-  consider remaining legacy probes such as `Tremove` and `Trename` when real
-  clients hit them.
+  attributes only when a Linux/v86/editor workflow proves they are required.

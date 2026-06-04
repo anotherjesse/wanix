@@ -51,6 +51,12 @@ pub const P9_TMKNOD: u8 = 18;
 /// 9P2000.L `Rmknod` message type.
 pub const P9_RMKNOD: u8 = 19;
 
+/// 9P2000.L `Trename` message type.
+pub const P9_TRENAME: u8 = 20;
+
+/// 9P2000.L `Rrename` message type.
+pub const P9_RRENAME: u8 = 21;
+
 /// 9P2000.L `Treadlink` message type.
 pub const P9_TREADLINK: u8 = 22;
 
@@ -177,6 +183,12 @@ pub const P9_TCLUNK: u8 = 120;
 /// 9P `Rclunk` message type.
 pub const P9_RCLUNK: u8 = 121;
 
+/// 9P `Tremove` message type.
+pub const P9_TREMOVE: u8 = 122;
+
+/// 9P `Rremove` message type.
+pub const P9_RREMOVE: u8 = 123;
+
 /// 9P2000.L `Tsetattr` permissions-valid bit.
 pub const P9_SETATTR_PERMISSIONS: u32 = 0x0000_0001;
 
@@ -240,6 +252,8 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RSYMLINK => Some("Rsymlink"),
         P9_TMKNOD => Some("Tmknod"),
         P9_RMKNOD => Some("Rmknod"),
+        P9_TRENAME => Some("Trename"),
+        P9_RRENAME => Some("Rrename"),
         P9_TREADLINK => Some("Treadlink"),
         P9_RREADLINK => Some("Rreadlink"),
         P9_TGETATTR => Some("Tgetattr"),
@@ -282,6 +296,8 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RWRITE => Some("Rwrite"),
         P9_TCLUNK => Some("Tclunk"),
         P9_RCLUNK => Some("Rclunk"),
+        P9_TREMOVE => Some("Tremove"),
+        P9_RREMOVE => Some("Rremove"),
         _ => None,
     }
 }
@@ -960,6 +976,17 @@ pub struct P9Link {
     pub name: String,
 }
 
+/// Decoded payload for legacy `Trename`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9Rename {
+    /// Existing fid to move.
+    pub fid: u32,
+    /// Destination parent directory fid.
+    pub dir_fid: u32,
+    /// Destination basename below `dir_fid`.
+    pub name: String,
+}
+
 /// Decoded payload for `Trenameat`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct P9RenameAt {
@@ -999,6 +1026,13 @@ pub struct P9Write {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct P9Clunk {
     /// Fid to release.
+    pub fid: u32,
+}
+
+/// Decoded payload for legacy `Tremove`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct P9Remove {
+    /// Fid to remove and clunk.
     pub fid: u32,
 }
 
@@ -1457,6 +1491,25 @@ pub fn p9_rlink(tag: u16) -> P9Frame {
     P9Frame::new(P9_RLINK, tag, Vec::new())
 }
 
+/// Builds a legacy `Trename` frame.
+///
+/// # Errors
+///
+/// Returns an error when the name cannot fit in a 9P string field.
+pub fn p9_trename(tag: u16, fid: u32, dir_fid: u32, name: &str) -> Result<P9Frame, P9Error> {
+    let mut payload = Vec::new();
+    push_u32(&mut payload, fid);
+    push_u32(&mut payload, dir_fid);
+    push_string(&mut payload, name)?;
+    Ok(P9Frame::new(P9_TRENAME, tag, payload))
+}
+
+/// Builds a legacy `Rrename` frame.
+#[must_use]
+pub fn p9_rrename(tag: u16) -> P9Frame {
+    P9Frame::new(P9_RRENAME, tag, Vec::new())
+}
+
 /// Builds a `Tmkdir` frame.
 ///
 /// # Errors
@@ -1570,6 +1623,20 @@ pub fn p9_rwrite(tag: u16, count: u32) -> P9Frame {
     let mut payload = Vec::with_capacity(4);
     push_u32(&mut payload, count);
     P9Frame::new(P9_RWRITE, tag, payload)
+}
+
+/// Builds a legacy `Tremove` frame.
+#[must_use]
+pub fn p9_tremove(tag: u16, fid: u32) -> P9Frame {
+    let mut payload = Vec::with_capacity(4);
+    push_u32(&mut payload, fid);
+    P9Frame::new(P9_TREMOVE, tag, payload)
+}
+
+/// Builds a legacy `Rremove` frame.
+#[must_use]
+pub fn p9_rremove(tag: u16) -> P9Frame {
+    P9Frame::new(P9_RREMOVE, tag, Vec::new())
 }
 
 /// Builds a `Tclunk` frame.
@@ -2188,6 +2255,33 @@ pub fn p9_decode_rlink(frame: &P9Frame) -> Result<(), P9Error> {
     PayloadCursor::new(frame.payload()).finish()
 }
 
+/// Decodes a legacy `Trename` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Trename` or the payload is
+/// malformed.
+pub fn p9_decode_trename(frame: &P9Frame) -> Result<P9Rename, P9Error> {
+    expect_message_type(frame, P9_TRENAME)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    let dir_fid = cursor.read_u32()?;
+    let name = cursor.read_string()?;
+    cursor.finish()?;
+    Ok(P9Rename { fid, dir_fid, name })
+}
+
+/// Decodes a legacy `Rrename` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rrename` or the payload is
+/// not empty.
+pub fn p9_decode_rrename(frame: &P9Frame) -> Result<(), P9Error> {
+    expect_message_type(frame, P9_RRENAME)?;
+    PayloadCursor::new(frame.payload()).finish()
+}
+
 /// Decodes a `Tmkdir` frame payload.
 ///
 /// # Errors
@@ -2338,6 +2432,31 @@ pub fn p9_decode_rwrite(frame: &P9Frame) -> Result<u32, P9Error> {
     let count = cursor.read_u32()?;
     cursor.finish()?;
     Ok(count)
+}
+
+/// Decodes a legacy `Tremove` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tremove` or the payload is
+/// malformed.
+pub fn p9_decode_tremove(frame: &P9Frame) -> Result<P9Remove, P9Error> {
+    expect_message_type(frame, P9_TREMOVE)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok(P9Remove { fid })
+}
+
+/// Decodes a legacy `Rremove` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rremove` or the payload is
+/// not empty.
+pub fn p9_decode_rremove(frame: &P9Frame) -> Result<(), P9Error> {
+    expect_message_type(frame, P9_RREMOVE)?;
+    PayloadCursor::new(frame.payload()).finish()
 }
 
 /// Decodes a `Tclunk` frame payload.
@@ -2872,6 +2991,8 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RSYMLINK), Some("Rsymlink"));
         assert_eq!(p9_message_type_name(P9_TMKNOD), Some("Tmknod"));
         assert_eq!(p9_message_type_name(P9_RMKNOD), Some("Rmknod"));
+        assert_eq!(p9_message_type_name(P9_TRENAME), Some("Trename"));
+        assert_eq!(p9_message_type_name(P9_RRENAME), Some("Rrename"));
         assert_eq!(p9_message_type_name(P9_TREADLINK), Some("Treadlink"));
         assert_eq!(p9_message_type_name(P9_RREADLINK), Some("Rreadlink"));
         assert_eq!(p9_message_type_name(P9_TGETATTR), Some("Tgetattr"));
@@ -2912,6 +3033,8 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RWRITE), Some("Rwrite"));
         assert_eq!(p9_message_type_name(P9_TCLUNK), Some("Tclunk"));
         assert_eq!(p9_message_type_name(P9_RCLUNK), Some("Rclunk"));
+        assert_eq!(p9_message_type_name(P9_TREMOVE), Some("Tremove"));
+        assert_eq!(p9_message_type_name(P9_RREMOVE), Some("Rremove"));
     }
 
     #[test]
@@ -3455,6 +3578,45 @@ mod tests {
         let unlink_response = p9_runlinkat(15).encode().unwrap();
         assert_eq!(&unlink_response[..4], &7_u32.to_le_bytes());
         p9_decode_runlinkat(&P9Frame::decode(&unlink_response).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn legacy_rename_round_trips_fid_dir_fid_and_name() {
+        let rename = p9_trename(20, 2, 1, "renamed.txt")
+            .unwrap()
+            .encode()
+            .unwrap();
+        assert_eq!(&rename[..4], &28_u32.to_le_bytes());
+        assert_eq!(rename[4], P9_TRENAME);
+        assert_eq!(
+            p9_decode_trename(&P9Frame::decode(&rename).unwrap()).unwrap(),
+            P9Rename {
+                fid: 2,
+                dir_fid: 1,
+                name: "renamed.txt".to_owned()
+            }
+        );
+
+        let response = p9_rrename(20).encode().unwrap();
+        assert_eq!(&response[..4], &7_u32.to_le_bytes());
+        assert_eq!(response[4], P9_RRENAME);
+        p9_decode_rrename(&P9Frame::decode(&response).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn legacy_remove_round_trips_fid_and_empty_response() {
+        let remove = p9_tremove(122, 3).encode().unwrap();
+        assert_eq!(&remove[..4], &11_u32.to_le_bytes());
+        assert_eq!(remove[4], P9_TREMOVE);
+        assert_eq!(
+            p9_decode_tremove(&P9Frame::decode(&remove).unwrap()).unwrap(),
+            P9Remove { fid: 3 }
+        );
+
+        let response = p9_rremove(122).encode().unwrap();
+        assert_eq!(&response[..4], &7_u32.to_le_bytes());
+        assert_eq!(response[4], P9_RREMOVE);
+        p9_decode_rremove(&P9Frame::decode(&response).unwrap()).unwrap();
     }
 
     #[test]
