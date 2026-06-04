@@ -193,8 +193,11 @@ guest's `hvc0` console path used by QEMU.
 command for the same Linux guest/rootfs shape, discovering `/boot/bzImage` or
 legacy `/bzImage` from the guest root unless `--kernel PATH` overrides it. The
 command uses base `9p2000.L` root flags and `hvc0` virtconsole by default,
-offers `--cmdline` and repeatable `--append` for guest boot tuning, and leaves
-actual QEMU process supervision for a later cycle.
+offers `--cmdline` and repeatable `--append` for guest boot tuning, and accepts
+`--exec` as an explicit foreground launch mode. Exec mode spawns the same
+validated argv, lets QEMU inherit native stdin/stdout/stderr for `-nographic`
+console ownership, and returns QEMU's exit status; richer VM lifecycle,
+rootfs assembly, signal policy, and network bridging remain follow-ups.
 `/.well-known` routes are reserved for protocol endpoints;
 `/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
 lands. Listener commands accept `--once` for tests and scripted demos.
@@ -523,6 +526,9 @@ cargo test --workspace --locked
 - [ADR 0100](docs/adrs/0100-direct-v86-boot-smoke-readiness.md):
   The direct-v86 bundle supports `autostart=1`, boot logs, lifecycle status,
   hvc0 resize, and discovery readiness markers for repeatable browser VM smokes.
+- [ADR 0101](docs/adrs/0101-qemu-exec-foreground-supervision.md):
+  `wanix-rust qemu --exec` foreground-spawns the validated QEMU argv while
+  preserving the print-only default command contract.
 
 ## Cycle Rules
 

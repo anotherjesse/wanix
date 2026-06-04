@@ -56,7 +56,7 @@ const USAGE: &str = concat!(
     "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust qemu --root DIR [--kernel PATH] [--cmdline TEXT] [--append TEXT ...] ",
     "[--qemu-bin PATH] [--memory-mb N] ",
-    "[--no-kvm]\n",
+    "[--no-kvm] [--exec]\n",
     "       wanix-rust serve [--root DIR | DIR] [--addr HOST:PORT | --listen HOST:PORT] ",
     "[--bundle NAME] [--wanix-services] [--once]\n",
     "       wanix-rust --help",
@@ -222,6 +222,17 @@ where
         ),
         [command, rest @ ..] if command == "p9-ws" => {
             p9_ws::run_p9_ws_streaming(p9_ws::parse_p9_ws_command(rest)?, &mut process_stderr)
+        }
+        [command, rest @ ..] if command == "qemu" => {
+            let command = qemu::parse_qemu_command(rest)?;
+            if qemu::qemu_command_exec(&command) {
+                qemu::run_qemu_streaming(command, &mut process_stderr)
+            } else {
+                let output = qemu::run_qemu_command(command)?;
+                write_process_output(&mut process_stdout, "stdout", output.stdout())?;
+                write_process_output(&mut process_stderr, "stderr", output.stderr())?;
+                Ok(output.exit_code())
+            }
         }
         [command, rest @ ..] if command == "serve" => {
             serve::run_serve_streaming(serve::parse_serve_command(rest)?, &mut process_stderr)
@@ -1557,7 +1568,7 @@ fn parse_exit(exit: &str) -> i32 {
 mod tests {
     use std::fs;
     use std::io::{self, Read, Write};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{run, run_with_process_io, run_with_process_stdin};
@@ -1709,6 +1720,7 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qemu"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--cmdline TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--append TEXT"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--exec"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust serve"));
         assert!(output.stderr().is_empty());
     }
@@ -1744,6 +1756,37 @@ mod tests {
         assert!(stdout.contains("-device virtio-9p-pci,fsdev=host9p,mount_tag=host9p"));
         assert!(stdout.contains("-device virtio-serial-pci"));
         assert!(stdout.contains("-device virtconsole,chardev=con"));
+        assert!(stdout.ends_with("-chardev stdio,id=con -nographic\n"));
+    }
+
+    #[test]
+    fn qemu_command_prints_through_live_process_io_without_exec() {
+        let root = temp_dir("wanix-cli-qemu-live-print-root");
+        let boot = root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        let kernel = boot.join("bzImage");
+        fs::write(&kernel, b"kernel").unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit_code = run_with_process_io(
+            vec![
+                "qemu".to_owned(),
+                "--root".to_owned(),
+                root.display().to_string(),
+            ],
+            io::empty(),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert!(stderr.is_empty());
+        let stdout = String::from_utf8(stdout).unwrap();
+        let kernel = fs::canonicalize(kernel).unwrap();
+        assert!(stdout.starts_with("qemu-system-i386 -enable-kvm -cpu host -m 512 -smp 1 "));
+        assert!(stdout.contains(&format!("-kernel {}", kernel.display())));
         assert!(stdout.ends_with("-chardev stdio,id=con -nographic\n"));
     }
 
@@ -1857,6 +1900,137 @@ mod tests {
         .unwrap_err();
         assert_eq!(comma_root.exit_code(), 2);
         assert!(comma_root.to_string().contains("cannot contain ','"));
+    }
+
+    #[test]
+    fn qemu_exec_requires_live_process_io() {
+        let root = temp_dir("wanix-cli-qemu-exec-captured-root");
+        let boot = root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        fs::write(boot.join("bzImage"), b"kernel").unwrap();
+
+        let error = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--exec".to_owned(),
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.exit_code(), 2);
+        assert!(
+            error
+                .to_string()
+                .contains("qemu --exec requires live process IO")
+        );
+    }
+
+    #[test]
+    fn qemu_exec_reports_spawn_failure() {
+        let root = temp_dir("wanix-cli-qemu-exec-spawn-failure-root");
+        let boot = root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        fs::write(boot.join("bzImage"), b"kernel").unwrap();
+        let missing_qemu = root.join("missing-qemu");
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run_with_process_io(
+            vec![
+                "qemu".to_owned(),
+                "--root".to_owned(),
+                root.display().to_string(),
+                "--qemu-bin".to_owned(),
+                missing_qemu.display().to_string(),
+                "--exec".to_owned(),
+            ],
+            io::empty(),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(stdout.is_empty());
+        assert!(
+            String::from_utf8(stderr)
+                .unwrap()
+                .contains("wanix-rust qemu exec:")
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("failed to start qemu executable")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qemu_exec_spawns_configured_qemu_binary_with_virtio9p_argv() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_dir("wanix-cli-qemu-exec-root");
+        let boot = root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        let kernel = boot.join("bzImage");
+        fs::write(&kernel, b"kernel").unwrap();
+        let capture = root.join("qemu-argv.txt");
+        let fake_qemu = root.join("fake-qemu");
+        fs::write(
+            &fake_qemu,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\nexit 7\n",
+                sh_quote_path(&capture)
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&fake_qemu, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit_code = run_with_process_io(
+            vec![
+                "qemu".to_owned(),
+                "--root".to_owned(),
+                root.display().to_string(),
+                "--qemu-bin".to_owned(),
+                fake_qemu.display().to_string(),
+                "--no-kvm".to_owned(),
+                "--exec".to_owned(),
+            ],
+            io::empty(),
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 7);
+        assert!(stdout.is_empty());
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stderr.contains("wanix-rust qemu exec:"), "{stderr}");
+        assert!(
+            stderr.contains(&fake_qemu.display().to_string()),
+            "{stderr}"
+        );
+        let argv = fs::read_to_string(capture).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let kernel = fs::canonicalize(kernel).unwrap();
+        assert!(argv.contains("-m\n512\n-smp\n1\n"), "{argv}");
+        assert!(
+            argv.contains(&format!("-kernel\n{}\n", kernel.display())),
+            "{argv}"
+        );
+        assert!(argv.contains("root=host9p rootfstype=9p"), "{argv}");
+        assert!(argv.contains(&format!(
+            "-fsdev\nlocal,id=host9p,path={},security_model=mapped-xattr\n",
+            root.display()
+        )));
+        assert!(argv.contains("-device\nvirtio-serial-pci\n"), "{argv}");
+        assert!(
+            argv.contains("-chardev\nstdio,id=con\n-nographic\n"),
+            "{argv}"
+        );
+        assert!(!argv.contains("--exec"), "{argv}");
     }
 
     #[test]
@@ -4601,6 +4775,11 @@ std.out.flush();
         path.push(format!("{prefix}-{}-{nonce}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[cfg(unix)]
+    fn sh_quote_path(path: &Path) -> String {
+        format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
     }
 
     fn example_script(name: &str) -> PathBuf {

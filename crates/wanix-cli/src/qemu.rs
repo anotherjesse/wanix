@@ -1,6 +1,8 @@
 use std::ffi::OsString;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use wanix_task::quote_cmd_argv;
 
@@ -20,6 +22,7 @@ pub(super) struct QemuCommand {
     kvm: bool,
     cmdline: Option<String>,
     append: Vec<String>,
+    exec: bool,
 }
 
 pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliError> {
@@ -30,6 +33,7 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
     let mut kvm = true;
     let mut cmdline = None;
     let mut append = Vec::new();
+    let mut exec = false;
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--root" {
@@ -83,6 +87,9 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
         } else if args[i] == "--no-kvm" {
             kvm = false;
             i += 1;
+        } else if args[i] == "--exec" {
+            exec = true;
+            i += 1;
         } else {
             return Err(CliError::usage(format!(
                 "unknown qemu option: {}",
@@ -99,14 +106,54 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
         kvm,
         cmdline,
         append,
+        exec,
     })
 }
 
 pub(super) fn run_qemu_command(command: QemuCommand) -> Result<CliOutput, CliError> {
+    if command.exec {
+        return Err(CliError::usage(
+            "qemu --exec requires live process IO; use the wanix-rust binary",
+        ));
+    }
     let argv = qemu_virtio9p_argv(&command)?;
     let mut output = quote_cmd_argv(argv.iter().map(String::as_str)).into_bytes();
     output.push(b'\n');
     Ok(CliOutput::new(output, Vec::new(), 0))
+}
+
+pub(super) fn run_qemu_streaming(
+    command: QemuCommand,
+    process_stderr: &mut dyn Write,
+) -> Result<i32, CliError> {
+    if !command.exec {
+        return Ok(run_qemu_command(command)?.exit_code());
+    }
+    let argv = qemu_virtio9p_argv(&command)?;
+    let quoted = quote_cmd_argv(argv.iter().map(String::as_str));
+    writeln!(process_stderr, "wanix-rust qemu exec: {quoted}")
+        .map_err(|error| CliError::new(format!("failed to write process stderr: {error}"), 1))?;
+    process_stderr
+        .flush()
+        .map_err(|error| CliError::new(format!("failed to flush process stderr: {error}"), 1))?;
+
+    let status = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| {
+            CliError::new(
+                format!("failed to start qemu executable {}: {error}", argv[0]),
+                1,
+            )
+        })?;
+    Ok(status.code().unwrap_or(1))
+}
+
+pub(super) fn qemu_command_exec(command: &QemuCommand) -> bool {
+    command.exec
 }
 
 fn qemu_virtio9p_argv(command: &QemuCommand) -> Result<Vec<String>, CliError> {
