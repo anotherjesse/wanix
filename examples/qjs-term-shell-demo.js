@@ -234,6 +234,89 @@ function parseQjsLaunch(words) {
   return launch;
 }
 
+function readEnvLines() {
+  return readServiceText("#task/self/env")
+    .split("\n")
+    .filter((line) => line.length > 0);
+}
+
+function envKey(line) {
+  const equals = line.indexOf("=");
+  return equals < 0 ? line : line.slice(0, equals);
+}
+
+function validEnvKey(key) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
+}
+
+function writeEnvLines(lines) {
+  writeRequiredServiceText("#task/self/env", lines.join("\n") + (lines.length > 0 ? "\n" : ""));
+}
+
+function runEnv(words) {
+  if (words.length > 2) {
+    std.out.puts("env: usage: env [KEY]\n");
+    prompt();
+    return;
+  }
+  const lines = readEnvLines();
+  if (words.length === 1) {
+    for (const line of lines.slice().sort()) {
+      std.out.puts(line + "\n");
+    }
+    prompt();
+    return;
+  }
+  const key = words[1];
+  if (!validEnvKey(key)) {
+    std.out.puts("env: " + key + ": invalid key\n");
+    prompt();
+    return;
+  }
+  for (const line of lines) {
+    if (envKey(line) === key) {
+      std.out.puts(line + "\n");
+      break;
+    }
+  }
+  prompt();
+}
+
+function runSetenv(words) {
+  if (words.length < 2) {
+    std.out.puts("setenv: usage: setenv KEY [VALUE...]\n");
+    prompt();
+    return;
+  }
+  const key = words[1];
+  const value = words.slice(2).join(" ");
+  if (!validEnvKey(key) || value.indexOf("\n") >= 0) {
+    std.out.puts("setenv: " + key + ": invalid KEY or VALUE\n");
+    prompt();
+    return;
+  }
+  const lines = readEnvLines().filter((line) => envKey(line) !== key);
+  lines.push(key + "=" + value);
+  writeEnvLines(lines);
+  prompt();
+}
+
+function runUnsetenv(words) {
+  if (words.length !== 2) {
+    std.out.puts("unsetenv: usage: unsetenv KEY\n");
+    prompt();
+    return;
+  }
+  const key = words[1];
+  if (!validEnvKey(key)) {
+    std.out.puts("unsetenv: " + key + ": invalid key\n");
+    prompt();
+    return;
+  }
+  writeEnvLines(readEnvLines().filter((line) => envKey(line) !== key));
+  prompt();
+}
+
 function visibleEntries(path) {
   const [entries, err] = os.readdir(path);
   if (err !== 0) {
@@ -546,6 +629,18 @@ function runCommand(line) {
   if (trimmed === "status") {
     std.out.puts("status " + lastStatus + "\n");
     prompt();
+    return;
+  }
+  if (words[0] === "env") {
+    runEnv(words);
+    return;
+  }
+  if (words[0] === "setenv") {
+    runSetenv(words);
+    return;
+  }
+  if (words[0] === "unsetenv") {
+    runUnsetenv(words);
     return;
   }
   if (words[0] === "ls") {

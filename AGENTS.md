@@ -76,8 +76,9 @@ tests.
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
   shell modes and served shell sessions use the same `#term` device contract,
   with a small `cd`/`ls`/`cat`/`write`/`mkdir`/`rm`/`rmdir`/`mv`/`cp`
-  filesystem command set and synchronous child `qjs` task launches with
-  namespace stdio redirection and observable child exit status for demos.
+  filesystem command set, `env`/`setenv`/`unsetenv` task-environment commands,
+  and synchronous child `qjs` task launches with inherited env, namespace
+  stdio redirection, and observable child exit status for demos.
 - `wanix-rust p9-stdio`, `p9-listen`, `p9-ws`, and `serve`: the Rust 9P server
   exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
   layers, with binary protocol traffic kept separate from diagnostics.

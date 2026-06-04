@@ -1708,6 +1708,7 @@ std.out.puts("child cwd " + std.loadFile("#task/self/dir").trim() + "\n");
 std.out.puts("child argv " + scriptArgs.join("|") + "\n");
 std.out.puts("child stdin " + readStdin().trimEnd() + "\n");
 std.out.puts("child raw " + std.getenv("WANIX_QJS_SHELL_RAW") + "\n");
+std.out.puts("child mode " + std.getenv("MODE") + "\n");
 std.out.flush();
 std.err.puts("child stderr " + scriptArgs[1] + "\n");
 std.err.flush();
@@ -1720,13 +1721,13 @@ std.exit(7);
         assert_eq!(initial_output, b"shell task: 1\r\n$ ");
         let output = session
             .input(
-                b"qjs child.js alpha 'two words' < input.txt > child-out.txt 2> child-err.txt\nstatus\ncat child-out.txt\ncat child-err.txt\nexit\n",
+                b"env\nsetenv MODE shell-mode\nenv MODE\nqjs child.js alpha 'two words' < input.txt > child-out.txt 2> child-err.txt\nstatus\ncat child-out.txt\ncat child-err.txt\nexit\n",
             )
             .unwrap();
 
         assert_eq!(
             output,
-            b"qjs child.js alpha 'two words' < input.txt > child-out.txt 2> child-err.txt\r\nqjs exit 7\r\n$ status\r\nstatus 7\r\n$ cat child-out.txt\r\nchild task 2\r\nchild cwd .\r\nchild argv child.js|alpha|two words\r\nchild stdin redirected stdin\r\nchild raw 1\r\n$ cat child-err.txt\r\nchild stderr alpha\r\n$ exit\r\nbye\r\n"
+            b"env\r\nWANIX_QJS_SHELL_RAW=1\r\n$ setenv MODE shell-mode\r\n$ env MODE\r\nMODE=shell-mode\r\n$ qjs child.js alpha 'two words' < input.txt > child-out.txt 2> child-err.txt\r\nqjs exit 7\r\n$ status\r\nstatus 7\r\n$ cat child-out.txt\r\nchild task 2\r\nchild cwd .\r\nchild argv child.js|alpha|two words\r\nchild stdin redirected stdin\r\nchild raw 1\r\nchild mode shell-mode\r\n$ cat child-err.txt\r\nchild stderr alpha\r\n$ exit\r\nbye\r\n"
         );
         assert!(session.is_finished());
     }
