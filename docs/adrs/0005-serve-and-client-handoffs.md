@@ -48,10 +48,10 @@ or mutate `wanix:/` over direct 9P, and use `#task` command/env/dir/fd files and
 workbench bridge remains a compatibility path for browser-embedded Wanix
 systems, not the Rust-hosted direction.
 
-Direct v86 is a browser/emulator handoff over Rust serve. The generated page
-should consume discovery, attach v86 to the advertised direct 9P route, use
-served or advertised v86 assets, and surface boot readiness without inferring
-filesystem layout.
+Direct v86 is a browser/emulator handoff over Rust serve. Generated pages should
+consume discovery, attach v86 to advertised direct 9P routes, use served or
+advertised v86 assets, and surface boot readiness without inferring filesystem
+layout.
 
 Native QEMU is a validated command handoff over the same prepared-root shape.
 Rootfs preparation validates archive safety and VM boot markers, machine-readable
@@ -67,8 +67,8 @@ workbench, v86, and native QEMU clients. These paths exercise the bigger pieces
 without turning `serve` into a VM manager, editor host, network bridge, or core
 filesystem crate.
 
-Exact bundle pages, JSON fields, and command flags belong in tests, examples,
-and walkthrough docs. Future auth, remote exposure, Ethernet/vnet,
-multiplexing, persistent session policy, daemon mode, rootfs build ownership, or
-VM lifecycle management should be recorded as new decisions because they change
-the serve/client trust boundary.
+Exact bundle pages, JSON fields, command flags, and demo milestones belong in
+tests, examples, walkthrough docs, and commit messages. Future auth, remote
+exposure, Ethernet/vnet, multiplexing, persistent session policy, daemon mode,
+rootfs build ownership, or VM lifecycle management should be recorded as new
+decisions because they change the serve/client trust boundary.

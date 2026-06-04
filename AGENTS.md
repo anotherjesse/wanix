@@ -180,7 +180,9 @@ These are current guardrails for keeping retired bridge ideas out of new work:
 Treat ADRs like code. Add or update one only for durable architecture, API,
 format, trust-boundary, or workflow decisions. When touching a topic, review the
 related ADRs at the same time and consolidate, delete, or clearly retire records
-that no longer describe the current direction.
+that no longer describe the current direction. ADRs should stay terse: record
+the boundary and consequences, then point implementation status to tests,
+examples, walkthrough docs, and commit messages.
 
 The root ADR index above is the active Wanix decision set: runtime boundary,
 QuickJS/WASI task boundary, terminals, 9P, and serve/client handoffs. Prefer

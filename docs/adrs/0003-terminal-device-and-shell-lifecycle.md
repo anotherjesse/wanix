@@ -49,17 +49,19 @@ Composition layers may provide cooked or raw native shells, browser/workbench
 pseudoterminals, deterministic fixtures, or future VM/editor terminals. Those
 surfaces should use `#task` and `#term` service files and close from observed
 Wanix task/session state rather than from frontend-only assumptions. In raw
-interactive modes, the host should feed bytes through the terminal device and
-let the guest-side shell own echo, simple editing, newline handling, Ctrl-C
-line cancellation, Ctrl-D exit, and command dispatch.
+interactive modes, the host feeds bytes through the terminal device and the
+guest-side shell owns echo, simple editing, newline handling, Ctrl-C line
+cancellation, Ctrl-D exit, and command dispatch. Browser/editor/VM terminal
+clients may translate platform key events into bytes such as `0x03` and `0x04`,
+but those translations are terminal input, not Wanix task cancellation or
+signal delivery.
 
 The bundled QuickJS shell is a guest program inside a Wanix task, not a separate
-process model. It may provide built-in interactive commands such as `cd`, `ls`,
-`cat`, and `write`, but those commands should use `qjs:std`, `qjs:os`, and
-service files. For shell sessions, `#task/self/dir` is the logical shell cwd,
-while the WASI root preopen stays at the namespace root so `cd` can navigate the
-served tree. Non-shell qjs script tasks continue to use task cwd as their WASI
-root preopen.
+process model. Shell behavior should use `qjs:std`, `qjs:os`, and service
+files. For shell sessions, `#task/self/dir` is the logical shell cwd, while the
+WASI root preopen stays at the namespace root so `cd` can navigate the served
+tree. Non-shell qjs script tasks continue to use task cwd as their WASI root
+preopen.
 
 Bounded output draining or event-loop pumping around terminal sessions is host
 lifecycle policy for an already evaluated task runtime. It is not a general
@@ -74,7 +76,7 @@ and service files such as `#term/<id>/winch`; clients can release terminal
 resources through `#term/<id>/ctl`, while Wanix continues to own task identity,
 fds, namespace, stdio, and exit state.
 
-Exact command, route, and fixture coverage belongs in tests, examples, and
-current-state docs. Future signal delivery, cancellation, process-group,
-durable attachment, or VM/editor terminal policy should get a separate decision
-when it changes the terminal/service contract.
+Exact command, route, fixture, and demo coverage belongs in tests, examples,
+current-state docs, and commit messages. Future signal delivery, cancellation,
+process-group, durable attachment, or VM/editor terminal policy should get a
+separate decision when it changes the terminal/service contract.

@@ -37,10 +37,10 @@ and cwd mapping, service paths such as `#task` and `#term`, fd operations,
 rights projection, path and metadata operations, readiness, clocks/timers, and
 deliberate unsupported errors for behavior that has no Wanix contract.
 
-When a QuickJS task opens dynamic regular-file WASI fds, the adapter mirrors
-the visible fd into the Wanix task fd table at the same number and removes it
-when WASI closes the fd. Directory fds can stay WASI-internal until a Wanix task
-fd contract needs them.
+When a QuickJS task exposes a guest fd as Wanix-observable state, the adapter
+must mirror that fd through the Wanix task fd table and release it when the
+guest closes it. Directory fds may stay WASI-internal until a Wanix task fd
+contract needs them.
 
 The checked-in QuickJS WASI fixture is a compatibility boundary for guest
 modules and imports. Guest code should use `qjs:std`, `qjs:os`, `scriptArgs`,
@@ -71,6 +71,6 @@ JavaScript running through `qjs:std`, `qjs:os`, `scriptArgs`, stdio, and
 semantics without `globalThis.Wanix` helpers and without a read-only virtual
 projection bridge.
 
-Specific syscall coverage, fixture changes, and bounded-execution proofs belong
-in `wanix-wasi`, `wanix-qjs`, `wanix-qjs-engine`, examples, tests, and commit
-messages. Update this ADR only when the durable task runtime boundary changes.
+Specific syscall coverage, fixture changes, bounded-execution proofs, and demo
+milestones belong in crate docs, examples, tests, and commit messages. Update
+this ADR only when the durable task runtime boundary changes.

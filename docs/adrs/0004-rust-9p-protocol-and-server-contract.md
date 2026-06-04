@@ -19,7 +19,8 @@ public filesystem or trust contract.
 
 `wanix-protocol` owns dependency-free 9P frame splitting, tag extraction,
 version negotiation, and typed operation codecs. It covers the server-facing
-9P2000.L surface and selected compatibility codecs when clients require them.
+9P2000.L surface and selected compatibility codecs only when clients require
+them.
 
 `wanix-9p` owns the server state that maps fids to Wanix filesystem objects and
 open-file state. It translates filesystem results into 9P replies and Linux-ish
@@ -43,8 +44,8 @@ output out of binary response streams.
 
 Unsupported features should return deliberate protocol errors until Wanix has a
 backing contract. Rust Wanix should not fake auth, special-file, extended
-attribute, ownership, or inode-link semantics beyond what the Wanix filesystem
-contract can actually provide.
+attribute, ownership, inode-link, or device semantics beyond what the Wanix
+filesystem contract can actually provide.
 
 ## Consequences
 
@@ -53,6 +54,6 @@ browser, v86, and editor paths without each transport inventing filesystem
 semantics. Operation-by-operation coverage belongs in codec/server tests and
 current-state docs, not in one ADR per operation.
 
-Future 9P work should add ADRs only when it changes the protocol contract,
-authentication/trust boundary, transport multiplexing model, or backing Wanix
-filesystem semantics.
+Future 9P work should update or add ADRs only when it changes the protocol
+contract, authentication/trust boundary, transport multiplexing model, or
+backing Wanix filesystem semantics.
