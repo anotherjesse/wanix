@@ -6,6 +6,7 @@
 //!   `guest <input-path> <output-path>` — copy/transform a file.
 //!   `guest --list <dir>`               — list a directory's entries + types.
 //!   `guest --rename <src> <dst>`       — atomically move a file/dir.
+//!   `guest --rmdir <dir>`              — remove an empty directory.
 
 use std::fs;
 
@@ -20,6 +21,10 @@ fn main() {
             args.get(2).map_or("", String::as_str),
             args.get(3).map_or("", String::as_str),
         );
+        return;
+    }
+    if args.get(1).map(String::as_str) == Some("--rmdir") {
+        rmdir(args.get(2).map_or("", String::as_str));
         return;
     }
 
@@ -49,6 +54,15 @@ fn rename(src: &str, dst: &str) {
     match fs::rename(src, dst) {
         Ok(()) => println!("rust-wasm: renamed {src} -> {dst}"),
         Err(err) => println!("rust-wasm: rename failed {src} -> {dst}: {err}"),
+    }
+}
+
+/// Removes the empty directory `dir` via `fs::remove_dir` (the
+/// `path_remove_directory` syscall).
+fn rmdir(dir: &str) {
+    match fs::remove_dir(dir) {
+        Ok(()) => println!("rust-wasm: removed dir {dir}"),
+        Err(err) => println!("rust-wasm: rmdir failed {dir}: {err}"),
     }
 }
 

@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use wanix_fs::MemFs;
+use wanix_fs::{FileSystem, MemFs, NormalizedPath};
 use wanix_qjs::{QuickJsRunner, QuickJsWanixConfig};
 use wanix_vfs::{BindOptions, Namespace};
 use wanix_wasi::WasiConfig;
@@ -197,6 +197,111 @@ std.out.flush();
     assert!(
         fs.read_file("shared/src.txt").is_err(),
         "source should be gone on the backing fs after rename"
+    );
+}
+
+/// Returns whether `path` exists on the backing fs (dir or file).
+fn fs_exists(fs: &Arc<MemFs>, path: &str) -> bool {
+    let np = NormalizedPath::new(path).expect("normalize path");
+    fs.metadata(&np).is_ok()
+}
+
+#[test]
+fn qjs_creates_rust_removes_directory() {
+    // Differential proof for the new path_remove_directory import: qjs/host
+    // creates an EMPTY directory, rust-wasm `std::fs::remove_dir`s it on the
+    // SAME namespace, then qjs (os.stat) and the backing fs both confirm it is
+    // gone. Both engines route rmdir/stat through one WasiCtx VFS.
+    let fs = Arc::new(MemFs::new());
+    fs.create_dir_all("shared/empty")
+        .expect("make /shared/empty");
+    assert!(fs_exists(&fs, "shared/empty"), "dir should exist initially");
+
+    let qjs = QuickJsRunner::from_bundled_wasm().expect("qjs runner");
+    let rust = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+
+    // 1. rust-wasm removes the empty directory through path_remove_directory.
+    let (exit, rust_out) = run_rust(&rust, &fs, &["guest", "--rmdir", "/shared/empty"]);
+    assert_eq!(exit, 0, "rust rmdir step exit: {rust_out:?}");
+    assert!(
+        rust_out.contains("removed dir /shared/empty"),
+        "rust rmdir output: {rust_out:?}"
+    );
+
+    // 2. qjs, on the same namespace, observes the directory is gone.
+    let observed = run_qjs(
+        &qjs,
+        &fs,
+        r#"import * as std from "qjs:std";
+import * as os from "qjs:os";
+const [, err] = os.stat("/shared/empty");
+std.out.puts("dir_present " + (err === 0) + "\n");
+std.out.flush();
+"#,
+    );
+    assert!(
+        observed.contains("dir_present false"),
+        "qjs should see dir gone after rmdir: {observed:?}"
+    );
+
+    // 3. Host-side confirmation straight from the shared backing filesystem.
+    assert!(
+        !fs_exists(&fs, "shared/empty"),
+        "directory should be gone on the backing fs after rmdir"
+    );
+    let np = NormalizedPath::new("shared/empty").expect("normalize");
+    assert!(
+        fs.read_dir(&np).is_err(),
+        "read_dir of removed directory should error on the backing fs"
+    );
+}
+
+#[test]
+fn rust_rmdir_nonempty_returns_error() {
+    // Parity with ENOTEMPTY: a directory containing a child cannot be removed.
+    // rust-wasm's remove_dir must fail and the directory must survive on the
+    // backing fs; qjs must still see it present — both engines agree the
+    // removal was rejected.
+    let fs = Arc::new(MemFs::new());
+    fs.create_dir_all("shared/full").expect("make /shared/full");
+    fs.write_file("shared/full/child.txt", b"keep me")
+        .expect("write child");
+
+    let qjs = QuickJsRunner::from_bundled_wasm().expect("qjs runner");
+    let rust = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+
+    let (exit, rust_out) = run_rust(&rust, &fs, &["guest", "--rmdir", "/shared/full"]);
+    assert_eq!(exit, 0, "rust rmdir step exit: {rust_out:?}");
+    assert!(
+        rust_out.contains("rmdir failed /shared/full"),
+        "rust rmdir of non-empty dir should report failure: {rust_out:?}"
+    );
+
+    // The non-empty directory and its child must still exist on the backing fs.
+    assert!(
+        fs_exists(&fs, "shared/full"),
+        "non-empty directory should survive a rejected rmdir"
+    );
+    assert_eq!(
+        fs.read_file("shared/full/child.txt").expect("child exists"),
+        b"keep me",
+        "child file should be untouched after rejected rmdir"
+    );
+
+    // qjs, on the same namespace, agrees the directory is still present.
+    let observed = run_qjs(
+        &qjs,
+        &fs,
+        r#"import * as std from "qjs:std";
+import * as os from "qjs:os";
+const [, err] = os.stat("/shared/full");
+std.out.puts("dir_present " + (err === 0) + "\n");
+std.out.flush();
+"#,
+    );
+    assert!(
+        observed.contains("dir_present true"),
+        "qjs should still see the non-empty dir after rejected rmdir: {observed:?}"
     );
 }
 

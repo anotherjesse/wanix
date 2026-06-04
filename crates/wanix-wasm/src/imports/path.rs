@@ -100,6 +100,20 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     )?;
     linker.func_wrap(
         m,
+        "path_remove_directory",
+        |mut caller: Caller<'_, WasiState>, dirfd: i32, path: i32, path_len: i32| -> Result<i32> {
+            let mem = memory(&mut caller)?;
+            let name = read_str(&mem, &mut caller, path, path_len)?;
+            Ok(code(
+                caller
+                    .data()
+                    .ctx
+                    .path_remove_directory(WasiFd::new(dirfd as u32), &name),
+            ))
+        },
+    )?;
+    linker.func_wrap(
+        m,
         "path_rename",
         |mut caller: Caller<'_, WasiState>,
          old_fd: i32,
