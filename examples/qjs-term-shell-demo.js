@@ -89,6 +89,10 @@ function writeRequiredServiceText(path, text) {
   }
 }
 
+function writeTerminalInput(text) {
+  writeRequiredServiceText("#term/" + termId + "/data", text);
+}
+
 function parseWords(line) {
   const words = [];
   let current = "";
@@ -232,6 +236,19 @@ function parseQjsLaunch(words) {
     i += 1;
   }
   return launch;
+}
+
+function commandUsesTerminalStdin(line) {
+  const trimmed = line.trim();
+  if (trimmed === "") {
+    return false;
+  }
+  const parsed = parseWords(trimmed);
+  if (parsed.error || parsed.words[0] !== "qjs" || parsed.words.length < 2) {
+    return false;
+  }
+  const launch = parseQjsLaunch(parsed.words);
+  return !launch.error && !launch.stdinPath;
 }
 
 function readEnvLines() {
@@ -711,6 +728,15 @@ function runCommand(line) {
   prompt();
 }
 
+function runInputLine(line, bufferedRemainder) {
+  const handoff = bufferedRemainder.length > 0 && commandUsesTerminalStdin(line);
+  if (handoff) {
+    writeTerminalInput(bufferedRemainder);
+  }
+  runCommand(line);
+  return handoff;
+}
+
 function handleRawByte(byte) {
   if (byte === 0x04 && pending.length === 0) {
     runCommand("exit");
@@ -721,13 +747,6 @@ function handleRawByte(byte) {
       pending = pending.slice(0, -1);
       std.out.puts("\x08 \x08");
     }
-    return;
-  }
-  if (byte === 0x0d || byte === 0x0a) {
-    std.out.puts("\n");
-    const line = pending;
-    pending = "";
-    runCommand(line);
     return;
   }
   if (byte === 0x09 || byte >= 0x20) {
@@ -742,6 +761,16 @@ function handleRawInput(bytes, count) {
     if (!running) {
       return;
     }
+    if (bytes[i] === 0x0d || bytes[i] === 0x0a) {
+      std.out.puts("\n");
+      const line = pending;
+      pending = "";
+      const remainder = stringFromBytes(bytes.slice(i + 1, count), count - i - 1);
+      if (runInputLine(line, remainder)) {
+        return;
+      }
+      continue;
+    }
     handleRawByte(bytes[i]);
   }
 }
@@ -751,8 +780,12 @@ function handleLineInput(bytes, count) {
   let newline;
   while ((newline = pending.indexOf("\n")) >= 0) {
     const line = pending.slice(0, newline);
-    pending = pending.slice(newline + 1);
-    runCommand(line);
+    const remainder = pending.slice(newline + 1);
+    pending = remainder;
+    if (runInputLine(line, remainder)) {
+      pending = "";
+      return;
+    }
   }
 }
 

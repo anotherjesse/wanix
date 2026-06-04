@@ -363,9 +363,10 @@ and a synchronous
 namespace and workbench demos. The launcher uses `#task/new/qjs`, service-file
 `cmd`/`env`/`dir`, fd binds, `start`, and `exit` rather than a host-side
 shortcut; child stdio can flow through the parent terminal fds, file
-redirection can bind child fd `0`/`1`/`2` through the Wanix namespace, the shell
-task's env flows into child `qjs` tasks, and `status` reports the last child
-`qjs` exit code observed from the child's `exit` service file.
+redirection can bind child fd `0`/`1`/`2` through the Wanix namespace, buffered
+terminal input after the qjs command line can be handed to the child fd `0`,
+the shell task's env flows into child `qjs` tasks, and `status` reports the last
+child `qjs` exit code observed from the child's `exit` service file.
 
 This is not yet a fully concurrent, production interactive scheduler. Raw mode
 still relies on the native host to put stdin into raw mode, but bytes then flow
@@ -374,9 +375,9 @@ and command dispatch. For the bundled interactive shell, served cwd is logical
 shell state recorded in `#task/self/dir`, while WASI remains rooted at the
 served namespace root so `cd` can navigate the tree. Normal qjs script tasks
 keep cwd-as-preopen behavior. Signal handling, cancellation, and richer
-foreground child-task terminal ownership need more work. Resource cleanup is
-explicit: clients that own a terminal can write `close` to `#term/<id>/ctl` to
-remove it from the service and invalidate existing handles.
+persistent foreground child-task terminal ownership need more work. Resource
+cleanup is explicit: clients that own a terminal can write `close` to
+`#term/<id>/ctl` to remove it from the service and invalidate existing handles.
 
 But the direction is important: terminal behavior is not browser xterm
 plumbing. It is a Wanix device surface. A browser xterm, a local terminal, a
