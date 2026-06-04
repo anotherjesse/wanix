@@ -15,9 +15,9 @@ use super::pump::{
 use super::terminal::attach_task_terminal;
 use super::{
     QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS, QJS_SHELL_READY_IO_TURNS, QJS_SHELL_SCRIPT_SENTINEL,
-    QJS_SHELL_SOURCE, configure_qjs_task, eval_qjs_source,
+    QJS_SHELL_SOURCE,
 };
-use crate::{CliError, parse_exit, quickjs_runner};
+use crate::{CliError, configure_qjs_task, eval_qjs_source, parse_exit, quickjs_runner};
 
 pub(crate) struct QjsShellSession {
     task: Task,

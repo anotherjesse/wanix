@@ -1,21 +1,12 @@
 #[cfg(all(test, unix))]
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::path::Path;
+#[cfg(all(test, unix))]
 use std::sync::Arc;
 #[cfg(all(test, unix))]
 use std::sync::Mutex;
 
-use wanix_fs::{MemFs, NormalizedPath};
-use wanix_qjs::QuickJsTaskDriver;
-use wanix_task::TaskTable;
-use wanix_vfs::BindOptions;
-
-use super::{
-    CliError, CliOutput, QJS_GUEST_SCRIPT, QjsCommand, apply_qjs_task_runtime_limits,
-    bind_host_mounts, configure_qjs_task, copy_script_directory, eval_qjs_source,
-    guest_path_in_cwd, quickjs_runner, read_qjs_stdin, read_utf8_script,
-};
+use super::{CliError, CliOutput};
 
 const QJS_SHELL_SOURCE: &str = include_str!("../../../examples/qjs-term-shell-demo.js");
 const QJS_SHELL_SCRIPT_SENTINEL: &str = "__wanix_qjs_shell.js";
@@ -25,7 +16,9 @@ const QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS: u64 = 20;
 mod command;
 mod post_eval;
 mod process;
+mod program_spec;
 mod pump;
+mod runtime;
 mod session;
 mod terminal;
 
@@ -33,10 +26,10 @@ use command::{PostEvalFeed, qjs_shell_command};
 pub(super) use command::{
     QjsShellCommand, QjsTermCommand, parse_qjs_shell_command, parse_qjs_term_command,
 };
-use post_eval::run_post_eval_feeds;
-use pump::{ProcessEventSources, TerminalPumpPolicy, TerminalPumpState, drain_terminal_output};
+use program_spec::QjsTermProgram;
+use pump::ProcessEventSources;
+use runtime::{run_qjs_term_program_streaming, run_qjs_term_program_streaming_with_input_mode};
 pub(crate) use session::QjsShellSession;
-use terminal::{attach_task_terminal, finish_terminal_task_output};
 
 pub(super) fn run_qjs_term(
     command: QjsTermCommand,
@@ -163,159 +156,6 @@ pub(super) fn run_qjs_shell_streaming_with_resize_queue(
         process_stdout,
         process_stderr,
     )
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QjsTermProgram {
-    HostScript,
-    BundledShell,
-}
-
-fn run_qjs_term_program_streaming(
-    qjs_command: QjsCommand,
-    feed_after_eval: Vec<PostEvalFeed>,
-    program: QjsTermProgram,
-    process_stdin: &mut dyn Read,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
-) -> Result<i32, CliError> {
-    run_qjs_term_program_streaming_with_input_mode(
-        qjs_command,
-        feed_after_eval,
-        program,
-        ProcessEventSources::blocking(),
-        process_stdin,
-        process_stdout,
-        process_stderr,
-    )
-}
-
-fn run_qjs_term_program_streaming_with_input_mode(
-    qjs_command: QjsCommand,
-    feed_after_eval: Vec<PostEvalFeed>,
-    program: QjsTermProgram,
-    event_sources: ProcessEventSources,
-    process_stdin: &mut dyn Read,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
-) -> Result<i32, CliError> {
-    let script = read_qjs_term_program(&qjs_command.script_path, program)?;
-    let stdin_bytes = read_qjs_stdin(qjs_command.stdin, process_stdin)?;
-
-    let runner = quickjs_runner()?;
-    let table = TaskTable::new();
-    let mut driver = QuickJsTaskDriver::new(Arc::clone(&runner))
-        .with_event_loop_wait_budget(qjs_command.event_loop_wait_budget)
-        .with_ready_io_turns(qjs_command.ready_io_turns);
-    if let Some(budget) = qjs_command.interrupt_poll_budget {
-        driver = driver.with_interrupt_poll_budget(budget);
-    }
-    if let Some(bytes) = qjs_command.memory_limit_bytes {
-        driver = driver.with_memory_limit_bytes(bytes);
-    }
-    table.register_driver("qjs", Arc::new(driver))?;
-    let task = table.allocate_root("qjs")?;
-
-    let root = Arc::new(MemFs::new());
-    if program == QjsTermProgram::HostScript {
-        copy_script_directory(&qjs_command.script_path, &root, &qjs_command.cwd)?;
-    }
-    let runtime_cwd = if program == QjsTermProgram::BundledShell {
-        // The bundled shell implements cwd in guest code; keep the WASI root
-        // at namespace root so shell navigation is not trapped below --cwd.
-        NormalizedPath::new(".")?
-    } else {
-        qjs_command.cwd.clone()
-    };
-    let program_path = if program == QjsTermProgram::BundledShell {
-        QJS_SHELL_SCRIPT_SENTINEL
-    } else {
-        QJS_GUEST_SCRIPT
-    };
-    let guest_script = if program == QjsTermProgram::BundledShell {
-        QJS_SHELL_SCRIPT_SENTINEL.to_owned()
-    } else {
-        guest_path_in_cwd(&qjs_command.cwd, QJS_GUEST_SCRIPT)?
-    };
-    root.write_file(guest_script.as_str(), script.as_bytes())?;
-    task.bind(root, ".", ".", BindOptions::default())?;
-    bind_host_mounts(&task, &qjs_command.mounts)?;
-
-    let terminal = attach_task_terminal(&task, stdin_bytes)?;
-    let mut task_env = qjs_command.env.clone();
-    if program == QjsTermProgram::BundledShell {
-        task_env.push(format!("WANIX_TERM_ID={}", terminal.id));
-    }
-    configure_qjs_task(
-        &task,
-        program_path,
-        &qjs_command.args,
-        &task_env,
-        &runtime_cwd,
-    )?;
-
-    let start_result = (|| -> Result<(), CliError> {
-        let mut runtime = runner.create_task_runtime(&task)?;
-        if program == QjsTermProgram::BundledShell {
-            task.set_dir(qjs_command.cwd.as_str())?;
-        }
-        apply_qjs_task_runtime_limits(
-            &mut runtime,
-            qjs_command.interrupt_poll_budget,
-            qjs_command.memory_limit_bytes,
-        )?;
-        let eval_ready_io_turns = if feed_after_eval.is_empty() {
-            qjs_command.ready_io_turns
-        } else {
-            0
-        };
-        let eval_result = eval_qjs_source(
-            &mut runtime,
-            &script,
-            &guest_script,
-            qjs_command.event_loop_wait_budget,
-            eval_ready_io_turns,
-        );
-        drain_terminal_output(&terminal.device, &terminal.id, process_stdout)?;
-        eval_result?;
-        if !feed_after_eval.is_empty() {
-            run_post_eval_feeds(
-                feed_after_eval,
-                process_stdin,
-                &terminal.device,
-                &terminal.id,
-                &mut runtime,
-                TerminalPumpState {
-                    policy: TerminalPumpPolicy {
-                        ready_io_turns: qjs_command.ready_io_turns,
-                        event_loop_wait_budget: qjs_command.event_loop_wait_budget,
-                        input_mode: event_sources.input_mode,
-                    },
-                    resize_source: event_sources.resize_source,
-                },
-                process_stdout,
-            )?;
-        }
-        let finish_result = runtime.finish();
-        drain_terminal_output(&terminal.device, &terminal.id, process_stdout)?;
-        finish_result?;
-        Ok(())
-    })();
-
-    finish_terminal_task_output(
-        start_result,
-        &task,
-        &terminal,
-        process_stdout,
-        process_stderr,
-    )
-}
-
-fn read_qjs_term_program(script_path: &Path, program: QjsTermProgram) -> Result<String, CliError> {
-    match program {
-        QjsTermProgram::HostScript => read_utf8_script(script_path),
-        QjsTermProgram::BundledShell => Ok(QJS_SHELL_SOURCE.to_owned()),
-    }
 }
 
 #[cfg(test)]
