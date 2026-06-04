@@ -1,20 +1,19 @@
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::pump::TermResize;
 use super::{CliError, QJS_SHELL_READY_IO_TURNS, QJS_SHELL_SCRIPT_SENTINEL};
 use crate::{QjsCommand, os_arg_to_string, parse_qjs_command_for};
 
+mod shell;
+
+pub(in crate::qjs_term) use shell::qjs_shell_command;
+pub(crate) use shell::{QjsShellCommand, parse_qjs_shell_command};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QjsTermCommand {
     pub(super) qjs: QjsCommand,
     pub(super) feed_after_eval: Vec<PostEvalFeed>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct QjsShellCommand {
-    pub(super) qjs: QjsCommand,
-    pub(super) raw: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,17 +59,9 @@ impl<'a> QjsTermArgParser<'a> {
     }
 
     fn parse(mut self) -> Result<ParsedQjsTermArgs, CliError> {
-        while let Some(arg) = self.current() {
-            match QjsTermOption::from_arg(arg) {
-                Some(QjsTermOption::FeedBytes) => self.parse_feed_bytes()?,
-                Some(QjsTermOption::FeedFile) => self.parse_feed_file()?,
-                Some(QjsTermOption::FeedLines) => self.parse_feed_lines()?,
-                Some(QjsTermOption::Resize) => self.parse_resize()?,
-                None if qjs_option_takes_value(arg) => self.parse_qjs_value_option(),
-                None => {
-                    self.forward_remaining_qjs_args();
-                    break;
-                }
+        while let Some(action) = self.current_action() {
+            if !self.apply_action(action)? {
+                break;
             }
         }
         Ok(self.parsed)
@@ -78,6 +69,33 @@ impl<'a> QjsTermArgParser<'a> {
 
     fn current(&self) -> Option<&OsString> {
         self.args.get(self.index)
+    }
+
+    fn current_action(&self) -> Option<QjsTermParseAction> {
+        QjsTermParseAction::from_arg(self.current()?)
+    }
+
+    fn apply_action(&mut self, action: QjsTermParseAction) -> Result<bool, CliError> {
+        match action {
+            QjsTermParseAction::TermOption(option) => self.apply_term_option(option)?,
+            QjsTermParseAction::QjsValueOption => self.parse_qjs_value_option(),
+            QjsTermParseAction::Rest => {
+                self.parsed
+                    .qjs_args
+                    .extend_from_slice(&self.args[self.index..]);
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn apply_term_option(&mut self, option: QjsTermOption) -> Result<(), CliError> {
+        match option {
+            QjsTermOption::FeedBytes => self.parse_feed_bytes(),
+            QjsTermOption::FeedFile => self.parse_feed_file(),
+            QjsTermOption::FeedLines => self.parse_feed_lines(),
+            QjsTermOption::Resize => self.parse_resize(),
+        }
     }
 
     fn take_value(&mut self, label: &str) -> Result<&'a OsString, CliError> {
@@ -137,11 +155,24 @@ impl<'a> QjsTermArgParser<'a> {
             self.index += 1;
         }
     }
+}
 
-    fn forward_remaining_qjs_args(&mut self) {
-        self.parsed
-            .qjs_args
-            .extend_from_slice(&self.args[self.index..]);
+#[derive(Clone, Copy)]
+enum QjsTermParseAction {
+    TermOption(QjsTermOption),
+    QjsValueOption,
+    Rest,
+}
+
+impl QjsTermParseAction {
+    fn from_arg(arg: &OsString) -> Option<Self> {
+        if let Some(option) = QjsTermOption::from_arg(arg) {
+            return Some(Self::TermOption(option));
+        }
+        if qjs_option_takes_value(arg) {
+            return Some(Self::QjsValueOption);
+        }
+        Some(Self::Rest)
     }
 }
 
@@ -186,31 +217,6 @@ fn feed_path_or_process(
     }
 }
 
-pub(crate) fn parse_qjs_shell_command(args: &[OsString]) -> Result<QjsShellCommand, CliError> {
-    let mut qjs_args = Vec::new();
-    let mut raw = false;
-    for arg in args {
-        if arg == "--raw" {
-            raw = true;
-        } else {
-            qjs_args.push(arg.clone());
-        }
-    }
-    qjs_args.push(OsString::from(QJS_SHELL_SCRIPT_SENTINEL));
-    let qjs = parse_qjs_command_for(&qjs_args, "qjs-shell")?;
-    if qjs.script_path != Path::new(QJS_SHELL_SCRIPT_SENTINEL) || !qjs.args.is_empty() {
-        return Err(CliError::usage(
-            "qjs-shell does not accept a script path or script arguments",
-        ));
-    }
-    if qjs.stdin.is_some() {
-        return Err(CliError::usage(
-            "qjs-shell reads native stdin as terminal input; use qjs-term for explicit stdin fixtures",
-        ));
-    }
-    Ok(QjsShellCommand { qjs, raw })
-}
-
 fn qjs_option_takes_value(arg: &OsString) -> bool {
     matches!(
         arg.to_str(),
@@ -248,12 +254,4 @@ fn parse_positive_u16(value: &str, label: &str) -> Result<u16, CliError> {
         )));
     }
     Ok(number)
-}
-
-pub(super) fn qjs_shell_command(mut command: QjsCommand, raw: bool) -> QjsCommand {
-    command.ready_io_turns = command.ready_io_turns.max(QJS_SHELL_READY_IO_TURNS);
-    if raw {
-        command.env.push("WANIX_QJS_SHELL_RAW=1".to_owned());
-    }
-    command
 }
