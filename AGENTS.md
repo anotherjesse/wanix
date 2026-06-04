@@ -121,10 +121,13 @@ When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86
 `filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also
 advertises direct-v86 boot hints: the default 9P-root Linux cmdline, memory
-size, VGA memory size, and virtio-console requirement. The page assumes the
-served root contains the v86 browser assets and accepts caller-supplied
+size, VGA memory size, virtio-console requirement, and embedded v86 asset
+routes. With `--bundle direct-v86`, Rust serve owns the embedded
+`/v86/lib/libv86.mjs`, `/v86/lib/mod.js`, `/v86/lib/offscreen.js`, wasm, and
+BIOS routes so the browser emulator runtime does not have to live in the served
+root. The page accepts caller-supplied
 kernel/initrd/cmdline URLs or query overrides, so it is a boot handoff proof
-rather than a complete VM bundle assembler.
+rather than a complete guest asset assembler.
 `/.well-known` routes are reserved for protocol endpoints;
 `/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
 lands. Listener commands accept `--once` for tests and scripted demos.
@@ -400,6 +403,9 @@ cargo test --workspace --locked
 - [ADR 0083](docs/adrs/0083-serve-direct-v86-boot-contract.md):
   Rust `serve --bundle direct-v86` advertises and applies the 9P-root Linux
   boot cmdline and virtio-console defaults needed by the v86 handoff.
+- [ADR 0084](docs/adrs/0084-serve-embedded-direct-v86-assets.md):
+  Rust `serve --bundle direct-v86` serves embedded v86 module, wasm, and BIOS
+  assets and advertises those routes in discovery.
 
 ## Cycle Rules
 

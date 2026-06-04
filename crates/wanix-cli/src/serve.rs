@@ -21,6 +21,51 @@ const DIRECT_V86_BUNDLE: &str = "direct-v86";
 const DIRECT_V86_DEFAULT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,aname=,cache=none,msize=131072 loglevel=3";
 const DIRECT_V86_MEMORY_SIZE: u32 = 1024 * 1024 * 1024;
 const DIRECT_V86_VGA_MEMORY_SIZE: u32 = 8 * 1024 * 1024;
+const DIRECT_V86_MODULE_PATH: &str = "/v86/lib/libv86.mjs";
+const DIRECT_V86_MOD_REEXPORT_PATH: &str = "/v86/lib/mod.js";
+const DIRECT_V86_OFFSCREEN_PATH: &str = "/v86/lib/offscreen.js";
+const DIRECT_V86_WASM_PATH: &str = "/v86/bundle/v86.wasm";
+const DIRECT_V86_BIOS_PATH: &str = "/v86/bundle/seabios.bin";
+const DIRECT_V86_VGA_BIOS_PATH: &str = "/v86/bundle/vgabios.bin";
+
+struct BuiltinAsset {
+    route: &'static str,
+    content_type: &'static str,
+    bytes: &'static [u8],
+}
+
+const DIRECT_V86_ASSETS: &[BuiltinAsset] = &[
+    BuiltinAsset {
+        route: DIRECT_V86_MOD_REEXPORT_PATH,
+        content_type: "text/javascript; charset=utf-8",
+        bytes: include_bytes!("../../../v86/lib/mod.js"),
+    },
+    BuiltinAsset {
+        route: DIRECT_V86_MODULE_PATH,
+        content_type: "text/javascript; charset=utf-8",
+        bytes: include_bytes!("../../../v86/lib/libv86.mjs"),
+    },
+    BuiltinAsset {
+        route: DIRECT_V86_OFFSCREEN_PATH,
+        content_type: "text/javascript; charset=utf-8",
+        bytes: include_bytes!("../../../v86/lib/offscreen.js"),
+    },
+    BuiltinAsset {
+        route: DIRECT_V86_WASM_PATH,
+        content_type: "application/wasm",
+        bytes: include_bytes!("../../../v86/bundle/v86.wasm"),
+    },
+    BuiltinAsset {
+        route: DIRECT_V86_BIOS_PATH,
+        content_type: "application/octet-stream",
+        bytes: include_bytes!("../../../v86/bundle/seabios.bin"),
+    },
+    BuiltinAsset {
+        route: DIRECT_V86_VGA_BIOS_PATH,
+        content_type: "application/octet-stream",
+        bytes: include_bytes!("../../../v86/bundle/vgabios.bin"),
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ServeCommand {
@@ -292,6 +337,7 @@ fn serve_http_connection(
     let response = match parse_http_request(&request) {
         Ok(path) => well_known_response(roots, &path, &request)
             .or_else(|| bundle_response(roots, &path, &request))
+            .or_else(|| direct_v86_asset_response(roots, &path))
             .unwrap_or_else(|| read_static_response(&roots.static_root, &path)),
         Err(status) => StaticResponse::plain(status, status.reason()),
     };
@@ -495,6 +541,21 @@ fn bundle_response(
     Some(direct_v86_bundle_response())
 }
 
+fn direct_v86_asset_response(roots: &ServeRoots, relative_path: &Path) -> Option<StaticResponse> {
+    if roots.bundle.as_deref() != Some(DIRECT_V86_BUNDLE) {
+        return None;
+    }
+    let route = format!("/{}", relative_path.to_str()?);
+    let asset = DIRECT_V86_ASSETS
+        .iter()
+        .find(|asset| asset.route == route)?;
+    Some(StaticResponse {
+        status: HttpStatus::Ok,
+        content_type: asset.content_type,
+        body: asset.bytes.to_vec(),
+    })
+}
+
 fn http_request_target(header_bytes: &[u8]) -> Option<&str> {
     let header_end = header_end(header_bytes)?;
     let header = std::str::from_utf8(&header_bytes[..header_end]).ok()?;
@@ -563,8 +624,6 @@ fn direct_v86_bundle_html() -> String {
     <textarea id="serial" spellcheck="false"></textarea>
   </main>
   <script type="module">
-    import { V86 } from "/v86/lib/mod.js";
-
 "##);
     html.push_str("    const DEFAULT_CMDLINE = ");
     html.push_str(&json_string(DIRECT_V86_DEFAULT_CMDLINE));
@@ -588,6 +647,8 @@ fn direct_v86_bundle_html() -> String {
     if (params.get("initrd")) initrd.value = params.get("initrd");
 
     const discovery = await fetch("/.well-known/wanix.json", { cache: "no-store" }).then(response => response.json());
+    const v86Assets = discovery.v86?.assets || {};
+    const { V86 } = await import(v86Assets.module || "/v86/lib/libv86.mjs");
     const proxyUrl = discovery.routes.p9.websocket;
     cmdline.value = discovery.v86?.defaultCmdline || DEFAULT_CMDLINE;
     if (params.get("cmdline")) cmdline.value = params.get("cmdline");
@@ -599,9 +660,9 @@ fn direct_v86_bundle_html() -> String {
         memory_size: discovery.v86?.memorySize || DEFAULT_MEMORY_SIZE,
         vga_memory_size: discovery.v86?.vgaMemorySize || DEFAULT_VGA_MEMORY_SIZE,
         cmdline: cmdline.value,
-        wasm_path: "/v86/bundle/v86.wasm",
-        bios: { url: "/v86/bundle/seabios.bin" },
-        vga_bios: { url: "/v86/bundle/vgabios.bin" },
+        wasm_path: v86Assets.wasm || "/v86/bundle/v86.wasm",
+        bios: { url: v86Assets.bios || "/v86/bundle/seabios.bin" },
+        vga_bios: { url: v86Assets.vgaBios || "/v86/bundle/vgabios.bin" },
         bzimage_initrd_from_filesystem: false,
         filesystem: { proxy_url: proxyUrl },
         autostart: true,
@@ -660,10 +721,17 @@ fn serve_discovery_json(local_addr: SocketAddr, bundle: Option<&str>, request: &
          \"p9\":{{\"websocket\":{},\"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\"}},\
          \"ethernet\":{{\"websocket\":{},\"status\":\"not-implemented\"}}\
          }},\
-         \"v86\":{{\"defaultCmdline\":{},\"memorySize\":{},\"vgaMemorySize\":{},\"virtioConsole\":true}},\
+         \"v86\":{{\"assets\":{{\"module\":{},\"mod\":{},\"offscreen\":{},\"wasm\":{},\"bios\":{},\"vgaBios\":{}}},\
+         \"defaultCmdline\":{},\"memorySize\":{},\"vgaMemorySize\":{},\"virtioConsole\":true}},\
          \"bundle\":{}}}",
         json_string(&p9_url),
         json_string(&ethernet_url),
+        json_string(DIRECT_V86_MODULE_PATH),
+        json_string(DIRECT_V86_MOD_REEXPORT_PATH),
+        json_string(DIRECT_V86_OFFSCREEN_PATH),
+        json_string(DIRECT_V86_WASM_PATH),
+        json_string(DIRECT_V86_BIOS_PATH),
+        json_string(DIRECT_V86_VGA_BIOS_PATH),
         json_string(DIRECT_V86_DEFAULT_CMDLINE),
         DIRECT_V86_MEMORY_SIZE,
         DIRECT_V86_VGA_MEMORY_SIZE,
@@ -1025,11 +1093,17 @@ mod tests {
             "{response}"
         );
         assert!(
-            response.contains("import { V86 } from \"/v86/lib/mod.js\";"),
+            response.contains("fetch(\"/.well-known/wanix.json\""),
             "{response}"
         );
         assert!(
-            response.contains("fetch(\"/.well-known/wanix.json\""),
+            response.contains("const v86Assets = discovery.v86?.assets || {}"),
+            "{response}"
+        );
+        assert!(
+            response.contains(
+                "const { V86 } = await import(v86Assets.module || \"/v86/lib/libv86.mjs\")"
+            ),
             "{response}"
         );
         assert!(
@@ -1066,7 +1140,11 @@ mod tests {
             "{response}"
         );
         assert!(
-            response.contains("wasm_path: \"/v86/bundle/v86.wasm\""),
+            response.contains("wasm_path: v86Assets.wasm || \"/v86/bundle/v86.wasm\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("bios: { url: v86Assets.bios || \"/v86/bundle/seabios.bin\" }"),
             "{response}"
         );
         assert!(
@@ -1078,6 +1156,147 @@ mod tests {
             "{response}"
         );
         assert!(!response.contains("static index"), "{response}");
+    }
+
+    #[test]
+    fn serve_once_returns_direct_v86_embedded_asset_over_static_collision() {
+        let root = temp_dir("wanix-cli-serve-direct-v86-assets");
+        fs::create_dir_all(root.join("v86/bundle")).unwrap();
+        fs::write(root.join("v86/bundle/v86.wasm"), b"not wasm").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /v86/bundle/v86.wasm HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        );
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let header_end = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        let headers = String::from_utf8_lossy(&response[..header_end]);
+        let body = &response[header_end..];
+        assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+        assert!(
+            headers.contains("Content-Type: application/wasm\r\n"),
+            "{headers}"
+        );
+        assert!(
+            body.starts_with(b"\0asm"),
+            "body did not start with wasm magic"
+        );
+        assert_ne!(body, b"not wasm");
+    }
+
+    #[test]
+    fn direct_v86_embedded_asset_table_serves_browser_runtime_assets() {
+        let root = temp_dir("wanix-cli-direct-v86-asset-table");
+        let roots = ServeRoots::new(
+            &root,
+            "127.0.0.1:0".parse().unwrap(),
+            Some(DIRECT_V86_BUNDLE.to_owned()),
+        )
+        .unwrap();
+
+        for (path, content_type, prefix) in [
+            (
+                "v86/lib/libv86.mjs",
+                "text/javascript; charset=utf-8",
+                Some(b";let module".as_slice()),
+            ),
+            (
+                "v86/lib/mod.js",
+                "text/javascript; charset=utf-8",
+                Some(b"export { V86 }".as_slice()),
+            ),
+            (
+                "v86/lib/offscreen.js",
+                "text/javascript; charset=utf-8",
+                None,
+            ),
+            ("v86/bundle/v86.wasm", "application/wasm", Some(b"\0asm")),
+            ("v86/bundle/seabios.bin", "application/octet-stream", None),
+            ("v86/bundle/vgabios.bin", "application/octet-stream", None),
+        ] {
+            let response = direct_v86_asset_response(&roots, Path::new(path)).unwrap();
+            assert_eq!(response.status.status_line(), "200 OK");
+            assert_eq!(response.content_type, content_type);
+            assert!(!response.body.is_empty(), "{path} was empty");
+            if let Some(prefix) = prefix {
+                assert!(
+                    response.body.starts_with(prefix),
+                    "{path} body did not start with expected bytes"
+                );
+            }
+        }
+
+        let other_roots = ServeRoots::new(
+            &root,
+            "127.0.0.1:0".parse().unwrap(),
+            Some("vm-workbench".to_owned()),
+        )
+        .unwrap();
+        assert!(
+            direct_v86_asset_response(&other_roots, Path::new("v86/bundle/v86.wasm")).is_none()
+        );
+    }
+
+    #[test]
+    fn serve_once_keeps_direct_v86_asset_paths_static_without_direct_bundle() {
+        let root = temp_dir("wanix-cli-serve-static-v86-asset");
+        fs::create_dir_all(root.join("v86/bundle")).unwrap();
+        fs::write(root.join("v86/bundle/v86.wasm"), b"static wasm").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some("vm-workbench".to_owned()),
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /v86/bundle/v86.wasm HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        );
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let header_end = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        let headers = String::from_utf8_lossy(&response[..header_end]);
+        let body = &response[header_end..];
+        assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+        assert!(
+            headers.contains("Content-Type: application/wasm\r\n"),
+            "{headers}"
+        );
+        assert_eq!(body, b"static wasm");
     }
 
     #[test]
@@ -1162,9 +1381,31 @@ mod tests {
             "{response}"
         );
         assert!(
-            response.contains(
-                "\"v86\":{\"defaultCmdline\":\"console=hvc0 init=/bin/init rw root=host9p rootfstype=9p"
-            ),
+            response.contains("\"assets\":{\"module\":\"/v86/lib/libv86.mjs\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("\"mod\":\"/v86/lib/mod.js\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("\"offscreen\":\"/v86/lib/offscreen.js\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("\"wasm\":\"/v86/bundle/v86.wasm\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("\"bios\":\"/v86/bundle/seabios.bin\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("\"vgaBios\":\"/v86/bundle/vgabios.bin\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("\"defaultCmdline\":\"console=hvc0 init=/bin/init rw root=host9p"),
             "{response}"
         );
         assert!(
