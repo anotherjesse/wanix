@@ -40,6 +40,11 @@
         "command": "workbench.createTerminal",
         "title": "Create Terminal",
         "category": "Workbench"
+      },
+      {
+        "command": "workbench.runQjsTask",
+        "title": "Run Current JavaScript as qjs Task",
+        "category": "Wanix"
       }
     ]
   }

@@ -1710,6 +1710,7 @@ fn workbench_fs9p_bundle_html() -> String {
                 task: discovery.services.task,
                 term: discovery.services.term
               };
+              workbenchConfig.qjsTask = discovery.services.drivers?.includes("qjs") || false;
               workbenchConfig.shell = {
                 cmd: params.get("cmd") || "",
                 type: params.get("type") || "noop",
@@ -2535,6 +2536,12 @@ mod tests {
         );
         assert!(
             response.contains("if (discovery.services?.task && discovery.services?.term)"),
+            "{response}"
+        );
+        assert!(
+            response.contains(
+                "workbenchConfig.qjsTask = discovery.services.drivers?.includes(\"qjs\") || false"
+            ),
             "{response}"
         );
         assert!(

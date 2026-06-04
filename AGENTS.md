@@ -509,6 +509,9 @@ cargo test --workspace --locked
 - [ADR 0097](docs/adrs/0097-serve-qjs-task-service-driver.md):
   `serve --wanix-services` registers a real `qjs` task driver and exports
   `#task` from a service-root task context so direct 9P clients can start JS.
+- [ADR 0098](docs/adrs/0098-workbench-qjs-task-command.md):
+  The Rust-served workbench can run the active `wanix:` JavaScript file as a
+  `qjs` Wanix task by driving `#task` and `#term` over direct 9P.
 
 ## Cycle Rules
 

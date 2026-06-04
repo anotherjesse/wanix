@@ -10,6 +10,7 @@ declare const navigator: unknown;
 type Config = {
 	discoveryUrl?: string;
 	qjsShellUrl?: string;
+	qjsTask?: boolean;
 	term?: boolean;
 	raw?: boolean;
 	ns?: {
@@ -54,9 +55,66 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 			
 		}
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.runQjsTask', async () => {
+			try {
+				const term = vscode.window.createTerminal({
+					name: await qjsTerminalName(),
+					pty: await createActiveQjsTaskTerminal(fsys, bridge, config)
+				});
+				term.show();
+				context.subscriptions.push(term);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 	});
 	
 	console.log('System extension activated');
+}
+
+async function qjsTerminalName(): Promise<string> {
+	const editor = activeWanixEditor();
+	if (!editor) {
+		return "qjs";
+	}
+	return `qjs: ${baseName(editor.document.uri.path)}`;
+}
+
+async function createActiveQjsTaskTerminal(fsys: any, bridge: WanixBridge, config: Config) {
+	if (!config.ns?.task || !config.ns?.term) {
+		throw new Error("Wanix task and terminal services are not available");
+	}
+	if (config.qjsTask === false) {
+		throw new Error("Wanix discovery did not advertise the qjs task driver");
+	}
+	const editor = activeWanixEditor();
+	if (!editor) {
+		throw new Error("Open a wanix: JavaScript file before running a qjs task");
+	}
+	if (editor.document.isDirty && !(await editor.document.save())) {
+		throw new Error("Save the active file before running it as a qjs task");
+	}
+
+	const scriptPath = bridge.normalizePath(editor.document.uri.path);
+	const scriptDir = parentPath(scriptPath) || ".";
+	const scriptName = baseName(scriptPath);
+	return await createTerminal(fsys, {
+		...config,
+		qjsShellUrl: undefined,
+		shell: {
+			cmd: quoteShellArg(scriptName),
+			type: "qjs",
+			wd: scriptDir
+		}
+	});
+}
+
+function activeWanixEditor(): vscode.TextEditor | undefined {
+	const editor = vscode.window.activeTextEditor;
+	if (editor?.document.uri.scheme === WanixBridge.scheme) {
+		return editor;
+	}
+	return undefined;
 }
 
 function createWanixHandle(context: vscode.ExtensionContext, setConfig: (config: Config) => void): Promise<any> {
@@ -182,27 +240,9 @@ async function createTerminal(fsys: any, config: Config) {
 	const taskPath = [config.ns?.task, taskID].join("/");
 	await fsys.writeFile(`${taskPath}/cmd`, config.shell?.cmd);
 	await fsys.writeFile(`${taskPath}/dir`, config.shell?.wd);
-	// not sure the best way to do this but the bind paths need to be 
-	// relative to the root of that system. works fine until you change 
-	// namespaces to a mount of another system, because the bind paths need
-	// to be relative to the root of the new system. this is a hack for now:
-	const commonPath = (a: string, b: string, sep = '/') => {
-		const as = a.split(sep);
-		const bs = b.split(sep);
-		const out = [];
-		for (let i = 0; i < Math.min(as.length, bs.length); i++) {
-		  if (as[i] !== bs[i]) break;
-		  out.push(as[i]);
-		}
-		return out.join(sep);
-	}
-	const common = commonPath(termPath, taskPath);
-	const termPathInner = termPath.slice(common.length+1);
-	const taskPathInner = taskPath.slice(common.length+1);
-	// console.log(`bind ${termPathInner}/program ${taskPathInner}/fd/0`);
-	await fsys.writeFile(`${taskPath}/ctl`, `bind ${termPathInner}/program ${taskPathInner}/fd/0`);
-	await fsys.writeFile(`${taskPath}/ctl`, `bind ${termPathInner}/program ${taskPathInner}/fd/1`);
-	await fsys.writeFile(`${taskPath}/ctl`, `bind ${termPathInner}/program ${taskPathInner}/fd/2`);
+	await fsys.writeFile(`${taskPath}/ctl`, `bind ${quoteShellArg(`${termPath}/program`)} fd/0`);
+	await fsys.writeFile(`${taskPath}/ctl`, `bind ${quoteShellArg(`${termPath}/program`)} fd/1`);
+	await fsys.writeFile(`${taskPath}/ctl`, `bind ${quoteShellArg(`${termPath}/program`)} fd/2`);
 	await fsys.writeFile(`${taskPath}/ctl`, "start");
 
 	const writeEmitter = new vscode.EventEmitter<string>();
@@ -250,6 +290,28 @@ async function createTerminal(fsys: any, config: Config) {
 			// await winch.close();
 		}
 	};
+}
+
+function splitPath(path: string): string[] {
+	return path.split("/").filter(Boolean);
+}
+
+function parentPath(path: string): string {
+	const parts = splitPath(path);
+	parts.pop();
+	return parts.join("/");
+}
+
+function baseName(path: string): string {
+	const parts = splitPath(path);
+	return parts.pop() || path;
+}
+
+function quoteShellArg(arg: string): string {
+	if (arg.length > 0 && !/[\s'"\\]/.test(arg)) {
+		return arg;
+	}
+	return `'${arg.replace(/'/g, `'\"'\"'`)}'`;
 }
 
 // @ts-ignore
