@@ -44,5 +44,5 @@ wanix-rust qemu --root rootdir
 ```
 
 This aligns native QEMU with the direct-v86 boot discovery convention while
-keeping process supervision, QEMU binary discovery, rootfs extraction, btrfs
-image creation, and microvm variants as future cycles.
+keeping process supervision, QEMU binary discovery, rootfs build automation,
+btrfs image creation, and microvm variants as future cycles.

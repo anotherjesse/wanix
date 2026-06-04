@@ -43,6 +43,7 @@ dialects until a boot proof shows the kernel and userspace accept it.
 Rust Wanix now has a tested native QEMU handoff artifact that points the same
 guest/rootfs story outside the browser without committing to a VM supervisor.
 
-Future cycles can add `--exec`, rootfs extraction from `extras/dist`, qemu binary
-discovery, btrfs image generation, microvm/qboot variants, or process/terminal
-supervision on top of this stable generated argv contract.
+Later cycles added `--exec` and `wanix-rust rootfs` archive extraction. Future
+cycles can add QEMU binary discovery, rootfs build automation, btrfs image
+generation, microvm/qboot variants, or process/terminal supervision on top of
+this stable generated argv contract.

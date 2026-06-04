@@ -7,9 +7,13 @@ Wasmtime as the execution substrate and QuickJS/WASI as the first serious task
 runtime. Browser support becomes a frontend or deployment option, not the
 runtime foundation.
 
-## First Demo Target
+## Current Big Targets
 
-Run JavaScript outside Chrome with access to a Wanix namespace.
+The baseline qjs, terminal, 9P, direct-v86, and native QEMU paths now exist.
+Highest-leverage next work should make those paths feel like a usable system:
+interactive shells and terminal lifecycle, broader Linux/v86/editor 9P
+compatibility, QEMU/v86 boot workflows, and serve/workbench/VS Code
+integration.
 
 ## Crate Shape
 
@@ -33,8 +37,8 @@ Run JavaScript outside Chrome with access to a Wanix namespace.
 - `wanix-qjs`: QuickJS/WASI task driver that adapts the engine crate to Wanix
   task semantics.
 - `wanix-cli`: native CLI and demo runner.
-- Future protocol work: typed 9P operations and server/client adapters, plus
-  CBOR/RPC, HTTPFS, and R2FS protocol pieces when those integrations need them.
+- Future protocol work beyond the current 9P stack: CBOR/RPC, HTTPFS, and R2FS
+  protocol pieces when those integrations need them.
 
 ## Dependency Direction
 
@@ -57,13 +61,12 @@ wanix-cli  -> runtime crates for orchestration
 No upward dependencies: `wanix-task` must not depend on `wanix-wasi` or
 `wanix-qjs`. Keep core filesystem and namespace crates free of Wasmtime.
 
-## First Vertical Slice
+## Current Vertical Slices
 
-The first real demo should be `wanix-rust qjs main.js`: JavaScript runs outside
-Chrome, reads and writes files through a Wanix namespace, prints through a
-stdio/console shim, and exits with an observable status. A strong follow-up demo
-should read `#task/self/id` from JavaScript to prove task context crosses into
-QuickJS.
+The baseline qjs demo is `wanix-rust qjs main.js`: JavaScript runs outside
+Chrome, reads and writes files through a Wanix namespace, prints through
+task-backed stdio, exits with an observable status, and can read `#task/self/id`
+to prove task context crosses into QuickJS.
 
 The next terminal-facing demo is `wanix-rust qjs-term main.js`: JavaScript still
 runs as a Wanix `qjs` task, but fd 0/1/2 are bound through `#term/<id>/program`
@@ -189,6 +192,13 @@ boot smoke. The same generated page bridges v86
 typed/pasted browser input back through `virtio-console0-input-bytes`, and
 sends browser console size changes as `virtio-console0-resize`, matching the
 guest's `hvc0` console path used by QEMU.
+`wanix-rust rootfs --archive FILE.tgz --out DIR` extracts a gzipped tar guest
+root into a missing or empty directory, rejects unsafe archive paths, validates
+the shared VM boot markers (`/boot/bzImage` or `/bzImage`, plus `/bin/init`),
+and prints ready-to-run QEMU and direct-v86 serve commands. This command is the
+Rust-side bridge from `extras/dist/alpine-linux.tgz`-style artifacts to both VM
+entrypoints; it prepares a directory but does not build the archive or manage VM
+lifecycle.
 `wanix-rust qemu --root DIR` prints a shell-quoted native QEMU/KVM virtio-9p
 command for the same Linux guest/rootfs shape, discovering `/boot/bzImage` or
 legacy `/bzImage` from the guest root unless `--kernel PATH` overrides it. The
@@ -197,7 +207,7 @@ offers `--cmdline` and repeatable `--append` for guest boot tuning, and accepts
 `--exec` as an explicit foreground launch mode. Exec mode spawns the same
 validated argv, lets QEMU inherit native stdin/stdout/stderr for `-nographic`
 console ownership, and returns QEMU's exit status; richer VM lifecycle,
-rootfs assembly, signal policy, and network bridging remain follow-ups.
+rootfs build automation, signal policy, and network bridging remain follow-ups.
 `/.well-known` routes are reserved for protocol endpoints;
 `/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
 lands. Listener commands accept `--once` for tests and scripted demos.
@@ -237,15 +247,9 @@ cargo test --workspace --locked
   is a migration oracle, not a structure to copy blindly.
 - [ADR 0005](docs/adrs/0005-crate-boundaries-and-dependency-graph.md): Crate
   boundaries keep core Wanix contracts independent from Wasmtime and QuickJS.
-- [ADR 0006](docs/adrs/0006-interim-quickjs-wanix-host-api.md): The temporary
-  `Wanix` JavaScript host API is fully superseded by qjs std/os, `scriptArgs`,
-  `#task`, and live Wanix-backed WASI.
 - [ADR 0007](docs/adrs/0007-workspace-local-rust-quality-gate.md): Formatting
-  checks enumerate Wanix crates while sibling prototypes remain path
-  dependencies.
-- [ADR 0008](docs/adrs/0008-quickjs-namespace-modules-and-virtual-wasi-projection.md):
-  QuickJS ES modules load from Wanix namespaces; the old read-only virtual
-  projection bridge is superseded by live Wanix-backed WASI.
+  checks enumerate current Wanix workspace crates; clippy and tests remain
+  workspace-wide.
 - [ADR 0009](docs/adrs/0009-quickjs-tasks-use-wanix-process-semantics.md):
   QuickJS is the execution engine inside `qjs` Wanix tasks, not a separate
   process model.
@@ -530,12 +534,28 @@ cargo test --workspace --locked
   `wanix-rust qemu --exec` foreground-spawns the validated QEMU argv while
   preserving the print-only default command contract.
 
+## Superseded ADRs
+
+- [ADR 0006](docs/adrs/0006-interim-quickjs-wanix-host-api.md): The temporary
+  `Wanix` JavaScript host API was removed after qjs std/os, `scriptArgs`,
+  `#task`, and live Wanix-backed WASI took over.
+- [ADR 0008](docs/adrs/0008-quickjs-namespace-modules-and-virtual-wasi-projection.md):
+  QuickJS namespace module loading remains current, but the read-only virtual
+  WASI projection bridge is superseded by live Wanix-backed WASI.
+
 ## Cycle Rules
 
 Prefer the highest-leverage externally visible capability or demo outcome.
 Use cleanup only when it unblocks that outcome, protects a trust boundary,
 preserves compatibility, or fixes a major review finding. Commit each completed
 cycle before starting the next one.
+
+Treat ADRs like code. Before adding one, check whether the change is a durable
+architecture, API, format, or workflow decision instead of a milestone note or
+implementation diary. Prefer current-state docs plus tests for routine CLI/demo
+slices, and when adding or touching ADRs, prune, delete, or clearly mark
+superseded records so `AGENTS.md` does not describe old bridges as current
+direction.
 
 ## Queued Follow-ups
 
@@ -544,6 +564,9 @@ cycle before starting the next one.
   intentional runtime decision.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
+- Run a dedicated ADR librarian pass: delete or consolidate superseded bridge
+  records, fixture rebuild notes, per-WASI-call records, and per-9P-op records
+  into subsystem-level decisions.
 - Continue `qjs-shell` interactivity with a host loop that can wait on native
   input and guest output concurrently, signal handling, and live native resize
   propagation.

@@ -5,6 +5,7 @@ mod p9_stdio;
 mod p9_ws;
 mod qemu;
 mod qjs_term;
+mod rootfs;
 mod serve;
 
 use std::collections::BTreeMap;
@@ -54,6 +55,7 @@ const USAGE: &str = concat!(
     "       wanix-rust p9-stdio --root DIR\n",
     "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
+    "       wanix-rust rootfs --archive FILE.tgz --out DIR\n",
     "       wanix-rust qemu --root DIR [--kernel PATH] [--cmdline TEXT] [--append TEXT ...] ",
     "[--qemu-bin PATH] [--memory-mb N] ",
     "[--no-kvm] [--exec]\n",
@@ -272,6 +274,9 @@ fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<Cl
         }
         [command, rest @ ..] if command == "p9-stdio" => {
             p9_stdio::run_p9_stdio(p9_stdio::parse_p9_stdio_command(rest)?, process_stdin)
+        }
+        [command, rest @ ..] if command == "rootfs" => {
+            rootfs::run_rootfs_command(rootfs::parse_rootfs_command(rest)?)
         }
         [command, rest @ ..] if command == "p9-listen" => {
             let _ = p9_listen::parse_p9_listen_command(rest)?;
@@ -1717,12 +1722,108 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-stdio"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-listen"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-ws"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust rootfs"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qemu"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--cmdline TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--append TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--exec"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust serve"));
         assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn rootfs_command_extracts_archive_and_reports_vm_entrypoints() {
+        let fixture = temp_dir("wanix-cli-rootfs-fixture");
+        let archive = fixture.join("alpine-linux.tgz");
+        write_rootfs_archive(
+            &archive,
+            &[
+                ("boot/bzImage", 0o644, b"kernel".as_slice()),
+                ("bin/init", 0o755, b"#!/bin/sh\n".as_slice()),
+                ("etc/resolv.conf", 0o644, b"nameserver 1.1.1.1\n".as_slice()),
+            ],
+        );
+        let out = temp_dir("wanix-cli-rootfs-out-parent").join("root");
+
+        let output = run(vec![
+            "rootfs".to_owned(),
+            "--archive".to_owned(),
+            archive.display().to_string(),
+            "--out".to_owned(),
+            out.display().to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.stderr().is_empty());
+        assert_eq!(fs::read(out.join("boot/bzImage")).unwrap(), b"kernel");
+        assert_eq!(fs::read(out.join("bin/init")).unwrap(), b"#!/bin/sh\n");
+        let stdout = String::from_utf8(output.stdout().to_vec()).unwrap();
+        let out = fs::canonicalize(out).unwrap();
+        assert!(
+            stdout.contains(&format!("rootfs extracted to {}", out.display())),
+            "{stdout}"
+        );
+        assert!(stdout.contains("kernel /boot/bzImage"), "{stdout}");
+        assert!(stdout.contains("init /bin/init"), "{stdout}");
+        assert!(stdout.contains("qemu wanix-rust qemu --root"), "{stdout}");
+        assert!(stdout.contains("--exec"), "{stdout}");
+        assert!(
+            stdout.contains("serve wanix-rust serve")
+                && stdout.contains("--bundle direct-v86")
+                && stdout.contains("--wanix-services"),
+            "{stdout}"
+        );
+    }
+
+    #[test]
+    fn rootfs_command_refuses_non_empty_output_directory() {
+        let fixture = temp_dir("wanix-cli-rootfs-non-empty-fixture");
+        let archive = fixture.join("alpine-linux.tgz");
+        write_rootfs_archive(
+            &archive,
+            &[
+                ("boot/bzImage", 0o644, b"kernel".as_slice()),
+                ("bin/init", 0o755, b"#!/bin/sh\n".as_slice()),
+            ],
+        );
+        let out = temp_dir("wanix-cli-rootfs-non-empty-out");
+        fs::write(out.join("already-here"), b"keep").unwrap();
+
+        let error = run(vec![
+            "rootfs".to_owned(),
+            "--archive".to_owned(),
+            archive.display().to_string(),
+            "--out".to_owned(),
+            out.display().to_string(),
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("must be empty"));
+        assert_eq!(fs::read(out.join("already-here")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn rootfs_command_rejects_unsafe_archive_paths() {
+        let fixture = temp_dir("wanix-cli-rootfs-unsafe-fixture");
+        let archive = fixture.join("unsafe.tgz");
+        let escaped = fixture.join("escape.txt");
+        write_raw_rootfs_archive_entry(&archive, "../escape.txt", b"nope");
+        let out = fixture.join("root");
+
+        let error = run(vec![
+            "rootfs".to_owned(),
+            "--archive".to_owned(),
+            archive.display().to_string(),
+            "--out".to_owned(),
+            out.display().to_string(),
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("unsafe rootfs archive path"));
+        assert!(!escaped.exists());
     }
 
     #[test]
@@ -4775,6 +4876,53 @@ std.out.flush();
         path.push(format!("{prefix}-{}-{nonce}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn write_rootfs_archive(path: &Path, entries: &[(&str, u32, &[u8])]) {
+        let file = fs::File::create(path).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        for (name, mode, bytes) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(*mode);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, *name, &mut &bytes[..])
+                .unwrap();
+        }
+        let encoder = builder.into_inner().unwrap();
+        encoder.finish().unwrap();
+    }
+
+    fn write_raw_rootfs_archive_entry(path: &Path, name: &str, bytes: &[u8]) {
+        let file = fs::File::create(path).unwrap();
+        let mut encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut header = [0_u8; 512];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        write_tar_octal(&mut header[100..108], 0o644);
+        write_tar_octal(&mut header[108..116], 0);
+        write_tar_octal(&mut header[116..124], 0);
+        write_tar_octal(&mut header[124..136], bytes.len() as u64);
+        write_tar_octal(&mut header[136..148], 0);
+        header[148..156].fill(b' ');
+        header[156] = b'0';
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        let checksum = header.iter().map(|byte| u32::from(*byte)).sum::<u32>();
+        let checksum = format!("{checksum:06o}\0 ");
+        header[148..156].copy_from_slice(checksum.as_bytes());
+        encoder.write_all(&header).unwrap();
+        encoder.write_all(bytes).unwrap();
+        let padding = (512 - (bytes.len() % 512)) % 512;
+        encoder.write_all(&vec![0_u8; padding]).unwrap();
+        encoder.write_all(&[0_u8; 1024]).unwrap();
+        encoder.finish().unwrap();
+    }
+
+    fn write_tar_octal(field: &mut [u8], value: u64) {
+        let value = format!("{value:0width$o}\0", width = field.len() - 1);
+        field.copy_from_slice(value.as_bytes());
     }
 
     #[cfg(unix)]

@@ -8,7 +8,9 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+flate2 = "1"
 libc = "0.2"
+tar = "0.4"
 tungstenite = "0.29.0"
 wanix-9p = { path = "../wanix-9p" }
 wanix-fs = { path = "../wanix-fs" }

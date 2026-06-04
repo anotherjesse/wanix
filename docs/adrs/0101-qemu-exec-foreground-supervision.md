@@ -35,6 +35,6 @@ The native VM path now has a runnable command:
 wanix-rust qemu --root rootdir --exec
 ```
 
-Future cycles can add QEMU binary discovery, rootfs extraction from
-`extras/dist`, signal/TTY policy, vnet/ethernet integration, or richer VM
-lifecycle controls without changing the stable print-only argv contract.
+Future cycles can add QEMU binary discovery, rootfs build automation,
+signal/TTY policy, vnet/ethernet integration, or richer VM lifecycle controls
+without changing the stable print-only argv contract.
