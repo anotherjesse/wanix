@@ -1427,6 +1427,7 @@ fn workbench_fs9p_bundle_html() -> String {
     const extensionId = params.get("extension") || "wanix.workbench";
     const workspaceUri = params.get("workspace") || "wanix:/";
     const rawAssets = params.get("assets") || "/workbench/";
+    const discoveryUrl = new URL("/.well-known/wanix.json", location.href).href;
     const extensionRoot = new URL(rawAssets.replace(/\/?$/, "/"), location.href);
     const codeDir = new URL("code/", extensionRoot);
     const outDir = new URL("out/", codeDir);
@@ -1487,7 +1488,7 @@ fn workbench_fs9p_bundle_html() -> String {
             const activationChannel = new MessageChannel();
             activationChannel.port2.onmessage = (event) => {
               if (event.data?.type === "_port" && event.data.port) {
-                event.data.port.postMessage({ config: {} });
+                event.data.port.postMessage({ config: { discoveryUrl } });
               }
             };
             const config = {
@@ -1534,7 +1535,7 @@ fn workbench_fs9p_bundle_html() -> String {
 
     (async () => {
       showStatus("Fetching Wanix discovery...");
-      const discoveryResponse = await fetch("/.well-known/wanix.json", { cache: "no-store" });
+      const discoveryResponse = await fetch(discoveryUrl, { cache: "no-store" });
       if (!discoveryResponse.ok) {
         throw new Error("failed to fetch discovery: HTTP " + discoveryResponse.status);
       }
@@ -2220,9 +2221,12 @@ mod tests {
             "{response}"
         );
         assert!(
-            response.contains("fetch(\"/.well-known/wanix.json\""),
+            response.contains(
+                "const discoveryUrl = new URL(\"/.well-known/wanix.json\", location.href).href"
+            ),
             "{response}"
         );
+        assert!(response.contains("fetch(discoveryUrl"), "{response}");
         assert!(
             response.contains("new URL(\"vs/loader.js\", outDir)"),
             "{response}"
@@ -2249,6 +2253,10 @@ mod tests {
         );
         assert!(
             response.contains("const activationChannel = new MessageChannel()"),
+            "{response}"
+        );
+        assert!(
+            response.contains("event.data.port.postMessage({ config: { discoveryUrl } })"),
             "{response}"
         );
         assert!(

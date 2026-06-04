@@ -8,6 +8,7 @@ import { WanixHandle } from '../wanix/fs.js';
 declare const navigator: unknown;
 
 type Config = {
+	discoveryUrl?: string;
 	term?: boolean;
 	raw?: boolean;
 	ns?: {
@@ -61,6 +62,9 @@ function createWanixHandle(context: vscode.ExtensionContext, setConfig: (config:
 	const channel = new MessageChannel();
 	return new Promise<any>((resolve) => {
 		let settled = false;
+		let pendingConfig: Config = {
+			discoveryUrl: new URL("/.well-known/wanix.json", context.extensionUri.toString()).href,
+		};
 		const resolveHandle = (handle: any, nextConfig: Config) => {
 			if (settled) {
 				return;
@@ -71,8 +75,11 @@ function createWanixHandle(context: vscode.ExtensionContext, setConfig: (config:
 		};
 
 		channel.port2.onmessage = async (event) => {
+			if (event.data.config) {
+				pendingConfig = { ...pendingConfig, ...event.data.config };
+			}
 			if (event.data.wanix) {
-				resolveHandle(new WanixHandle(event.data.wanix), event.data.config || {});
+				resolveHandle(new WanixHandle(event.data.wanix), pendingConfig);
 			}
 		};
 
@@ -81,10 +88,19 @@ function createWanixHandle(context: vscode.ExtensionContext, setConfig: (config:
 			port.postMessage({type: "_port", port: channel.port1}, [channel.port1]);
 		}
 
-		delay(100).then(() => WanixP9Handle.fromDiscovery()).then((handle) => {
-			resolveHandle(handle, {});
-		}).catch(() => {
-			// The classic workbench embedding does not expose Rust serve discovery.
+		delay(100).then(() => {
+			if (settled) {
+				return undefined;
+			}
+			return WanixP9Handle.fromDiscovery(pendingConfig.discoveryUrl);
+		}).then((handle) => {
+			if (handle) {
+				resolveHandle(handle, pendingConfig);
+			}
+		}).catch((error) => {
+			if (!settled) {
+				console.warn("Wanix direct 9P discovery fallback failed", error);
+			}
 		});
 	});
 }

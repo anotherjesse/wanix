@@ -33,9 +33,16 @@ page that:
 - opens `wanix:/` as the trusted workspace;
 - fetches `/.well-known/wanix.json` before launch so the active Rust serve
   endpoint is visible to the page; and
-- supplies only a VS Code IPC activation channel, without an `event.data.wanix`
-  filesystem port, so any filesystem backend must come from the extension's
-  direct 9P fallback rather than the legacy MessagePort/CBOR bridge.
+- supplies only a VS Code IPC activation channel with config data such as the
+  absolute discovery URL, without an `event.data.wanix` filesystem port, so any
+  filesystem backend must come from the extension's direct 9P fallback rather
+  than the legacy MessagePort/CBOR bridge.
+
+The workbench extension activates on startup as well as on `onFileSystem:wanix`
+so the dedicated Wanix filesystem provider registers during the Rust-served
+workbench boot. The direct 9P fallback resolves discovery from the extension's
+served URI by default and can accept an absolute discovery URL from launcher
+config when the workbench assets are served from another origin.
 
 The generated page accepts optional `assets`, `workspace`, `extension`, and
 `debug` query parameters for local experiments, but its default contract is the
@@ -49,13 +56,15 @@ filesystem port supplied by the page. This is the first Rust-served workbench
 launch surface and a better target for browser-side integration regressions than
 the standalone 9P smoke page alone.
 
-The first browser smoke proved that the generated page boots Code OSS and opens
-the `wanix:/` workspace root. It also exposed the next integration blocker:
-this checked-out Code OSS asset set does not yet register the served
-`wanix.workbench` extension from `/workbench/`, so Explorer does not yet
-populate through the direct 9P backend. That registration/activation issue is
-the next workbench filesystem blocker, not a reason to reintroduce the legacy
-Wanix filesystem bridge.
+The first browser smoke proved that the generated page boots Code OSS, opens
+the `wanix:/` workspace root, loads the served `wanix.workbench` extension from
+`/workbench/`, fetches Rust serve discovery from inside the extension host,
+opens the direct 9P WebSocket, and populates Explorer from the served root. The
+smoke still shows VS Code warning before extension activation that no
+`wanix:` provider was available while validating the workspace folder, and it
+warns that no search provider is registered for the `wanix` scheme. Those are
+follow-up integration gaps, not reasons to reintroduce the legacy Wanix
+filesystem bridge.
 
 The bundle is intentionally a dev/demo path. The Code OSS assets under
 `workbench/code/` and the built extension under `workbench/dist/` are generated

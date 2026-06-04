@@ -141,15 +141,17 @@ than a plain served 9P directory.
 When launched with `--bundle workbench-fs9p`, `/?bundle=workbench-fs9p`
 returns a generated filesystem-only VS Code web workbench launcher. The page
 loads Code OSS and the `workbench/` extension package from the served root,
-opens `wanix:/` as the workspace, uses VS Code IPC only to wake the extension,
-and does not supply the legacy Wanix MessagePort filesystem bridge. The
+opens `wanix:/` as the workspace, uses VS Code IPC only to wake the extension
+and pass a config-only absolute discovery URL, and does not supply the legacy
+Wanix MessagePort filesystem bridge. The
 intended backend remains the extension's Rust serve discovery path for direct
 9P filesystem access.
 This is a dev/demo launch path for local generated workbench assets, not a
 packaged Code OSS distribution and not a terminal/task integration. The first
-browser smoke proves the Rust-served page boots Code OSS to the `wanix:/`
-workspace root; the next blocker is making this Code OSS asset set register the
-served `wanix.workbench` extension so Explorer populates through direct 9P.
+browser smoke now proves the Rust-served page boots Code OSS to the `wanix:/`
+workspace root, loads the served `wanix.workbench` extension, opens the Rust
+direct 9P WebSocket, and populates Explorer from the served root. Search
+providers, terminal creation, and `#task`/`#term` semantics remain follow-ups.
 When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86
 `filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also

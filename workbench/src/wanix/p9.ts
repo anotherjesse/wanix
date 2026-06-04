@@ -50,7 +50,7 @@ export class WanixP9Handle {
 	}
 
 	static async fromDiscovery(discoveryUrl = "/.well-known/wanix.json"): Promise<WanixP9Handle> {
-		const response = await fetch(discoveryUrl, { cache: "no-store" });
+		const response = await fetch(resolveDiscoveryUrl(discoveryUrl), { cache: "no-store" });
 		if (!response.ok) {
 			throw new Error(`Wanix discovery failed: HTTP ${response.status}`);
 		}
@@ -283,6 +283,21 @@ export class WanixP9Handle {
 		});
 	}
 
+}
+
+function resolveDiscoveryUrl(discoveryUrl: string): string {
+	try {
+		return new URL(discoveryUrl).href;
+	} catch {
+		// Root-relative URLs work in a normal browser window, but VS Code's web
+		// extension worker can expose an internal location that is not a valid
+		// URL base. Embedders should pass an absolute discovery URL when they can.
+	}
+	try {
+		return new URL(discoveryUrl, location.href).href;
+	} catch {
+		throw new Error(`Wanix discovery URL must be absolute in this extension host: ${discoveryUrl}`);
+	}
 }
 
 function delay(ms: number): Promise<void> {
