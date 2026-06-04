@@ -1,7 +1,6 @@
 # Existing oversized production modules. The first column is the maximum
 # allowed non-test line count for that path; counts may shrink but must not grow.
 # Remove entries as cleanup passes split files below the 350-line hard limit.
-377 crates/wanix-cli/src/serve.rs
 1916 crates/wanix-protocol/src/p9.rs
 943 crates/wanix-cli/src/lib.rs
 633 crates/wanix-cli/src/qjs_term.rs

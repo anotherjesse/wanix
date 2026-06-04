@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use tungstenite::accept;
-use wanix_fs::{FileSystem, LocalFs, NormalizedPath};
+use wanix_fs::{FileSystem, LocalFs};
 use wanix_qjs::QuickJsTaskDriver;
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
@@ -32,14 +32,14 @@ pub(super) use command::{ServeCommand, parse_serve_command};
 use discovery::display_host;
 use http::{
     HttpStatus, StaticResponse, is_websocket_upgrade, peek_request_headers, peek_request_target,
-    percent_decode, serve_http_connection, websocket_rejection_response, write_static_response,
+    serve_http_connection, websocket_rejection_response, write_static_response,
 };
-use terminal_ws::serve_terminal_websocket_connection;
+use terminal_ws::{
+    is_qjs_shell_websocket_path, qjs_shell_cwd_from_target, serve_terminal_websocket_connection,
+};
 
 const FS9P_BUNDLE: &str = "fs9p";
 const WORKBENCH_FS9P_BUNDLE: &str = "workbench-fs9p";
-const QJS_SHELL_WEBSOCKET_PATH: &str = "/.well-known/qjs-shell";
-const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
 
 pub(super) fn run_serve_streaming(
     command: ServeCommand,
@@ -339,49 +339,6 @@ fn serve_connection(
     }
 
     serve_http_connection(roots, stream, peer_addr)
-}
-
-fn is_qjs_shell_websocket_path(raw_path: Option<&str>) -> bool {
-    raw_path.map(|path| path.split_once('?').map_or(path, |(path, _)| path))
-        == Some(QJS_SHELL_WEBSOCKET_PATH)
-}
-
-fn qjs_shell_cwd_from_target(raw_path: Option<&str>) -> Result<NormalizedPath, StaticResponse> {
-    let raw_path =
-        raw_path.ok_or_else(|| StaticResponse::plain(HttpStatus::BadRequest, "bad request"))?;
-    let Some((_path, query)) = raw_path.split_once('?') else {
-        return Ok(NormalizedPath::new(".").expect("default cwd is valid"));
-    };
-    for pair in query.split('&') {
-        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
-        let key = query_percent_decode(raw_key)?;
-        if key == "cwd" {
-            let value = query_percent_decode(raw_value)?;
-            return qjs_shell_cwd_from_query_value(&value);
-        }
-    }
-    Ok(NormalizedPath::new(".").expect("default cwd is valid"))
-}
-
-fn qjs_shell_cwd_from_query_value(value: &str) -> Result<NormalizedPath, StaticResponse> {
-    let path = match value {
-        "" => {
-            return Err(StaticResponse::plain(
-                HttpStatus::BadRequest,
-                "invalid qjs shell cwd",
-            ));
-        }
-        "/" => ".",
-        path => path.strip_prefix('/').unwrap_or(path),
-    };
-    let path = if path.is_empty() { "." } else { path };
-    NormalizedPath::new(path)
-        .map_err(|_| StaticResponse::plain(HttpStatus::BadRequest, "invalid qjs shell cwd"))
-}
-
-fn query_percent_decode(value: &str) -> Result<String, StaticResponse> {
-    percent_decode(&value.replace('+', " "))
-        .map_err(|_| StaticResponse::plain(HttpStatus::BadRequest, "invalid query string"))
 }
 
 #[derive(Debug)]

@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::json::json_string;
 use crate::rootfs::rootfs_json_handoff_for_prepared_root;
 
+use super::ServeRoots;
 use super::direct_v86::{
     DIRECT_V86_BIOS_PATH, DIRECT_V86_DEFAULT_CMDLINE, DIRECT_V86_DEFAULT_P9_MSIZE,
     DIRECT_V86_MEMORY_SIZE, DIRECT_V86_MOD_REEXPORT_PATH, DIRECT_V86_MODULE_PATH,
@@ -11,7 +12,7 @@ use super::direct_v86::{
     DIRECT_V86_WASM_PATH, direct_v86_boot_json, rootfs_handoff_readiness,
 };
 use super::http::{HttpStatus, StaticResponse, header_end};
-use super::{QJS_SHELL_WEBSOCKET_PATH, ServeRoots};
+use super::terminal_ws::QJS_SHELL_WEBSOCKET_PATH;
 
 pub(super) fn serve_discovery_response(
     roots: &ServeRoots,
