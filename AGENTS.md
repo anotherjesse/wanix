@@ -98,9 +98,10 @@ tests.
   terminal disposal writes `close` through `#term/<id>/ctl`.
 - `serve --bundle direct-v86`: browser v86 handoff over Rust serve discovery,
   direct 9P, boot-asset hints, hvc0 console bridging with Ctrl-C/Ctrl-D byte
-  forwarding and a scriptable hvc0 send hook, and autostart-friendly launch
-  hooks. The generated page reports rootfs handoff status and, for trusted
-  loopback clients, exposes `window.wanixRootfsHandoff` plus copyable
+  forwarding and a scriptable hvc0 send hook, direct-v86 9P `msize` discovery
+  and query override, and autostart-friendly launch hooks. The generated page
+  reports rootfs handoff status and, for trusted loopback clients, exposes
+  `window.wanixRootfsHandoff` plus copyable
   QEMU/direct-v86 serve commands.
 - `wanix-rust rootfs --archive FILE.tgz --out DIR`: prepares a guest root,
   rejects unsafe archive paths, validates VM boot markers, and emits shell or
@@ -109,10 +110,11 @@ tests.
 - `/.well-known/rootfs.json`: when loopback clients access `serve` on a
   prepared guest root, exposes the same `wanix-rootfs.v1` handoff for trusted
   local browser/editor/VM launchers.
-- `wanix-rust qemu --root DIR`: validates the same guest-root shape and emits a
-  shell or `wanix-qemu-virtio9p.v1` JSON handoff with discovered or explicit
-  initrd support plus an explicit 9P `msize` boot knob; `--exec` is an
-  explicit foreground launch, not a Wanix VM supervisor.
+- `wanix-rust qemu --root DIR`: validates the same guest-root shape, including
+  the default `/bin/init` marker unless `--cmdline` owns init policy, and emits
+  a shell or `wanix-qemu-virtio9p.v1` JSON handoff with discovered or explicit
+  initrd support plus an explicit 9P `msize` boot knob; `--exec` is an explicit
+  foreground launch, not a Wanix VM supervisor.
 
 The biggest missing pieces remain interactive shell/session depth, broader
 Linux/v86/editor 9P compatibility, QEMU/v86 boot workflows, and Rust

@@ -7,7 +7,9 @@ use tar::Archive;
 use wanix_task::quote_cmd_argv;
 
 use crate::json::{json_string, json_string_array};
-use crate::qemu::{qemu_default_json_handoff_for_root, qemu_validate_root_path_for_handoff};
+use crate::qemu::{
+    DEFAULT_P9_MSIZE, qemu_default_json_handoff_for_root, qemu_validate_root_path_for_handoff,
+};
 use crate::{CliError, CliOutput};
 
 const KERNEL_CANDIDATES: &[&str] = &["boot/bzImage", "bzImage"];
@@ -132,7 +134,7 @@ fn rootfs_json_handoff(report: &RootfsReport) -> Result<String, CliError> {
         "--wanix-services",
     ];
     Ok(format!(
-        "{{\n  \"kind\":\"wanix-rootfs.v1\",\n  \"rootPath\":{},\n  \"kernelRoute\":{},\n  \"kernelPath\":{},\n  \"initRoute\":{},\n  \"initPath\":{},\n  \"qemu\":{},\n  \"serveDirectV86\":{{\n    \"argv\":{},\n    \"bundle\":\"direct-v86\",\n    \"wanixServices\":true\n  }}\n}}\n",
+        "{{\n  \"kind\":\"wanix-rootfs.v1\",\n  \"rootPath\":{},\n  \"kernelRoute\":{},\n  \"kernelPath\":{},\n  \"initRoute\":{},\n  \"initPath\":{},\n  \"qemu\":{},\n  \"serveDirectV86\":{{\n    \"argv\":{},\n    \"bundle\":\"direct-v86\",\n    \"wanixServices\":true,\n    \"p9Msize\":{}\n  }}\n}}\n",
         json_string(&out),
         json_string(&kernel_route),
         json_string(kernel_path.to_string_lossy().as_ref()),
@@ -140,6 +142,7 @@ fn rootfs_json_handoff(report: &RootfsReport) -> Result<String, CliError> {
         json_string(init_path.to_string_lossy().as_ref()),
         qemu,
         json_string_array(serve_argv),
+        DEFAULT_P9_MSIZE,
     ))
 }
 

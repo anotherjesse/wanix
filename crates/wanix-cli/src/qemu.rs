@@ -9,9 +9,8 @@ use crate::{CliError, CliOutput};
 
 mod handoff;
 
-use handoff::{
-    DEFAULT_P9_MSIZE, qemu_handoff_json, qemu_virtio9p_handoff, validate_qemu_option_fragment,
-};
+pub(crate) use handoff::DEFAULT_P9_MSIZE;
+use handoff::{qemu_handoff_json, qemu_virtio9p_handoff, validate_qemu_option_fragment};
 
 const DEFAULT_QEMU_BIN: &str = "qemu-system-i386";
 const DEFAULT_MEMORY_MB: u32 = 512;

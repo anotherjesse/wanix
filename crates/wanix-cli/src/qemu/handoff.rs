@@ -6,11 +6,12 @@ use crate::json::{json_string, json_string_array};
 
 use super::QemuCommand;
 
-pub(super) const DEFAULT_P9_MSIZE: u32 = 131_072;
+pub(crate) const DEFAULT_P9_MSIZE: u32 = 131_072;
 
 const DEFAULT_KERNEL_CANDIDATES: &[&str] = &["boot/bzImage", "bzImage"];
 const DEFAULT_INITRD_CANDIDATES: &[&str] =
     &["boot/initrd", "boot/initrd.img", "initrd", "initrd.img"];
+const DEFAULT_INIT_PATH: &str = "bin/init";
 
 pub(super) struct QemuHandoff {
     pub(super) root_path: PathBuf,
@@ -42,6 +43,7 @@ pub(super) fn qemu_virtio9p_handoff(command: &QemuCommand) -> Result<QemuHandoff
     let initrd_path = resolve_initrd_path(command, &root_path)?;
     let root = root_path.to_string_lossy();
     validate_qemu_option_fragment(&root, "qemu --root path")?;
+    validate_default_init_path(command, &root_path)?;
     let cmdline = qemu_cmdline(command);
 
     let mut argv = Vec::new();
@@ -135,6 +137,24 @@ fn resolve_initrd_path(
         }
     }
     Ok(None)
+}
+
+fn validate_default_init_path(command: &QemuCommand, root_path: &Path) -> Result<(), CliError> {
+    if command.cmdline.is_some() {
+        return Ok(());
+    }
+    let init_path = root_path.join(DEFAULT_INIT_PATH);
+    if init_path.is_file() {
+        return Ok(());
+    }
+    Err(CliError::new(
+        format!(
+            "qemu default cmdline expects /{DEFAULT_INIT_PATH} under {}; pass --cmdline TEXT \
+             to own init policy",
+            root_path.display()
+        ),
+        1,
+    ))
 }
 
 fn qemu_cmdline(command: &QemuCommand) -> String {

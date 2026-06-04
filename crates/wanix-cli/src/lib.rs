@@ -2089,6 +2089,7 @@ mod tests {
         assert_eq!(qemu_argv, expected_qemu_argv);
         assert_eq!(serve["bundle"], "direct-v86");
         assert_eq!(serve["wanixServices"], true);
+        assert_eq!(serve["p9Msize"], 131072);
         assert_eq!(serve_argv, expected_serve_argv);
     }
 
@@ -2179,10 +2180,7 @@ mod tests {
     #[test]
     fn qemu_command_prints_virtio9p_kvm_invocation() {
         let root = temp_dir("wanix-cli-qemu-root");
-        let boot = root.join("boot");
-        fs::create_dir_all(&boot).unwrap();
-        let kernel = boot.join("bzImage");
-        fs::write(&kernel, b"kernel").unwrap();
+        let kernel = write_qemu_default_root(&root);
 
         let output = run(vec![
             "qemu".to_owned(),
@@ -2213,10 +2211,7 @@ mod tests {
     #[test]
     fn qemu_command_prints_through_live_process_io_without_exec() {
         let root = temp_dir("wanix-cli-qemu-live-print-root");
-        let boot = root.join("boot");
-        fs::create_dir_all(&boot).unwrap();
-        let kernel = boot.join("bzImage");
-        fs::write(&kernel, b"kernel").unwrap();
+        let kernel = write_qemu_default_root(&root);
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -2244,6 +2239,7 @@ mod tests {
     #[test]
     fn qemu_command_can_print_without_kvm_with_explicit_kernel_and_custom_memory() {
         let root = temp_dir("wanix-cli-qemu-no-kvm-root");
+        write_qemu_default_init(&root);
         let kernel = root.join("kernel");
         fs::write(&kernel, b"kernel").unwrap();
 
@@ -2270,9 +2266,7 @@ mod tests {
     #[test]
     fn qemu_command_can_customize_virtio9p_mount_tag_and_security_model() {
         let root = temp_dir("wanix-cli-qemu-custom-9p-root");
-        let boot = root.join("boot");
-        fs::create_dir_all(&boot).unwrap();
-        fs::write(boot.join("bzImage"), b"kernel").unwrap();
+        write_qemu_default_root(&root);
 
         let output = run(vec![
             "qemu".to_owned(),
@@ -2301,10 +2295,7 @@ mod tests {
     #[test]
     fn qemu_command_can_emit_json_handoff() {
         let root = temp_dir("wanix-cli-qemu-json-root");
-        let boot = root.join("boot");
-        fs::create_dir_all(&boot).unwrap();
-        let kernel = boot.join("bzImage");
-        fs::write(&kernel, b"kernel").unwrap();
+        let kernel = write_qemu_default_root(&root);
         let qemu_bin = r#"qemu "quoted" \bin"#;
         let append = "panic=1 note=\"json\" slash=\\ tab=\t line\nnext";
 
@@ -2389,6 +2380,7 @@ mod tests {
     #[test]
     fn qemu_command_uses_legacy_root_kernel_fallback() {
         let root = temp_dir("wanix-cli-qemu-legacy-kernel-root");
+        write_qemu_default_init(&root);
         let kernel = root.join("bzImage");
         fs::write(&kernel, b"kernel").unwrap();
 
@@ -2407,12 +2399,10 @@ mod tests {
     #[test]
     fn qemu_command_includes_discovered_and_explicit_initrd() {
         let root = temp_dir("wanix-cli-qemu-initrd-root");
-        let boot = root.join("boot");
-        fs::create_dir_all(&boot).unwrap();
-        let kernel = boot.join("bzImage");
+        let kernel = write_qemu_default_root(&root);
+        let boot = kernel.parent().unwrap();
         let initrd = boot.join("initrd");
         let custom_initrd = root.join("custom-initrd");
-        fs::write(&kernel, b"kernel").unwrap();
         fs::write(&initrd, b"initrd").unwrap();
         fs::write(&custom_initrd, b"custom initrd").unwrap();
 
@@ -2456,9 +2446,7 @@ mod tests {
     #[test]
     fn qemu_command_can_replace_and_extend_kernel_cmdline() {
         let root = temp_dir("wanix-cli-qemu-cmdline-root");
-        let boot = root.join("boot");
-        fs::create_dir_all(&boot).unwrap();
-        fs::write(boot.join("bzImage"), b"kernel").unwrap();
+        write_qemu_default_root(&root);
 
         let appended = run(vec![
             "qemu".to_owned(),
@@ -2473,10 +2461,14 @@ mod tests {
         let stdout = String::from_utf8(appended.stdout().to_vec()).unwrap();
         assert!(stdout.contains("loglevel=3 wanix.demo=1 panic=1"));
 
+        let custom_root = temp_dir("wanix-cli-qemu-custom-cmdline-root");
+        let boot = custom_root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        fs::write(boot.join("bzImage"), b"kernel").unwrap();
         let replaced = run(vec![
             "qemu".to_owned(),
             "--root".to_owned(),
-            root.display().to_string(),
+            custom_root.display().to_string(),
             "--cmdline".to_owned(),
             "console=ttyS0 init=/bin/sh".to_owned(),
             "--append".to_owned(),
@@ -2519,6 +2511,26 @@ mod tests {
         .unwrap_err();
         assert_eq!(comma_root.exit_code(), 2);
         assert!(comma_root.to_string().contains("cannot contain ','"));
+
+        let missing_init_root = temp_dir("wanix-cli-qemu-missing-init-root");
+        let missing_init_boot = missing_init_root.join("boot");
+        fs::create_dir_all(&missing_init_boot).unwrap();
+        fs::write(missing_init_boot.join("bzImage"), b"kernel").unwrap();
+        let missing_default_init = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            missing_init_root.display().to_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(missing_default_init.exit_code(), 1);
+        assert!(
+            missing_default_init.to_string().contains("/bin/init"),
+            "{missing_default_init}"
+        );
+        assert!(
+            missing_default_init.to_string().contains("--cmdline TEXT"),
+            "{missing_default_init}"
+        );
 
         let invalid_mount_tag = run(vec![
             "qemu".to_owned(),
@@ -2577,9 +2589,7 @@ mod tests {
         );
 
         let initrd_root = temp_dir("wanix-cli-qemu-missing-initrd-root");
-        let initrd_boot = initrd_root.join("boot");
-        fs::create_dir_all(&initrd_boot).unwrap();
-        fs::write(initrd_boot.join("bzImage"), b"kernel").unwrap();
+        write_qemu_default_root(&initrd_root);
         let missing_initrd = run(vec![
             "qemu".to_owned(),
             "--root".to_owned(),
@@ -2627,9 +2637,7 @@ mod tests {
     #[test]
     fn qemu_exec_requires_live_process_io() {
         let root = temp_dir("wanix-cli-qemu-exec-captured-root");
-        let boot = root.join("boot");
-        fs::create_dir_all(&boot).unwrap();
-        fs::write(boot.join("bzImage"), b"kernel").unwrap();
+        write_qemu_default_root(&root);
 
         let error = run(vec![
             "qemu".to_owned(),
@@ -2650,9 +2658,7 @@ mod tests {
     #[test]
     fn qemu_exec_reports_spawn_failure() {
         let root = temp_dir("wanix-cli-qemu-exec-spawn-failure-root");
-        let boot = root.join("boot");
-        fs::create_dir_all(&boot).unwrap();
-        fs::write(boot.join("bzImage"), b"kernel").unwrap();
+        write_qemu_default_root(&root);
         let missing_qemu = root.join("missing-qemu");
 
         let mut stdout = Vec::new();
@@ -2692,10 +2698,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let root = temp_dir("wanix-cli-qemu-exec-root");
-        let boot = root.join("boot");
-        fs::create_dir_all(&boot).unwrap();
-        let kernel = boot.join("bzImage");
-        fs::write(&kernel, b"kernel").unwrap();
+        let kernel = write_qemu_default_root(&root);
         let capture = root.join("qemu-argv.txt");
         let fake_qemu = root.join("fake-qemu");
         fs::write(
@@ -5659,6 +5662,21 @@ std.out.flush();
         path.push(format!("{prefix}-{}-{nonce}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn write_qemu_default_root(root: &Path) -> PathBuf {
+        let boot = root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        let kernel = boot.join("bzImage");
+        fs::write(&kernel, b"kernel").unwrap();
+        write_qemu_default_init(root);
+        kernel
+    }
+
+    fn write_qemu_default_init(root: &Path) {
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("init"), b"init").unwrap();
     }
 
     fn write_rootfs_archive(path: &Path, entries: &[(&str, u32, &[u8])]) {

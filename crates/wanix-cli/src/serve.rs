@@ -18,6 +18,7 @@ use wanix_vfs::{BindOptions, BindPosition, Namespace};
 
 use crate::json::json_string;
 use crate::p9_ws::{P9WsConnectionError, serve_websocket_connection};
+use crate::qemu::DEFAULT_P9_MSIZE;
 use crate::qjs_term::QjsShellSession;
 use crate::rootfs::rootfs_json_handoff_for_prepared_root;
 use crate::{CliError, quickjs_runner, write_process_output};
@@ -34,6 +35,7 @@ const WORKBENCH_FS9P_BUNDLE: &str = "workbench-fs9p";
 const QJS_SHELL_WEBSOCKET_PATH: &str = "/.well-known/qjs-shell";
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
 const DIRECT_V86_DEFAULT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,aname=,cache=none,msize=131072 loglevel=3";
+const DIRECT_V86_DEFAULT_P9_MSIZE: u32 = DEFAULT_P9_MSIZE;
 const DIRECT_V86_DEFAULT_KERNEL_PATH: &str = "/boot/bzImage";
 const DIRECT_V86_INIT_PATH: &str = "/bin/init";
 const DIRECT_V86_MEMORY_SIZE: u32 = 1024 * 1024 * 1024;
@@ -1088,6 +1090,7 @@ fn direct_v86_bundle_html() -> String {
     if (params.get("initrd")) initrd.value = params.get("initrd");
     cmdline.value = discovery.v86?.defaultCmdline || DEFAULT_CMDLINE;
     if (params.get("cmdline")) cmdline.value = params.get("cmdline");
+    if (params.get("p9-msize")) cmdline.value = cmdline.value.replace(/(\bmsize=)\d+/, "$1" + params.get("p9-msize"));
     if (params.get("append")) cmdline.value = [cmdline.value, params.get("append")].filter(Boolean).join(" ");
     logBoot("9P proxy: " + proxyUrl);
     if (v86Boot.ready) {
@@ -2124,7 +2127,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8], peer_addr: SocketAdd
          }},\
          \"v86\":{{\"assets\":{{\"module\":{},\"mod\":{},\"offscreen\":{},\"wasm\":{},\"bios\":{},\"vgaBios\":{}}},\
          \"boot\":{},\
-         \"defaultCmdline\":{},\"memorySize\":{},\"vgaMemorySize\":{},\"virtioConsole\":true}},\
+         \"defaultCmdline\":{},\"p9Msize\":{},\"memorySize\":{},\"vgaMemorySize\":{},\"virtioConsole\":true}},\
          \"services\":{},\
          \"bundle\":{}}}",
         json_string(&p9_url),
@@ -2139,6 +2142,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8], peer_addr: SocketAdd
         json_string(DIRECT_V86_VGA_BIOS_PATH),
         direct_v86_boot,
         json_string(DIRECT_V86_DEFAULT_CMDLINE),
+        DIRECT_V86_DEFAULT_P9_MSIZE,
         DIRECT_V86_MEMORY_SIZE,
         DIRECT_V86_VGA_MEMORY_SIZE,
         services,
@@ -2771,6 +2775,11 @@ mod tests {
         );
         assert!(
             response
+                .contains("if (params.get(\"p9-msize\")) cmdline.value = cmdline.value.replace"),
+            "{response}"
+        );
+        assert!(
+            response
                 .contains("if (params.get(\"cmdline\")) cmdline.value = params.get(\"cmdline\")"),
             "{response}"
         );
@@ -3389,6 +3398,7 @@ mod tests {
             response.contains("\"defaultCmdline\":\"console=hvc0 init=/bin/init rw root=host9p"),
             "{response}"
         );
+        assert!(response.contains("\"p9Msize\":131072"), "{response}");
         assert!(
             response.contains(
                 "\"memorySize\":1073741824,\"vgaMemorySize\":8388608,\"virtioConsole\":true"
@@ -3457,6 +3467,7 @@ mod tests {
         assert_eq!(qemu["securityModel"], "mapped-xattr");
         assert_eq!(serve["bundle"], "direct-v86");
         assert_eq!(serve["wanixServices"], true);
+        assert_eq!(serve["p9Msize"], 131072);
         assert_eq!(serve["argv"][0], "wanix-rust");
         assert_eq!(serve["argv"][1], "serve");
         assert_eq!(serve["argv"][2], root.display().to_string());
