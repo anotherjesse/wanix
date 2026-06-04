@@ -6,9 +6,13 @@
 //! Part 2 stays inside one process with the module loaded once and times the
 //! per-run cost that the disk cache does NOT remove: instantiating a fresh
 //! QuickJS runtime per run vs reusing one runtime and only re-evaluating JS.
+//!
+//! Part 3 reports memory: QuickJS heap accounting for one runtime, and (with
+//! `WANIX_BENCH_HOLD=N`) holds N live runtimes so an external RSS probe such as
+//! `/usr/bin/time -l` can size the host footprint per concurrent instance.
 
-use std::time::Instant;
 use rust_wasi_quickjs::QuickJsModule;
+use std::time::Instant;
 use wasmtime::{Engine, Module};
 
 const WASM: &[u8] = rust_wasi_quickjs::QUICKJS_WASM_FIXTURE;
@@ -70,5 +74,36 @@ fn main() -> anyhow::Result<()> {
     println!("--- in-process, module loaded once (n={RUNS}) ---");
     println!("fresh runtime + eval: {fresh_us:.1} us/run");
     println!("reuse runtime, eval : {reuse_us:.1} us/run");
+
+    // Part 3: memory. QuickJS heap accounting for one fresh runtime.
+    let mut probe = module.create_runtime()?;
+    probe.eval_discard("1 + 1")?;
+    let usage = probe.memory_usage()?;
+    println!("--- memory ---");
+    println!(
+        "QuickJS heap malloc_size : {} KiB",
+        usage.malloc_size / 1024
+    );
+    println!(
+        "QuickJS memory_used_size : {} KiB",
+        usage.memory_used_size / 1024
+    );
+
+    // Hold N live runtimes so an external RSS probe (/usr/bin/time -l) can size
+    // the host footprint per concurrent instance. WANIX_BENCH_HOLD=N enables it.
+    if let Some(n) = std::env::var("WANIX_BENCH_HOLD")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        let mut held = Vec::with_capacity(n);
+        for _ in 0..n {
+            let mut rt = module.create_runtime()?;
+            rt.eval_discard("1 + 1")?;
+            held.push(rt);
+        }
+        println!("holding {} live runtimes", held.len());
+        // Keep them alive past the RSS sample.
+        std::hint::black_box(&held);
+    }
     Ok(())
 }
