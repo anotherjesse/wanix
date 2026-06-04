@@ -1,5 +1,6 @@
 //! Native CLI plumbing for Rust Wanix demos.
 
+mod json;
 mod p9_listen;
 mod p9_stdio;
 mod p9_ws;
@@ -55,7 +56,7 @@ const USAGE: &str = concat!(
     "       wanix-rust p9-stdio --root DIR\n",
     "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
-    "       wanix-rust rootfs --archive FILE.tgz --out DIR\n",
+    "       wanix-rust rootfs --archive FILE.tgz --out DIR [--json]\n",
     "       wanix-rust qemu --root DIR [--kernel PATH] [--cmdline TEXT] [--append TEXT ...] ",
     "[--qemu-bin PATH] [--memory-mb N] ",
     "[--mount-tag TAG] [--security-model MODEL] ",
@@ -1920,6 +1921,10 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-listen"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-ws"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust rootfs"));
+        assert!(
+            String::from_utf8_lossy(output.stdout())
+                .contains("rootfs --archive FILE.tgz --out DIR [--json]")
+        );
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qemu"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--cmdline TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--append TEXT"));
@@ -1976,6 +1981,111 @@ mod tests {
     }
 
     #[test]
+    fn rootfs_command_can_emit_json_handoffs() {
+        let fixture = temp_dir("wanix-cli-rootfs-json-fixture");
+        let archive = fixture.join("alpine-linux.tgz");
+        write_rootfs_archive(
+            &archive,
+            &[
+                ("boot/bzImage", 0o644, b"kernel".as_slice()),
+                ("bin/init", 0o755, b"#!/bin/sh\n".as_slice()),
+                ("etc/motd", 0o644, b"hello rootfs\n".as_slice()),
+            ],
+        );
+        let out = temp_dir("wanix-cli-rootfs-json-out-parent").join("root");
+
+        let output = run(vec![
+            "rootfs".to_owned(),
+            "--archive".to_owned(),
+            archive.display().to_string(),
+            "--out".to_owned(),
+            out.display().to_string(),
+            "--json".to_owned(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.stderr().is_empty());
+        assert_eq!(fs::read(out.join("etc/motd")).unwrap(), b"hello rootfs\n");
+        let out = fs::canonicalize(out).unwrap();
+        let kernel = out.join("boot/bzImage");
+        let init = out.join("bin/init");
+        let manifest: serde_json::Value = serde_json::from_slice(output.stdout()).unwrap();
+        let qemu = &manifest["qemu"];
+        let serve = &manifest["serveDirectV86"];
+        let cmdline = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p \
+                       rootflags=trans=virtio,version=9p2000.L,msize=131072 loglevel=3"
+            .to_owned();
+        let expected_qemu_argv = vec![
+            "qemu-system-i386".to_owned(),
+            "-enable-kvm".to_owned(),
+            "-cpu".to_owned(),
+            "host".to_owned(),
+            "-m".to_owned(),
+            "512".to_owned(),
+            "-smp".to_owned(),
+            "1".to_owned(),
+            "-kernel".to_owned(),
+            kernel.display().to_string(),
+            "-append".to_owned(),
+            cmdline.clone(),
+            "-fsdev".to_owned(),
+            format!(
+                "local,id=host9p,path={},security_model=mapped-xattr",
+                out.display()
+            ),
+            "-device".to_owned(),
+            "virtio-9p-pci,fsdev=host9p,mount_tag=host9p".to_owned(),
+            "-device".to_owned(),
+            "virtio-serial-pci".to_owned(),
+            "-device".to_owned(),
+            "virtconsole,chardev=con".to_owned(),
+            "-chardev".to_owned(),
+            "stdio,id=con".to_owned(),
+            "-nographic".to_owned(),
+        ];
+        let expected_serve_argv = vec![
+            "wanix-rust".to_owned(),
+            "serve".to_owned(),
+            out.display().to_string(),
+            "--bundle".to_owned(),
+            "direct-v86".to_owned(),
+            "--wanix-services".to_owned(),
+        ];
+        let qemu_argv = qemu["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        let serve_argv = serve["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(manifest["kind"], "wanix-rootfs.v1");
+        assert_eq!(manifest["rootPath"], out.display().to_string());
+        assert_eq!(manifest["kernelRoute"], "/boot/bzImage");
+        assert_eq!(manifest["kernelPath"], kernel.display().to_string());
+        assert_eq!(manifest["initRoute"], "/bin/init");
+        assert_eq!(manifest["initPath"], init.display().to_string());
+        assert_eq!(qemu["kind"], "wanix-qemu-virtio9p.v1");
+        assert_eq!(qemu["rootPath"], out.display().to_string());
+        assert_eq!(qemu["kernelPath"], kernel.display().to_string());
+        assert_eq!(qemu["cmdline"], cmdline);
+        assert_eq!(qemu["mountTag"], "host9p");
+        assert_eq!(qemu["securityModel"], "mapped-xattr");
+        assert_eq!(qemu["console"], "hvc0");
+        assert_eq!(qemu["rootFilesystem"], "9p");
+        assert_eq!(qemu_argv, expected_qemu_argv);
+        assert_eq!(serve["bundle"], "direct-v86");
+        assert_eq!(serve["wanixServices"], true);
+        assert_eq!(serve_argv, expected_serve_argv);
+    }
+
+    #[test]
     fn rootfs_command_refuses_non_empty_output_directory() {
         let fixture = temp_dir("wanix-cli-rootfs-non-empty-fixture");
         let archive = fixture.join("alpine-linux.tgz");
@@ -2023,6 +2133,40 @@ mod tests {
         assert_eq!(error.exit_code(), 1);
         assert!(error.to_string().contains("unsafe rootfs archive path"));
         assert!(!escaped.exists());
+    }
+
+    #[test]
+    fn rootfs_json_rejects_qemu_unsafe_root_before_extracting_archive() {
+        let fixture = temp_dir("wanix-cli-rootfs-json-qemu-unsafe-fixture");
+        let archive = fixture.join("alpine-linux.tgz");
+        write_rootfs_archive(
+            &archive,
+            &[
+                ("boot/bzImage", 0o644, b"kernel".as_slice()),
+                ("bin/init", 0o755, b"#!/bin/sh\n".as_slice()),
+            ],
+        );
+        let out = temp_dir("wanix-cli-rootfs-json-qemu-unsafe-out-parent").join("root,comma");
+
+        let error = run(vec![
+            "rootfs".to_owned(),
+            "--archive".to_owned(),
+            archive.display().to_string(),
+            "--out".to_owned(),
+            out.display().to_string(),
+            "--json".to_owned(),
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.exit_code(), 2);
+        assert!(
+            error
+                .to_string()
+                .contains("qemu --root path cannot contain ','")
+        );
+        assert!(!out.join("boot/bzImage").exists());
+        assert!(!out.join("bin/init").exists());
+        assert!(fs::read_dir(out).unwrap().next().is_none());
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 
 use wanix_task::quote_cmd_argv;
 
+use crate::json::{json_string, json_string_array};
 use crate::{CliError, CliOutput};
 
 const DEFAULT_QEMU_BIN: &str = "qemu-system-i386";
@@ -212,6 +213,29 @@ pub(super) fn qemu_command_exec(command: &QemuCommand) -> bool {
     command.exec
 }
 
+pub(crate) fn qemu_default_json_handoff_for_root(root_path: &Path) -> Result<String, CliError> {
+    let command = QemuCommand {
+        root_path: root_path.to_path_buf(),
+        kernel_path: None,
+        qemu_bin: DEFAULT_QEMU_BIN.to_owned(),
+        memory_mb: DEFAULT_MEMORY_MB,
+        kvm: true,
+        mount_tag: DEFAULT_MOUNT_TAG.to_owned(),
+        security_model: DEFAULT_SECURITY_MODEL.to_owned(),
+        cmdline: None,
+        append: Vec::new(),
+        output_format: QemuOutputFormat::Json,
+        exec: false,
+    };
+    let handoff = qemu_virtio9p_handoff(&command)?;
+    Ok(qemu_handoff_json(&handoff))
+}
+
+pub(crate) fn qemu_validate_root_path_for_handoff(root_path: &Path) -> Result<(), CliError> {
+    let root = root_path.to_string_lossy();
+    validate_qemu_option_fragment(&root, "qemu --root path")
+}
+
 fn qemu_virtio9p_handoff(command: &QemuCommand) -> Result<QemuHandoff, CliError> {
     if command.memory_mb == 0 {
         return Err(CliError::usage(
@@ -220,8 +244,8 @@ fn qemu_virtio9p_handoff(command: &QemuCommand) -> Result<QemuHandoff, CliError>
     }
     let root_path = canonical_existing_dir(&command.root_path, "qemu --root")?;
     let kernel_path = resolve_kernel_path(command, &root_path)?;
+    qemu_validate_root_path_for_handoff(&root_path)?;
     let root = root_path.to_string_lossy();
-    validate_qemu_option_fragment(&root, "qemu --root path")?;
     let cmdline = qemu_cmdline(command);
 
     let mut argv = Vec::new();
@@ -415,36 +439,6 @@ fn qemu_handoff_json(handoff: &QemuHandoff) -> String {
         json_string(&handoff.mount_tag),
         json_string(&handoff.security_model),
     )
-}
-
-fn json_string_array(values: &[String]) -> String {
-    let mut json = String::from("[");
-    for (index, value) in values.iter().enumerate() {
-        if index > 0 {
-            json.push(',');
-        }
-        json.push_str(&json_string(value));
-    }
-    json.push(']');
-    json
-}
-
-fn json_string(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len() + 2);
-    escaped.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            ch if ch.is_control() => escaped.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => escaped.push(ch),
-        }
-    }
-    escaped.push('"');
-    escaped
 }
 
 fn os_arg_to_string(arg: &OsString, label: &str) -> Result<String, CliError> {

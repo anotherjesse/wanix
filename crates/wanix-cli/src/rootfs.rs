@@ -6,6 +6,8 @@ use flate2::read::GzDecoder;
 use tar::Archive;
 use wanix_task::quote_cmd_argv;
 
+use crate::json::{json_string, json_string_array};
+use crate::qemu::{qemu_default_json_handoff_for_root, qemu_validate_root_path_for_handoff};
 use crate::{CliError, CliOutput};
 
 const KERNEL_CANDIDATES: &[&str] = &["boot/bzImage", "bzImage"];
@@ -15,6 +17,7 @@ const INIT_PATH: &str = "bin/init";
 pub(super) struct RootfsCommand {
     archive_path: PathBuf,
     out_path: PathBuf,
+    output_format: RootfsOutputFormat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,9 +26,16 @@ struct RootfsReport {
     kernel_route: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RootfsOutputFormat {
+    Text,
+    Json,
+}
+
 pub(super) fn parse_rootfs_command(args: &[OsString]) -> Result<RootfsCommand, CliError> {
     let mut archive_path = None;
     let mut out_path = None;
+    let mut output_format = RootfsOutputFormat::Text;
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--archive" {
@@ -42,6 +52,9 @@ pub(super) fn parse_rootfs_command(args: &[OsString]) -> Result<RootfsCommand, C
                 .ok_or_else(|| CliError::usage("rootfs --out expects DIR"))?;
             out_path = Some(PathBuf::from(value));
             i += 1;
+        } else if args[i] == "--json" {
+            output_format = RootfsOutputFormat::Json;
+            i += 1;
         } else {
             return Err(CliError::usage(format!(
                 "unknown rootfs option: {}",
@@ -55,11 +68,21 @@ pub(super) fn parse_rootfs_command(args: &[OsString]) -> Result<RootfsCommand, C
     Ok(RootfsCommand {
         archive_path,
         out_path,
+        output_format,
     })
 }
 
 pub(super) fn run_rootfs_command(command: RootfsCommand) -> Result<CliOutput, CliError> {
+    let output_format = command.output_format;
     let report = prepare_rootfs(command)?;
+    let stdout = match output_format {
+        RootfsOutputFormat::Text => rootfs_text_handoff(&report),
+        RootfsOutputFormat::Json => rootfs_json_handoff(&report)?,
+    };
+    Ok(CliOutput::new(stdout.into_bytes(), Vec::new(), 0))
+}
+
+fn rootfs_text_handoff(report: &RootfsReport) -> String {
     let out = report.out_path.to_string_lossy().into_owned();
     let qemu = quote_cmd_argv(["wanix-rust", "qemu", "--root", &out, "--exec"]);
     let serve = quote_cmd_argv([
@@ -70,7 +93,7 @@ pub(super) fn run_rootfs_command(command: RootfsCommand) -> Result<CliOutput, Cl
         "direct-v86",
         "--wanix-services",
     ]);
-    let stdout = format!(
+    format!(
         "rootfs extracted to {}\n\
          kernel /{}\n\
          init /{}\n\
@@ -79,23 +102,52 @@ pub(super) fn run_rootfs_command(command: RootfsCommand) -> Result<CliOutput, Cl
         report.out_path.display(),
         report.kernel_route,
         INIT_PATH,
-    );
-    Ok(CliOutput::new(stdout.into_bytes(), Vec::new(), 0))
+    )
+}
+
+fn rootfs_json_handoff(report: &RootfsReport) -> Result<String, CliError> {
+    let out = report.out_path.to_string_lossy().into_owned();
+    let kernel_route = format!("/{}", report.kernel_route);
+    let init_route = format!("/{INIT_PATH}");
+    let kernel_path = report.out_path.join(report.kernel_route);
+    let init_path = report.out_path.join(INIT_PATH);
+    let qemu = qemu_default_json_handoff_for_root(&report.out_path)?;
+    let serve_argv = [
+        "wanix-rust",
+        "serve",
+        out.as_str(),
+        "--bundle",
+        "direct-v86",
+        "--wanix-services",
+    ];
+    Ok(format!(
+        "{{\n  \"kind\":\"wanix-rootfs.v1\",\n  \"rootPath\":{},\n  \"kernelRoute\":{},\n  \"kernelPath\":{},\n  \"initRoute\":{},\n  \"initPath\":{},\n  \"qemu\":{},\n  \"serveDirectV86\":{{\n    \"argv\":{},\n    \"bundle\":\"direct-v86\",\n    \"wanixServices\":true\n  }}\n}}\n",
+        json_string(&out),
+        json_string(&kernel_route),
+        json_string(kernel_path.to_string_lossy().as_ref()),
+        json_string(&init_route),
+        json_string(init_path.to_string_lossy().as_ref()),
+        qemu,
+        json_string_array(serve_argv),
+    ))
 }
 
 fn prepare_rootfs(command: RootfsCommand) -> Result<RootfsReport, CliError> {
     let archive_path = canonical_existing_file(&command.archive_path, "rootfs --archive")?;
     ensure_output_dir_ready(&command.out_path)?;
-    extract_tgz(&archive_path, &command.out_path)?;
     let out_path = fs::canonicalize(&command.out_path).map_err(|error| {
         CliError::new(
             format!(
-                "rootfs --out {} is not readable after extraction: {error}",
+                "rootfs --out {} is not readable after preparation: {error}",
                 command.out_path.display()
             ),
             1,
         )
     })?;
+    if command.output_format == RootfsOutputFormat::Json {
+        qemu_validate_root_path_for_handoff(&out_path)?;
+    }
+    extract_tgz(&archive_path, &out_path)?;
     let kernel_route = first_existing(&out_path, KERNEL_CANDIDATES).ok_or_else(|| {
         CliError::new(
             format!(

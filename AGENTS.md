@@ -89,8 +89,9 @@ tests.
   direct 9P, boot-asset hints, hvc0 console bridging, and autostart-friendly
   launch hooks.
 - `wanix-rust rootfs --archive FILE.tgz --out DIR`: prepares a guest root,
-  rejects unsafe archive paths, validates VM boot markers, and prints QEMU and
-  direct-v86 launch hints without owning rootfs build or VM lifecycle.
+  rejects unsafe archive paths, validates VM boot markers, and emits shell or
+  `wanix-rootfs.v1` JSON handoffs for QEMU and direct-v86 without owning rootfs
+  build or VM lifecycle.
 - `wanix-rust qemu --root DIR`: validates the same guest-root shape and emits a
   shell or `wanix-qemu-virtio9p.v1` JSON handoff; `--exec` is an explicit
   foreground launch, not a Wanix VM supervisor.

@@ -84,6 +84,10 @@ Native QEMU is a validated command handoff:
 - `wanix-rust rootfs --archive FILE.tgz --out DIR` extracts a guest root into a
   missing or empty directory, rejects unsafe archive paths, validates shared VM
   boot markers, and prints ready-to-run QEMU and direct-v86 commands.
+- `wanix-rust rootfs --archive FILE.tgz --out DIR --json` prints the same
+  prepared root as a machine-readable `wanix-rootfs.v1` manifest, including
+  root path, boot marker routes, a nested default `wanix-qemu-virtio9p.v1`
+  handoff, and direct-v86 serve argv.
 - `wanix-rust qemu --root DIR` canonicalizes and validates the guest root,
   discovers `/boot/bzImage` or legacy `/bzImage` unless `--kernel PATH` is
   supplied, supports cmdline override, append options, mount-tag override, and

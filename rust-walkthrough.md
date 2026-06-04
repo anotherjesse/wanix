@@ -376,6 +376,13 @@ $WANIX rootfs --archive extras/dist/alpine-linux.tgz --out /tmp/wanix-rootfs
 $WANIX qemu --root /tmp/wanix-rootfs --exec
 ```
 
+For scripts, editors, or browser launchers that want one prepared-root handoff,
+ask `rootfs` for JSON:
+
+```sh
+$WANIX rootfs --archive extras/dist/alpine-linux.tgz --out /tmp/wanix-rootfs-json --json
+```
+
 For host-specific 9P policy, tune the generated QEMU command before launching:
 
 ```sh
@@ -397,9 +404,11 @@ the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
 > `#task` and `#term` over direct 9P so browser/workbench clients can start qjs
 > tasks, attach terminals, start served qjs-shell sessions in the requested
 > Wanix cwd, forward resizes through `#term/<id>/winch`, and observe exit state.
-> `rootfs` and `qemu` are the native VM handoff path, not a VM manager yet. The
-> shell and JSON QEMU outputs share one validated argv so scripts and future
-> UI surfaces can consume the handoff without reinterpreting a shell string.
+> `rootfs` and `qemu` are the native VM handoff path, not a VM manager yet.
+> `rootfs --json` emits `wanix-rootfs.v1` with the prepared root, boot markers,
+> default QEMU manifest, and direct-v86 serve argv. The shell and JSON QEMU
+> outputs share one validated argv so scripts and future UI surfaces can consume
+> the handoff without reinterpreting a shell string.
 > QEMU mount tags and local 9P security models stay explicit because they
 > affect the guest boot contract and host filesystem trust boundary.
 
