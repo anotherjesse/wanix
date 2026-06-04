@@ -1,32 +1,30 @@
-//! WASI Preview 1 `fd_*` imports.
+//! WASI Preview 1 `fd_*` imports, generic over any [`WasiHost`].
 
-use super::WasiState;
-use super::mem::{
-    ERRNO_INVAL, ERRNO_SUCCESS, code, errno, memory, read_bytes, read_iovs, write_bytes, write_u32,
-    write_u64,
-};
+use wanix_fs::DirEntry;
 use wanix_wasi::{WasiFd, WasiFileType, WasiWhence};
-use wasmtime::{Caller, Linker, Result};
+use wasmtime::{Caller, Linker, Memory, Result};
+
+use super::WasiHost;
+use super::mem::{
+    code, errno, memory, read_bytes, read_iovs, write_bytes, write_u32, write_u64,
+};
+use super::{ERRNO_INVAL, ERRNO_SUCCESS};
 
 /// Byte size of a WASI Preview 1 `dirent` header.
 const DIRENT_SIZE: usize = 24;
-/// Offset of the `d_next` cookie field within a dirent header.
 const DIRENT_NEXT_OFFSET: usize = 0;
-/// Offset of the `d_ino` field within a dirent header.
 const DIRENT_INO_OFFSET: usize = 8;
-/// Offset of the `d_namlen` field within a dirent header.
 const DIRENT_NAMLEN_OFFSET: usize = 16;
-/// Offset of the `d_type` field within a dirent header.
 const DIRENT_FILETYPE_OFFSET: usize = 20;
 
 /// Registers the `fd_*` imports on `linker`.
-pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
+pub(super) fn register<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<()> {
     let m = super::MODULE;
 
     linker.func_wrap(
         m,
         "fd_write",
-        |mut caller: Caller<'_, WasiState>,
+        |mut caller: Caller<'_, S>,
          fd: i32,
          iovs: i32,
          iovs_len: i32,
@@ -36,7 +34,7 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
             let mut written = 0usize;
             for (ptr, len) in read_iovs(&mem, &mut caller, iovs, iovs_len)? {
                 let buf = read_bytes(&mem, &mut caller, ptr, len)?;
-                match caller.data_mut().ctx.fd_write(WasiFd::new(fd as u32), &buf) {
+                match caller.data_mut().wasi().fd_write(WasiFd::new(fd as u32), &buf) {
                     Ok(n) => {
                         written += n;
                         if n < buf.len() {
@@ -54,7 +52,7 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     linker.func_wrap(
         m,
         "fd_read",
-        |mut caller: Caller<'_, WasiState>,
+        |mut caller: Caller<'_, S>,
          fd: i32,
          iovs: i32,
          iovs_len: i32,
@@ -66,7 +64,7 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
                 let mut buf = vec![0u8; len];
                 match caller
                     .data_mut()
-                    .ctx
+                    .wasi()
                     .fd_read(WasiFd::new(fd as u32), &mut buf)
                 {
                     Ok(n) => {
@@ -84,29 +82,20 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
             Ok(ERRNO_SUCCESS)
         },
     )?;
-    linker.func_wrap(
-        m,
-        "fd_close",
-        |mut caller: Caller<'_, WasiState>, fd: i32| {
-            code(caller.data_mut().ctx.fd_close(WasiFd::new(fd as u32)))
-        },
-    )?;
+    linker.func_wrap(m, "fd_close", |mut caller: Caller<'_, S>, fd: i32| {
+        code(caller.data_mut().wasi().fd_close(WasiFd::new(fd as u32)))
+    })?;
     linker.func_wrap(
         m,
         "fd_seek",
-        |mut caller: Caller<'_, WasiState>,
-         fd: i32,
-         offset: i64,
-         whence: i32,
-         out: i32|
-         -> Result<i32> {
+        |mut caller: Caller<'_, S>, fd: i32, offset: i64, whence: i32, out: i32| -> Result<i32> {
             let w = match WasiWhence::from_preview1(whence) {
                 Ok(w) => w,
                 Err(_) => return Ok(ERRNO_INVAL),
             };
             match caller
                 .data_mut()
-                .ctx
+                .wasi()
                 .fd_seek(WasiFd::new(fd as u32), offset, w)
             {
                 Ok(pos) => {
@@ -121,8 +110,8 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     linker.func_wrap(
         m,
         "fd_tell",
-        |mut caller: Caller<'_, WasiState>, fd: i32, out: i32| -> Result<i32> {
-            match caller.data().ctx.fd_tell(WasiFd::new(fd as u32)) {
+        |mut caller: Caller<'_, S>, fd: i32, out: i32| -> Result<i32> {
+            match caller.data_mut().wasi().fd_tell(WasiFd::new(fd as u32)) {
                 Ok(pos) => {
                     let mem = memory(&mut caller)?;
                     write_u64(&mem, &mut caller, out, pos)?;
@@ -135,8 +124,8 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     linker.func_wrap(
         m,
         "fd_fdstat_get",
-        |mut caller: Caller<'_, WasiState>, fd: i32, out: i32| -> Result<i32> {
-            match caller.data().ctx.fd_fdstat_get(WasiFd::new(fd as u32)) {
+        |mut caller: Caller<'_, S>, fd: i32, out: i32| -> Result<i32> {
+            match caller.data_mut().wasi().fd_fdstat_get(WasiFd::new(fd as u32)) {
                 Ok(stat) => {
                     let bytes = stat.to_preview1_bytes();
                     let mem = memory(&mut caller)?;
@@ -150,11 +139,11 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     linker.func_wrap(
         m,
         "fd_fdstat_set_flags",
-        |mut caller: Caller<'_, WasiState>, fd: i32, flags: i32| {
+        |mut caller: Caller<'_, S>, fd: i32, flags: i32| {
             code(
                 caller
                     .data_mut()
-                    .ctx
+                    .wasi()
                     .fd_fdstat_set_flags(WasiFd::new(fd as u32), flags as u16),
             )
         },
@@ -162,8 +151,8 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     linker.func_wrap(
         m,
         "fd_prestat_get",
-        |mut caller: Caller<'_, WasiState>, fd: i32, out: i32| -> Result<i32> {
-            match caller.data().ctx.fd_prestat_get(WasiFd::new(fd as u32)) {
+        |mut caller: Caller<'_, S>, fd: i32, out: i32| -> Result<i32> {
+            match caller.data_mut().wasi().fd_prestat_get(WasiFd::new(fd as u32)) {
                 Ok(prestat) => {
                     let bytes = prestat.to_preview1_bytes();
                     let mem = memory(&mut caller)?;
@@ -177,11 +166,11 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     linker.func_wrap(
         m,
         "fd_prestat_dir_name",
-        |mut caller: Caller<'_, WasiState>, fd: i32, path: i32, path_len: i32| -> Result<i32> {
+        |mut caller: Caller<'_, S>, fd: i32, path: i32, path_len: i32| -> Result<i32> {
             let mut buf = vec![0u8; path_len.max(0) as usize];
             match caller
-                .data()
-                .ctx
+                .data_mut()
+                .wasi()
                 .fd_prestat_dir_name(WasiFd::new(fd as u32), &mut buf)
             {
                 Ok(n) => {
@@ -196,11 +185,11 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     linker.func_wrap(
         m,
         "fd_filestat_set_size",
-        |mut caller: Caller<'_, WasiState>, fd: i32, size: i64| {
+        |mut caller: Caller<'_, S>, fd: i32, size: i64| {
             code(
                 caller
                     .data_mut()
-                    .ctx
+                    .wasi()
                     .fd_filestat_set_size(WasiFd::new(fd as u32), size as u64),
             )
         },
@@ -208,8 +197,8 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     linker.func_wrap(
         m,
         "fd_filestat_get",
-        |mut caller: Caller<'_, WasiState>, fd: i32, out: i32| -> Result<i32> {
-            match caller.data().ctx.fd_filestat_get(WasiFd::new(fd as u32)) {
+        |mut caller: Caller<'_, S>, fd: i32, out: i32| -> Result<i32> {
+            match caller.data_mut().wasi().fd_filestat_get(WasiFd::new(fd as u32)) {
                 Ok(stat) => {
                     let bytes = stat.to_preview1_bytes();
                     let mem = memory(&mut caller)?;
@@ -223,14 +212,14 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
     linker.func_wrap(
         m,
         "fd_readdir",
-        |mut caller: Caller<'_, WasiState>,
+        |mut caller: Caller<'_, S>,
          fd: i32,
          buf: i32,
          buf_len: i32,
          cookie: i64,
          bufused: i32|
          -> Result<i32> {
-            let entries = match caller.data().ctx.fd_read_dir(WasiFd::new(fd as u32)) {
+            let entries = match caller.data_mut().wasi().fd_read_dir(WasiFd::new(fd as u32)) {
                 Ok(entries) => entries,
                 Err(e) => return Ok(e.preview1_code() as i32),
             };
@@ -255,13 +244,13 @@ pub(super) fn register(linker: &mut Linker<WasiState>) -> Result<()> {
 /// Mirrors the WASI wire encoding: a fixed [`DIRENT_SIZE`] header followed by
 /// the raw name bytes per entry. A truncated entry (header or name clipped by
 /// the buffer) is the final entry written, matching `fd_readdir` semantics.
-fn write_direntries(
-    mem: &wasmtime::Memory,
-    caller: &mut Caller<'_, WasiState>,
+fn write_direntries<S>(
+    mem: &Memory,
+    caller: &mut Caller<'_, S>,
     buf: i32,
     buf_len: usize,
     cookie: usize,
-    entries: &[wanix_fs::DirEntry],
+    entries: &[DirEntry],
 ) -> Result<usize> {
     let mut used = 0usize;
     for (index, entry) in entries.iter().enumerate().skip(cookie) {
@@ -277,12 +266,7 @@ fn write_direntries(
         write_bytes(mem, caller, buf + used as i32, &header[..header_len])?;
         if to_write > DIRENT_SIZE {
             let name_len = to_write - DIRENT_SIZE;
-            write_bytes(
-                mem,
-                caller,
-                buf + (used + DIRENT_SIZE) as i32,
-                &name[..name_len],
-            )?;
+            write_bytes(mem, caller, buf + (used + DIRENT_SIZE) as i32, &name[..name_len])?;
         }
         used += to_write;
         if to_write < entry_len {
@@ -293,7 +277,7 @@ fn write_direntries(
 }
 
 /// Builds the fixed-size Preview 1 dirent header for `entry` at `index`.
-fn dirent_header(index: usize, entry: &wanix_fs::DirEntry) -> [u8; DIRENT_SIZE] {
+fn dirent_header(index: usize, entry: &DirEntry) -> [u8; DIRENT_SIZE] {
     let next = (index as u64) + 1;
     let name_len = entry.name().len() as u32;
     let file_type = WasiFileType::from_file_type(entry.metadata().file_type()).preview1_code();

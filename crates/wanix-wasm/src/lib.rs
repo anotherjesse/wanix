@@ -16,12 +16,49 @@ use std::sync::{Arc, Mutex};
 use wanix_fs::{File, FileType, FsError, FsResult, LocalFs, Metadata};
 use wanix_vfs::{BindOptions, Namespace};
 use wanix_wasi::{WasiConfig, WasiCtx};
+use wanix_wasi_host::WasiHost;
 use wasmtime::error::Context as _;
 use wasmtime::{Engine, Error, Linker, Module, Result, Store};
 
-mod imports;
+/// Store state for a running WASI command: a [`WasiCtx`] plus the deterministic
+/// clock and recorded exit code the shared linker needs via [`WasiHost`].
+pub struct WasiState {
+    ctx: WasiCtx,
+    clock_ns: u64,
+    exit_code: Option<i32>,
+}
 
-pub use imports::WasiState;
+impl WasiState {
+    /// Creates state wrapping a WASI context and a fixed clock value.
+    #[must_use]
+    pub fn new(ctx: WasiCtx, clock_ns: u64) -> Self {
+        Self {
+            ctx,
+            clock_ns,
+            exit_code: None,
+        }
+    }
+
+    /// Returns the recorded `proc_exit` code, if the guest exited.
+    #[must_use]
+    pub fn exit_code(&self) -> Option<i32> {
+        self.exit_code
+    }
+}
+
+impl WasiHost for WasiState {
+    fn wasi(&mut self) -> &mut WasiCtx {
+        &mut self.ctx
+    }
+
+    fn clock_time_ns(&self) -> u64 {
+        self.clock_ns
+    }
+
+    fn on_proc_exit(&mut self, code: i32) {
+        self.exit_code = Some(code);
+    }
+}
 
 /// A compiled `wasm32-wasi` command module ready to run as Wanix tasks.
 pub struct WasiRunner {
@@ -57,7 +94,7 @@ impl WasiRunner {
         let mut store = Store::new(&self.engine, WasiState::new(ctx, clock_ns));
 
         let mut linker = Linker::new(&self.engine);
-        imports::add_to_linker(&mut linker)?;
+        wanix_wasi_host::add_to_linker(&mut linker)?;
 
         let instance = linker
             .instantiate(&mut store, &self.module)

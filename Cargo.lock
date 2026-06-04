@@ -1146,6 +1146,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wanix-wasi-host"
+version = "0.1.0"
+dependencies = [
+ "wanix-fs",
+ "wanix-wasi",
+ "wasmtime",
+]
+
+[[package]]
 name = "wanix-wasm"
 version = "0.1.0"
 dependencies = [
@@ -1153,6 +1162,7 @@ dependencies = [
  "wanix-fs",
  "wanix-vfs",
  "wanix-wasi",
+ "wanix-wasi-host",
  "wasmtime",
 ]
 

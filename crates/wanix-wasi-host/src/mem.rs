@@ -1,24 +1,24 @@
 //! Guest linear-memory access and WASI Preview 1 encoding helpers.
+//!
+//! These are generic over the store state `S`: they only touch guest memory and
+//! plain values, never the host context, so they work for any [`WasiHost`].
 
-use super::WasiState;
 use wanix_wasi::Errno;
 use wasmtime::{Caller, Error, Extern, Memory, Result};
 
-pub(super) const ERRNO_SUCCESS: i32 = 0;
-pub(super) const ERRNO_INVAL: i32 = 28;
-pub(super) const ERRNO_NOSYS: i32 = 52;
+use super::ERRNO_SUCCESS;
 
 /// Returns the guest's exported linear memory.
-pub(super) fn memory(caller: &mut Caller<'_, WasiState>) -> Result<Memory> {
+pub(super) fn memory<S>(caller: &mut Caller<'_, S>) -> Result<Memory> {
     match caller.get_export("memory") {
         Some(Extern::Memory(mem)) => Ok(mem),
         _ => Err(Error::msg("wasm module does not export 'memory'")),
     }
 }
 
-pub(super) fn read_bytes(
+pub(super) fn read_bytes<S>(
     mem: &Memory,
-    caller: &mut Caller<'_, WasiState>,
+    caller: &mut Caller<'_, S>,
     ptr: i32,
     len: usize,
 ) -> Result<Vec<u8>> {
@@ -28,9 +28,9 @@ pub(super) fn read_bytes(
     Ok(buf)
 }
 
-pub(super) fn read_str(
+pub(super) fn read_str<S>(
     mem: &Memory,
-    caller: &mut Caller<'_, WasiState>,
+    caller: &mut Caller<'_, S>,
     ptr: i32,
     len: i32,
 ) -> Result<String> {
@@ -38,9 +38,9 @@ pub(super) fn read_str(
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-pub(super) fn write_bytes(
+pub(super) fn write_bytes<S>(
     mem: &Memory,
-    caller: &mut Caller<'_, WasiState>,
+    caller: &mut Caller<'_, S>,
     ptr: i32,
     bytes: &[u8],
 ) -> Result<()> {
@@ -48,33 +48,33 @@ pub(super) fn write_bytes(
         .map_err(|e| Error::msg(format!("guest memory write: {e}")))
 }
 
-pub(super) fn write_u32(
+pub(super) fn write_u32<S>(
     mem: &Memory,
-    caller: &mut Caller<'_, WasiState>,
+    caller: &mut Caller<'_, S>,
     ptr: i32,
     value: u32,
 ) -> Result<()> {
     write_bytes(mem, caller, ptr, &value.to_le_bytes())
 }
 
-pub(super) fn write_u64(
+pub(super) fn write_u64<S>(
     mem: &Memory,
-    caller: &mut Caller<'_, WasiState>,
+    caller: &mut Caller<'_, S>,
     ptr: i32,
     value: u64,
 ) -> Result<()> {
     write_bytes(mem, caller, ptr, &value.to_le_bytes())
 }
 
-pub(super) fn read_u32(mem: &Memory, caller: &mut Caller<'_, WasiState>, ptr: i32) -> Result<u32> {
+pub(super) fn read_u32<S>(mem: &Memory, caller: &mut Caller<'_, S>, ptr: i32) -> Result<u32> {
     let bytes = read_bytes(mem, caller, ptr, 4)?;
     Ok(u32::from_le_bytes(bytes.try_into().expect("4 bytes")))
 }
 
 /// Reads an array of WASI `iovec` (ptr,len) pairs.
-pub(super) fn read_iovs(
+pub(super) fn read_iovs<S>(
     mem: &Memory,
-    caller: &mut Caller<'_, WasiState>,
+    caller: &mut Caller<'_, S>,
     iovs: i32,
     iovs_len: i32,
 ) -> Result<Vec<(i32, usize)>> {
@@ -89,8 +89,8 @@ pub(super) fn read_iovs(
 }
 
 /// Writes the (count, total-buffer-size) pair for an argv/environ vector.
-pub(super) fn write_vec_sizes(
-    caller: &mut Caller<'_, WasiState>,
+pub(super) fn write_vec_sizes<S>(
+    caller: &mut Caller<'_, S>,
     v: &[String],
     count: i32,
     size: i32,
@@ -103,8 +103,8 @@ pub(super) fn write_vec_sizes(
 }
 
 /// Writes the pointer table and null-terminated buffer for an argv/environ vector.
-pub(super) fn write_vec_buffer(
-    caller: &mut Caller<'_, WasiState>,
+pub(super) fn write_vec_buffer<S>(
+    caller: &mut Caller<'_, S>,
     v: &[String],
     ptrs: i32,
     buf: i32,
@@ -122,7 +122,7 @@ pub(super) fn write_vec_buffer(
 }
 
 /// Maps a `Result<(), Errno>` to a Preview 1 errno return.
-pub(super) fn code(r: Result<(), Errno>) -> i32 {
+pub(super) fn code(r: core::result::Result<(), Errno>) -> i32 {
     match r {
         Ok(()) => ERRNO_SUCCESS,
         Err(e) => e.preview1_code() as i32,
@@ -130,9 +130,9 @@ pub(super) fn code(r: Result<(), Errno>) -> i32 {
 }
 
 /// Writes a partial byte count then returns the errno (for fd_read/fd_write).
-pub(super) fn errno(
+pub(super) fn errno<S>(
     mem: &Memory,
-    caller: &mut Caller<'_, WasiState>,
+    caller: &mut Caller<'_, S>,
     nout: i32,
     partial: usize,
     e: Errno,
