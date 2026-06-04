@@ -7,6 +7,7 @@
 mod attrs;
 mod dispatch;
 mod path;
+mod session;
 mod setattr;
 mod transport;
 
@@ -22,19 +23,14 @@ use wanix_fs::{
 use wanix_protocol::{
     P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_CTIME, P9_SETATTR_GID,
     P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
-    P9_SETATTR_UID, P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_1,
-    P9_VERSION_9P2000_L_GOOGLE_2, P9AttrBody, P9DirEntry, P9Error, P9Frame, P9Lock, P9Qid,
-    P9SetAttr, P9Version, p9_decode_tattach, p9_decode_tauth, p9_decode_tclunk, p9_decode_tflush,
-    p9_decode_tflushf, p9_decode_tfsync, p9_decode_tgetattr, p9_decode_tgetlock,
-    p9_decode_tlcreate, p9_decode_tlink, p9_decode_tlock, p9_decode_tlopen, p9_decode_tmkdir,
+    P9_SETATTR_UID, P9AttrBody, P9DirEntry, P9Error, P9Frame, P9Qid, P9SetAttr, p9_decode_tclunk,
+    p9_decode_tgetattr, p9_decode_tlcreate, p9_decode_tlink, p9_decode_tlopen, p9_decode_tmkdir,
     p9_decode_tmknod, p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink, p9_decode_tremove,
-    p9_decode_trename, p9_decode_trenameat, p9_decode_tstatfs, p9_decode_tsymlink,
-    p9_decode_tunlinkat, p9_decode_tversion, p9_decode_twalk, p9_decode_twalkgetattr,
-    p9_decode_twrite, p9_decode_txattrcreate, p9_decode_txattrwalk, p9_dir_entry_encoded_len,
-    p9_rattach, p9_rclunk, p9_rflush, p9_rflushf, p9_rfsync, p9_rgetattr, p9_rgetlock, p9_rlcreate,
-    p9_rlerror, p9_rlink, p9_rlock, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir, p9_rreadlink,
-    p9_rremove, p9_rrename, p9_rrenameat, p9_rstatfs, p9_rsymlink, p9_runlinkat, p9_rversion,
-    p9_rwalk, p9_rwalkgetattr, p9_rwrite,
+    p9_decode_trename, p9_decode_trenameat, p9_decode_tsymlink, p9_decode_tunlinkat,
+    p9_decode_twalk, p9_decode_twalkgetattr, p9_decode_twrite, p9_decode_txattrcreate,
+    p9_decode_txattrwalk, p9_dir_entry_encoded_len, p9_rclunk, p9_rgetattr, p9_rlcreate,
+    p9_rlerror, p9_rlink, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir, p9_rreadlink, p9_rremove,
+    p9_rrename, p9_rrenameat, p9_rsymlink, p9_runlinkat, p9_rwalk, p9_rwalkgetattr, p9_rwrite,
 };
 
 pub use transport::{P9TransportError, P9TransportStats};
@@ -46,6 +42,7 @@ use attrs::{
 };
 use attrs::{attr_for_metadata, dirent_type_for_metadata, fs_stat, qid_for_metadata};
 use path::{is_same_or_descendant_path, join_walk_component, rebase_path};
+use session::P9_GOOGLE_TWALKGETATTR_VERSION;
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix 9P filesystem server adapters";
@@ -88,9 +85,6 @@ const P9_SETATTR_KNOWN_MASK: u32 = P9_SETATTR_PERMISSIONS
 const P9_SETATTR_OWNER_MASK: u32 = P9_SETATTR_UID | P9_SETATTR_GID;
 const P9_SETATTR_UNSUPPORTED_MASK: u32 = P9_SETATTR_CTIME;
 
-const P9_GOOGLE_VERSION_PREFIX: &str = "9P2000.L.Google.";
-const P9_GOOGLE_TFLUSHF_VERSION: u32 = 1;
-const P9_GOOGLE_TWALKGETATTR_VERSION: u32 = 2;
 const P9_LOCK_TYPE_UNLOCK: u8 = wanix_protocol::P9_LOCK_TYPE_UNLOCK;
 const P9_LOCK_STATUS_OK: u8 = wanix_protocol::P9_LOCK_STATUS_OK;
 
@@ -154,67 +148,6 @@ impl P9Server {
             max_msize: DEFAULT_MAX_MSIZE,
             google_version: 0,
         }
-    }
-
-    fn handle_version(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        let P9Version { msize, version } = p9_decode_tversion(frame)?;
-        self.fids.clear();
-        self.owners.clear();
-        self.msize = msize.min(self.max_msize);
-        let (version, google_version) = negotiate_p9_version(&version);
-        self.google_version = google_version;
-        Ok(p9_rversion(frame.tag(), self.msize, version)?)
-    }
-
-    fn handle_attach(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        let attach = p9_decode_tattach(frame)?;
-        let path = NormalizedPath::new(".").expect("root path is valid");
-        let qid = match self.qid_for_path(&path) {
-            Ok(qid) => qid,
-            Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
-        };
-        self.fids.insert(
-            attach.fid,
-            FidEntry {
-                path,
-                file: None,
-                append: false,
-            },
-        );
-        Ok(p9_rattach(frame.tag(), qid))
-    }
-
-    fn handle_flush(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        p9_decode_tflush(frame)?;
-        Ok(p9_rflush(frame.tag()))
-    }
-
-    fn handle_flushf(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        let flushf = p9_decode_tflushf(frame)?;
-        if self.google_version < P9_GOOGLE_TFLUSHF_VERSION {
-            return Ok(p9_rlerror(frame.tag(), EOPNOTSUPP));
-        }
-        if self.fids.contains_key(&flushf.fid) {
-            Ok(p9_rflushf(frame.tag()))
-        } else {
-            Ok(p9_rlerror(frame.tag(), EBADF))
-        }
-    }
-
-    fn handle_statfs(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        let statfs = p9_decode_tstatfs(frame)?;
-        let Some(path) = self.fids.get(&statfs.fid).map(|entry| entry.path.clone()) else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
-        };
-        if let Err(error) = self.root.metadata(&path) {
-            return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
-        }
-        Ok(p9_rstatfs(frame.tag(), fs_stat()))
-    }
-
-    fn handle_auth(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        p9_decode_tauth(frame)?;
-        Ok(p9_rlerror(frame.tag(), ENOSYS))
     }
 
     fn handle_walk(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -475,41 +408,6 @@ impl P9Server {
             p9_entries.push(p9_entry);
         }
         Ok(p9_rreaddir(frame.tag(), &p9_entries)?)
-    }
-
-    fn handle_fsync(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        let fsync = p9_decode_tfsync(frame)?;
-        if self.fids.contains_key(&fsync.fid) {
-            Ok(p9_rfsync(frame.tag()))
-        } else {
-            Ok(p9_rlerror(frame.tag(), EBADF))
-        }
-    }
-
-    fn handle_lock(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        let lock = p9_decode_tlock(frame)?;
-        if self.fids.contains_key(&lock.fid) {
-            Ok(p9_rlock(frame.tag(), P9_LOCK_STATUS_OK))
-        } else {
-            Ok(p9_rlerror(frame.tag(), EBADF))
-        }
-    }
-
-    fn handle_getlock(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        let getlock = p9_decode_tgetlock(frame)?;
-        if !self.fids.contains_key(&getlock.fid) {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
-        }
-        Ok(p9_rgetlock(
-            frame.tag(),
-            &P9Lock {
-                lock_type: P9_LOCK_TYPE_UNLOCK,
-                start: getlock.lock.start,
-                length: getlock.lock.length,
-                proc_id: 0,
-                client_id: String::new(),
-            },
-        )?)
     }
 
     fn handle_read(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -787,25 +685,6 @@ impl P9Server {
     }
 }
 
-fn negotiate_p9_version(requested: &str) -> (&'static str, u32) {
-    if requested == P9_VERSION_9P2000_L {
-        return (P9_VERSION_9P2000_L, 0);
-    }
-    let Some(version) = requested
-        .strip_prefix(P9_GOOGLE_VERSION_PREFIX)
-        .and_then(|suffix| suffix.parse::<u32>().ok())
-    else {
-        return ("unknown", 0);
-    };
-    if version >= P9_GOOGLE_TWALKGETATTR_VERSION {
-        (P9_VERSION_9P2000_L_GOOGLE_2, P9_GOOGLE_TWALKGETATTR_VERSION)
-    } else if version >= P9_GOOGLE_TFLUSHF_VERSION {
-        (P9_VERSION_9P2000_L_GOOGLE_1, P9_GOOGLE_TFLUSHF_VERSION)
-    } else {
-        (P9_VERSION_9P2000_L, 0)
-    }
-}
-
 fn open_options_from_flags(flags: u32) -> OpenOptions {
     let access = flags & O_ACCMODE;
     OpenOptions {
@@ -847,17 +726,18 @@ mod tests {
         P9_RSETATTR, P9_RSTATFS, P9_RSYMLINK, P9_RUNLINKAT, P9_RVERSION, P9_RWALK, P9_RWALKGETATTR,
         P9_RWRITE, P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_MTIME,
         P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
-        P9_VERSION_9P2000_L_GOOGLE_1, P9_VERSION_9P2000_L_GOOGLE_2, P9DirEntry, P9Lock, P9SetAttr,
-        p9_decode_rflush, p9_decode_rflushf, p9_decode_rfsync, p9_decode_rgetattr,
-        p9_decode_rgetlock, p9_decode_rlcreate, p9_decode_rlerror, p9_decode_rlink,
-        p9_decode_rlock, p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread, p9_decode_rreaddir,
-        p9_decode_rreadlink, p9_decode_rremove, p9_decode_rrename, p9_decode_rsetattr,
-        p9_decode_rstatfs, p9_decode_rsymlink, p9_decode_rversion, p9_decode_rwalk,
-        p9_decode_rwalkgetattr, p9_decode_rwrite, p9_dir_entry_encoded_len, p9_tattach, p9_tauth,
-        p9_tclunk, p9_tflush, p9_tflushf, p9_tfsync, p9_tgetattr, p9_tgetlock, p9_tlcreate,
-        p9_tlink, p9_tlock, p9_tlopen, p9_tmkdir, p9_tmknod, p9_tread, p9_treaddir, p9_treadlink,
-        p9_tremove, p9_trename, p9_trenameat, p9_tsetattr, p9_tstatfs, p9_tsymlink, p9_tunlinkat,
-        p9_tversion, p9_twalk, p9_twalkgetattr, p9_twrite, p9_txattrcreate, p9_txattrwalk,
+        P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_1, P9_VERSION_9P2000_L_GOOGLE_2,
+        P9DirEntry, P9Lock, P9SetAttr, p9_decode_rflush, p9_decode_rflushf, p9_decode_rfsync,
+        p9_decode_rgetattr, p9_decode_rgetlock, p9_decode_rlcreate, p9_decode_rlerror,
+        p9_decode_rlink, p9_decode_rlock, p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread,
+        p9_decode_rreaddir, p9_decode_rreadlink, p9_decode_rremove, p9_decode_rrename,
+        p9_decode_rsetattr, p9_decode_rstatfs, p9_decode_rsymlink, p9_decode_rversion,
+        p9_decode_rwalk, p9_decode_rwalkgetattr, p9_decode_rwrite, p9_dir_entry_encoded_len,
+        p9_tattach, p9_tauth, p9_tclunk, p9_tflush, p9_tflushf, p9_tfsync, p9_tgetattr,
+        p9_tgetlock, p9_tlcreate, p9_tlink, p9_tlock, p9_tlopen, p9_tmkdir, p9_tmknod, p9_tread,
+        p9_treaddir, p9_treadlink, p9_tremove, p9_trename, p9_trenameat, p9_tsetattr, p9_tstatfs,
+        p9_tsymlink, p9_tunlinkat, p9_tversion, p9_twalk, p9_twalkgetattr, p9_twrite,
+        p9_txattrcreate, p9_txattrwalk,
     };
 
     use super::*;
