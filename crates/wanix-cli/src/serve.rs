@@ -704,7 +704,7 @@ fn direct_v86_bundle_html() -> String {
     #screen { min-height: 100vh; background: #080a0d; }
     #screen canvas { display: block; max-width: 100%; }
     #screen div { white-space: pre; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    #serial { min-height: 180px; resize: vertical; }
+    #serial { min-height: 180px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #11141a; padding: 12px; border: 1px solid #363b44; }
     label { display: block; margin: 12px 0 4px; color: #c9d3e0; }
     input, textarea { box-sizing: border-box; width: 100%; padding: 8px; color: #f4f4f0; background: #11141a; border: 1px solid #4b5563; }
@@ -727,7 +727,7 @@ fn direct_v86_bundle_html() -> String {
       <pre id="config"></pre>
     </aside>
     <div id="screen"><canvas></canvas><div></div></div>
-    <textarea id="serial" spellcheck="false"></textarea>
+    <textarea id="serial" spellcheck="false" readonly></textarea>
   </main>
   <script type="module">
 "##);
@@ -750,7 +750,10 @@ fn direct_v86_bundle_html() -> String {
     const kernel = document.querySelector("#kernel");
     const initrd = document.querySelector("#initrd");
     const cmdline = document.querySelector("#cmdline");
+    const hvc0 = document.querySelector("#serial");
     const params = new URLSearchParams(location.search);
+    const hvc0Encoder = new TextEncoder();
+    const hvc0Decoder = new TextDecoder();
 
     const discovery = await fetch("/.well-known/wanix.json", { cache: "no-store" }).then(response => response.json());
     const v86Assets = discovery.v86?.assets || {};
@@ -797,6 +800,41 @@ fn direct_v86_bundle_html() -> String {
       }, 2);
     }
 
+    function appendHvc0(bytes) {
+      hvc0.value += hvc0Decoder.decode(bytes, { stream: true });
+      hvc0.scrollTop = hvc0.scrollHeight;
+    }
+
+    function hvc0KeyBytes(event) {
+      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "d") return Uint8Array.of(4);
+      if (event.metaKey || event.altKey || event.ctrlKey) return null;
+      if (event.key === "Enter") return hvc0Encoder.encode("\n");
+      if (event.key === "Backspace") return Uint8Array.of(0x7f);
+      if (event.key === "Tab") return hvc0Encoder.encode("\t");
+      if (event.key.length === 1) return hvc0Encoder.encode(event.key);
+      return null;
+    }
+
+    function sendHvc0(vm, bytes) {
+      vm.bus.send("virtio-console0-input-bytes", bytes);
+    }
+
+    function connectHvc0(vm) {
+      vm.add_listener("virtio-console0-output-bytes", appendHvc0);
+      hvc0.addEventListener("keydown", event => {
+        const bytes = hvc0KeyBytes(event);
+        if (!bytes) return;
+        event.preventDefault();
+        sendHvc0(vm, bytes);
+      });
+      hvc0.addEventListener("paste", event => {
+        const text = event.clipboardData?.getData("text");
+        if (!text) return;
+        event.preventDefault();
+        sendHvc0(vm, hvc0Encoder.encode(text));
+      });
+    }
+
     kernel.addEventListener("input", refreshConfig);
     initrd.addEventListener("input", refreshConfig);
     cmdline.addEventListener("input", refreshConfig);
@@ -804,7 +842,10 @@ fn direct_v86_bundle_html() -> String {
     start.disabled = false;
     start.addEventListener("click", () => {
       start.disabled = true;
-      new V86(buildConfig());
+      const vm = new V86(buildConfig());
+      window.wanixV86 = vm;
+      connectHvc0(vm);
+      hvc0.focus();
     });
   </script>
 </body>
@@ -1310,9 +1351,23 @@ mod tests {
             "{response}"
         );
         assert!(
-            response.contains("<textarea id=\"serial\" spellcheck=\"false\"></textarea>"),
+            response.contains("<textarea id=\"serial\" spellcheck=\"false\" readonly></textarea>"),
             "{response}"
         );
+        assert!(
+            response.contains("const hvc0 = document.querySelector(\"#serial\")"),
+            "{response}"
+        );
+        assert!(
+            response.contains("vm.add_listener(\"virtio-console0-output-bytes\", appendHvc0)"),
+            "{response}"
+        );
+        assert!(
+            response.contains("vm.bus.send(\"virtio-console0-input-bytes\", bytes)"),
+            "{response}"
+        );
+        assert!(response.contains("window.wanixV86 = vm"), "{response}");
+        assert!(response.contains("connectHvc0(vm)"), "{response}");
         assert!(!response.contains("static index"), "{response}");
     }
 

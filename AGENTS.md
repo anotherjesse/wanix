@@ -136,7 +136,10 @@ serve owns the embedded `/v86/lib/libv86.mjs`, `/v86/lib/mod.js`,
 `/v86/lib/offscreen.js`, wasm, and BIOS routes so the browser emulator runtime
 does not have to live in the served root. The page accepts caller-supplied
 kernel/initrd/cmdline URLs or query overrides, so it is a boot handoff proof
-rather than a complete guest asset assembler.
+rather than a complete guest asset assembler. The same generated page bridges
+v86 `virtio-console0-output-bytes` into a visible console textarea and sends
+typed/pasted browser input back through `virtio-console0-input-bytes`, matching
+the guest's `hvc0` console path used by QEMU.
 `wanix-rust qemu --root DIR` prints a shell-quoted native QEMU/KVM virtio-9p
 command for the same Linux guest/rootfs shape, discovering `/boot/bzImage` or
 legacy `/bzImage` from the guest root unless `--kernel PATH` overrides it. The
@@ -437,6 +440,9 @@ cargo test --workspace --locked
 - [ADR 0089](docs/adrs/0089-qemu-root-kernel-discovery-and-cmdline-options.md):
   `wanix-rust qemu` discovers guest-root kernels and exposes cmdline
   override/append options while staying a print-only handoff.
+- [ADR 0090](docs/adrs/0090-direct-v86-hvc0-console-bridge.md):
+  Rust direct-v86 pages expose the guest `hvc0` virtio-console stream for
+  visible browser boot and shell interaction.
 
 ## Cycle Rules
 
