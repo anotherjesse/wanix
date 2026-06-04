@@ -33,6 +33,25 @@ A snapshot contains:
 - the saved `__stack_pointer`;
 - the saved QuickJS runtime and context pointers.
 
+The canonical v1 byte envelope is:
+
+```text
+RWQSNAP\0
+u32 format_version
+u32 quickjs_wasm_abi_version
+u32 header_len
+u64 total_len
+u64 memory_len
+u32 stack_pointer
+u32 runtime_ptr
+u32 context_ptr
+[u8; 32] quickjs_wasm_sha256
+[u8; memory_len] wasm_linear_memory
+```
+
+Changing that field order, meaning, byte order, or validation contract requires
+a snapshot format-version decision.
+
 Restore validates the envelope and module identity before copying memory into a
 fresh instance. The raw guest pointers remain implementation details; public
 metadata APIs expose only route-friendly compatibility data such as format

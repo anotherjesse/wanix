@@ -26,22 +26,16 @@ local listener:
 - Static HTTP responses use the browser headers needed by local v86 and
   workbench demos.
 - `/.well-known/export9p` is the reserved direct binary 9P WebSocket route.
-- `/.well-known/wanix.json` advertises discovery data: direct 9P routes,
-  selected bundles, service availability, direct-v86 boot hints, and explicitly
-  unimplemented routes such as Ethernet/vnet until those contracts exist.
+- `/.well-known/wanix.json` is the reserved discovery document for direct 9P,
+  selected bundles, service availability, direct-v86 boot hints, and explicit
+  placeholders for unimplemented routes such as Ethernet/vnet.
 - `--once` remains a deterministic single-connection mode for tests and
   scripted clients; normal serve accepts concurrent HTTP and 9P WebSocket
   clients.
 - `--wanix-services` exports a Wanix namespace containing `#task` and `#term`
-  through direct 9P from a service-root task context.
-- In service mode, the task table registers at least `noop` and `qjs`, so
-  direct 9P clients can allocate a QuickJS task, set `cmd`/`env`/`dir`, bind
-  fds, and start it through `#task`.
-- In service mode, `/.well-known/qjs-shell` exposes a terminal/session
-  WebSocket route for browser/workbench pseudoterminals to drive a
-  terminal-backed QuickJS task. The route accepts a Wanix `cwd` query value and
-  resize control frames so editor terminals can start in the requested Wanix
-  cwd and deliver dimensions through `#term/<id>/winch`.
+  through direct 9P from a service-root task context. Service mode may register
+  task drivers such as `noop` and `qjs`, and may expose terminal-backed shell
+  routes that are still backed by `#task` and `#term`.
 
 Generated bundle pages and browser clients should consume the discovery document
 rather than hard-coding route assumptions.
@@ -58,47 +52,33 @@ serve contract:
 - The legacy MessagePort/CBOR workbench bridge is a compatibility path for
   browser-embedded Wanix systems; Rust serve discovery and direct 9P are the
   Rust-hosted workbench direction.
-- When discovery advertises services, the workbench path can open qjs shell
-  sessions and can start `qjs` Wanix tasks by driving `#task` and `#term` over
-  direct 9P.
-- Running the active `wanix:` JavaScript file as a `qjs` task should use the
-  same task command/env/dir/fd service files as native clients.
+- Workbench tasks and terminals should use the same `#task` command/env/dir/fd
+  files and `#term` service files as native clients.
 
 Direct v86 is a browser/emulator handoff over Rust serve:
 
 - `serve --bundle direct-v86` consumes discovery and wires the advertised
   direct 9P WebSocket into v86 `filesystem.proxy_url`;
 - serve owns or advertises the v86 module, wasm, BIOS, and helper asset routes
-  needed by the generated page;
-- discovery reports boot asset readiness for kernel and optional initrd routes
-  found in the served root;
-- discovery exposes boot hints such as the default 9P-root Linux cmdline,
-  memory size, VGA memory size, and virtio-console expectation;
-- query overrides can supply kernel, initrd, cmdline, and autostart behavior
-  for deterministic browser launches; and
-- the generated page exposes the guest `hvc0` virtio-console stream for visible
-  browser boot and shell interaction.
+  needed by the generated page; and
+- discovery reports boot readiness and explicit launch hints without making the
+  browser page infer filesystem layout.
 
 Native QEMU is a validated command handoff:
 
 - `wanix-rust rootfs --archive FILE.tgz --out DIR` extracts a guest root into a
   missing or empty directory, rejects unsafe archive paths, validates shared VM
-  boot markers, and prints ready-to-run QEMU and direct-v86 commands.
+  boot markers, and prints ready-to-run QEMU and direct-v86 handoffs.
 - `wanix-rust rootfs --archive FILE.tgz --out DIR --json` prints the same
   prepared root as a machine-readable `wanix-rootfs.v1` manifest, including
-  root path, boot marker routes, a nested default `wanix-qemu-virtio9p.v1`
-  handoff, and direct-v86 serve argv.
+  root path, boot marker routes, a nested default native QEMU handoff, and
+  direct-v86 serve argv.
 - `wanix-rust qemu --root DIR` canonicalizes and validates the guest root,
-  discovers `/boot/bzImage` or legacy `/bzImage` unless `--kernel PATH` is
-  supplied, supports cmdline override, append options, mount-tag override, and
-  a validated QEMU local 9P `security_model`, and prints a shell-quoted
-  QEMU/KVM virtio-9p command by default.
-- `wanix-rust qemu --json` prints the same validated handoff as a
-  machine-readable `wanix-qemu-virtio9p.v1` manifest, including argv, root,
-  kernel, cmdline, mount tag, security model, console, memory, and KVM policy.
-- By default, the native QEMU command uses the same 9P-root guest shape where
-  practical, with `host9p`, base `9p2000.L` root flags, `mapped-xattr` local 9P
-  security, and `hvc0` virtconsole defaults.
+  discovers VM boot markers, applies explicit command overrides, validates local
+  9P security policy, and prints a shell-quoted QEMU/KVM virtio-9p command by
+  default.
+- `wanix-rust qemu --json` prints the same validated handoff as
+  `wanix-qemu-virtio9p.v1`.
 - `wanix-rust qemu --exec` is an explicit foreground launch mode. It spawns the
   validated argv, inherits stdin/stdout/stderr, reports the child exit status,
   and does not turn Wanix into a background VM supervisor.
@@ -110,8 +90,8 @@ workbench, v86, and native QEMU clients. These paths exercise the bigger pieces
 without turning `serve` into a VM manager, editor host, network bridge, or core
 filesystem crate.
 
-Future auth, remote exposure, Ethernet/vnet, multiplexing, or persistent
-session policy should be recorded as new decisions because they change the
-serve/client trust boundary. Future QEMU work that adds daemon mode, persistent
-VM management, network/vnet, terminal multiplexing, or rootfs build ownership
-should also get a new decision.
+Exact bundle pages, JSON fields, and command flags belong in tests, examples,
+and walkthrough docs. Future auth, remote exposure, Ethernet/vnet,
+multiplexing, persistent session policy, daemon mode, rootfs build ownership, or
+VM lifecycle management should be recorded as new decisions because they change
+the serve/client trust boundary.

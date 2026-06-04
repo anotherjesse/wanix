@@ -28,24 +28,16 @@ adapters.
 
 The supported contract includes:
 
-- version negotiation for 9P2000.L, capped compatibility for
-  `9P2000.L.Google.2`, and explicit rejection of unsupported versions;
-- attach, walk, clunk, open, create, read, write, and error replies;
-- directory reads using opaque one-based cookies;
-- metadata through `Tgetattr`, POSIX file-type mode bits, host-backed link
-  counts, virtual uid/gid, and permission updates where Wanix filesystems
-  support them;
-- `Tstatfs` synthetic mount probes;
-- file and directory mutations including create, mkdir, unlink, remove,
-  rename, legacy fid-oriented rename/remove, symlink, readlink, and hard-link
-  creation where the backing filesystem supports it;
-- setattr for size, access/modification times, and permissions;
-- append mode as opened-fid state, so writes append at EOF regardless of client
-  offsets;
-- compatibility probe handling for `Tflush`, `Tfsync`, lock/getlock, auth,
-  mknod, and xattr requests; and
-- Google.2 `Twalkgetattr`/`Rwalkgetattr` and `Tflushf`/`Rflushf` compatibility
-  where useful for v86/Linux clients.
+- version negotiation for 9P2000.L, bounded `9P2000.L.Google.2`
+  compatibility, and explicit rejection of unsupported versions;
+- attach/walk/open/read/write/create/clunk/error basics;
+- directory iteration with opaque cookies;
+- metadata, statfs, permission, size, timestamp, symlink/readlink, hard-link,
+  rename, remove, mkdir, and append behavior where the backing Wanix filesystem
+  supports it;
+- compatibility probes for flush, fsync, lock, auth, mknod, and xattr requests;
+  and
+- selected Google.2 operations needed by v86/Linux clients.
 
 Stdio, TCP, WebSocket, and `serve` transports are adapters over the same server
 contract. They must preserve binary frame boundaries and keep diagnostic/status
@@ -62,8 +54,8 @@ semantics.
 
 External 9P clients can mount or browse a Wanix namespace through native,
 browser, v86, and editor paths without each transport inventing filesystem
-semantics. The compatibility surface is testable at the codec, server, CLI, and
-serve layers.
+semantics. Operation-by-operation coverage belongs in codec/server tests and
+current-state docs, not in one ADR per operation.
 
 Future 9P work should add ADRs only when it changes the protocol contract,
 authentication/trust boundary, transport multiplexing model, or backing Wanix

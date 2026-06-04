@@ -593,5 +593,5 @@ Not implemented yet:
   events.
 
 See [docs/architecture.md](docs/architecture.md) for the current boundary
-summary and [docs/investigation.md](docs/investigation.md) for the historical
-snapshot investigation notes.
+summary. Historical investigation and milestone notes belong in git history,
+not in the active documentation set.

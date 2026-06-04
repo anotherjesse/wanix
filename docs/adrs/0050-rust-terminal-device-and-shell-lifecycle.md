@@ -38,13 +38,9 @@ unless a file implementation overrides it.
 
 Expose terminal-backed task sessions through composition layers:
 
-- `wanix-rust qjs-term` runs a caller-supplied script as a Wanix `qjs` task
-  with fd 0/1/2 bound through `#term/<id>/program`.
-- `wanix-rust qjs-shell` runs the bundled QuickJS shell source through the same
-  terminal-backed task shape as the direct native shell demo.
-- `serve --wanix-services` exposes a qjs-shell WebSocket route for
-  browser/workbench pseudoterminals using the same terminal-backed task shape,
-  with an optional Wanix cwd selected by the client.
+- native CLI commands such as `qjs-term` and `qjs-shell`;
+- served browser/workbench pseudoterminal routes; and
+- future VM/editor terminal clients.
 
 Native and served shell loops may stream terminal output during eval, after
 input batches, after ready-IO turns, and while reporting errors. They may pump
@@ -62,11 +58,11 @@ For native shell input:
 - the bundled QuickJS shell owns echo, simple editing, newline handling, Ctrl-D
   exit, and command dispatch when `WANIX_QJS_SHELL_RAW=1` is present.
 
-Terminal resize travels through `#term/<id>/winch` as `columns rows\n`.
-Deterministic fixtures, served shell sessions, native Unix shell sessions, and
-workbench pseudoterminals should all use that same file. WASI cwd remapping
-must not re-root `#term` service paths. Signal-driven resize wakeups may be
-added later without changing the terminal device contract.
+Terminal resize travels through `#term/<id>/winch` as `columns rows\n`. Native
+sessions, served shell sessions, workbench pseudoterminals, deterministic
+fixtures, and future VM/editor clients should all use that file. WASI cwd
+remapping must not re-root `#term` service paths. Signal-driven resize wakeups
+may be added later without changing the terminal device contract.
 
 For editor-facing lifecycle, workbench pseudoterminals should close from Wanix
 task/session state instead of from frontend-only assumptions. Served shell
@@ -82,7 +78,7 @@ running as a Wanix `qjs` task observes terminals through ordinary fd readiness
 and service files such as `#term/<id>/winch`, while Wanix continues to own task
 identity, fds, namespace, stdio, and exit state.
 
-Exact native, served, and fixture behavior is pinned by tests and examples.
-Future signal delivery, cancellation, process-group, durable attachment, or
-VM/editor terminal policy should get a separate decision when it changes the
-terminal/service contract.
+Exact command, route, and fixture coverage belongs in tests, examples, and
+current-state docs. Future signal delivery, cancellation, process-group,
+durable attachment, or VM/editor terminal policy should get a separate decision
+when it changes the terminal/service contract.

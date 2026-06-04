@@ -175,8 +175,10 @@ were removed.
 
 Milestone proofs, fixture rebuild notes, per-syscall or per-operation coverage,
 CLI/demo slices, and smoke-test progress belong in tests, examples,
-current-state docs, and commit messages. Routine cargo command lists live in the
-code-quality guardrails above unless the workflow itself changes.
+current-state docs, and commit messages. If an ADR draft reads like a good
+commit message, keep it as the commit message instead. Routine cargo command
+lists live in the code-quality guardrails above unless the workflow itself
+changes.
 
 ## Cycle Rules
 
