@@ -10,12 +10,12 @@ Wanix terminals are a service contract, not browser xterm plumbing. The Go
 runtime exposes terminals through `#term`: reading `#term/new` allocates a
 resource id, and each resource exposes terminal-side data, program-side data,
 and window-size notifications. Browser, native, served, editor, and VM clients
-should all attach to that same device shape instead of inventing separate
+should attach to that same device shape instead of inventing separate
 process-specific terminal APIs.
 
-Terminal-backed QuickJS tasks are one client of that service contract. The
-terminal decision should cover device shape, readiness, resize delivery, and
-session lifecycle; the QuickJS process boundary is covered by ADR 0002.
+This ADR covers the terminal device shape, readiness, resize delivery, and
+session lifecycle boundary. QuickJS process semantics are covered by ADR 0002;
+serve, workbench, v86, and QEMU handoffs are covered by ADR 0068.
 
 ## Decision
 
@@ -36,39 +36,22 @@ queue-aware: terminal fds report readable only when bytes are queued for that
 side or for that `winch` subscriber. Regular-file readiness stays default-ready
 unless a file implementation overrides it.
 
-Expose terminal-backed task sessions through composition layers:
+Terminal-backed tasks bind fd 0/1/2 to the program side of a terminal. Human,
+browser, editor, and VM clients attach to the data side. Resize travels through
+`#term/<id>/winch` as textual `columns rows\n` payloads, and WASI cwd remapping
+must not re-root `#term` service paths.
 
-- native CLI commands such as `qjs-term` and `qjs-shell`;
-- served browser/workbench pseudoterminal routes; and
-- future VM/editor terminal clients.
+Composition layers may provide cooked or raw native shells, browser/workbench
+pseudoterminals, deterministic fixtures, or future VM/editor terminals. Those
+surfaces should use `#task` and `#term` service files and close from observed
+Wanix task/session state rather than from frontend-only assumptions. In raw
+interactive modes, the host should feed bytes through the terminal device and
+let the guest-side shell own echo, simple editing, newline handling, Ctrl-D, and
+command dispatch.
 
-Native and served shell loops may stream terminal output during eval, after
-input batches, after ready-IO turns, and while reporting errors. They may pump
-bounded guest event-loop work while the shell is otherwise idle so delayed
-output can surface without another input frame or byte. These pumps are host
-lifecycle policy for an already evaluated task runtime; they are not a general
-Wanix scheduler.
-
-For native shell input:
-
-- cooked `qjs-shell` sessions remain line-oriented;
-- `qjs-shell --raw` may put host stdin into a restore-on-drop raw-ish terminal
-  mode when stdin is a TTY;
-- raw mode feeds native bytes directly into `#term/<id>/data`; and
-- the bundled QuickJS shell owns echo, simple editing, newline handling, Ctrl-D
-  exit, and command dispatch when `WANIX_QJS_SHELL_RAW=1` is present.
-
-Terminal resize travels through `#term/<id>/winch` as `columns rows\n`. Native
-sessions, served shell sessions, workbench pseudoterminals, deterministic
-fixtures, and future VM/editor clients should all use that file. WASI cwd
-remapping must not re-root `#term` service paths. Signal-driven resize wakeups
-may be added later without changing the terminal device contract.
-
-For editor-facing lifecycle, workbench pseudoterminals should close from Wanix
-task/session state instead of from frontend-only assumptions. Served shell
-routes can report task exit as lifecycle frames, and direct service-backed
-workbench terminals may observe `#task/<id>/exit` over 9P after draining
-terminal output.
+Bounded output draining or event-loop pumping around terminal sessions is host
+lifecycle policy for an already evaluated task runtime. It is not a general
+Wanix scheduler, signal system, cancellation model, or process-group contract.
 
 ## Consequences
 

@@ -1,4 +1,4 @@
-# ADR 0068: Serve And Client Handoffs
+# ADR 0068: Serve and Client Handoffs
 
 ## Status
 
@@ -6,89 +6,59 @@ Accepted
 
 ## Context
 
-`wanix-rust serve` is the local composition surface for browser, v86,
-workbench, VS Code, and local tool clients. It needs to serve static assets and
-protocol routes from one listener without making the 9P server or core runtime
-own HTTP, WebSocket, browser isolation, or demo-page policy.
+`wanix-rust serve` is the local composition surface for browser filesystem,
+workbench, VS Code, v86, QEMU-launcher, and local tool clients. It needs to
+serve static assets, discovery documents, and protocol routes from one listener
+without making the 9P server or core runtime own HTTP, WebSocket, browser
+isolation, or demo-page policy.
 
-Native QEMU is the corresponding non-browser VM handoff. It shares the same
-guest-root and 9P-root assumptions as direct-v86 but remains an inspectable
-command handoff rather than a VM manager.
+Native QEMU and direct-v86 are VM handoffs over the same prepared-root and
+9P-root assumptions. They are launch/attachment contracts, not evidence that
+Wanix has become a VM supervisor or that the browser has become the runtime
+foundation again.
 
 ## Decision
 
 Rust `serve` combines static HTTP, discovery, and direct protocol routes on one
 local listener:
 
-- `wanix-rust serve [DIR] [--listen HOST:PORT] [--once] [--bundle NAME]
-  [--wanix-services]` serves a selected root, defaulting to the current
-  directory and a demo-friendly local address.
-- Static HTTP responses use the browser headers needed by local v86 and
-  workbench demos.
-- `/.well-known/export9p` is the reserved direct binary 9P WebSocket route.
-- `/.well-known/wanix.json` is the reserved discovery document for direct 9P,
-  selected bundles, service availability, direct-v86 boot hints, and explicit
-  placeholders for unimplemented routes such as Ethernet/vnet.
+- static responses and bundle assets use the local browser headers needed by
+  v86, workbench, and filesystem demos;
+- `/.well-known/export9p` is the reserved direct binary 9P WebSocket route;
+- `/.well-known/wanix.json` is the reserved discovery document for routes,
+  selected bundle metadata, service availability, boot hints, and explicit
+  placeholders for unimplemented routes such as Ethernet/vnet;
 - `/.well-known/rootfs.json` is the reserved prepared-root handoff document for
-  served guest roots. Discovery reports its `ready`, `missing`, and `status`
-  fields. Because the manifest includes absolute local paths and launch argv,
-  the route returns `wanix-rootfs.v1` only to loopback clients when the served
-  root has the VM boot markers required by the rootfs/QEMU/direct-v86 contract.
-- `--once` remains a deterministic single-connection mode for tests and
-  scripted clients; normal serve accepts concurrent HTTP and 9P WebSocket
-  clients.
-- `--wanix-services` exports a Wanix namespace containing `#task` and `#term`
-  through direct 9P from a service-root task context. Service mode may register
-  task drivers such as `noop` and `qjs`, and may expose terminal-backed shell
-  routes that are still backed by `#task` and `#term`.
+  trusted local clients. Because the manifest includes absolute local paths and
+  launch argv, it returns `wanix-rootfs.v1` only to loopback clients when the
+  served root satisfies the VM boot-marker contract;
+- deterministic single-connection serve mode may exist for tests and scripted
+  clients, but normal serve accepts concurrent HTTP and 9P WebSocket clients;
+  and
+- service mode exports a Wanix namespace containing the served root, `#task`,
+  and `#term` through direct 9P from a service-root task context.
 
 Generated bundle pages and browser clients should consume the discovery document
 rather than hard-coding route assumptions.
 
-Browser filesystem and workbench clients are frontend integrations over that
-serve contract:
+Browser filesystem and workbench clients are frontend integrations over the
+serve contract. Rust-hosted workbench integrations should discover serve, browse
+or mutate `wanix:/` over direct 9P, and use `#task` command/env/dir/fd files and
+`#term` service files for tasks and terminals. The legacy MessagePort/CBOR
+workbench bridge remains a compatibility path for browser-embedded Wanix
+systems, not the Rust-hosted direction.
 
-- `serve --bundle fs9p` exposes a browser filesystem page for direct 9P
-  browse/read/write behavior against the served root.
-- The workbench extension can back its `wanix:` filesystem provider with direct
-  9P operations, plus bounded client-side search over `wanix:/`.
-- `serve --bundle workbench-fs9p` is a local generated VS Code web workbench
-  launch path that points the extension at Rust serve discovery.
-- The legacy MessagePort/CBOR workbench bridge is a compatibility path for
-  browser-embedded Wanix systems; Rust serve discovery and direct 9P are the
-  Rust-hosted workbench direction.
-- Workbench tasks and terminals should use the same `#task` command/env/dir/fd
-  files and `#term` service files as native clients.
+Direct v86 is a browser/emulator handoff over Rust serve. The generated page
+should consume discovery, attach v86 to the advertised direct 9P route, use
+served or advertised v86 assets, and surface boot readiness without inferring
+filesystem layout.
 
-Direct v86 is a browser/emulator handoff over Rust serve:
-
-- `serve --bundle direct-v86` consumes discovery and wires the advertised
-  direct 9P WebSocket into v86 `filesystem.proxy_url`;
-- serve owns or advertises the v86 module, wasm, BIOS, and helper asset routes
-  needed by the generated page; and
-- discovery reports boot readiness and explicit launch hints without making the
-  browser page infer filesystem layout.
-
-Native QEMU is a validated command handoff:
-
-- `wanix-rust rootfs --archive FILE.tgz --out DIR` extracts a guest root into a
-  missing or empty directory, rejects unsafe archive paths, validates shared VM
-  boot markers, and prints ready-to-run QEMU and direct-v86 handoffs.
-- `wanix-rust rootfs --archive FILE.tgz --out DIR --json` prints the same
-  prepared root as a machine-readable `wanix-rootfs.v1` manifest, including
-  root path, boot marker routes, a nested default native QEMU handoff, and
-  direct-v86 serve argv.
-- `wanix-rust serve DIR` can expose that same prepared-root manifest at
-  `/.well-known/rootfs.json` for trusted local browser, editor, or VM launchers.
-- `wanix-rust qemu --root DIR` canonicalizes and validates the guest root,
-  discovers VM boot markers, applies explicit command overrides, validates local
-  9P security policy, and prints a shell-quoted QEMU/KVM virtio-9p command by
-  default.
-- `wanix-rust qemu --json` prints the same validated handoff as
-  `wanix-qemu-virtio9p.v1`.
-- `wanix-rust qemu --exec` is an explicit foreground launch mode. It spawns the
-  validated argv, inherits stdin/stdout/stderr, reports the child exit status,
-  and does not turn Wanix into a background VM supervisor.
+Native QEMU is a validated command handoff over the same prepared-root shape.
+Rootfs preparation validates archive safety and VM boot markers, machine-readable
+manifests use stable handoff kinds such as `wanix-rootfs.v1`, and QEMU launch
+manifests use stable argv/policy data such as `wanix-qemu-virtio9p.v1`. Explicit
+foreground launch is allowed, but background supervision, daemon lifecycle, and
+VM management are separate future decisions.
 
 ## Consequences
 

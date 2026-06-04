@@ -138,30 +138,28 @@ not be restored as active ADRs.
   state, snapshots reattachment, fixture boundaries, and bounded guest
   execution policy.
 - [ADR 0050](docs/adrs/0050-rust-terminal-device-and-shell-lifecycle.md):
-  `wanix-term`, `qjs-term`, native `qjs-shell`, and served qjs-shell sessions
+  `wanix-term` and terminal-backed native, served, editor, and VM sessions
   share one terminal device and shell lifecycle contract.
-- [ADR 0058](docs/adrs/0058-rust-9p-protocol-framing.md): `wanix-protocol` and
-  `wanix-9p` own the Rust 9P frame, codec, fid, metadata, mutation, and
-  compatibility contract across transports.
+- [ADR 0058](docs/adrs/0058-rust-9p-protocol-and-server-contract.md):
+  `wanix-protocol` and `wanix-9p` own the Rust 9P frame, codec, fid, metadata,
+  mutation, and compatibility contract across transports.
 - [ADR 0068](docs/adrs/0068-serve-and-client-handoffs.md): Rust `serve`,
   browser filesystem/workbench, direct-v86, rootfs prep, and native QEMU share
   explicit discovery and handoff contracts instead of becoming runtime
   foundations.
 
-## Retired Bridge Notes
+## Retired Bridge Guardrails
 
-- The temporary `globalThis.Wanix` JavaScript helper API is retired. Guest code
-  should use `qjs:std`, `qjs:os`, `scriptArgs`, stdio, and `#task` service
-  files.
-- The read-only virtual WASI projection is retired as a Wanix runtime path.
-  Engine-level read-only virtual files may remain only as isolated fixture
-  support under ADR 0002.
-- Host line-discipline shell framing is retired. Native raw mode feeds bytes
-  through the terminal device and lets the guest QuickJS shell own echo,
-  editing, newline handling, and Ctrl-D behavior under ADR 0050.
-- The legacy MessagePort/CBOR workbench bridge is compatibility for
-  browser-embedded Wanix systems, not the Rust serve direction. Rust-served
-  workbench integrations should consume discovery and direct 9P under ADR 0068.
+These are current guardrails, not a replacement ledger for deleted ADRs:
+
+- Guest JavaScript should use `qjs:std`, `qjs:os`, `scriptArgs`, stdio, env, and
+  service files instead of `globalThis.Wanix` helpers.
+- Wanix runtime paths should use live Wanix-backed WASI providers; engine
+  read-only virtual files are fixture support only.
+- Raw shell input should flow through `#term`; guest shells own echo, simple
+  editing, newline handling, Ctrl-D, and command dispatch.
+- Rust-served workbench paths should consume discovery and direct 9P; the
+  MessagePort/CBOR bridge is browser-embedded compatibility only.
 
 ## ADR Workflow
 
@@ -170,11 +168,13 @@ format, trust-boundary, or workflow decisions. When touching a topic, review the
 related ADRs at the same time and consolidate, delete, or clearly retire records
 that no longer describe the current direction.
 
-The root ADR index above is the active Wanix decision set. Imported prototype
-ADR archives should be consolidated into topic docs or deleted; do not let
-nested crates regrow progress-journal ADR series. Do not keep replacement
-ledgers inside active ADRs; git history already records which milestone notes
-were removed.
+The root ADR index above is the active Wanix decision set: runtime boundary,
+QuickJS/WASI task boundary, terminals, 9P, and serve/client handoffs. Prefer
+revising one of those records before adding a new one. Imported prototype ADR
+archives should be consolidated into topic docs or deleted; do not let nested
+crates regrow progress-journal ADR series. Do not keep replacement ledgers
+inside active ADRs; git history already records which milestone notes were
+removed.
 
 Milestone proofs, fixture rebuild notes, per-syscall or per-operation coverage,
 CLI/demo slices, and smoke-test progress belong in tests, examples,
