@@ -510,7 +510,9 @@ export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider,
 			throw FileSystemError.FileExists(destination);
 		}
 
-		await this.wfsys.copy(this.normalizePath(source.path), this.normalizePath(destination.path));
+		await this.wfsys.copy(this.normalizePath(source.path), this.normalizePath(destination.path), {
+			overwrite: options.overwrite,
+		});
 
 		this._fireSoon(
 			{ type: FileChangeType.Changed, uri: destination.with({ path: this._dirname(destination.path) }) },

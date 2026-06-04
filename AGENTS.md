@@ -85,9 +85,10 @@ tests.
 - `serve --bundle fs9p`: browser filesystem client over direct 9P.
 - `serve --bundle workbench-fs9p`: local Code OSS/workbench launch path where
   the bootstrap passes the discovered direct-9P route into the extension,
-  negotiates Google.2 `walkgetattr` when available, browses `wanix:/` over
-  direct 9P, and can open qjs-backed terminal sessions when services are
-  enabled. Direct terminal disposal writes `close` through `#term/<id>/ctl`.
+  negotiates Google.2 `walkgetattr` when available, browses and mutates
+  `wanix:/` over direct 9P, and can open qjs-backed terminal sessions when
+  services are enabled. Direct terminal disposal writes `close` through
+  `#term/<id>/ctl`.
 - `serve --bundle direct-v86`: browser v86 handoff over Rust serve discovery,
   direct 9P, boot-asset hints, hvc0 console bridging, and autostart-friendly
   launch hooks. The generated page reports rootfs handoff status and, for

@@ -34,6 +34,10 @@ type RemoteEntry = {
 	Size: number;
 };
 
+type CopyOptions = {
+	overwrite?: boolean;
+};
+
 const READ_CHUNK_SIZE = 64 * 1024;
 
 const utf8 = new TextEncoder();
@@ -241,13 +245,45 @@ export class WanixP9Handle {
 		}
 	}
 
-	async copy(oldname: string, newname: string): Promise<void> {
+	async copy(oldname: string, newname: string, options: CopyOptions = {}): Promise<void> {
 		this.logger(`copy ${oldname} ${newname}`);
 		const source = await this.stat(oldname);
 		if (source.IsDir) {
-			throw new Error("direct 9P copy currently supports files only");
+			await this.copyDirectory(oldname, newname, options);
+			return;
+		}
+		const existing = await this.stat(newname).catch(() => undefined);
+		if (existing) {
+			if (!options.overwrite) {
+				throw new Error(`destination exists: ${newname}`);
+			}
+			if (existing.IsDir) {
+				await this.removeAll(newname);
+			}
 		}
 		await this.writeFile(newname, await this.readFile(oldname));
+	}
+
+	private async copyDirectory(oldname: string, newname: string, options: CopyOptions): Promise<void> {
+		const source = normalizePath(oldname);
+		const destination = normalizePath(newname);
+		if (isSameOrNestedPath(source, destination)) {
+			throw new Error("cannot copy a directory into itself");
+		}
+
+		const existing = await this.stat(destination).catch(() => undefined);
+		if (existing) {
+			if (!options.overwrite) {
+				throw new Error(`destination exists: ${newname}`);
+			}
+			await this.removeAll(destination);
+		}
+
+		await this.makeDir(destination);
+		for (const child of await this.readDir(source)) {
+			const name = child.replace(/\/$/, "");
+			await this.copy(joinPath(source, name), joinPath(destination, name), options);
+		}
 	}
 
 	async remove(name: string): Promise<void> {
@@ -382,6 +418,10 @@ function preferredProtocol(route: WanixP9Route): string | undefined {
 function isLiveServiceStream(name: string): boolean {
 	const normalized = normalizePath(name);
 	return normalized.startsWith("/#term/");
+}
+
+function isSameOrNestedPath(parent: string, candidate: string): boolean {
+	return candidate === parent || (parent === "/" ? candidate.startsWith("/") : candidate.startsWith(`${parent}/`));
 }
 
 function resolveDiscoveryUrl(discoveryUrl: string): string {

@@ -634,12 +634,13 @@ and a served terminal/session route, but it is not a complete production
 terminal scheduler with signals, cancellation, and rich lifecycle control.
 Direct-v86 is becoming a reproducible browser boot path, but it is not a full
 assembled VM distribution, not a vnet bridge, and not a native VM supervisor.
-The Rust-served workbench path can browse, edit, search, open a qjs shell route,
-start that shell in the configured Wanix cwd, forward terminal resizes, close
-owned terminal resources through service files, and run a qjs task, but it is
-still an integration demo rather than the full Go browser environment. Public
-auth, writable export policy, HTTPS, Ethernet/vnet, QEMU supervision,
-multi-tenant isolation, and cloud orchestration remain open design work.
+The Rust-served workbench path can browse, edit, copy directory trees, search,
+open a qjs shell route, start that shell in the configured Wanix cwd, forward
+terminal resizes, close owned terminal resources through service files, and run
+a qjs task, but it is still an integration demo rather than the full Go browser
+environment. Public auth, writable export policy, HTTPS, Ethernet/vnet, QEMU
+supervision, multi-tenant isolation, and cloud orchestration remain open design
+work.
 
 Snapshots are not whole-process checkpoints. 9P has intentional unsupported
 areas. Browser clients can discover the current Rust serve contract, but that
