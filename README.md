@@ -31,12 +31,12 @@ devices with service-file lifecycle control, `qjs-shell` with basic filesystem
 and environment commands including symlink/readlink, child `qjs` task launches,
 namespace stdio redirection, direct terminal stdio with buffered foreground
 stdin handoff, queued resize tracking from `#term/<id>/winch`, `ps` task
-inspection, and child exit status inspection, 9P exports over
-stdio/TCP/WebSocket, Rust `serve` discovery, browser filesystem and workbench
-demos, direct-v86 handoff, rootfs preparation with shell/JSON handoffs,
-trusted-local served prepared-root handoff discovery with copyable browser
-commands, hvc0 Ctrl-C/Ctrl-D forwarding plus a scriptable send hook, and
-initrd-aware native QEMU command/JSON handoff.
+inspection, child exit status inspection, and served shell terminal cleanup, 9P
+exports over stdio/TCP/WebSocket, Rust `serve` discovery, browser filesystem
+and workbench demos, direct-v86 handoff, rootfs preparation with shell/JSON
+handoffs, trusted-local served prepared-root handoff discovery with copyable
+browser commands, hvc0 Ctrl-C/Ctrl-D forwarding plus a scriptable send hook,
+and initrd-aware native QEMU command/JSON handoff.
 Wanix owns task identity, namespaces, cwd/env/cmd, stdio/fds, exit status, and
 WASI filesystem semantics; QuickJS is the execution engine inside a `qjs` task.
 

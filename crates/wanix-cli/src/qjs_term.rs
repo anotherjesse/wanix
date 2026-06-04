@@ -36,6 +36,7 @@ pub(super) struct QjsShellSession {
     runtime: QuickJsTaskRuntime,
     ready_io_turns: usize,
     finished: bool,
+    terminal_closed: bool,
 }
 
 impl QjsShellSession {
@@ -103,6 +104,7 @@ impl QjsShellSession {
                 runtime,
                 ready_io_turns: QJS_SHELL_READY_IO_TURNS,
                 finished: false,
+                terminal_closed: false,
             },
             initial_output,
         ))
@@ -155,12 +157,37 @@ impl QjsShellSession {
         Ok(self.runtime.exit_code()?)
     }
 
+    #[cfg(test)]
+    fn terminal_for_test(&self) -> Arc<TermDevice> {
+        Arc::clone(&self.terminal)
+    }
+
+    #[cfg(test)]
+    fn terminal_id_for_test(&self) -> &str {
+        &self.terminal_id
+    }
+
+    pub(super) fn close_terminal_resource(&mut self) -> Result<(), CliError> {
+        if self.terminal_closed {
+            return Ok(());
+        }
+        self.terminal.close(&self.terminal_id)?;
+        self.terminal_closed = true;
+        Ok(())
+    }
+
     fn finish_if_exited(&mut self) -> Result<(), CliError> {
         if !self.finished && self.runtime.exit_code()?.is_some() {
             self.runtime.finish()?;
             self.finished = true;
         }
         Ok(())
+    }
+}
+
+impl Drop for QjsShellSession {
+    fn drop(&mut self) {
+        let _ = self.close_terminal_resource();
     }
 }
 
@@ -1481,7 +1508,7 @@ mod tests {
         PostEvalFeed, QJS_SHELL_SCRIPT_SENTINEL, QjsShellSession, TermResize,
         parse_qjs_shell_command, parse_qjs_term_command,
     };
-    use wanix_fs::NormalizedPath;
+    use wanix_fs::{FileSystem, FsError, NormalizedPath, OpenOptions};
 
     #[test]
     fn parse_qjs_term_collects_pre_script_post_eval_feeds() {
@@ -1665,6 +1692,47 @@ mod tests {
         let output = session.input(b"exit\n").unwrap();
         assert_eq!(output, b"exit\r\nbye\r\n");
         assert!(session.is_finished());
+    }
+
+    #[test]
+    fn qjs_shell_session_closes_owned_terminal_on_drop() {
+        let root = temp_dir("wanix-qjs-shell-session-drop");
+        let (session, _initial_output) = QjsShellSession::start(&root).unwrap();
+        let terminal = session.terminal_for_test();
+        let terminal_id = session.terminal_id_for_test().to_owned();
+
+        drop(session);
+
+        let result = terminal.open(
+            &NormalizedPath::new(format!("{terminal_id}/data")).unwrap(),
+            OpenOptions {
+                read: true,
+                ..OpenOptions::default()
+            },
+        );
+        assert!(matches!(result, Err(FsError::NotFound)));
+    }
+
+    #[test]
+    fn qjs_shell_session_close_releases_terminal_resource() {
+        let root = temp_dir("wanix-qjs-shell-session-close");
+        let (mut session, _initial_output) = QjsShellSession::start(&root).unwrap();
+        let terminal = session.terminal_for_test();
+        let terminal_id = session.terminal_id_for_test().to_owned();
+
+        assert!(
+            terminal
+                .metadata(&NormalizedPath::new(format!("{terminal_id}/id")).unwrap())
+                .is_ok()
+        );
+
+        session.close_terminal_resource().unwrap();
+        session.close_terminal_resource().unwrap();
+
+        assert!(matches!(
+            terminal.metadata(&NormalizedPath::new(format!("{terminal_id}/id")).unwrap()),
+            Err(FsError::NotFound)
+        ));
     }
 
     #[test]

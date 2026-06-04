@@ -81,7 +81,8 @@ tests.
   synchronous child `qjs` task launches with inherited env, direct terminal
   stdio including buffered foreground stdin handoff, namespace stdio
   redirection, queued resize tracking from `#term/<id>/winch`, and observable
-  child exit status for demos.
+  child exit status for demos. Served shell sessions release their owned
+  terminal resource when the session closes.
 - `wanix-rust p9-stdio`, `p9-listen`, `p9-ws`, and `serve`: the Rust 9P server
   exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
   layers, with binary protocol traffic kept separate from diagnostics.

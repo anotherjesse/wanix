@@ -501,7 +501,7 @@ fn serve_terminal_websocket_connection(
             Err(error) if is_terminal_websocket_idle_tick(&error) => {
                 let output = session.pump().map_err(ServeConnectionError::Terminal)?;
                 send_terminal_output(&mut socket, output)?;
-                if close_terminal_websocket_if_finished(&mut socket, &session)? {
+                if close_terminal_websocket_if_finished(&mut socket, &mut session)? {
                     return Ok(());
                 }
                 continue;
@@ -518,7 +518,7 @@ fn serve_terminal_websocket_connection(
                     .input(bytes.as_ref())
                     .map_err(ServeConnectionError::Terminal)?;
                 send_terminal_output(&mut socket, output)?;
-                if close_terminal_websocket_if_finished(&mut socket, &session)? {
+                if close_terminal_websocket_if_finished(&mut socket, &mut session)? {
                     return Ok(());
                 }
             }
@@ -534,11 +534,16 @@ fn serve_terminal_websocket_connection(
                         .map_err(ServeConnectionError::Terminal)?
                 };
                 send_terminal_output(&mut socket, output)?;
-                if close_terminal_websocket_if_finished(&mut socket, &session)? {
+                if close_terminal_websocket_if_finished(&mut socket, &mut session)? {
                     return Ok(());
                 }
             }
-            Message::Close(_) => return Ok(()),
+            Message::Close(_) => {
+                session
+                    .close_terminal_resource()
+                    .map_err(ServeConnectionError::Terminal)?;
+                return Ok(());
+            }
             Message::Ping(bytes) => socket.send(Message::Pong(bytes)).map_err(|error| {
                 ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error))
             })?,
@@ -598,7 +603,7 @@ fn query_percent_decode(value: &str) -> Result<String, StaticResponse> {
 
 fn close_terminal_websocket_if_finished(
     socket: &mut WebSocket<TcpStream>,
-    session: &QjsShellSession,
+    session: &mut QjsShellSession,
 ) -> Result<bool, ServeConnectionError> {
     if !session.is_finished() {
         return Ok(false);
@@ -608,6 +613,9 @@ fn close_terminal_websocket_if_finished(
         .map_err(ServeConnectionError::Terminal)?
         .unwrap_or(0);
     send_terminal_exit(socket, exit_code)?;
+    session
+        .close_terminal_resource()
+        .map_err(ServeConnectionError::Terminal)?;
     socket
         .close(None)
         .map_err(|error| ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error)))?;

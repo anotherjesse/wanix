@@ -381,6 +381,8 @@ behavior. Signal delivery, child-task cancellation, and richer persistent
 foreground child-task terminal ownership need more work. Resource cleanup is
 explicit: clients that own a terminal can write `close` to
 `#term/<id>/ctl` to remove it from the service and invalidate existing handles.
+Served qjs-shell sessions release their owned terminal resource when the
+session closes.
 
 But the direction is important: terminal behavior is not browser xterm
 plumbing. It is a Wanix device surface. A browser xterm, a local terminal, a
@@ -519,7 +521,8 @@ driving `#task` and `#term` over 9P. The served qjs-shell WebSocket route gives
 the workbench a terminal/session path backed by the same native task and
 terminal model; it can start in the configured Wanix cwd and deliver terminal
 resize frames through `#term/<id>/winch`. Direct workbench terminals dispose of
-owned terminal resources through `#term/<id>/ctl`.
+owned terminal resources through `#term/<id>/ctl`, and served shell sessions
+close their owned terminal resource as part of session cleanup.
 
 With `--bundle direct-v86`, Rust `serve` generates a browser page that fetches
 the discovery document and configures v86 `filesystem.proxy_url` to the Rust 9P

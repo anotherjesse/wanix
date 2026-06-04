@@ -377,7 +377,8 @@ $ bye
 > served tree without changing normal qjs script cwd semantics.
 > Clients that own a terminal resource can release it by writing `close` to
 > `#term/<id>/ctl`; that cleans up the terminal resource without pretending to
-> be task cancellation.
+> be task cancellation. Served qjs-shell sessions apply the same lifecycle rule
+> to their owned terminal resource when the session closes.
 
 ## 9. Inspect Protocol, Editor, And VM Entrypoints
 
