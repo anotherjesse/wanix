@@ -194,6 +194,31 @@ function quoteCommandWord(word) {
   return "'" + word.replace(/'/g, "'\"'\"'") + "'";
 }
 
+function parseQjsLaunch(words) {
+  const redirect = words.indexOf("<");
+  if (redirect < 0) {
+    return {
+      script: words[1],
+      args: words.slice(2),
+      stdinPath: null
+    };
+  }
+  if (redirect === 0 || redirect === 1) {
+    return { error: "qjs: missing script before <" };
+  }
+  if (redirect + 1 >= words.length) {
+    return { error: "qjs: missing stdin path after <" };
+  }
+  if (redirect + 2 !== words.length) {
+    return { error: "qjs: expected a single stdin path after <" };
+  }
+  return {
+    script: words[1],
+    args: words.slice(2, redirect),
+    stdinPath: resolveShellPath(words[redirect + 1])
+  };
+}
+
 function visibleEntries(path) {
   const [entries, err] = os.readdir(path);
   if (err !== 0) {
@@ -406,19 +431,25 @@ function runCp(words) {
 
 function runQjs(words) {
   if (words.length < 2) {
-    std.out.puts("qjs: usage: qjs SCRIPT [ARGS...]\n");
+    std.out.puts("qjs: usage: qjs SCRIPT [ARGS...] [< STDIN]\n");
     prompt();
     return;
   }
-  const scriptPath = resolveShellPath(words[1]);
+  const launch = parseQjsLaunch(words);
+  if (launch.error) {
+    std.out.puts(launch.error + "\n");
+    prompt();
+    return;
+  }
+  const scriptPath = resolveShellPath(launch.script);
   if (scriptPath[0] === "#") {
-    std.out.puts("qjs: " + words[1] + ": service paths are not executable scripts\n");
+    std.out.puts("qjs: " + launch.script + ": service paths are not executable scripts\n");
     prompt();
     return;
   }
   const childDir = namespaceDir(scriptPath);
   const scriptName = namespaceBase(scriptPath);
-  const command = [scriptName].concat(words.slice(2)).map(quoteCommandWord).join(" ") + "\n";
+  const command = [scriptName].concat(launch.args).map(quoteCommandWord).join(" ") + "\n";
   try {
     const parent = readServiceText("#task/self/id").trim();
     const child = readServiceText("#task/new/qjs").trim();
@@ -426,7 +457,11 @@ function runQjs(words) {
     writeRequiredServiceText(taskPath + "/cmd", command);
     writeRequiredServiceText(taskPath + "/env", readServiceText("#task/self/env"));
     writeRequiredServiceText(taskPath + "/dir", childDir + "\n");
-    writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/0 fd/0\n");
+    if (launch.stdinPath) {
+      writeRequiredServiceText(taskPath + "/ctl", "bind " + quoteCommandWord(launch.stdinPath) + " fd/0\n");
+    } else {
+      writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/0 fd/0\n");
+    }
     writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/1 fd/1\n");
     writeRequiredServiceText(taskPath + "/ctl", "bind #task/" + parent + "/fd/2 fd/2\n");
     writeRequiredServiceText(taskPath + "/ctl", "start\n");

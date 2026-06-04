@@ -356,9 +356,10 @@ $ bye
 > the guest shell owns echo, simple editing, Ctrl-D, and command dispatch.
 > The bundled shell has a small filesystem command set (`cd`, `ls`, `cat`,
 > `write`, `mkdir`, `rm`, `rmdir`, `mv`, and `cp`) for Wanix namespace demos,
-> plus a synchronous `qjs SCRIPT [ARGS...]` launcher that allocates a child
-> `qjs` task through `#task/new/qjs`, wires its stdio fds to the terminal, and
-> waits on the child's `exit` file.
+> plus a synchronous `qjs SCRIPT [ARGS...] [< STDIN]` launcher that allocates a
+> child `qjs` task through `#task/new/qjs`, wires stdout/stderr to the
+> terminal, optionally binds fd `0` from a namespace file, and waits on the
+> child's `exit` file.
 > Served/workbench shell sessions keep WASI rooted at the served namespace root
 > while `#task/self/dir` tracks the logical shell cwd, so `cd` can navigate the
 > served tree without changing normal qjs script cwd semantics.

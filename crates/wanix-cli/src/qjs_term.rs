@@ -1688,13 +1688,25 @@ mod tests {
     #[test]
     fn qjs_shell_session_starts_child_qjs_task() {
         let root = temp_dir("wanix-qjs-shell-session-child");
+        fs::write(root.join("input.txt"), "redirected stdin\n").unwrap();
         fs::write(
             root.join("child.js"),
             r##"import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+function readStdin() {
+  const bytes = new Uint8Array(64);
+  const count = os.read(0, bytes.buffer, 0, bytes.length);
+  if (count < 0) {
+    throw new Error("stdin read failed: " + count);
+  }
+  return Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+}
 
 std.out.puts("child task " + std.loadFile("#task/self/id").trim() + "\n");
 std.out.puts("child cwd " + std.loadFile("#task/self/dir").trim() + "\n");
 std.out.puts("child argv " + scriptArgs.join("|") + "\n");
+std.out.puts("child stdin " + readStdin().trimEnd() + "\n");
 std.out.puts("child raw " + std.getenv("WANIX_QJS_SHELL_RAW") + "\n");
 std.out.flush();
 "##,
@@ -1704,12 +1716,12 @@ std.out.flush();
 
         assert_eq!(initial_output, b"shell task: 1\r\n$ ");
         let output = session
-            .input(b"qjs child.js alpha 'two words'\nexit\n")
+            .input(b"qjs child.js alpha 'two words' < input.txt\nexit\n")
             .unwrap();
 
         assert_eq!(
             output,
-            b"qjs child.js alpha 'two words'\r\nchild task 2\r\nchild cwd .\r\nchild argv child.js|alpha|two words\r\nchild raw 1\r\n$ exit\r\nbye\r\n"
+            b"qjs child.js alpha 'two words' < input.txt\r\nchild task 2\r\nchild cwd .\r\nchild argv child.js|alpha|two words\r\nchild stdin redirected stdin\r\nchild raw 1\r\n$ exit\r\nbye\r\n"
         );
         assert!(session.is_finished());
     }
