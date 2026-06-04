@@ -1510,10 +1510,10 @@ fn fs9p_bundle_html() -> String {
         return new Reader(response.payload).u32();
       }
 
-      async readdir(fid) {
+      async readdirPage(fid, offset) {
         const payload = new Writer();
         payload.u32(fid);
-        payload.u64(0);
+        payload.u64(offset);
         payload.u32(65536);
         const response = await this.rpc(P9_TREADDIR, payload.done());
         const reader = new Reader(response.payload);
@@ -1521,10 +1521,24 @@ fn fs9p_bundle_html() -> String {
         const dirBytes = new Reader(reader.data(reader.u32()));
         while (dirBytes.remaining() > 0) {
           const qid = dirBytes.qid();
-          dirBytes.u64();
+          const offset = dirBytes.u64();
           const type = dirBytes.u8();
           const name = dirBytes.string();
-          entries.push({ name, type, qid });
+          entries.push({ name, type, qid, offset });
+        }
+        return entries;
+      }
+
+      async readdir(fid) {
+        const entries = [];
+        let offset = 0n;
+        while (true) {
+          const page = await this.readdirPage(fid, offset);
+          if (page.length === 0) break;
+          entries.push(...page);
+          const nextOffset = page[page.length - 1].offset;
+          if (nextOffset <= offset) break;
+          offset = nextOffset;
         }
         return entries;
       }
@@ -2611,6 +2625,12 @@ mod tests {
             "{response}"
         );
         assert!(response.contains("async remove(path)"), "{response}");
+        assert!(
+            response.contains("async readdirPage(fid, offset)"),
+            "{response}"
+        );
+        assert!(response.contains("payload.u64(offset)"), "{response}");
+        assert!(response.contains("entries.push(...page)"), "{response}");
         assert!(response.contains("window.wanixP9 = client"), "{response}");
         assert!(!response.contains("static index"), "{response}");
         assert!(!response.contains("globalThis.Wanix"), "{response}");

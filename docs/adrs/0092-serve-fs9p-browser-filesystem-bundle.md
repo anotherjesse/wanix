@@ -20,8 +20,8 @@ The browser filesystem and workbench path uses Rust serve discovery and direct
 9P:
 
 - `serve --bundle fs9p` can expose a browser filesystem smoke page that fetches
-  discovery, opens the direct 9P WebSocket route, and proves browse/read/write
-  operations against the served root.
+  discovery, opens the direct 9P WebSocket route, and proves paginated
+  browse/read/write operations against the served root.
 - The workbench extension can back its `wanix:` filesystem provider with direct
   9P operations for stat, paginated directory listing, read, write, rename, and
   delete, plus bounded client-side file and text search over `wanix:/`.

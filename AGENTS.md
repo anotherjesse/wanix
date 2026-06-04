@@ -146,7 +146,9 @@ while keeping offset semantics for regular seekable files.
 When launched with `--bundle fs9p`, `/?bundle=fs9p` returns a generated browser
 filesystem smoke page that fetches discovery, opens the direct binary 9P
 WebSocket route, negotiates 9P2000.L, and exposes list/read/write/rename/delete
-controls against the served root. This is the browser-side 9P transport proof
+controls against the served root. Its browser-side client follows `Treaddir`
+offset cookies so large directories are listed across multiple response pages.
+This is the browser-side 9P transport proof
 for future workbench/VS Code filesystem integration, not the VS Code provider
 itself.
 The web workbench extension now also has a direct 9P filesystem backend that
