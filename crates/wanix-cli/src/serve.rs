@@ -19,6 +19,7 @@ const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
 const DIRECT_V86_BUNDLE: &str = "direct-v86";
 const FS9P_BUNDLE: &str = "fs9p";
+const WORKBENCH_FS9P_BUNDLE: &str = "workbench-fs9p";
 const DIRECT_V86_DEFAULT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,aname=,cache=none,msize=131072 loglevel=3";
 const DIRECT_V86_DEFAULT_KERNEL_PATH: &str = "/boot/bzImage";
 const DIRECT_V86_MEMORY_SIZE: u32 = 1024 * 1024 * 1024;
@@ -643,6 +644,9 @@ fn bundle_response(
     match (roots.bundle.as_deref(), query_param(query, "bundle")) {
         (Some(DIRECT_V86_BUNDLE), Some(DIRECT_V86_BUNDLE)) => Some(direct_v86_bundle_response()),
         (Some(FS9P_BUNDLE), Some(FS9P_BUNDLE)) => Some(fs9p_bundle_response()),
+        (Some(WORKBENCH_FS9P_BUNDLE), Some(WORKBENCH_FS9P_BUNDLE)) => {
+            Some(workbench_fs9p_bundle_response())
+        }
         _ => None,
     }
 }
@@ -1375,6 +1379,181 @@ fn fs9p_bundle_html() -> String {
     )
 }
 
+fn workbench_fs9p_bundle_response() -> StaticResponse {
+    StaticResponse {
+        status: HttpStatus::Ok,
+        content_type: "text/html; charset=utf-8",
+        body: workbench_fs9p_bundle_html().into_bytes(),
+    }
+}
+
+fn workbench_fs9p_bundle_html() -> String {
+    String::from(
+        r##"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wanix Rust workbench</title>
+  <style>
+    html, body, #workbench { height: 100%; margin: 0; }
+    body { overflow: hidden; color: #f5f5f5; background: #181818; font: 13px system-ui, sans-serif; }
+    #workbench { width: 100%; }
+    #status {
+      position: fixed;
+      z-index: 10;
+      top: 10px;
+      left: 10px;
+      max-width: min(560px, calc(100vw - 20px));
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border: 1px solid #3f3f46;
+      background: rgba(24, 24, 24, .92);
+      color: #f5f5f5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    body.ready #status { display: none; }
+    body.error #status { border-color: #b85f5f; color: #ffd8d8; }
+  </style>
+</head>
+<body>
+  <div id="workbench" role="main"></div>
+  <div id="status">Loading workbench assets...</div>
+  <script>
+    const statusEl = document.querySelector("#status");
+    const container = document.querySelector("#workbench");
+    const params = new URLSearchParams(location.search);
+    const extensionId = params.get("extension") || "wanix.workbench";
+    const workspaceUri = params.get("workspace") || "wanix:/";
+    const rawAssets = params.get("assets") || "/workbench/";
+    const extensionRoot = new URL(rawAssets.replace(/\/?$/, "/"), location.href);
+    const codeDir = new URL("code/", extensionRoot);
+    const outDir = new URL("out/", codeDir);
+    const outRoot = outDir.href.replace(/\/?$/, "");
+
+    function showStatus(message) {
+      statusEl.textContent = message;
+    }
+
+    function showError(error) {
+      const message = error && error.stack ? error.stack : String(error);
+      document.body.classList.remove("ready");
+      document.body.classList.add("error");
+      showStatus(message);
+      console.error(error);
+    }
+
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error("failed to load " + src));
+        document.head.appendChild(script);
+      });
+    }
+
+    function loadStylesheet(href) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = href;
+      document.head.appendChild(link);
+    }
+
+    function waitForAmdRequire() {
+      return new Promise((resolve, reject) => {
+        const started = performance.now();
+        const poll = () => {
+          const amdRequire = globalThis.require;
+          if (amdRequire && typeof amdRequire.config === "function") {
+            resolve(amdRequire);
+            return;
+          }
+          if (performance.now() - started > 5000) {
+            reject(new Error("VS Code AMD loader did not initialize"));
+            return;
+          }
+          setTimeout(poll, 0);
+        };
+        poll();
+      });
+    }
+
+    function createWorkbench(amdRequire, discovery) {
+      return new Promise((resolve, reject) => {
+        amdRequire(["vs/workbench/workbench.web.main"], async (wb) => {
+          try {
+            const activationChannel = new MessageChannel();
+            activationChannel.port2.onmessage = (event) => {
+              if (event.data?.type === "_port" && event.data.port) {
+                event.data.port.postMessage({ config: {} });
+              }
+            };
+            const config = {
+              additionalBuiltinExtensions: [wb.URI.parse(extensionRoot.href)],
+              configurationDefaults: {
+                "window.commandCenter": false,
+                "workbench.layoutControl.enabled": false,
+                "workbench.startupEditor": "none",
+                "workbench.tips.enabled": false,
+                "workbench.welcomePage.walkthroughs.openOnInstall": false,
+                "editor.minimap.enabled": false,
+                "explorer.confirmDelete": false,
+                "explorer.confirmDragAndDrop": false
+              },
+              developmentOptions: { logLevel: params.has("debug") ? 2 : 0 },
+              productConfiguration: {
+                extensionEnabledApiProposals: { [extensionId]: ["ipc"] }
+              },
+              workspaceProvider: {
+                trusted: true,
+                workspace: { folderUri: wb.URI.parse(workspaceUri) },
+                open(workspace, options) {
+                  console.log("todo: handle openFolder", workspace, options);
+                  return Promise.resolve(true);
+                }
+              },
+              messagePorts: new Map([[extensionId, activationChannel.port1]])
+            };
+            globalThis.wanixWorkbench = {
+              activationPort: activationChannel.port2,
+              assets: extensionRoot.href,
+              discovery,
+              workspace: workspaceUri
+            };
+            await wb.create(container, config);
+            document.body.classList.add("ready");
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        }, reject);
+      });
+    }
+
+    (async () => {
+      showStatus("Fetching Wanix discovery...");
+      const discoveryResponse = await fetch("/.well-known/wanix.json", { cache: "no-store" });
+      if (!discoveryResponse.ok) {
+        throw new Error("failed to fetch discovery: HTTP " + discoveryResponse.status);
+      }
+      const discovery = await discoveryResponse.json();
+      showStatus("Opening " + workspaceUri + " through " + discovery.routes.p9.websocket);
+      loadStylesheet(new URL("vs/workbench/workbench.web.main.css", outDir).href);
+      await loadScript(new URL("nls.messages.js", outDir).href);
+      await loadScript(new URL("vs/loader.js", outDir).href);
+      const amdRequire = await waitForAmdRequire();
+      amdRequire.config({ baseUrl: outRoot });
+      await createWorkbench(amdRequire, discovery);
+    })().catch(showError);
+  </script>
+</body>
+</html>
+"##,
+    )
+}
+
 fn serve_discovery_response(roots: &ServeRoots, request: &[u8]) -> StaticResponse {
     StaticResponse {
         status: HttpStatus::Ok,
@@ -2004,6 +2183,98 @@ mod tests {
         assert!(response.contains("window.wanixP9 = client"), "{response}");
         assert!(!response.contains("static index"), "{response}");
         assert!(!response.contains("globalThis.Wanix"), "{response}");
+    }
+
+    #[test]
+    fn serve_once_returns_workbench_fs9p_bundle_page() {
+        let root = temp_dir("wanix-cli-serve-workbench-fs9p");
+        fs::write(root.join("index.html"), b"static index").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /?bundle=workbench-fs9p HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+        );
+        let (exit_code, stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stderr.contains("/?bundle=workbench-fs9p"), "{stderr}");
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(
+            response.contains("Content-Type: text/html; charset=utf-8\r\n"),
+            "{response}"
+        );
+        assert!(
+            response.contains("fetch(\"/.well-known/wanix.json\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("new URL(\"vs/loader.js\", outDir)"),
+            "{response}"
+        );
+        assert!(
+            response.contains("new URL(\"vs/workbench/workbench.web.main.css\", outDir)"),
+            "{response}"
+        );
+        assert!(
+            response.contains("amdRequire.config({ baseUrl: outRoot })"),
+            "{response}"
+        );
+        assert!(
+            response.contains("[\"vs/workbench/workbench.web.main\"]"),
+            "{response}"
+        );
+        assert!(
+            response.contains("additionalBuiltinExtensions: [wb.URI.parse(extensionRoot.href)]"),
+            "{response}"
+        );
+        assert!(
+            response.contains("extensionEnabledApiProposals: { [extensionId]: [\"ipc\"] }"),
+            "{response}"
+        );
+        assert!(
+            response.contains("const activationChannel = new MessageChannel()"),
+            "{response}"
+        );
+        assert!(
+            response.contains("messagePorts: new Map([[extensionId, activationChannel.port1]])"),
+            "{response}"
+        );
+        assert!(
+            response.contains("workspace: { folderUri: wb.URI.parse(workspaceUri) }"),
+            "{response}"
+        );
+        assert!(
+            response.contains("const workspaceUri = params.get(\"workspace\") || \"wanix:/\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("const rawAssets = params.get(\"assets\") || \"/workbench/\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("globalThis.wanixWorkbench ="),
+            "{response}"
+        );
+        assert!(!response.contains("event.data.wanix"), "{response}");
+        assert!(!response.contains("new WanixHandle"), "{response}");
+        assert!(!response.contains("globalThis.Wanix"), "{response}");
+        assert!(!response.contains("static index"), "{response}");
     }
 
     #[test]
