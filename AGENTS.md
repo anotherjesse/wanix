@@ -166,7 +166,8 @@ reachability over the workbench path. The same `--wanix-services` mode also expo
 `/.well-known/qjs-shell`, a Rust-owned terminal/session WebSocket route that
 starts the bundled QuickJS shell as a Wanix task, pumps guest ready-IO while
 browser terminal input arrives, returns terminal output as binary WebSocket
-frames, and reports exit as a lifecycle text frame.
+frames, and reports exit as a lifecycle text frame consumed by the workbench
+pseudoterminal.
 When launched with `--bundle workbench-fs9p`, `/?bundle=workbench-fs9p`
 returns a generated filesystem-only VS Code web workbench launcher. The page
 loads Code OSS and the `workbench/` extension package from the served root,
@@ -183,8 +184,8 @@ the Rust direct 9P WebSocket, and populates Explorer from the served root.
 `--wanix-services` adds a test-covered service namespace export, a qjs-backed
 terminal route for the workbench pseudoterminal, and real one-shot qjs task
 startup through `#task`; direct service-backed workbench terminals also forward
-resize events to the terminal `winch` file. Richer task/session lifecycle controls remain
-follow-ups.
+resize events to the terminal `winch` file and close from observed task exit
+state. Richer task/session lifecycle controls remain follow-ups.
 When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86
 `filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also

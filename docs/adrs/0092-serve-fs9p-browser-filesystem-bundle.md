@@ -30,7 +30,8 @@ The browser filesystem and workbench path uses Rust serve discovery and direct
 - When discovery advertises services, the workbench path can open a qjs shell
   terminal route and can start a `qjs` Wanix task by driving `#task` and
   `#term` over direct 9P, including terminal resize delivery through
-  `#term/<id>/winch`.
+  `#term/<id>/winch` and pseudoterminal close events driven by Wanix task or
+  session exit state.
 - Running the active `wanix:` JavaScript file as a `qjs` task should use the
   same task command/env/dir/fd service files as native clients.
 

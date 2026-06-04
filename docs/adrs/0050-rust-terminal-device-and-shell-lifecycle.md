@@ -56,7 +56,8 @@ separate QuickJS process model:
   other qjs task paths while rejecting script-path and preloaded-stdin fixture
   controls.
 - `serve --wanix-services` exposes a qjs-shell WebSocket route that drives the
-  same terminal-backed task shape for browser/workbench pseudoterminals.
+  same terminal-backed task shape for browser/workbench pseudoterminals,
+  including exit lifecycle frames.
 
 Native and served shell loops may stream terminal output during eval, after
 input/feed batches, after ready-IO turns, and while reporting errors. They may
@@ -85,6 +86,12 @@ For terminal resize:
 - signal-driven resize wakeups may be added later without changing the terminal
   device contract.
 
+For editor-facing lifecycle, workbench pseudoterminals should close from Wanix
+task/session state instead of from frontend-only assumptions. The served
+qjs-shell route reports task exit as a lifecycle text frame, and direct
+service-backed workbench terminals may observe `#task/<id>/exit` over 9P after
+draining terminal output.
+
 ## Consequences
 
 Rust Wanix has one terminal contract that can be used by native CLI demos,
@@ -100,8 +107,9 @@ Their behavior is now pinned by tests and examples, while this ADR records the
 durable terminal lifecycle contract.
 
 This still leaves important future work: signal delivery, signal-driven resize
-wakeups, cancellation, richer terminal/session lifecycle control, process
-groups, durable terminal attachment, and VM/editor terminal policy.
+wakeups, cancellation, richer terminal/session lifecycle control beyond exit
+observation, process groups, durable terminal attachment, and VM/editor
+terminal policy.
 
 ## Replaces
 

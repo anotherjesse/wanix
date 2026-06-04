@@ -168,14 +168,29 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const DIRECT_TASK_EXIT_POLL_MS = 100;
+const DIRECT_TASK_EXIT_DRAIN_MS = 100;
+
 function createQjsShellTerminal(config: Config) {
 	const writeEmitter = new vscode.EventEmitter<string>();
+	const closeEmitter = new vscode.EventEmitter<number | void>();
 	const dec = new TextDecoder();
 	const enc = new TextEncoder();
 	let socket: WebSocket | undefined;
 	let opened = false;
+	let closed = false;
 	const pending: Uint8Array[] = [];
+	const finish = (code?: number) => {
+		if (closed) {
+			return;
+		}
+		closed = true;
+		closeEmitter.fire(code);
+	};
 	const sendInput = (bytes: Uint8Array) => {
+		if (closed) {
+			return;
+		}
 		if (opened && socket?.readyState === WebSocket.OPEN) {
 			socket.send(bytes);
 		} else {
@@ -184,6 +199,7 @@ function createQjsShellTerminal(config: Config) {
 	};
 	return {
 		onDidWrite: writeEmitter.event,
+		onDidClose: closeEmitter.event,
 		open: () => {
 			socket = new WebSocket(config.qjsShellUrl || "");
 			socket.binaryType = "arraybuffer";
@@ -199,6 +215,8 @@ function createQjsShellTerminal(config: Config) {
 						const message = JSON.parse(event.data);
 						if (message.type === "error") {
 							writeEmitter.fire(`\r\n${message.message}\r\n`);
+						} else if (message.type === "exit") {
+							finish(parseTerminalExitCode(message.code));
 						}
 					} catch {
 						// Ignore lifecycle text frames that are not terminal output.
@@ -213,15 +231,22 @@ function createQjsShellTerminal(config: Config) {
 			socket.onerror = () => {
 				writeEmitter.fire("\r\nterminal websocket failed\r\n");
 			};
+			socket.onclose = () => {
+				finish();
+			};
 		},
 		close: () => {
+			if (closed) {
+				return;
+			}
+			closed = true;
 			socket?.close();
 		},
 		handleInput: (data: string) => {
 			sendInput(enc.encode(data));
 		},
 		setDimensions: (dimensions: vscode.TerminalDimensions) => {
-			if (socket?.readyState === WebSocket.OPEN) {
+			if (!closed && socket?.readyState === WebSocket.OPEN) {
 				socket.send(JSON.stringify({
 					type: "resize",
 					columns: dimensions.columns,
@@ -246,13 +271,53 @@ async function createTerminal(fsys: any, config: Config) {
 	await fsys.writeFile(`${taskPath}/ctl`, "start");
 
 	const writeEmitter = new vscode.EventEmitter<string>();
+	const closeEmitter = new vscode.EventEmitter<number | void>();
 	const dec = new TextDecoder();
 	const enc = new TextEncoder();
 	const readable = await fsys.openReadable(`${termPath}/data`);
+	const reader = readable.getReader();
 	const writable = (await fsys.openWritable(`${termPath}/data`)).getWriter();
 	let pendingResize: Promise<void> = Promise.resolve();
 	let closed = false;
 	let buffer = '';
+	let lastOutputAt = Date.now();
+	const closeWriter = () => {
+		writable.close().catch((error: unknown) => {
+			console.warn("Wanix terminal input close failed", error);
+		});
+	};
+	const cancelReader = () => {
+		reader.cancel().catch((error: unknown) => {
+			console.warn("Wanix terminal output close failed", error);
+		});
+	};
+	const finish = (code?: number) => {
+		if (closed) {
+			return;
+		}
+		closed = true;
+		closeWriter();
+		cancelReader();
+		closeEmitter.fire(code);
+	};
+	const watchTaskExit = async () => {
+		while (!closed) {
+			let exit = "";
+			try {
+				exit = (await fsys.readText(`${taskPath}/exit`)).trim();
+			} catch (error) {
+				console.warn("Wanix terminal exit watch failed", error);
+			}
+			if (exit.length > 0) {
+				while (!closed && Date.now() - lastOutputAt < DIRECT_TASK_EXIT_DRAIN_MS) {
+					await delay(25);
+				}
+				finish(parseTerminalExitCode(exit));
+				return;
+			}
+			await delay(DIRECT_TASK_EXIT_POLL_MS);
+		}
+	};
 	const sendResize = (dimensions: vscode.TerminalDimensions) => {
 		if (dimensions.columns <= 0 || dimensions.rows <= 0 || closed) {
 			return;
@@ -271,18 +336,40 @@ async function createTerminal(fsys: any, config: Config) {
 	};
 	return {
 		onDidWrite: writeEmitter.event,
+		onDidClose: closeEmitter.event,
 		open: () => {
 			(async () => {
-				for await (const chunk of readable) {
-					writeEmitter.fire(dec.decode(chunk));
+				try {
+					while (!closed) {
+						const { done, value } = await reader.read();
+						if (done) {
+							return;
+						}
+						lastOutputAt = Date.now();
+						writeEmitter.fire(dec.decode(value));
+					}
+				} catch (error) {
+					if (!closed) {
+						console.warn("Wanix terminal output failed", error);
+					}
+				} finally {
+					reader.releaseLock();
 				}
 			})();
+			watchTaskExit();
 		},
 		close: () => {
+			if (closed) {
+				return;
+			}
 			closed = true;
-			writable.close();
+			closeWriter();
+			cancelReader();
 		},
 		handleInput: async (data: string) => {
+			if (closed) {
+				return;
+			}
 			if (config.raw) {
 				writable.write(enc.encode(data));
 				return;
@@ -307,6 +394,21 @@ async function createTerminal(fsys: any, config: Config) {
 			sendResize(dimensions);
 		}
 	};
+}
+
+function parseTerminalExitCode(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isInteger(value)) {
+		return value;
+	}
+	if (typeof value !== "string") {
+		return undefined;
+	}
+	const text = value.trim();
+	if (text.length === 0) {
+		return undefined;
+	}
+	const code = Number.parseInt(text, 10);
+	return Number.isInteger(code) ? code : undefined;
 }
 
 function splitPath(path: string): string[] {
