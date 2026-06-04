@@ -11,7 +11,9 @@
     "Other"
   ],
   "enabledApiProposals": [
-    "ipc"
+    "ipc",
+    "fileSearchProvider",
+    "textSearchProvider"
   ],
   "activationEvents": [
     "onStartupFinished",

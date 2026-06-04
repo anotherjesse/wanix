@@ -24,6 +24,7 @@ export type P9DirEntry = {
 	IsDir: boolean;
 	Name: string;
 	ModTime: number;
+	Offset: bigint;
 	Size: number;
 };
 
@@ -107,10 +108,10 @@ export class P9Session {
 		return new Reader(response.payload).u32();
 	}
 
-	async readdir(fid: number, count: number): Promise<P9DirEntry[]> {
+	async readdir(fid: number, offset: bigint, count: number): Promise<P9DirEntry[]> {
 		const payload = new Writer();
 		payload.u32(fid);
-		payload.u64(0n);
+		payload.u64(offset);
 		payload.u32(count);
 		const response = await this.rpc(P9_TREADDIR, payload.done());
 		const reader = new Reader(response.payload);
@@ -118,13 +119,14 @@ export class P9Session {
 		const entries: P9DirEntry[] = [];
 		while (dirBytes.remaining() > 0) {
 			const qid = dirBytes.qid();
-			dirBytes.u64();
+			const offset = dirBytes.u64();
 			const direntType = dirBytes.u8();
 			const name = dirBytes.string();
 			entries.push({
 				IsDir: direntType === DT_DIR || (qid.type & 0x80) !== 0,
 				Name: name,
 				ModTime: 0,
+				Offset: offset,
 				Size: 0,
 			});
 		}

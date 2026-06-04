@@ -71,8 +71,21 @@ export class WanixP9Handle {
 		const fid = await this.session.walkPath(name);
 		try {
 			await this.session.open(fid, O_RDONLY);
-			const entries = await this.session.readdir(fid, READ_CHUNK_SIZE);
-			return entries.map((entry) => entry.IsDir ? `${entry.Name}/` : entry.Name);
+			const names: string[] = [];
+			let offset = 0n;
+			while (true) {
+				const entries = await this.session.readdir(fid, offset, READ_CHUNK_SIZE);
+				if (entries.length === 0) {
+					break;
+				}
+				names.push(...entries.map((entry) => entry.IsDir ? `${entry.Name}/` : entry.Name));
+				const nextOffset = entries[entries.length - 1].Offset;
+				if (nextOffset <= offset) {
+					break;
+				}
+				offset = nextOffset;
+			}
+			return names;
 		} finally {
 			await this.session.clunkQuietly(fid);
 		}

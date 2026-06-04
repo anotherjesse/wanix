@@ -1,4 +1,5 @@
 import {
+	CancellationToken,
 	Disposable,
 	Event,
 	EventEmitter,
@@ -8,6 +9,8 @@ import {
 	FileSystemError,
 	FileSystemProvider,
 	FileType,
+	Progress,
+	Range,
 	Uri,
 	workspace,
 } from 'vscode';
@@ -18,6 +21,251 @@ interface RemoteEntry {
     // Ctime: number;
     ModTime: number;
     Size: number;
+}
+
+const DEFAULT_SEARCH_LIMIT = 512;
+const MAX_TEXT_SEARCH_BYTES = 1024 * 1024;
+const searchDecoder = new TextDecoder();
+
+type WanixSearchWorkspace = typeof workspace & {
+	registerFileSearchProvider?: (scheme: string, provider: WanixFileSearchProvider) => Disposable;
+	registerTextSearchProvider?: (scheme: string, provider: WanixTextSearchProvider) => Disposable;
+};
+
+interface WanixFileSearchProvider {
+	provideFileSearchResults(query: WanixFileSearchQuery, options: WanixSearchOptions, token: CancellationToken): Promise<Uri[]>;
+}
+
+interface WanixTextSearchProvider {
+	provideTextSearchResults(query: WanixTextSearchQuery, options: WanixSearchOptions, progress: Progress<WanixTextSearchResult>, token: CancellationToken): Promise<WanixSearchComplete>;
+}
+
+interface WanixFileSearchQuery {
+	pattern?: string;
+}
+
+interface WanixTextSearchQuery {
+	pattern: string;
+	isCaseSensitive?: boolean;
+	isRegExp?: boolean;
+	isWordMatch?: boolean;
+	isMultiline?: boolean;
+}
+
+interface WanixSearchOptions {
+	folder: Uri;
+	includes?: string[];
+	excludes?: string[];
+	maxFileSize?: number;
+	maxResults?: number;
+}
+
+interface WanixTextSearchResult {
+	uri: Uri;
+	ranges: Range | Range[];
+	preview: {
+		text: string;
+		matches: Range | Range[];
+	};
+}
+
+interface WanixSearchComplete {
+	limitHit?: boolean;
+}
+
+function searchRootUri(options: WanixSearchOptions): Uri {
+	const folder = options.folder?.scheme === WanixBridge.scheme
+		? options.folder
+		: Uri.parse(`${WanixBridge.scheme}:/`);
+	return folder.with({ path: normalizeUriPath(folder.path || "/") });
+}
+
+function searchLimit(options: WanixSearchOptions): number {
+	return options.maxResults && options.maxResults > 0
+		? options.maxResults
+		: DEFAULT_SEARCH_LIMIT;
+}
+
+function textSearchByteLimit(options: WanixSearchOptions): number {
+	return options.maxFileSize && options.maxFileSize > 0
+		? Math.min(options.maxFileSize, MAX_TEXT_SEARCH_BYTES)
+		: MAX_TEXT_SEARCH_BYTES;
+}
+
+function normalizeUriPath(path: string): string {
+	let normalized = path.replace(/\\/g, "/");
+	if (!normalized || normalized === ".") {
+		return "/";
+	}
+	if (!normalized.startsWith("/")) {
+		normalized = `/${normalized}`;
+	}
+	normalized = normalized.replace(/\/+$/, "");
+	return normalized || "/";
+}
+
+function joinUriPath(parent: string, child: string): string {
+	const base = normalizeUriPath(parent);
+	return base === "/" ? `/${child}` : `${base}/${child}`;
+}
+
+function splitUriPath(path: string): string[] {
+	const normalized = normalizeUriPath(path);
+	return normalized === "/" ? [] : normalized.slice(1).split("/");
+}
+
+function relativeSearchPath(rootPath: string, childPath: string): string {
+	const root = normalizeUriPath(rootPath);
+	const child = normalizeUriPath(childPath);
+	if (root === "/") {
+		return child.slice(1);
+	}
+	if (child === root) {
+		return "";
+	}
+	if (child.startsWith(`${root}/`)) {
+		return child.slice(root.length + 1);
+	}
+	return child.slice(1);
+}
+
+function isSearchServicePath(path: string): boolean {
+	const [first] = splitUriPath(path);
+	return first?.startsWith("#") || false;
+}
+
+function pathBaseName(path: string): string {
+	const parts = splitUriPath(path);
+	return parts[parts.length - 1] || "";
+}
+
+function pathMatchesFileSearch(relativePath: string, pattern?: string): boolean {
+	const trimmed = (pattern || "").trim().replace(/\\/g, "/");
+	if (!trimmed || trimmed === "*" || trimmed === "**/*") {
+		return true;
+	}
+	if (hasGlobSyntax(trimmed)) {
+		return globMatches(trimmed, relativePath);
+	}
+	const needle = trimmed.toLowerCase();
+	return relativePath.toLowerCase().includes(needle) || pathBaseName(relativePath).toLowerCase().includes(needle);
+}
+
+function pathPassesFilters(relativePath: string, options: WanixSearchOptions): boolean {
+	const includes = (options.includes || []).filter(Boolean);
+	if (includes.length > 0 && !includes.some((pattern) => globMatches(pattern, relativePath))) {
+		return false;
+	}
+	const excludes = (options.excludes || []).filter(Boolean);
+	return !excludes.some((pattern) => globMatches(pattern, relativePath));
+}
+
+function globMatches(pattern: string, relativePath: string): boolean {
+	const normalizedPattern = normalizeGlobPattern(pattern);
+	const normalizedPath = relativePath.replace(/\\/g, "/");
+	const patterns = normalizedPattern.startsWith("**/")
+		? [normalizedPattern, normalizedPattern.slice(3)]
+		: [normalizedPattern];
+	return patterns.some((candidate) => {
+		const target = candidate.includes("/") ? normalizedPath : pathBaseName(normalizedPath);
+		return globToRegExp(candidate).test(target);
+	});
+}
+
+function normalizeGlobPattern(pattern: string): string {
+	let normalized = pattern.trim().replace(/\\/g, "/");
+	while (normalized.startsWith("./")) {
+		normalized = normalized.slice(2);
+	}
+	normalized = normalized.replace(/^\/+/, "");
+	if (normalized.endsWith("/")) {
+		normalized += "**";
+	}
+	return normalized;
+}
+
+function hasGlobSyntax(pattern: string): boolean {
+	return /[*?[\]{}]/.test(pattern);
+}
+
+function globToRegExp(pattern: string): RegExp {
+	let source = "^";
+	for (let index = 0; index < pattern.length; index += 1) {
+		const char = pattern[index];
+		const next = pattern[index + 1];
+		if (char === "*" && next === "*") {
+			source += ".*";
+			index += 1;
+		} else if (char === "*") {
+			source += "[^/]*";
+		} else if (char === "?") {
+			source += "[^/]";
+		} else {
+			source += escapeRegExp(char);
+		}
+	}
+	source += "$";
+	return new RegExp(source, "i");
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function textSearchMatcher(query: WanixTextSearchQuery): RegExp | undefined {
+	if (!query.pattern) {
+		return undefined;
+	}
+	const flags = query.isCaseSensitive ? "g" : "gi";
+	try {
+		if (query.isRegExp) {
+			return new RegExp(query.pattern, flags);
+		}
+		const source = query.isWordMatch
+			? `\\b${escapeRegExp(query.pattern)}\\b`
+			: escapeRegExp(query.pattern);
+		return new RegExp(source, flags);
+	} catch {
+		return undefined;
+	}
+}
+
+function looksBinary(contents: Uint8Array): boolean {
+	const sampleLength = Math.min(contents.length, 8192);
+	for (let index = 0; index < sampleLength; index += 1) {
+		if (contents[index] === 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function* textSearchResults(uri: Uri, text: string, matcher: RegExp): Iterable<WanixTextSearchResult> {
+	const lines = text.split("\n");
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		const line = lines[lineIndex].endsWith("\r") ? lines[lineIndex].slice(0, -1) : lines[lineIndex];
+		matcher.lastIndex = 0;
+		let match: RegExpExecArray | null;
+		while ((match = matcher.exec(line)) !== null) {
+			const text = match[0] || "";
+			if (!text) {
+				matcher.lastIndex += 1;
+				continue;
+			}
+			const start = match.index;
+			const end = start + text.length;
+			const sourceRange = new Range(lineIndex, start, lineIndex, end);
+			const previewRange = new Range(0, start, 0, end);
+			yield {
+				uri,
+				ranges: sourceRange,
+				preview: {
+					text: line,
+					matches: previewRange,
+				},
+			};
+		}
+	}
 }
 
 export class File implements FileStat {
@@ -58,13 +306,13 @@ export class Directory implements FileStat {
 
 export type Entry = File | Directory;
 
-export class WanixBridge implements FileSystemProvider, /*FileSearchProvider, TextSearchProvider,*/ Disposable {
+export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider, WanixTextSearchProvider, Disposable {
 	static scheme = 'wanix';
 
 	public wfsys: any;
 	public readonly ready: Promise<any>;
 	private readonly disposable: Disposable;
-    private root: string;	
+	private root: string;
 
 	constructor(wanix: Promise<any>, root: string) {
 		this.ready = wanix;
@@ -72,11 +320,19 @@ export class WanixBridge implements FileSystemProvider, /*FileSearchProvider, Te
 			this.wfsys = fsys;
 		});
 		this.root = root;
-		this.disposable = Disposable.from(
+		const disposables = [
 			workspace.registerFileSystemProvider(WanixBridge.scheme, this, { isCaseSensitive: true }),
-			// workspace.registerFileSearchProvider(MemFS.scheme, this),
-			// workspace.registerTextSearchProvider(MemFS.scheme, this)
-		);
+		];
+		const searchWorkspace = workspace as WanixSearchWorkspace;
+		const fileSearch = searchWorkspace.registerFileSearchProvider?.(WanixBridge.scheme, this);
+		if (fileSearch) {
+			disposables.push(fileSearch);
+		}
+		const textSearch = searchWorkspace.registerTextSearchProvider?.(WanixBridge.scheme, this);
+		if (textSearch) {
+			disposables.push(textSearch);
+		}
+		this.disposable = Disposable.from(...disposables);
 	}
 
 	normalizePath(path: string): string {
@@ -153,6 +409,64 @@ export class WanixBridge implements FileSystemProvider, /*FileSearchProvider, Te
 	async _readFile(uri: Uri): Promise<Uint8Array> {
 		await this.ready;
 		return await this.wfsys.readFile(this.normalizePath(uri.path));
+	}
+
+	async provideFileSearchResults(query: WanixFileSearchQuery, options: WanixSearchOptions, token: CancellationToken): Promise<Uri[]> {
+		await this.ready;
+		const base = searchRootUri(options);
+		const limit = searchLimit(options);
+		const matches: Uri[] = [];
+		await this._walkSearchFiles(base, token, async (uri, relativePath) => {
+			if (!pathMatchesFileSearch(relativePath, query.pattern)) {
+				return false;
+			}
+			if (!pathPassesFilters(relativePath, options)) {
+				return false;
+			}
+			matches.push(uri);
+			return matches.length >= limit;
+		});
+		return matches;
+	}
+
+	async provideTextSearchResults(query: WanixTextSearchQuery, options: WanixSearchOptions, progress: Progress<WanixTextSearchResult>, token: CancellationToken): Promise<WanixSearchComplete> {
+		await this.ready;
+		const matcher = textSearchMatcher(query);
+		if (!matcher) {
+			return {};
+		}
+
+		const base = searchRootUri(options);
+		const limit = searchLimit(options);
+		const maxFileBytes = textSearchByteLimit(options);
+		let count = 0;
+		let limitHit = false;
+		await this._walkSearchFiles(base, token, async (uri, relativePath, stat) => {
+			if (!pathPassesFilters(relativePath, options)) {
+				return false;
+			}
+			if (stat.Size > maxFileBytes) {
+				return false;
+			}
+			const contents = await this.wfsys.readFile(this.normalizePath(uri.path));
+			if (contents.length > maxFileBytes || looksBinary(contents)) {
+				return false;
+			}
+			const text = searchDecoder.decode(contents);
+			for (const result of textSearchResults(uri, text, matcher)) {
+				if (token.isCancellationRequested) {
+					return true;
+				}
+				progress.report(result);
+				count += 1;
+				if (count >= limit) {
+					limitHit = true;
+					return true;
+				}
+			}
+			return false;
+		});
+		return { limitHit };
 	}
 
 	writeFile(uri: Uri, content: Uint8Array, options: { create: boolean, overwrite: boolean }): Thenable<void> {
@@ -253,6 +567,55 @@ export class WanixBridge implements FileSystemProvider, /*FileSearchProvider, Te
 			{ type: FileChangeType.Changed, uri: uri.with({ path: this._dirname(uri.path) }) }, 
 			{ type: FileChangeType.Created, uri }
 		);
+	}
+
+	private async _walkSearchFiles(base: Uri, token: CancellationToken, visit: (uri: Uri, relativePath: string, stat: RemoteEntry) => Promise<boolean>): Promise<void> {
+		const rootPath = normalizeUriPath(base.path || "/");
+		const stack = [rootPath];
+		while (stack.length > 0) {
+			if (token.isCancellationRequested) {
+				return;
+			}
+			const directory = stack.pop()!;
+			if (isSearchServicePath(directory)) {
+				continue;
+			}
+
+			let entries: string[];
+			try {
+				entries = await this.wfsys.readDir(this.normalizePath(directory));
+			} catch {
+				continue;
+			}
+			entries.sort((a, b) => a.localeCompare(b));
+
+			for (const entry of entries) {
+				if (token.isCancellationRequested) {
+					return;
+				}
+				const isDirectory = entry.endsWith("/");
+				const name = isDirectory ? entry.slice(0, -1) : entry;
+				const path = joinUriPath(directory, name);
+				if (isSearchServicePath(path)) {
+					continue;
+				}
+				if (isDirectory) {
+					stack.push(path);
+					continue;
+				}
+
+				let stat: RemoteEntry;
+				try {
+					stat = await this.wfsys.stat(this.normalizePath(path));
+				} catch {
+					continue;
+				}
+				const stop = await visit(base.with({ path }), relativeSearchPath(rootPath, path), stat);
+				if (stop) {
+					return;
+				}
+			}
+		}
 	}
 
 	// --- lookup

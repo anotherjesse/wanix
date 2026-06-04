@@ -151,8 +151,10 @@ for future workbench/VS Code filesystem integration, not the VS Code provider
 itself.
 The web workbench extension now also has a direct 9P filesystem backend that
 matches the existing `WanixBridge` provider shape by consuming Rust serve
-discovery and issuing 9P operations for `stat`, directory listing, file
-read/write, mkdir, rename, copy, and removal. The classic MessagePort/CBOR
+discovery and issuing 9P operations for `stat`, paginated directory listing,
+file read/write, mkdir, rename, copy, and removal. It also registers bounded
+client-side `wanix:/` file and text search providers when the served workbench
+enables the matching VS Code proposed APIs. The classic MessagePort/CBOR
 backend remains preferred when an embedding browser Wanix system supplies one.
 When discovery advertises services, the Rust-served launcher passes `#task` and
 `#term` paths into the extension and the direct 9P client can write existing
@@ -177,8 +179,8 @@ The first browser smoke now proves the Rust-served page boots Code OSS to the
 the Rust direct 9P WebSocket, and populates Explorer from the served root.
 `--wanix-services` adds a test-covered service namespace export, a qjs-backed
 terminal route for the workbench pseudoterminal, and real one-shot qjs task
-startup through `#task`, but search providers and richer task/session lifecycle
-controls remain follow-ups.
+startup through `#task`. Richer task/session lifecycle controls remain
+follow-ups.
 When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86
 `filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also

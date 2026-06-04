@@ -1837,7 +1837,7 @@ fn workbench_fs9p_bundle_html() -> String {
               },
               developmentOptions: { logLevel: params.has("debug") ? 2 : 0 },
               productConfiguration: {
-                extensionEnabledApiProposals: { [extensionId]: ["ipc"] }
+                extensionEnabledApiProposals: { [extensionId]: ["ipc", "fileSearchProvider", "textSearchProvider"] }
               },
               workspaceProvider: {
                 trusted: true,
@@ -2678,7 +2678,7 @@ mod tests {
             "{response}"
         );
         assert!(
-            response.contains("extensionEnabledApiProposals: { [extensionId]: [\"ipc\"] }"),
+            response.contains("extensionEnabledApiProposals: { [extensionId]: [\"ipc\", \"fileSearchProvider\", \"textSearchProvider\"] }"),
             "{response}"
         );
         assert!(
