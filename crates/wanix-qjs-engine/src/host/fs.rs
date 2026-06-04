@@ -13,6 +13,9 @@ use crate::guest::guest_offset;
 use std::sync::Arc;
 use wasmtime::{Caller, Linker, Memory};
 
+mod open;
+use open::path_open;
+
 pub(super) const PREOPEN_ROOT_FD: i32 = 3;
 pub(super) const FIRST_VIRTUAL_FILE_FD: i32 = 4;
 
@@ -217,102 +220,6 @@ fn fd_prestat_dir_name(
     }
     let memory = caller_memory(&caller)?;
     memory.write(&mut caller, guest_offset(path_ptr), PREOPEN_ROOT_PATH)?;
-    Ok(ERRNO_SUCCESS)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn path_open(
-    mut caller: Caller<'_, HostState>,
-    dirfd: i32,
-    dirflags: i32,
-    path_ptr: i32,
-    path_len: i32,
-    oflags: i32,
-    fs_rights_base: i64,
-    fs_rights_inheriting: i64,
-    fdflags: i32,
-    opened_fd_ptr: i32,
-) -> wasmtime::Result<i32> {
-    if caller.data().wasi_host().is_some() {
-        if unsupported_lookupflags(dirflags) {
-            return Ok(ERRNO_NOTCAPABLE);
-        }
-        let dirfd = match preview1_fd(dirfd) {
-            Ok(fd) => fd,
-            Err(errno) => return Ok(errno),
-        };
-        let oflags = match preview1_u16_flags(oflags) {
-            Ok(flags) => flags,
-            Err(errno) => return Ok(errno),
-        };
-        let fdflags = match preview1_u16_flags(fdflags) {
-            Ok(flags) => flags,
-            Err(errno) => return Ok(errno),
-        };
-        let memory = caller_memory(&caller)?;
-        guest_range(&memory, &caller, guest_offset(opened_fd_ptr), WASI_U32_SIZE)?;
-        let path_len = match checked_wasi_path_len(path_len)? {
-            Ok(path_len) => path_len,
-            Err(errno) => return Ok(errno),
-        };
-        let path = read_guest_path(&memory, &caller, path_ptr, path_len)?;
-        let Some(result) = with_wasi_host_u32(&caller, |host| {
-            host.path_open(
-                dirfd,
-                dirflags.cast_unsigned(),
-                &path,
-                oflags,
-                fs_rights_base.cast_unsigned(),
-                fs_rights_inheriting.cast_unsigned(),
-                fdflags,
-            )
-        })?
-        else {
-            return Ok(ERRNO_BADF);
-        };
-        let fd = match result {
-            Ok(fd) => fd,
-            Err(errno) => return Ok(errno.preview1_result()),
-        };
-        memory.write(&mut caller, guest_offset(opened_fd_ptr), &fd.to_le_bytes())?;
-        return Ok(ERRNO_SUCCESS);
-    }
-
-    if !caller.data().is_virtual_preopen_fd(dirfd) {
-        return Ok(ERRNO_BADF);
-    }
-    if unsupported_lookupflags(dirflags) || oflags != 0 || fdflags != 0 {
-        return Ok(ERRNO_NOTCAPABLE);
-    }
-    let rights_base = fs_rights_base.cast_unsigned();
-    let rights_inheriting = fs_rights_inheriting.cast_unsigned();
-    if rights_base & !ALLOWED_FILE_RIGHTS != 0 || rights_inheriting & !ALLOWED_FILE_RIGHTS != 0 {
-        return Ok(ERRNO_NOTCAPABLE);
-    }
-
-    let memory = caller_memory(&caller)?;
-    guest_range(&memory, &caller, guest_offset(opened_fd_ptr), WASI_U32_SIZE)?;
-    let path = match read_absolute_virtual_path(&memory, &caller, path_ptr, path_len)? {
-        Ok(path) => path,
-        Err(errno) => return Ok(errno),
-    };
-    if caller
-        .data()
-        .config()
-        .read_only_virtual_file(&path)
-        .is_none()
-    {
-        return Ok(ERRNO_NOENT);
-    }
-
-    let Some(fd) = caller.data_mut().open_virtual_file(path, rights_base) else {
-        return Ok(ERRNO_INVAL);
-    };
-    let write = memory.write(&mut caller, guest_offset(opened_fd_ptr), &fd.to_le_bytes());
-    if let Err(err) = write {
-        caller.data_mut().close_virtual_file(fd);
-        return Err(err.into());
-    }
     Ok(ERRNO_SUCCESS)
 }
 
