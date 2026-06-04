@@ -427,11 +427,12 @@ the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
 `--json` is an inspection format; it cannot be combined with `--exec`.
 
 > Developer aside: `p9-*` and `serve` are the path toward Linux/v86/editor
-> clients browsing the same Wanix namespace. `serve --wanix-services` exports
-> `#task` and `#term` over direct 9P so browser/workbench clients can start qjs
-> tasks, attach terminals, start served qjs-shell sessions in the requested
-> Wanix cwd, forward resizes through `#term/<id>/winch`, close owned terminals
-> through `#term/<id>/ctl`, and observe exit state.
+> clients browsing the same Wanix namespace. The workbench bootstrap passes the
+> discovered direct-9P route into the extension, and `serve --wanix-services`
+> exports `#task` and `#term` over that route so browser/workbench clients can
+> start qjs tasks, attach terminals, start served qjs-shell sessions in the
+> requested Wanix cwd, forward resizes through `#term/<id>/winch`, close owned
+> terminals through `#term/<id>/ctl`, and observe exit state.
 > `rootfs` and `qemu` are the native VM handoff path, not a VM manager yet.
 > `rootfs --json` emits `wanix-rootfs.v1` with the prepared root, boot markers,
 > default QEMU manifest, and direct-v86 serve argv. `/.well-known/rootfs.json`

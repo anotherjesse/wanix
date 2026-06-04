@@ -498,9 +498,9 @@ and `qjs`, so a browser or editor client can allocate a `qjs` task through
 state through service files.
 
 The Rust-served workbench path now uses that contract. The `workbench-fs9p`
-bundle launches VS Code web against a `wanix:/` workspace, lets the extension
-discover the Rust 9P route, populates Explorer through the direct 9P backend,
-and can run the current JavaScript file as a real Wanix `qjs` task by driving
+bundle launches VS Code web against a `wanix:/` workspace, passes the discovered
+direct-9P route into the extension, populates Explorer through that backend, and
+can run the current JavaScript file as a real Wanix `qjs` task by driving
 `#task` and `#term` over 9P. The served qjs-shell WebSocket route gives the
 workbench a terminal/session path backed by the same native task and terminal
 model; it can start in the configured Wanix cwd and deliver terminal resize

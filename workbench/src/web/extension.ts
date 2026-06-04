@@ -1,7 +1,7 @@
 
 import * as vscode from 'vscode';
 import { WanixBridge } from './bridge.js';
-import { WanixP9Handle } from '../wanix/p9.js';
+import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
 //@ts-ignore
 import { WanixHandle } from '../wanix/fs.js';
 
@@ -9,6 +9,7 @@ declare const navigator: unknown;
 
 type Config = {
 	discoveryUrl?: string;
+	p9?: WanixP9Route;
 	qjsShellUrl?: string;
 	qjsTask?: boolean;
 	term?: boolean;
@@ -150,6 +151,9 @@ function createWanixHandle(context: vscode.ExtensionContext, setConfig: (config:
 		delay(100).then(() => {
 			if (settled) {
 				return undefined;
+			}
+			if (pendingConfig.p9?.websocket) {
+				return WanixP9Handle.fromRoute(pendingConfig.p9);
 			}
 			return WanixP9Handle.fromDiscovery(pendingConfig.discoveryUrl);
 		}).then((handle) => {

@@ -1964,6 +1964,9 @@ fn workbench_fs9p_bundle_html() -> String {
         amdRequire(["vs/workbench/workbench.web.main"], async (wb) => {
           try {
             const workbenchConfig = { discoveryUrl };
+            if (discovery.routes?.p9?.websocket) {
+              workbenchConfig.p9 = discovery.routes.p9;
+            }
             if (discovery.routes?.qjsShell?.websocket) {
               workbenchConfig.qjsShellUrl = discovery.routes.qjsShell.websocket;
               workbenchConfig.term = params.has("term");
@@ -2997,6 +3000,10 @@ mod tests {
         );
         assert!(
             response.contains("const workbenchConfig = { discoveryUrl }"),
+            "{response}"
+        );
+        assert!(
+            response.contains("workbenchConfig.p9 = discovery.routes.p9"),
             "{response}"
         );
         assert!(

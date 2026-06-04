@@ -17,10 +17,15 @@ import { baseName, baseNameOrRoot, joinPath, normalizePath, parentPath, splitPat
 
 type DiscoveryDocument = {
 	routes?: {
-		p9?: {
-			websocket?: string;
-		};
+		p9?: WanixP9Route;
 	};
+};
+
+export type WanixP9Route = {
+	websocket?: string;
+	transport?: string;
+	protocol?: string;
+	supportedProtocols?: string[];
 };
 
 type RemoteEntry = {
@@ -55,7 +60,11 @@ export class WanixP9Handle {
 			throw new Error(`Wanix discovery failed: HTTP ${response.status}`);
 		}
 		const discovery = await response.json() as DiscoveryDocument;
-		const websocketUrl = discovery.routes?.p9?.websocket;
+		return await WanixP9Handle.fromRoute(discovery.routes?.p9);
+	}
+
+	static async fromRoute(route: WanixP9Route | undefined): Promise<WanixP9Handle> {
+		const websocketUrl = route?.websocket;
 		if (!websocketUrl) {
 			throw new Error("Wanix discovery did not advertise a 9P websocket route");
 		}
