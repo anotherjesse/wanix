@@ -4,7 +4,9 @@
 //! split byte streams into tagged 9P frames and decode typed payloads before
 //! the Rust port grows a full 9P server backed by Wanix namespaces.
 
-use std::fmt;
+mod frame;
+
+pub use frame::{P9Error, P9Frame, P9FrameBuffer, p9_declared_size, p9_tag_from_frame_bytes};
 
 /// 9P2000.L version string used by the existing v86 integration.
 pub const P9_VERSION_9P2000_L: &str = "9P2000.L";
@@ -258,6 +260,23 @@ pub const P9_LOCK_STATUS_GRACE: u8 = 3;
 /// Returns a stable name for message types the Rust port currently identifies.
 #[must_use]
 pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
+    if let Some(name) = p9_linux_message_type_name(message_type) {
+        return Some(name);
+    }
+    p9_core_message_type_name(message_type)
+}
+
+const fn p9_linux_message_type_name(message_type: u8) -> Option<&'static str> {
+    if let Some(name) = p9_linux_file_message_type_name(message_type) {
+        return Some(name);
+    }
+    if let Some(name) = p9_linux_lock_message_type_name(message_type) {
+        return Some(name);
+    }
+    p9_linux_mutation_message_type_name(message_type)
+}
+
+const fn p9_linux_file_message_type_name(message_type: u8) -> Option<&'static str> {
     match message_type {
         P9_RLERROR => Some("Rlerror"),
         P9_TSTATFS => Some("Tstatfs"),
@@ -284,12 +303,24 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RXATTRCREATE => Some("Rxattrcreate"),
         P9_TREADDIR => Some("Treaddir"),
         P9_RREADDIR => Some("Rreaddir"),
+        _ => None,
+    }
+}
+
+const fn p9_linux_lock_message_type_name(message_type: u8) -> Option<&'static str> {
+    match message_type {
         P9_TFSYNC => Some("Tfsync"),
         P9_RFSYNC => Some("Rfsync"),
         P9_TLOCK => Some("Tlock"),
         P9_RLOCK => Some("Rlock"),
         P9_TGETLOCK => Some("Tgetlock"),
         P9_RGETLOCK => Some("Rgetlock"),
+        _ => None,
+    }
+}
+
+const fn p9_linux_mutation_message_type_name(message_type: u8) -> Option<&'static str> {
+    match message_type {
         P9_TLINK => Some("Tlink"),
         P9_RLINK => Some("Rlink"),
         P9_TMKDIR => Some("Tmkdir"),
@@ -298,6 +329,12 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RRENAMEAT => Some("Rrenameat"),
         P9_TUNLINKAT => Some("Tunlinkat"),
         P9_RUNLINKAT => Some("Runlinkat"),
+        _ => None,
+    }
+}
+
+const fn p9_core_message_type_name(message_type: u8) -> Option<&'static str> {
+    match message_type {
         P9_TVERSION => Some("Tversion"),
         P9_RVERSION => Some("Rversion"),
         P9_TAUTH => Some("Tauth"),
@@ -321,259 +358,6 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_TWALKGETATTR => Some("Twalkgetattr"),
         P9_RWALKGETATTR => Some("Rwalkgetattr"),
         _ => None,
-    }
-}
-
-/// 9P frame or payload decode/encode error.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum P9Error {
-    /// The input is shorter than the 9P frame header.
-    ShortFrame {
-        /// Actual number of bytes supplied.
-        len: usize,
-    },
-    /// The declared frame size is smaller than the 9P header.
-    InvalidFrameSize {
-        /// Declared frame size in bytes.
-        size: usize,
-    },
-    /// The declared size does not match the exact frame bytes supplied.
-    FrameSizeMismatch {
-        /// Size declared in the frame header.
-        declared: usize,
-        /// Actual number of bytes supplied.
-        actual: usize,
-    },
-    /// The encoded frame would exceed the 9P u32 size field.
-    FrameTooLarge {
-        /// Encoded frame size in bytes.
-        size: usize,
-    },
-    /// The payload ended before a typed field could be decoded.
-    UnexpectedEof {
-        /// Number of bytes the decoder needed for the next field.
-        needed: usize,
-        /// Number of bytes left in the payload.
-        remaining: usize,
-    },
-    /// The payload had bytes left over after typed decoding.
-    TrailingPayload {
-        /// Number of trailing bytes.
-        count: usize,
-    },
-    /// A 9P string field was not valid UTF-8.
-    InvalidUtf8,
-    /// A string field cannot fit in the 9P u16 string length.
-    StringTooLong {
-        /// String length in bytes.
-        len: usize,
-    },
-    /// A byte vector cannot fit in a 9P u32 count field.
-    DataTooLong {
-        /// Data length in bytes.
-        len: usize,
-    },
-    /// A walk name vector cannot fit in a 9P u16 name count field.
-    TooManyWalkNames {
-        /// Number of walk names.
-        count: usize,
-    },
-    /// A typed decoder was used with the wrong frame message type.
-    UnexpectedMessageType {
-        /// Expected 9P message type byte.
-        expected: u8,
-        /// Actual 9P message type byte.
-        actual: u8,
-    },
-}
-
-impl fmt::Display for P9Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ShortFrame { len } => write!(f, "9P frame is too short: {len} bytes"),
-            Self::InvalidFrameSize { size } => {
-                write!(f, "9P frame declares invalid size {size}")
-            }
-            Self::FrameSizeMismatch { declared, actual } => write!(
-                f,
-                "9P frame declares {declared} bytes but input has {actual} bytes"
-            ),
-            Self::FrameTooLarge { size } => {
-                write!(f, "9P frame is too large for u32 size field: {size} bytes")
-            }
-            Self::UnexpectedEof { needed, remaining } => write!(
-                f,
-                "9P payload needs {needed} bytes but only {remaining} remain"
-            ),
-            Self::TrailingPayload { count } => {
-                write!(f, "9P payload has {count} trailing bytes")
-            }
-            Self::InvalidUtf8 => f.write_str("9P string is not valid UTF-8"),
-            Self::StringTooLong { len } => {
-                write!(f, "9P string is too long for u16 length: {len} bytes")
-            }
-            Self::DataTooLong { len } => {
-                write!(f, "9P data is too long for u32 count: {len} bytes")
-            }
-            Self::TooManyWalkNames { count } => {
-                write!(f, "9P walk has too many names for u16 count: {count}")
-            }
-            Self::UnexpectedMessageType { expected, actual } => {
-                write!(f, "9P frame has message type {actual}, expected {expected}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for P9Error {}
-
-/// A decoded 9P frame with its typed payload left uninterpreted.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct P9Frame {
-    message_type: u8,
-    tag: u16,
-    payload: Vec<u8>,
-}
-
-impl P9Frame {
-    /// Creates a frame from a raw message type, tag, and payload.
-    #[must_use]
-    pub fn new(message_type: u8, tag: u16, payload: Vec<u8>) -> Self {
-        Self {
-            message_type,
-            tag,
-            payload,
-        }
-    }
-
-    /// Returns the raw 9P message type byte.
-    #[must_use]
-    pub const fn message_type(&self) -> u8 {
-        self.message_type
-    }
-
-    /// Returns the 9P tag.
-    #[must_use]
-    pub const fn tag(&self) -> u16 {
-        self.tag
-    }
-
-    /// Returns the uninterpreted payload bytes after the 9P header.
-    #[must_use]
-    pub fn payload(&self) -> &[u8] {
-        &self.payload
-    }
-
-    /// Decodes one complete 9P frame from exactly one frame of bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the frame header is too short, declares an
-    /// impossible size, or does not match the supplied byte length.
-    pub fn decode(bytes: &[u8]) -> Result<Self, P9Error> {
-        if bytes.len() < P9_HEADER_LEN {
-            return Err(P9Error::ShortFrame { len: bytes.len() });
-        }
-        let declared = p9_declared_size(bytes)?.expect("header length was checked");
-        if declared != bytes.len() {
-            return Err(P9Error::FrameSizeMismatch {
-                declared,
-                actual: bytes.len(),
-            });
-        }
-        Ok(Self {
-            message_type: bytes[4],
-            tag: p9_tag_from_frame_bytes(bytes)?,
-            payload: bytes[P9_HEADER_LEN..].to_vec(),
-        })
-    }
-
-    /// Encodes this frame into 9P bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the frame would exceed the 9P u32 size field.
-    pub fn encode(&self) -> Result<Vec<u8>, P9Error> {
-        let size = P9_HEADER_LEN + self.payload.len();
-        let size_u32 = u32::try_from(size).map_err(|_| P9Error::FrameTooLarge { size })?;
-        let mut out = Vec::with_capacity(size);
-        out.extend_from_slice(&size_u32.to_le_bytes());
-        out.push(self.message_type);
-        out.extend_from_slice(&self.tag.to_le_bytes());
-        out.extend_from_slice(&self.payload);
-        Ok(out)
-    }
-}
-
-/// Returns the declared frame size once at least the 4-byte size field exists.
-///
-/// # Errors
-///
-/// Returns an error when the declared size is smaller than a 9P header.
-pub fn p9_declared_size(bytes: &[u8]) -> Result<Option<usize>, P9Error> {
-    if bytes.len() < 4 {
-        return Ok(None);
-    }
-    let size = u32::from_le_bytes(
-        bytes[..4]
-            .try_into()
-            .expect("slice length was checked before conversion"),
-    ) as usize;
-    if size < P9_HEADER_LEN {
-        return Err(P9Error::InvalidFrameSize { size });
-    }
-    Ok(Some(size))
-}
-
-/// Reads the 9P tag from frame bytes without decoding the payload.
-///
-/// # Errors
-///
-/// Returns an error when fewer than seven bytes are available.
-pub fn p9_tag_from_frame_bytes(bytes: &[u8]) -> Result<u16, P9Error> {
-    if bytes.len() < P9_HEADER_LEN {
-        return Err(P9Error::ShortFrame { len: bytes.len() });
-    }
-    Ok(u16::from_le_bytes([bytes[5], bytes[6]]))
-}
-
-/// Stream accumulator that splits arbitrary byte chunks into complete 9P frames.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct P9FrameBuffer {
-    bytes: Vec<u8>,
-}
-
-impl P9FrameBuffer {
-    /// Creates an empty frame buffer.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns the number of buffered bytes that do not yet form a full frame.
-    #[must_use]
-    pub fn buffered_len(&self) -> usize {
-        self.bytes.len()
-    }
-
-    /// Appends bytes and returns every complete 9P frame now available.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the buffered data declares an impossible frame or
-    /// a completed frame fails to decode.
-    pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<P9Frame>, P9Error> {
-        self.bytes.extend_from_slice(bytes);
-        let mut frames = Vec::new();
-        while let Some(size) = p9_declared_size(&self.bytes)? {
-            if self.bytes.len() < size {
-                break;
-            }
-            let frame = P9Frame::decode(&self.bytes[..size])?;
-            self.bytes.drain(..size);
-            frames.push(frame);
-        }
-        Ok(frames)
     }
 }
 
@@ -2726,7 +2510,7 @@ fn encode_version_payload(msize: u32, version: &str) -> Result<Vec<u8>, P9Error>
 
 fn decode_version_frame(frame: &P9Frame, expected: u8) -> Result<P9Version, P9Error> {
     expect_message_type(frame, expected)?;
-    let mut cursor = PayloadCursor::new(&frame.payload);
+    let mut cursor = PayloadCursor::new(frame.payload());
     let msize = cursor.read_u32()?;
     let version = cursor.read_string()?;
     cursor.finish()?;
@@ -2750,12 +2534,12 @@ fn decode_data_frame(frame: &P9Frame, expected: u8) -> Result<Vec<u8>, P9Error> 
 }
 
 fn expect_message_type(frame: &P9Frame, expected: u8) -> Result<(), P9Error> {
-    if frame.message_type == expected {
+    if frame.message_type() == expected {
         Ok(())
     } else {
         Err(P9Error::UnexpectedMessageType {
             expected,
-            actual: frame.message_type,
+            actual: frame.message_type(),
         })
     }
 }
@@ -3289,6 +3073,8 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RRENAMEAT), Some("Rrenameat"));
         assert_eq!(p9_message_type_name(P9_TUNLINKAT), Some("Tunlinkat"));
         assert_eq!(p9_message_type_name(P9_RUNLINKAT), Some("Runlinkat"));
+        assert_eq!(p9_message_type_name(P9_TVERSION), Some("Tversion"));
+        assert_eq!(p9_message_type_name(P9_RVERSION), Some("Rversion"));
         assert_eq!(p9_message_type_name(P9_TAUTH), Some("Tauth"));
         assert_eq!(p9_message_type_name(P9_RAUTH), Some("Rauth"));
         assert_eq!(p9_message_type_name(P9_TATTACH), Some("Tattach"));
@@ -3309,6 +3095,7 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RFLUSHF), Some("Rflushf"));
         assert_eq!(p9_message_type_name(P9_TWALKGETATTR), Some("Twalkgetattr"));
         assert_eq!(p9_message_type_name(P9_RWALKGETATTR), Some("Rwalkgetattr"));
+        assert_eq!(p9_message_type_name(250), None);
     }
 
     #[test]
@@ -4034,8 +3821,9 @@ mod tests {
 
     #[test]
     fn typed_decoders_reject_trailing_payloads() {
-        let mut frame = p9_tlopen(1, 2, 3);
-        frame.payload.push(99);
+        let mut payload = Vec::from(p9_tlopen(1, 2, 3).payload());
+        payload.push(99);
+        let frame = P9Frame::new(P9_TLOPEN, 1, payload);
 
         assert_eq!(
             p9_decode_tlopen(&frame).unwrap_err(),
