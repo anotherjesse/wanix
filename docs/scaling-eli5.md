@@ -45,6 +45,26 @@ that's the trade for tiny, instant, secure rooms. Wanix's superpower isn't makin
 one program fast; it's running **thousands of isolated programs cheaply at the
 same time**, scaling smoothly up to whatever your hardware can do.
 
+## Need it fast? Same rooms, a faster engine inside.
+
+The small JavaScript engine is great for quick scripts, but it's an interpreter —
+so heavy math is slow. The good news: a room can hold *any* kind of engine, not
+just the JavaScript one. If you write your task in Rust, Go, C, or Zig and
+compile it to WebAssembly, it runs in the **exact same kind of locked room** —
+same tiny size, same isolation, same doors — but **~100× faster**, because it's
+real compiled code instead of interpreted script.
+
+So you get to choose, per task:
+
+- **Quick & easy:** write JavaScript, no build step. Perfect for glue code and
+  small or AI-generated snippets. (Slower for heavy number-crunching.)
+- **Fast when it matters:** compile Rust/Go/etc. to WebAssembly. Same secure
+  room, near-native speed. Drop your hot paths here.
+- **Heavy-duty:** a full program in its own building, or even a complete virtual
+  machine, when you need a whole operating system or maximum isolation.
+
+Same security story across all three — you just dial in how much speed you need.
+
 ## Why have more than one building?
 
 Safety, chosen on purpose — not one building per user:

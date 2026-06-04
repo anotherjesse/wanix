@@ -185,6 +185,49 @@ holds steady under heavy concurrency.** It is core-bound for CPU work (as any
 system is) and interpreter-speed per task — not magic, but it does not fall apart
 at scale.
 
+## Performance tier: compile to wasm when you need speed
+
+QuickJS is slow for hot compute because it is an interpreter — but it is just one
+wasm module running on Wasmtime. **The same substrate runs any wasm.** A task
+compiled from Rust/Go/C/Zig/TinyGo/AssemblyScript to `wasm32-wasi` runs on the
+exact engine Wanix already hosts, at cranelift-JIT speed, in the same sandbox.
+
+`wasm_speed_bench` runs the identical 20 M-iteration kernel as compiled wasm:
+
+| same kernel, 20M iters     | time     |
+| -------------------------- | -------- |
+| QuickJS (interpreted JS)   | ~1015 ms |
+| compiled wasm (Wasmtime)   | ~7 ms    |
+| **compiled wasm vs QuickJS** | **~130x faster** |
+
+(The black-boxed native Rust baseline reads ~24 ms only because `black_box`
+defeats its optimizer; real native and compiled wasm are both "compiled speed."
+The honest headline is compiled-wasm vs interpreted-JS: ~100–160x.)
+
+So the platform is naturally **tiered**, and the tier is a per-task choice:
+
+| tier | what runs | build step | speed | isolation | footprint |
+| ---- | --------- | ---------- | ----- | --------- | --------- |
+| 0 | interpreted JS (`qjs`) | none | interpreter (~60x off native) | wasm sandbox + caps | ~0.25 MiB |
+| 1 | Rust/Go/C → `wasm32-wasi` | compile to wasm | cranelift JIT, near-native | **same** wasm sandbox + caps | ~0.25 MiB + module |
+| 2 | native process / v86 VM | full toolchain / image | native | OS process / VM | ~10 MiB+ |
+
+Tier 1 is the answer to "protection *and* performance when you need it": same
+cheap sandbox and capability boundary as the JS tier, ~100x the compute, and the
+same module cache (`from_bytes_cached`) gives it fast cold-start too. Use Tier 0
+for glue and AI-generated snippets, drop hot paths to Tier 1, reserve Tier 2 for
+full-OS or hostile-at-scale needs.
+
+**What exists vs the gap.** The substrate (Wasmtime), namespace-backed WASI
+imports (`wanix-wasi`), the compiled-module cache, and cheap per-instance
+isolation are all already here. The missing piece is a *generic WASI task driver*:
+today the WASI import linker is coupled inside the QuickJS engine
+(`wanix-qjs-engine`'s host), so Wanix can only instantiate the QuickJS module as a
+task. Letting users "bring your own compiled wasm task" means factoring those
+`wanix-wasi`-backed imports into a driver that links them into an arbitrary
+`wasm32-wasi` module — then a Rust/Go task is a first-class Wanix task next to
+`qjs`.
+
 ### Known limitation: thread-per-task, not a single-thread reactor
 
 Today the public event-loop pump blocks a host thread for the duration of a
