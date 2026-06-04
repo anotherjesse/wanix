@@ -1,7 +1,6 @@
 # Existing oversized production modules. The first column is the maximum
 # allowed non-test line count for that path; counts may shrink but must not grow.
 # Remove entries as cleanup passes split files below the 350-line hard limit.
-738 crates/wanix-qjs-engine/src/host/fs.rs
 643 crates/wanix-9p/src/lib.rs
 827 crates/wanix-qjs-engine/src/host/call.rs
 570 crates/wanix-qjs/src/lib.rs
