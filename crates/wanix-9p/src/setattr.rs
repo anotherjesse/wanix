@@ -111,42 +111,44 @@ impl P9Server {
     ) -> Result<(), FsError> {
         let metadata = self.root.metadata(path)?;
         let now = requested_system_time_ns(valid)?;
-        let accessed_time_ns = selected_setattr_time_ns(
+        let accessed_time_ns = selected_setattr_time_ns(SetattrTimeSelection {
             valid,
-            P9_SETATTR_ATIME,
-            P9_SETATTR_ATIME_NOT_SYSTEM_TIME,
-            metadata.accessed_time_ns(),
-            (attr.atime_seconds, attr.atime_nanoseconds),
-            now,
-        )?;
-        let modified_time_ns = selected_setattr_time_ns(
+            requested_bit: P9_SETATTR_ATIME,
+            explicit_time_bit: P9_SETATTR_ATIME_NOT_SYSTEM_TIME,
+            current_time_ns: metadata.accessed_time_ns(),
+            explicit_time: (attr.atime_seconds, attr.atime_nanoseconds),
+            system_time_ns: now,
+        })?;
+        let modified_time_ns = selected_setattr_time_ns(SetattrTimeSelection {
             valid,
-            P9_SETATTR_MTIME,
-            P9_SETATTR_MTIME_NOT_SYSTEM_TIME,
-            metadata.modified_time_ns(),
-            (attr.mtime_seconds, attr.mtime_nanoseconds),
-            now,
-        )?;
+            requested_bit: P9_SETATTR_MTIME,
+            explicit_time_bit: P9_SETATTR_MTIME_NOT_SYSTEM_TIME,
+            current_time_ns: metadata.modified_time_ns(),
+            explicit_time: (attr.mtime_seconds, attr.mtime_nanoseconds),
+            system_time_ns: now,
+        })?;
         self.root
             .set_times(path, accessed_time_ns, modified_time_ns)
     }
 }
 
-fn selected_setattr_time_ns(
+struct SetattrTimeSelection {
     valid: u32,
     requested_bit: u32,
     explicit_time_bit: u32,
     current_time_ns: u64,
     explicit_time: (u64, u64),
     system_time_ns: Option<u64>,
-) -> Result<u64, FsError> {
-    if valid & requested_bit == 0 {
-        return Ok(current_time_ns);
+}
+
+fn selected_setattr_time_ns(selection: SetattrTimeSelection) -> Result<u64, FsError> {
+    if selection.valid & selection.requested_bit == 0 {
+        return Ok(selection.current_time_ns);
     }
-    if valid & explicit_time_bit != 0 {
-        return unix_time_ns(explicit_time.0, explicit_time.1);
+    if selection.valid & selection.explicit_time_bit != 0 {
+        return unix_time_ns(selection.explicit_time.0, selection.explicit_time.1);
     }
-    Ok(system_time_ns.expect("system time is present when requested"))
+    selection.system_time_ns.ok_or(FsError::InvalidTime)
 }
 
 fn validate_setattr_request(valid: u32, attr: &P9SetAttr) -> Result<(), u32> {
