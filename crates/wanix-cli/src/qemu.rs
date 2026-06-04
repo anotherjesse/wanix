@@ -7,10 +7,12 @@ use wanix_task::quote_cmd_argv;
 use crate::{CliError, CliOutput};
 
 mod handoff;
+mod json;
 mod parse;
 
 pub(crate) use handoff::DEFAULT_P9_MSIZE;
-use handoff::{qemu_handoff_json, qemu_virtio9p_handoff, validate_qemu_option_fragment};
+use handoff::{qemu_virtio9p_handoff, validate_qemu_option_fragment};
+use json::qemu_handoff_json;
 pub(super) use parse::parse_qemu_command;
 
 const DEFAULT_QEMU_BIN: &str = "qemu-system-i386";
