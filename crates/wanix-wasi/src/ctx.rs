@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
-use std::fmt;
 use std::sync::Arc;
 
-use wanix_fs::{
-    DirEntry, FileSeekFrom, FileSystem, FileType, FsError, NormalizedPath, OpenOptions,
-};
+use wanix_fs::{DirEntry, FileSeekFrom, FileSystem, FileType, NormalizedPath, OpenOptions};
 use wanix_vfs::Namespace;
 
 use crate::{
@@ -13,8 +10,13 @@ use crate::{
     WasiPrestat, WasiRights,
 };
 
+mod handle;
+mod path;
+
+use handle::{Handle, OpenFileHandle};
+use path::{is_rooted_service_path, join_paths, wasi_path, wasi_symlink_target};
+
 const FIRST_PREOPEN_FD: u32 = 3;
-const MAX_WASI_PATH_BYTES: usize = 4096;
 
 /// Host context for Wanix-backed WASI filesystem operations.
 #[derive(Debug)]
@@ -26,79 +28,6 @@ pub struct WasiCtx {
     env: Vec<String>,
     clock_time_ns: u64,
     fd_observer: Option<Arc<dyn WasiFdObserver>>,
-}
-
-enum Handle {
-    Stdio {
-        file: WasiFile,
-    },
-    Preopen {
-        source_path: NormalizedPath,
-        guest_path: NormalizedPath,
-    },
-    Directory {
-        path: NormalizedPath,
-        rights_base: WasiRights,
-        rights_inheriting: WasiRights,
-    },
-    File {
-        file: WasiFile,
-        path: NormalizedPath,
-        read: bool,
-        write: bool,
-        rights_base: WasiRights,
-        fdflags: u16,
-    },
-}
-
-struct OpenFileHandle {
-    file: WasiFile,
-    path: NormalizedPath,
-    read: bool,
-    write: bool,
-    rights_base: WasiRights,
-    fdflags: u16,
-}
-
-impl fmt::Debug for Handle {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Stdio { file } => f.debug_struct("Stdio").field("file", file).finish(),
-            Self::Preopen {
-                source_path,
-                guest_path,
-            } => f
-                .debug_struct("Preopen")
-                .field("source_path", source_path)
-                .field("guest_path", guest_path)
-                .finish(),
-            Self::Directory {
-                path,
-                rights_base,
-                rights_inheriting,
-            } => f
-                .debug_struct("Directory")
-                .field("path", path)
-                .field("rights_base", rights_base)
-                .field("rights_inheriting", rights_inheriting)
-                .finish(),
-            Self::File {
-                path,
-                read,
-                write,
-                rights_base,
-                fdflags,
-                ..
-            } => f
-                .debug_struct("File")
-                .field("path", path)
-                .field("read", read)
-                .field("write", write)
-                .field("rights_base", rights_base)
-                .field("fdflags", fdflags)
-                .finish(),
-        }
-    }
 }
 
 impl WasiCtx {
@@ -890,12 +819,6 @@ impl WasiCtx {
     }
 }
 
-fn is_rooted_service_path(path: &NormalizedPath) -> bool {
-    matches!(path.as_str(), "#task" | "#term")
-        || path.as_str().starts_with("#task/")
-        || path.as_str().starts_with("#term/")
-}
-
 impl Drop for WasiCtx {
     fn drop(&mut self) {
         let Some(observer) = &self.fd_observer else {
@@ -982,46 +905,4 @@ impl WasiCtx {
             .max()
             .map_or(FIRST_PREOPEN_FD, |fd| fd + 1)
     }
-}
-
-fn wasi_path(path: &str) -> Result<NormalizedPath, Errno> {
-    if path.len() > MAX_WASI_PATH_BYTES {
-        return Err(Errno::Nametoolong);
-    }
-    if path == "." {
-        return NormalizedPath::new(path).map_err(Errno::from);
-    }
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.ends_with('/')
-        || path.contains("//")
-        || path.contains('\\')
-        || path.contains('\0')
-        || path
-            .split('/')
-            .any(|component| component == "." || component == "..")
-    {
-        return Err(Errno::Notcapable);
-    }
-    NormalizedPath::new(path).map_err(Errno::from)
-}
-
-fn wasi_symlink_target(target: &[u8]) -> Result<&[u8], Errno> {
-    if target.len() > MAX_WASI_PATH_BYTES {
-        return Err(Errno::Nametoolong);
-    }
-    if target.contains(&0) {
-        return Err(Errno::Inval);
-    }
-    Ok(target)
-}
-
-fn join_paths(base: &NormalizedPath, path: &NormalizedPath) -> Result<NormalizedPath, FsError> {
-    if path.as_str() == "." {
-        return Ok(base.clone());
-    }
-    if base.as_str() == "." {
-        return Ok(path.clone());
-    }
-    NormalizedPath::new(format!("{base}/{path}"))
 }
