@@ -10,7 +10,9 @@ use crate::{CliError, CliOutput};
 
 const DEFAULT_QEMU_BIN: &str = "qemu-system-i386";
 const DEFAULT_MEMORY_MB: u32 = 512;
-const DEFAULT_QEMU_9P_ROOT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,msize=131072 loglevel=3";
+const DEFAULT_MOUNT_TAG: &str = "host9p";
+const DEFAULT_SECURITY_MODEL: &str = "mapped-xattr";
+const VALID_SECURITY_MODELS: &[&str] = &["mapped-xattr", "mapped-file", "passthrough", "none"];
 const DEFAULT_KERNEL_CANDIDATES: &[&str] = &["boot/bzImage", "bzImage"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +22,8 @@ pub(super) struct QemuCommand {
     qemu_bin: String,
     memory_mb: u32,
     kvm: bool,
+    mount_tag: String,
+    security_model: String,
     cmdline: Option<String>,
     append: Vec<String>,
     exec: bool,
@@ -31,6 +35,8 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
     let mut qemu_bin = DEFAULT_QEMU_BIN.to_owned();
     let mut memory_mb = DEFAULT_MEMORY_MB;
     let mut kvm = true;
+    let mut mount_tag = DEFAULT_MOUNT_TAG.to_owned();
+    let mut security_model = DEFAULT_SECURITY_MODEL.to_owned();
     let mut cmdline = None;
     let mut append = Vec::new();
     let mut exec = false;
@@ -84,6 +90,20 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
                 .ok_or_else(|| CliError::usage("qemu --memory-mb expects N"))?;
             memory_mb = parse_memory_mb(value)?;
             i += 1;
+        } else if args[i] == "--mount-tag" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qemu --mount-tag expects TAG"))?;
+            mount_tag = parse_mount_tag(value)?;
+            i += 1;
+        } else if args[i] == "--security-model" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qemu --security-model expects MODEL"))?;
+            security_model = parse_security_model(value)?;
+            i += 1;
         } else if args[i] == "--no-kvm" {
             kvm = false;
             i += 1;
@@ -104,6 +124,8 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
         qemu_bin,
         memory_mb,
         kvm,
+        mount_tag,
+        security_model,
         cmdline,
         append,
         exec,
@@ -165,11 +187,7 @@ fn qemu_virtio9p_argv(command: &QemuCommand) -> Result<Vec<String>, CliError> {
     let root_path = canonical_existing_dir(&command.root_path, "qemu --root")?;
     let kernel_path = resolve_kernel_path(command, &root_path)?;
     let root = root_path.to_string_lossy();
-    if root.contains(',') {
-        return Err(CliError::usage(
-            "qemu --root path cannot contain ',' because QEMU -fsdev uses comma-separated options",
-        ));
-    }
+    validate_qemu_option_fragment(&root, "qemu --root path")?;
 
     let mut argv = Vec::new();
     argv.push(command.qemu_bin.clone());
@@ -190,9 +208,12 @@ fn qemu_virtio9p_argv(command: &QemuCommand) -> Result<Vec<String>, CliError> {
         "-append".to_owned(),
         qemu_cmdline(command),
         "-fsdev".to_owned(),
-        format!("local,id=host9p,path={root},security_model=mapped-xattr"),
+        format!(
+            "local,id=host9p,path={root},security_model={}",
+            command.security_model
+        ),
         "-device".to_owned(),
-        "virtio-9p-pci,fsdev=host9p,mount_tag=host9p".to_owned(),
+        format!("virtio-9p-pci,fsdev=host9p,mount_tag={}", command.mount_tag),
         "-device".to_owned(),
         "virtio-serial-pci".to_owned(),
         "-device".to_owned(),
@@ -229,7 +250,7 @@ fn qemu_cmdline(command: &QemuCommand) -> String {
     let mut cmdline = command
         .cmdline
         .clone()
-        .unwrap_or_else(|| DEFAULT_QEMU_9P_ROOT_CMDLINE.to_owned());
+        .unwrap_or_else(|| default_qemu_9p_root_cmdline(&command.mount_tag));
     for append in &command.append {
         if append.is_empty() {
             continue;
@@ -240,6 +261,13 @@ fn qemu_cmdline(command: &QemuCommand) -> String {
         cmdline.push_str(append);
     }
     cmdline
+}
+
+fn default_qemu_9p_root_cmdline(mount_tag: &str) -> String {
+    format!(
+        "console=hvc0 init=/bin/init rw root={mount_tag} rootfstype=9p \
+         rootflags=trans=virtio,version=9p2000.L,msize=131072 loglevel=3"
+    )
 }
 
 fn canonical_existing_dir(path: &PathBuf, label: &str) -> Result<PathBuf, CliError> {
@@ -285,6 +313,48 @@ fn parse_memory_mb(arg: &OsString) -> Result<u32, CliError> {
         ));
     }
     Ok(memory)
+}
+
+fn parse_qemu_option_value(arg: &OsString, label: &str) -> Result<String, CliError> {
+    let value = os_arg_to_string(arg, label)?;
+    validate_qemu_option_fragment(&value, label)?;
+    Ok(value)
+}
+
+fn parse_mount_tag(arg: &OsString) -> Result<String, CliError> {
+    let value = parse_qemu_option_value(arg, "qemu --mount-tag")?;
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(CliError::usage(
+            "qemu --mount-tag accepts only ASCII letters, digits, '.', '_', and '-'",
+        ));
+    }
+    Ok(value)
+}
+
+fn parse_security_model(arg: &OsString) -> Result<String, CliError> {
+    let value = parse_qemu_option_value(arg, "qemu --security-model")?;
+    if !VALID_SECURITY_MODELS.contains(&value.as_str()) {
+        return Err(CliError::usage(format!(
+            "qemu --security-model expects one of {}",
+            VALID_SECURITY_MODELS.join(", ")
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_qemu_option_fragment(value: &str, label: &str) -> Result<(), CliError> {
+    if value.is_empty() {
+        return Err(CliError::usage(format!("{label} cannot be empty")));
+    }
+    if value.contains(',') {
+        return Err(CliError::usage(format!(
+            "{label} cannot contain ',' because QEMU device options are comma-separated"
+        )));
+    }
+    Ok(())
 }
 
 fn os_arg_to_string(arg: &OsString, label: &str) -> Result<String, CliError> {

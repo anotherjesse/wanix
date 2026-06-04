@@ -58,6 +58,7 @@ const USAGE: &str = concat!(
     "       wanix-rust rootfs --archive FILE.tgz --out DIR\n",
     "       wanix-rust qemu --root DIR [--kernel PATH] [--cmdline TEXT] [--append TEXT ...] ",
     "[--qemu-bin PATH] [--memory-mb N] ",
+    "[--mount-tag TAG] [--security-model MODEL] ",
     "[--no-kvm] [--exec]\n",
     "       wanix-rust serve [--root DIR | DIR] [--addr HOST:PORT | --listen HOST:PORT] ",
     "[--bundle NAME] [--wanix-services] [--once]\n",
@@ -1922,6 +1923,8 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qemu"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--cmdline TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--append TEXT"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--mount-tag TAG"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--security-model MODEL"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--exec"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust serve"));
         assert!(output.stderr().is_empty());
@@ -2114,6 +2117,34 @@ mod tests {
     }
 
     #[test]
+    fn qemu_command_can_customize_virtio9p_mount_tag_and_security_model() {
+        let root = temp_dir("wanix-cli-qemu-custom-9p-root");
+        let boot = root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        fs::write(boot.join("bzImage"), b"kernel").unwrap();
+
+        let output = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--mount-tag".to_owned(),
+            "wanixroot".to_owned(),
+            "--security-model".to_owned(),
+            "none".to_owned(),
+        ])
+        .unwrap();
+
+        let stdout = String::from_utf8(output.stdout().to_vec()).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        assert!(stdout.contains("root=wanixroot rootfstype=9p"), "{stdout}");
+        assert!(stdout.contains(&format!(
+            "-fsdev local,id=host9p,path={},security_model=none",
+            root.display()
+        )));
+        assert!(stdout.contains("-device virtio-9p-pci,fsdev=host9p,mount_tag=wanixroot"));
+    }
+
+    #[test]
     fn qemu_command_uses_legacy_root_kernel_fallback() {
         let root = temp_dir("wanix-cli-qemu-legacy-kernel-root");
         let kernel = root.join("bzImage");
@@ -2197,6 +2228,47 @@ mod tests {
         .unwrap_err();
         assert_eq!(comma_root.exit_code(), 2);
         assert!(comma_root.to_string().contains("cannot contain ','"));
+
+        let invalid_mount_tag = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            missing_kernel_root.display().to_string(),
+            "--mount-tag".to_owned(),
+            "bad,tag".to_owned(),
+        ])
+        .unwrap_err();
+        assert_eq!(invalid_mount_tag.exit_code(), 2);
+        assert!(invalid_mount_tag.to_string().contains("cannot contain ','"));
+
+        let spaced_mount_tag = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            missing_kernel_root.display().to_string(),
+            "--mount-tag".to_owned(),
+            "bad tag".to_owned(),
+        ])
+        .unwrap_err();
+        assert_eq!(spaced_mount_tag.exit_code(), 2);
+        assert!(
+            spaced_mount_tag
+                .to_string()
+                .contains("accepts only ASCII letters")
+        );
+
+        let invalid_security_model = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            missing_kernel_root.display().to_string(),
+            "--security-model".to_owned(),
+            "unknown".to_owned(),
+        ])
+        .unwrap_err();
+        assert_eq!(invalid_security_model.exit_code(), 2);
+        assert!(
+            invalid_security_model
+                .to_string()
+                .contains("expects one of mapped-xattr, mapped-file, passthrough, none")
+        );
     }
 
     #[test]
@@ -2322,6 +2394,10 @@ mod tests {
             "-fsdev\nlocal,id=host9p,path={},security_model=mapped-xattr\n",
             root.display()
         )));
+        assert!(
+            argv.contains("-device\nvirtio-9p-pci,fsdev=host9p,mount_tag=host9p\n"),
+            "{argv}"
+        );
         assert!(argv.contains("-device\nvirtio-serial-pci\n"), "{argv}");
         assert!(
             argv.contains("-chardev\nstdio,id=con\n-nographic\n"),

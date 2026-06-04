@@ -81,10 +81,12 @@ Native QEMU is a validated command handoff:
   boot markers, and prints ready-to-run QEMU and direct-v86 commands.
 - `wanix-rust qemu --root DIR` canonicalizes and validates the guest root,
   discovers `/boot/bzImage` or legacy `/bzImage` unless `--kernel PATH` is
-  supplied, supports cmdline override and append options, and prints a
-  shell-quoted QEMU/KVM virtio-9p command by default.
-- The native QEMU command uses the same 9P-root guest shape where practical,
-  with `host9p`, base `9p2000.L` root flags, and `hvc0` virtconsole defaults.
+  supplied, supports cmdline override, append options, mount-tag override, and
+  a validated QEMU local 9P `security_model`, and prints a shell-quoted
+  QEMU/KVM virtio-9p command by default.
+- By default, the native QEMU command uses the same 9P-root guest shape where
+  practical, with `host9p`, base `9p2000.L` root flags, `mapped-xattr` local 9P
+  security, and `hvc0` virtconsole defaults.
 - `wanix-rust qemu --exec` is an explicit foreground launch mode. It spawns the
   validated argv, inherits stdin/stdout/stderr, reports the child exit status,
   and does not turn Wanix into a background VM supervisor.

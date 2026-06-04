@@ -376,11 +376,22 @@ $WANIX rootfs --archive extras/dist/alpine-linux.tgz --out /tmp/wanix-rootfs
 $WANIX qemu --root /tmp/wanix-rootfs --exec
 ```
 
+For host-specific 9P policy, tune the generated QEMU command before launching:
+
+```sh
+$WANIX qemu --root /tmp/wanix-rootfs --security-model none --mount-tag wanixroot
+```
+
+`--mount-tag` also updates the generated default kernel cmdline. If you replace
+the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
+
 > Developer aside: `p9-*` and `serve` are the path toward Linux/v86/editor
 > clients browsing the same Wanix namespace. `serve --wanix-services` exports
 > `#task` and `#term` over direct 9P so browser/workbench clients can start qjs
 > tasks, attach terminals, forward resizes, and observe exit state. `rootfs` and
-> `qemu` are the native VM handoff path, not a VM manager yet.
+> `qemu` are the native VM handoff path, not a VM manager yet; QEMU mount tags
+> and local 9P security models stay explicit because they affect the guest boot
+> contract and host filesystem trust boundary.
 
 ## 10. Snapshot And Restore In One Command
 

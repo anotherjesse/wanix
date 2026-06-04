@@ -436,8 +436,9 @@ That set of commands says a lot about the intended shape:
 - expose a namespace over process stdio;
 - expose a namespace over TCP;
 - expose a namespace over WebSocket;
-- print a native QEMU/KVM virtio-9p handoff command for the same guest-root
-  shape as direct-v86;
+- print a native QEMU/KVM virtio-9p handoff command with explicit host 9P
+  mount tag and security-model knobs for the same guest-root shape as
+  direct-v86;
 - serve browser assets, protocol routes, optional Wanix services, workbench,
   and direct-v86 entrypoints from one native listener.
 
@@ -531,9 +532,12 @@ Wanix, not a normal Wanix WASI task.
 Native QEMU is the other path. `wanix-rust qemu` targets real host execution of
 QEMU/KVM or software emulation with the same guest-root shape: a Linux kernel,
 an hvc0 virtconsole, and a virtio-9p root mounted from a Wanix/host directory.
-That path is closer to "use the hardware when available." Today it is a
-validated handoff command, not a supervised Wanix VM process, but it is the
-right native parity path for serious Linux VM work.
+It can tune the generated guest mount tag and QEMU local 9P `security_model`
+without changing the default `host9p`/`mapped-xattr` handoff; a fully replaced
+kernel cmdline remains caller-owned. That path is closer to "use the hardware
+when available." Today it is a validated handoff command, not a supervised
+Wanix VM process, but it is the right native parity path for serious Linux VM
+work.
 
 So the current split is:
 
