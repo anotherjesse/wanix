@@ -2010,8 +2010,12 @@ fn workbench_fs9p_bundle_html() -> String {
               workspaceProvider: {
                 trusted: true,
                 workspace: { folderUri: wb.URI.parse(workspaceUri) },
-                open(workspace, options) {
-                  console.log("todo: handle openFolder", workspace, options);
+                open(workspace) {
+                  const folder = workspace?.folderUri?.toString?.() || workspace?.workspaceUri?.toString?.();
+                  if (!folder) return Promise.resolve(false);
+                  const next = new URL(location.href);
+                  next.searchParams.set("workspace", folder);
+                  location.href = next.href;
                   return Promise.resolve(true);
                 }
               },
@@ -3038,6 +3042,11 @@ mod tests {
             response.contains("workspace: { folderUri: wb.URI.parse(workspaceUri) }"),
             "{response}"
         );
+        assert!(
+            response.contains("next.searchParams.set(\"workspace\", folder)"),
+            "{response}"
+        );
+        assert!(!response.contains("todo: handle openFolder"), "{response}");
         assert!(
             response.contains("const workspaceUri = params.get(\"workspace\") || \"wanix:/\""),
             "{response}"

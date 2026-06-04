@@ -164,8 +164,8 @@ These are current guardrails, not a replacement ledger for deleted ADRs:
   read-only virtual files are fixture support only.
 - Raw shell input should flow through `#term`; guest shells own echo, simple
   editing, newline handling, Ctrl-D, and command dispatch.
-- Rust-served workbench paths should consume discovery and direct 9P; the
-  MessagePort/CBOR bridge is browser-embedded compatibility only.
+- Rust-served workbench paths should pass discovered direct-9P routes into the
+  extension; the MessagePort/CBOR bridge is browser-embedded compatibility only.
 
 ## ADR Workflow
 

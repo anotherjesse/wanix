@@ -66,7 +66,7 @@ export class WanixP9Handle {
 	static async fromRoute(route: WanixP9Route | undefined): Promise<WanixP9Handle> {
 		const websocketUrl = route?.websocket;
 		if (!websocketUrl) {
-			throw new Error("Wanix discovery did not advertise a 9P websocket route");
+			throw new Error("Wanix 9P route did not advertise a websocket");
 		}
 		return await WanixP9Handle.connect(websocketUrl);
 	}
