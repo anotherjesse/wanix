@@ -131,9 +131,9 @@ cargo test --workspace --locked
 ## ADR Index
 
 Keep this index to active architecture, API, format, trust-boundary, and
-workflow contracts. The active set is intentionally small; deleted ADR numbers
-remain in git history, and milestone proofs or progress-journal records should
-not be restored as active ADRs.
+workflow contracts. The active set is intentionally small and consecutive; old
+milestone numbers remain in git history, and milestone proofs or
+progress-journal records should not be restored as active ADRs.
 
 - [ADR 0001](docs/adrs/0001-rust-native-wasmtime-runtime.md): Rust Wanix is the
   host/microkernel runtime, Wasmtime is the execution substrate, Go is a
@@ -143,20 +143,20 @@ not be restored as active ADRs.
   Wanix `qjs` task; Wanix owns task identity, live WASI semantics, fd/service
   state, snapshots reattachment, fixture boundaries, and bounded guest
   execution policy.
-- [ADR 0050](docs/adrs/0050-rust-terminal-device-and-shell-lifecycle.md):
+- [ADR 0003](docs/adrs/0003-terminal-device-and-shell-lifecycle.md):
   `wanix-term` and terminal-backed native, served, editor, and VM sessions
   share one terminal device and shell lifecycle contract.
-- [ADR 0058](docs/adrs/0058-rust-9p-protocol-and-server-contract.md):
+- [ADR 0004](docs/adrs/0004-rust-9p-protocol-and-server-contract.md):
   `wanix-protocol` and `wanix-9p` own the Rust 9P frame, codec, fid, metadata,
   mutation, and compatibility contract across transports.
-- [ADR 0068](docs/adrs/0068-serve-and-client-handoffs.md): Rust `serve`,
+- [ADR 0005](docs/adrs/0005-serve-and-client-handoffs.md): Rust `serve`,
   browser filesystem/workbench, direct-v86, rootfs prep, and native QEMU share
   explicit discovery and handoff contracts instead of becoming runtime
   foundations.
 
-## Retired Bridge Guardrails
+## Runtime Guardrails
 
-These are current guardrails, not a replacement ledger for deleted ADRs:
+These are current guardrails for keeping retired bridge ideas out of new work:
 
 - Guest JavaScript should use `qjs:std`, `qjs:os`, `scriptArgs`, stdio, env, and
   service files instead of `globalThis.Wanix` helpers.

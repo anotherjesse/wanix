@@ -1,4 +1,4 @@
-# ADR 0050: Terminal Device and Shell Lifecycle
+# ADR 0003: Terminal Device and Shell Lifecycle
 
 ## Status
 
@@ -15,7 +15,7 @@ process-specific terminal APIs.
 
 This ADR covers the terminal device shape, readiness, resize delivery, and
 session lifecycle boundary. QuickJS process semantics are covered by ADR 0002;
-serve, workbench, v86, and QEMU handoffs are covered by ADR 0068.
+serve, workbench, v86, and QEMU handoffs are covered by ADR 0005.
 
 ## Decision
 

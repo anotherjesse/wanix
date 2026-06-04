@@ -1,4 +1,4 @@
-# ADR 0058: Rust 9P Protocol and Server Contract
+# ADR 0004: Rust 9P Protocol and Server Contract
 
 ## Status
 
