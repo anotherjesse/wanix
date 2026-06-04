@@ -835,7 +835,8 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
         "{{\"version\":1,\
          \"runtime\":\"wanix-rust\",\
          \"routes\":{{\
-         \"p9\":{{\"websocket\":{},\"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\"}},\
+         \"p9\":{{\"websocket\":{},\"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\",\
+         \"supportedProtocols\":[\"9P2000.L\",\"9P2000.L.Google.2\"]}},\
          \"ethernet\":{{\"websocket\":{},\"status\":\"not-implemented\"}}\
          }},\
          \"v86\":{{\"assets\":{{\"module\":{},\"mod\":{},\"offscreen\":{},\"wasm\":{},\"bios\":{},\"vgaBios\":{}}},\
@@ -1068,10 +1069,11 @@ mod tests {
     use tungstenite::{Message, connect};
     use wanix_protocol::{
         P9_RATTACH, P9_RGETATTR, P9_RLERROR, P9_RLOPEN, P9_RREAD, P9_RREMOVE, P9_RRENAME,
-        P9_RSETATTR, P9_RVERSION, P9_RWALK, P9_SETATTR_GID, P9_SETATTR_UID, P9_VERSION_9P2000_L,
-        P9Frame, P9SetAttr, p9_decode_rgetattr, p9_decode_rlerror, p9_decode_rread,
-        p9_decode_rremove, p9_decode_rrename, p9_tattach, p9_tauth, p9_tgetattr, p9_tlink,
-        p9_tlopen, p9_tmknod, p9_tread, p9_tremove, p9_trename, p9_tsetattr, p9_tversion, p9_twalk,
+        P9_RSETATTR, P9_RVERSION, P9_RWALK, P9_RWALKGETATTR, P9_SETATTR_GID, P9_SETATTR_UID,
+        P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_2, P9Frame, P9SetAttr, p9_decode_rgetattr,
+        p9_decode_rlerror, p9_decode_rread, p9_decode_rremove, p9_decode_rrename,
+        p9_decode_rwalkgetattr, p9_tattach, p9_tauth, p9_tgetattr, p9_tlink, p9_tlopen, p9_tmknod,
+        p9_tread, p9_tremove, p9_trename, p9_tsetattr, p9_tversion, p9_twalk, p9_twalkgetattr,
         p9_txattrcreate, p9_txattrwalk,
     };
 
@@ -1524,7 +1526,8 @@ mod tests {
         assert!(
             response.contains(
                 "\"p9\":{\"websocket\":\"ws://demo.local:7654/.well-known/export9p\",\
-                 \"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\"}"
+                 \"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\",\
+                 \"supportedProtocols\":[\"9P2000.L\",\"9P2000.L.Google.2\"]}"
             ),
             "{response}"
         );
@@ -1868,6 +1871,59 @@ mod tests {
         assert_eq!(attr.uid, 1000);
         assert_eq!(attr.gid, 1001);
         assert_eq!(p9_decode_rread(&frames[6]).unwrap(), b"hello export");
+    }
+
+    #[test]
+    fn serve_once_exports_google_2_walkgetattr_on_well_known_path() {
+        let root = temp_dir("wanix-cli-serve-export9p-google2");
+        fs::write(root.join("hello.txt"), b"hello google2").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: None,
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let mut socket = connect(format!("ws://{addr}/.well-known/export9p"))
+            .unwrap()
+            .0;
+        let requests = request_stream([
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L_GOOGLE_2).unwrap(),
+            p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
+            p9_twalkgetattr(3, 1, 2, &["hello.txt"]).unwrap(),
+            p9_tlopen(4, 2, 0),
+            p9_tread(5, 2, 0, 13),
+        ]);
+        socket.send(Message::binary(requests)).unwrap();
+
+        let frames = read_binary_frames(&mut socket, 5);
+        socket.close(None).unwrap();
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            frame_types(&frames),
+            [
+                P9_RVERSION,
+                P9_RATTACH,
+                P9_RWALKGETATTR,
+                P9_RLOPEN,
+                P9_RREAD
+            ]
+        );
+        let walk = p9_decode_rwalkgetattr(&frames[2]).unwrap();
+        assert_eq!(walk.valid, u64::MAX);
+        assert_eq!(walk.qids.len(), 1);
+        assert_eq!(walk.attr.size, 13);
+        assert_eq!(p9_decode_rread(&frames[4]).unwrap(), b"hello google2");
     }
 
     #[test]

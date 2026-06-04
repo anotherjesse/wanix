@@ -9,6 +9,12 @@ use std::fmt;
 /// 9P2000.L version string used by the existing v86 integration.
 pub const P9_VERSION_9P2000_L: &str = "9P2000.L";
 
+/// 9P2000.L Google extension version that adds `Tflushf`.
+pub const P9_VERSION_9P2000_L_GOOGLE_1: &str = "9P2000.L.Google.1";
+
+/// 9P2000.L Google extension version that adds `Twalkgetattr`.
+pub const P9_VERSION_9P2000_L_GOOGLE_2: &str = "9P2000.L.Google.2";
+
 /// The 9P `NOTAG` value used by version negotiation.
 pub const P9_NOTAG: u16 = 0xffff;
 
@@ -189,6 +195,18 @@ pub const P9_TREMOVE: u8 = 122;
 /// 9P `Rremove` message type.
 pub const P9_RREMOVE: u8 = 123;
 
+/// 9P2000.L.Google.1 `Tflushf` message type.
+pub const P9_TFLUSHF: u8 = 124;
+
+/// 9P2000.L.Google.1 `Rflushf` message type.
+pub const P9_RFLUSHF: u8 = 125;
+
+/// 9P2000.L.Google.2 `Twalkgetattr` message type.
+pub const P9_TWALKGETATTR: u8 = 126;
+
+/// 9P2000.L.Google.2 `Rwalkgetattr` message type.
+pub const P9_RWALKGETATTR: u8 = 127;
+
 /// 9P2000.L `Tsetattr` permissions-valid bit.
 pub const P9_SETATTR_PERMISSIONS: u32 = 0x0000_0001;
 
@@ -298,6 +316,10 @@ pub const fn p9_message_type_name(message_type: u8) -> Option<&'static str> {
         P9_RCLUNK => Some("Rclunk"),
         P9_TREMOVE => Some("Tremove"),
         P9_RREMOVE => Some("Rremove"),
+        P9_TFLUSHF => Some("Tflushf"),
+        P9_RFLUSHF => Some("Rflushf"),
+        P9_TWALKGETATTR => Some("Twalkgetattr"),
+        P9_RWALKGETATTR => Some("Rwalkgetattr"),
         _ => None,
     }
 }
@@ -649,6 +671,13 @@ pub struct P9Flush {
     pub oldtag: u16,
 }
 
+/// Decoded payload for `Tflushf`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct P9FlushF {
+    /// Fid whose pending file state should be flushed.
+    pub fid: u32,
+}
+
 /// 9P2000.L record-lock range fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct P9Lock {
@@ -744,6 +773,17 @@ pub struct P9Walk {
     pub newfid: u32,
     /// Path components to walk.
     pub names: Vec<String>,
+}
+
+/// Decoded payload for `Rwalkgetattr`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9WalkGetAttrResponse {
+    /// Attribute bits the server considers valid.
+    pub valid: u64,
+    /// Attributes for the final walked fid, excluding the qid carried by `Rgetattr`.
+    pub attr: P9AttrBody,
+    /// QIDs returned for each walked path component.
+    pub qids: Vec<P9Qid>,
 }
 
 /// Decoded payload for `Tlopen`.
@@ -859,6 +899,72 @@ pub struct P9Attr {
     pub generation: u64,
     /// Server data-version value.
     pub data_version: u64,
+}
+
+/// 9P attribute body without `valid` or `qid`, used by `Rwalkgetattr`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P9AttrBody {
+    /// POSIX mode including file type bits.
+    pub mode: u32,
+    /// Numeric owner user id.
+    pub uid: u32,
+    /// Numeric owner group id.
+    pub gid: u32,
+    /// Link count.
+    pub nlink: u64,
+    /// Device id for special files.
+    pub rdev: u64,
+    /// File size in bytes.
+    pub size: u64,
+    /// Preferred block size.
+    pub block_size: u64,
+    /// Allocated 512-byte block count.
+    pub blocks: u64,
+    /// Last access time seconds.
+    pub atime_seconds: u64,
+    /// Last access time nanoseconds.
+    pub atime_nanoseconds: u64,
+    /// Last modification time seconds.
+    pub mtime_seconds: u64,
+    /// Last modification time nanoseconds.
+    pub mtime_nanoseconds: u64,
+    /// Last metadata-change time seconds.
+    pub ctime_seconds: u64,
+    /// Last metadata-change time nanoseconds.
+    pub ctime_nanoseconds: u64,
+    /// Creation/birth time seconds.
+    pub btime_seconds: u64,
+    /// Creation/birth time nanoseconds.
+    pub btime_nanoseconds: u64,
+    /// File generation value.
+    pub generation: u64,
+    /// Server data-version value.
+    pub data_version: u64,
+}
+
+impl From<&P9Attr> for P9AttrBody {
+    fn from(attr: &P9Attr) -> Self {
+        Self {
+            mode: attr.mode,
+            uid: attr.uid,
+            gid: attr.gid,
+            nlink: attr.nlink,
+            rdev: attr.rdev,
+            size: attr.size,
+            block_size: attr.block_size,
+            blocks: attr.blocks,
+            atime_seconds: attr.atime_seconds,
+            atime_nanoseconds: attr.atime_nanoseconds,
+            mtime_seconds: attr.mtime_seconds,
+            mtime_nanoseconds: attr.mtime_nanoseconds,
+            ctime_seconds: attr.ctime_seconds,
+            ctime_nanoseconds: attr.ctime_nanoseconds,
+            btime_seconds: attr.btime_seconds,
+            btime_nanoseconds: attr.btime_nanoseconds,
+            generation: attr.generation,
+            data_version: attr.data_version,
+        }
+    }
 }
 
 /// 9P2000.L attribute values carried by `Tsetattr`.
@@ -1191,6 +1297,20 @@ pub fn p9_rflush(tag: u16) -> P9Frame {
     P9Frame::new(P9_RFLUSH, tag, Vec::new())
 }
 
+/// Builds a `Tflushf` frame.
+#[must_use]
+pub fn p9_tflushf(tag: u16, fid: u32) -> P9Frame {
+    let mut payload = Vec::with_capacity(4);
+    push_u32(&mut payload, fid);
+    P9Frame::new(P9_TFLUSHF, tag, payload)
+}
+
+/// Builds an `Rflushf` frame.
+#[must_use]
+pub fn p9_rflushf(tag: u16) -> P9Frame {
+    P9Frame::new(P9_RFLUSHF, tag, Vec::new())
+}
+
 /// Builds a `Twalk` frame.
 ///
 /// # Errors
@@ -1198,6 +1318,31 @@ pub fn p9_rflush(tag: u16) -> P9Frame {
 /// Returns an error when too many names are supplied or a name cannot fit in a
 /// 9P string length.
 pub fn p9_twalk(tag: u16, fid: u32, newfid: u32, names: &[&str]) -> Result<P9Frame, P9Error> {
+    build_walk_frame(P9_TWALK, tag, fid, newfid, names)
+}
+
+/// Builds a `Twalkgetattr` frame.
+///
+/// # Errors
+///
+/// Returns an error when too many names are supplied or a name cannot fit in a
+/// 9P string length.
+pub fn p9_twalkgetattr(
+    tag: u16,
+    fid: u32,
+    newfid: u32,
+    names: &[&str],
+) -> Result<P9Frame, P9Error> {
+    build_walk_frame(P9_TWALKGETATTR, tag, fid, newfid, names)
+}
+
+fn build_walk_frame(
+    message_type: u8,
+    tag: u16,
+    fid: u32,
+    newfid: u32,
+    names: &[&str],
+) -> Result<P9Frame, P9Error> {
     let name_count =
         u16::try_from(names.len()).map_err(|_| P9Error::TooManyWalkNames { count: names.len() })?;
     let mut payload = Vec::new();
@@ -1207,7 +1352,7 @@ pub fn p9_twalk(tag: u16, fid: u32, newfid: u32, names: &[&str]) -> Result<P9Fra
     for name in names {
         push_string(&mut payload, name)?;
     }
-    Ok(P9Frame::new(P9_TWALK, tag, payload))
+    Ok(P9Frame::new(message_type, tag, payload))
 }
 
 /// Builds an `Rwalk` frame.
@@ -1224,6 +1369,29 @@ pub fn p9_rwalk(tag: u16, qids: &[P9Qid]) -> Result<P9Frame, P9Error> {
         push_qid(&mut payload, *qid);
     }
     Ok(P9Frame::new(P9_RWALK, tag, payload))
+}
+
+/// Builds an `Rwalkgetattr` frame.
+///
+/// # Errors
+///
+/// Returns an error when too many QIDs are supplied.
+pub fn p9_rwalkgetattr(
+    tag: u16,
+    valid: u64,
+    attr: &P9AttrBody,
+    qids: &[P9Qid],
+) -> Result<P9Frame, P9Error> {
+    let qid_count =
+        u16::try_from(qids.len()).map_err(|_| P9Error::TooManyWalkNames { count: qids.len() })?;
+    let mut payload = Vec::with_capacity(142 + qids.len() * 13);
+    push_u64(&mut payload, valid);
+    push_attr_body(&mut payload, attr);
+    push_u16(&mut payload, qid_count);
+    for qid in qids {
+        push_qid(&mut payload, *qid);
+    }
+    Ok(P9Frame::new(P9_RWALKGETATTR, tag, payload))
 }
 
 /// Builds a `Tlopen` frame.
@@ -1873,6 +2041,31 @@ pub fn p9_decode_rflush(frame: &P9Frame) -> Result<(), P9Error> {
     PayloadCursor::new(frame.payload()).finish()
 }
 
+/// Decodes a `Tflushf` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Tflushf` or the payload is
+/// malformed.
+pub fn p9_decode_tflushf(frame: &P9Frame) -> Result<P9FlushF, P9Error> {
+    expect_message_type(frame, P9_TFLUSHF)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let fid = cursor.read_u32()?;
+    cursor.finish()?;
+    Ok(P9FlushF { fid })
+}
+
+/// Decodes an `Rflushf` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rflushf` or the payload is not
+/// empty.
+pub fn p9_decode_rflushf(frame: &P9Frame) -> Result<(), P9Error> {
+    expect_message_type(frame, P9_RFLUSHF)?;
+    PayloadCursor::new(frame.payload()).finish()
+}
+
 /// Decodes a `Twalk` frame payload.
 ///
 /// # Errors
@@ -1880,7 +2073,21 @@ pub fn p9_decode_rflush(frame: &P9Frame) -> Result<(), P9Error> {
 /// Returns an error when the frame type is not `Twalk` or the payload is
 /// malformed.
 pub fn p9_decode_twalk(frame: &P9Frame) -> Result<P9Walk, P9Error> {
-    expect_message_type(frame, P9_TWALK)?;
+    decode_walk_frame(frame, P9_TWALK)
+}
+
+/// Decodes a `Twalkgetattr` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Twalkgetattr` or the payload is
+/// malformed.
+pub fn p9_decode_twalkgetattr(frame: &P9Frame) -> Result<P9Walk, P9Error> {
+    decode_walk_frame(frame, P9_TWALKGETATTR)
+}
+
+fn decode_walk_frame(frame: &P9Frame, expected_message_type: u8) -> Result<P9Walk, P9Error> {
+    expect_message_type(frame, expected_message_type)?;
     let mut cursor = PayloadCursor::new(frame.payload());
     let fid = cursor.read_u32()?;
     let newfid = cursor.read_u32()?;
@@ -1902,12 +2109,33 @@ pub fn p9_decode_twalk(frame: &P9Frame) -> Result<P9Walk, P9Error> {
 pub fn p9_decode_rwalk(frame: &P9Frame) -> Result<Vec<P9Qid>, P9Error> {
     expect_message_type(frame, P9_RWALK)?;
     let mut cursor = PayloadCursor::new(frame.payload());
+    let qids = read_qids_from_cursor(&mut cursor)?;
+    cursor.finish()?;
+    Ok(qids)
+}
+
+/// Decodes an `Rwalkgetattr` frame payload.
+///
+/// # Errors
+///
+/// Returns an error when the frame type is not `Rwalkgetattr` or the payload is
+/// malformed.
+pub fn p9_decode_rwalkgetattr(frame: &P9Frame) -> Result<P9WalkGetAttrResponse, P9Error> {
+    expect_message_type(frame, P9_RWALKGETATTR)?;
+    let mut cursor = PayloadCursor::new(frame.payload());
+    let valid = cursor.read_u64()?;
+    let attr = cursor.read_attr_body()?;
+    let qids = read_qids_from_cursor(&mut cursor)?;
+    cursor.finish()?;
+    Ok(P9WalkGetAttrResponse { valid, attr, qids })
+}
+
+fn read_qids_from_cursor(cursor: &mut PayloadCursor<'_>) -> Result<Vec<P9Qid>, P9Error> {
     let qid_count = cursor.read_u16()? as usize;
     let mut qids = Vec::with_capacity(qid_count);
     for _ in 0..qid_count {
         qids.push(cursor.read_qid()?);
     }
-    cursor.finish()?;
     Ok(qids)
 }
 
@@ -2574,6 +2802,10 @@ fn push_fs_stat(out: &mut Vec<u8>, stat: P9FsStat) {
 fn push_attr(out: &mut Vec<u8>, attr: &P9Attr) {
     push_u64(out, attr.valid);
     push_qid(out, attr.qid);
+    push_attr_body(out, &P9AttrBody::from(attr));
+}
+
+fn push_attr_body(out: &mut Vec<u8>, attr: &P9AttrBody) {
     push_u32(out, attr.mode);
     push_u32(out, attr.uid);
     push_u32(out, attr.gid);
@@ -2719,6 +2951,32 @@ impl<'a> PayloadCursor<'a> {
     fn read_attr(&mut self) -> Result<P9Attr, P9Error> {
         let valid = self.read_u64()?;
         let qid = self.read_qid()?;
+        let body = self.read_attr_body()?;
+        Ok(P9Attr {
+            valid,
+            qid,
+            mode: body.mode,
+            uid: body.uid,
+            gid: body.gid,
+            nlink: body.nlink,
+            rdev: body.rdev,
+            size: body.size,
+            block_size: body.block_size,
+            blocks: body.blocks,
+            atime_seconds: body.atime_seconds,
+            atime_nanoseconds: body.atime_nanoseconds,
+            mtime_seconds: body.mtime_seconds,
+            mtime_nanoseconds: body.mtime_nanoseconds,
+            ctime_seconds: body.ctime_seconds,
+            ctime_nanoseconds: body.ctime_nanoseconds,
+            btime_seconds: body.btime_seconds,
+            btime_nanoseconds: body.btime_nanoseconds,
+            generation: body.generation,
+            data_version: body.data_version,
+        })
+    }
+
+    fn read_attr_body(&mut self) -> Result<P9AttrBody, P9Error> {
         let mode = self.read_u32()?;
         let uid = self.read_u32()?;
         let gid = self.read_u32()?;
@@ -2737,9 +2995,7 @@ impl<'a> PayloadCursor<'a> {
         let btime_nanoseconds = self.read_u64()?;
         let generation = self.read_u64()?;
         let data_version = self.read_u64()?;
-        Ok(P9Attr {
-            valid,
-            qid,
+        Ok(P9AttrBody {
             mode,
             uid,
             gid,
@@ -2883,6 +3139,20 @@ mod tests {
             P9Error::UnexpectedMessageType {
                 expected: P9_TVERSION,
                 actual: P9_RVERSION
+            }
+        );
+    }
+
+    #[test]
+    fn version_frame_round_trips_google_2_extension() {
+        let frame = p9_tversion(P9_NOTAG, 131_072, P9_VERSION_9P2000_L_GOOGLE_2).unwrap();
+        let decoded = P9Frame::decode(&frame.encode().unwrap()).unwrap();
+
+        assert_eq!(
+            p9_decode_tversion(&decoded).unwrap(),
+            P9Version {
+                msize: 131_072,
+                version: P9_VERSION_9P2000_L_GOOGLE_2.to_owned()
             }
         );
     }
@@ -3035,6 +3305,10 @@ mod tests {
         assert_eq!(p9_message_type_name(P9_RCLUNK), Some("Rclunk"));
         assert_eq!(p9_message_type_name(P9_TREMOVE), Some("Tremove"));
         assert_eq!(p9_message_type_name(P9_RREMOVE), Some("Rremove"));
+        assert_eq!(p9_message_type_name(P9_TFLUSHF), Some("Tflushf"));
+        assert_eq!(p9_message_type_name(P9_RFLUSHF), Some("Rflushf"));
+        assert_eq!(p9_message_type_name(P9_TWALKGETATTR), Some("Twalkgetattr"));
+        assert_eq!(p9_message_type_name(P9_RWALKGETATTR), Some("Rwalkgetattr"));
     }
 
     #[test]
@@ -3228,6 +3502,22 @@ mod tests {
     }
 
     #[test]
+    fn flushf_round_trips_fid_and_empty_response() {
+        let frame = p9_tflushf(7, 11).encode().unwrap();
+        assert_eq!(&frame[..4], &11_u32.to_le_bytes());
+        assert_eq!(frame[4], P9_TFLUSHF);
+        assert_eq!(
+            p9_decode_tflushf(&P9Frame::decode(&frame).unwrap()).unwrap(),
+            P9FlushF { fid: 11 }
+        );
+
+        let response = p9_rflushf(7).encode().unwrap();
+        assert_eq!(&response[..4], &7_u32.to_le_bytes());
+        assert_eq!(response[4], P9_RFLUSHF);
+        p9_decode_rflushf(&P9Frame::decode(&response).unwrap()).unwrap();
+    }
+
+    #[test]
     fn walk_round_trips_names_and_qids() {
         let frame = p9_twalk(5, 10, 11, &["bin", "sh"]).unwrap();
         let decoded = P9Frame::decode(&frame.encode().unwrap()).unwrap();
@@ -3247,6 +3537,58 @@ mod tests {
         assert_eq!(
             p9_decode_rwalk(&P9Frame::decode(&response.encode().unwrap()).unwrap()).unwrap(),
             vec![first, second]
+        );
+    }
+
+    #[test]
+    fn walkgetattr_round_trips_names_attrs_and_qids() {
+        let frame = p9_twalkgetattr(5, 10, 11, &["bin", "sh"]).unwrap();
+        let decoded = P9Frame::decode(&frame.encode().unwrap()).unwrap();
+
+        assert_eq!(decoded.message_type(), P9_TWALKGETATTR);
+        assert_eq!(
+            p9_decode_twalkgetattr(&decoded).unwrap(),
+            P9Walk {
+                fid: 10,
+                newfid: 11,
+                names: vec!["bin".to_owned(), "sh".to_owned()]
+            }
+        );
+
+        let first = qid(0x80, 0, 1);
+        let second = qid(0, 0, 2);
+        let attr = P9Attr {
+            valid: 0x200,
+            qid: second,
+            mode: 0o100755,
+            uid: 3,
+            gid: 4,
+            nlink: 5,
+            rdev: 6,
+            size: 7,
+            block_size: 8,
+            blocks: 9,
+            atime_seconds: 10,
+            atime_nanoseconds: 11,
+            mtime_seconds: 12,
+            mtime_nanoseconds: 13,
+            ctime_seconds: 14,
+            ctime_nanoseconds: 15,
+            btime_seconds: 16,
+            btime_nanoseconds: 17,
+            generation: 18,
+            data_version: 19,
+        };
+        let response =
+            p9_rwalkgetattr(5, attr.valid, &P9AttrBody::from(&attr), &[first, second]).unwrap();
+        assert_eq!(&response.encode().unwrap()[..4], &175_u32.to_le_bytes());
+        assert_eq!(
+            p9_decode_rwalkgetattr(&P9Frame::decode(&response.encode().unwrap()).unwrap()).unwrap(),
+            P9WalkGetAttrResponse {
+                valid: attr.valid,
+                attr: P9AttrBody::from(&attr),
+                qids: vec![first, second]
+            }
         );
     }
 

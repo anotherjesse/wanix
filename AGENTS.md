@@ -89,17 +89,20 @@ can observe terminal resize broadcasts through live Wanix-backed fd readiness.
 
 The next 9P-facing demo target is wiring the native and browser listeners into
 serve/v86 experiments so external clients can browse a Wanix namespace. The
-server core already negotiates 9P2000.L, attaches, walks, opens regular files
-and read-only directories, reads/writes regular files, lists directories with
-`Treaddir`, clunks fids, reports no-follow metadata with `Tgetattr`, creates
+server core already negotiates 9P2000.L and caps Google-extension negotiation
+at `9P2000.L.Google.2`, attaches, walks, opens regular files and read-only
+directories, reads/writes regular files, lists directories with `Treaddir`,
+clunks fids, reports no-follow metadata with `Tgetattr` and Google.2
+`Twalkgetattr`, creates
 and reads symbolic links with `Tsymlink` and `Treadlink`, and handles core mount
 and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, legacy `Trename` and
 `Tremove`, `Trenameat`, and `Tunlinkat`, file size, permission, and timestamp
 mutation with `Tsetattr`,
 session-virtual uid/gid ownership through `Tsetattr`/`Tgetattr`,
 advisory-lock compatibility probes with `Tlock`/`Tgetlock`, synchronous
-compatibility probes with `Tflush` and `Tfsync`, and append-open write
-semantics for `O_APPEND` fids; it also decodes `Tmknod`, `Tlink`, and xattr
+compatibility probes with `Tflush`, Google.1 `Tflushf`, and `Tfsync`, and
+append-open write semantics for `O_APPEND` fids; it also decodes `Tmknod`,
+`Tlink`, and xattr
 probes as typed compatibility requests and returns intentional unsupported
 errors until Wanix grows backing contracts, while `Tauth` returns explicit
 `ENOSYS` because Rust Wanix does not require a separate 9P auth phase yet. It
@@ -117,9 +120,10 @@ Rust-native serve shape for browser/v86/VS Code experiments.
 Normal `serve` handles HTTP and direct 9P WebSocket connections concurrently so
 long-lived mounted clients do not block discovery or static assets; `--once`
 remains a deterministic single-connection mode for tests and scripted demos.
-`/.well-known/wanix.json` describes the direct binary 9P WebSocket route, the
-optional bundle hint, and the explicitly unimplemented Ethernet route so
-browser/v86/VS Code clients can discover the current Rust serve contract.
+`/.well-known/wanix.json` describes the direct binary 9P WebSocket route,
+including base and Google.2 supported protocol strings, the optional bundle
+hint, and the explicitly unimplemented Ethernet route so browser/v86/VS Code
+clients can discover the current Rust serve contract.
 When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86
 `filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also
@@ -138,7 +142,8 @@ rather than a complete guest asset assembler.
 lands. Listener commands accept `--once` for tests and scripted demos.
 `p9-stdio` and the `serve` well-known WebSocket route both have compatibility
 probe smokes for auth, mknod, hard-link, xattr, legacy rename, and legacy
-remove requests, pinning the externally visible contract used by
+remove requests, and the serve WebSocket path has a Google.2 `Twalkgetattr`
+smoke, pinning the externally visible contract used by
 Linux/v86/editor clients.
 
 ## Code Quality Guardrails
@@ -417,6 +422,9 @@ cargo test --workspace --locked
 - [ADR 0086](docs/adrs/0086-concurrent-rust-serve-clients.md):
   Normal Rust `serve` accepts concurrent HTTP and direct 9P WebSocket clients
   while `--once` stays single-connection for deterministic smokes.
+- [ADR 0087](docs/adrs/0087-9p-google2-walkgetattr.md):
+  `wanix-9p` negotiates Google.2 9P extensions for `Tflushf` and
+  `Twalkgetattr` while keeping v86's default mount contract on base 9P.
 
 ## Cycle Rules
 
