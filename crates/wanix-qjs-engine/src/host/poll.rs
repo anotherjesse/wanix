@@ -1,13 +1,14 @@
 use std::thread;
 use std::time::Duration;
 
-use super::guest_memory::{guest_len, guest_offset_at, guest_range};
 use super::{ERRNO_INVAL, ERRNO_NOSYS, ERRNO_SUCCESS, HostState, caller_memory};
 use super::{QuickJsWasiErrno, QuickJsWasiFdStat};
-use crate::guest::guest_offset;
+use events::{PollEvents, PollReadiness};
 use wasmtime::{Caller, Linker};
 
+mod events;
 mod layout;
+mod subscription;
 
 const EVENTTYPE_CLOCK: u8 = 0;
 const EVENTTYPE_FD_READ: u8 = 1;
@@ -30,125 +31,93 @@ fn poll_oneoff(
     nsubscriptions: i32,
     nevents_ptr: i32,
 ) -> wasmtime::Result<i32> {
-    let nsubscriptions = guest_len(nsubscriptions)?;
+    poll_oneoff_result(&mut caller, in_ptr, out_ptr, nsubscriptions, nevents_ptr)
+        .map(preview1_poll_result)
+}
+
+fn poll_oneoff_result(
+    caller: &mut Caller<'_, HostState>,
+    in_ptr: i32,
+    out_ptr: i32,
+    nsubscriptions: i32,
+    nevents_ptr: i32,
+) -> wasmtime::Result<Result<(), i32>> {
     if nsubscriptions == 0 {
-        return Ok(ERRNO_INVAL);
+        return Ok(Err(ERRNO_INVAL));
     }
-    let memory = caller_memory(&caller)?;
-    guest_range(
+    let memory = caller_memory(caller)?;
+    let subscriptions = subscription::read_poll_subscriptions(
         &memory,
-        &caller,
-        guest_offset(nevents_ptr),
-        layout::WASI_U32_SIZE,
-    )?;
-    guest_range(
-        &memory,
-        &caller,
-        guest_offset(in_ptr),
-        nsubscriptions
-            .checked_mul(layout::SUBSCRIPTION_SIZE)
-            .ok_or_else(|| wasmtime::Error::msg("poll_oneoff subscription size overflow"))?,
-    )?;
-    guest_range(
-        &memory,
-        &caller,
-        guest_offset(out_ptr),
-        nsubscriptions
-            .checked_mul(layout::EVENT_SIZE)
-            .ok_or_else(|| wasmtime::Error::msg("poll_oneoff event size overflow"))?,
+        caller,
+        in_ptr,
+        out_ptr,
+        nevents_ptr,
+        nsubscriptions,
     )?;
 
-    let mut subscriptions = Vec::new();
-    subscriptions
-        .try_reserve_exact(nsubscriptions)
-        .map_err(|_| wasmtime::Error::msg("poll_oneoff subscription allocation failed"))?;
-    for index in 0..nsubscriptions {
-        let mut subscription = [0; layout::SUBSCRIPTION_SIZE];
-        memory.read(
-            &caller,
-            guest_offset_at(in_ptr, index, layout::SUBSCRIPTION_SIZE)?,
-            &mut subscription,
-        )?;
-        subscriptions.push(subscription);
-    }
+    let events = collect_ready_events(caller, &subscriptions)?;
+    events::write_poll_events(
+        &memory,
+        caller,
+        out_ptr,
+        nevents_ptr,
+        &subscriptions,
+        events,
+        clock_event,
+    )
+}
 
-    let mut ready_events = Vec::new();
-    let mut pending_fd = false;
-    for subscription in &subscriptions {
-        match layout::subscription_tag(subscription) {
-            EVENTTYPE_FD_READ | EVENTTYPE_FD_WRITE => {
-                let event = match fd_event(&caller, subscription)? {
-                    Ok(event) => event,
-                    Err(errno) => return Ok(errno),
-                };
-                if let Some(event) = event {
-                    ready_events.push(event);
-                } else {
-                    pending_fd = true;
-                }
-            }
-            EVENTTYPE_CLOCK => {
-                let event = match immediate_clock_event(&caller, subscription) {
-                    Ok(event) => event,
-                    Err(errno) => return Ok(errno),
-                };
-                if let Some(event) = event {
-                    ready_events.push(event);
-                }
-            }
-            _ => return Ok(ERRNO_NOSYS),
+fn preview1_poll_result(result: Result<(), i32>) -> i32 {
+    match result {
+        Ok(()) => ERRNO_SUCCESS,
+        Err(errno) => errno,
+    }
+}
+
+fn collect_ready_events(
+    caller: &Caller<'_, HostState>,
+    subscriptions: &[layout::Subscription],
+) -> wasmtime::Result<PollEvents> {
+    let mut accumulator = events::PollEventAccumulator::new();
+    for subscription in subscriptions {
+        if let Err(errno) = accumulator.record(ready_event(caller, subscription)?) {
+            return Ok(PollEvents::Unsupported(errno));
         }
     }
-    if !ready_events.is_empty() {
-        layout::write_events(&memory, &mut caller, out_ptr, &ready_events)?;
-        layout::write_nevents(&memory, &mut caller, nevents_ptr, ready_events.len())?;
-        return Ok(ERRNO_SUCCESS);
+    Ok(accumulator.finish(subscriptions.len()))
+}
+
+fn ready_event(
+    caller: &Caller<'_, HostState>,
+    subscription: &layout::Subscription,
+) -> wasmtime::Result<PollReadiness> {
+    match layout::subscription_tag(subscription) {
+        EVENTTYPE_FD_READ => fd_event(caller, subscription, EVENTTYPE_FD_READ, RIGHT_FD_READ),
+        EVENTTYPE_FD_WRITE => fd_event(caller, subscription, EVENTTYPE_FD_WRITE, RIGHT_FD_WRITE),
+        EVENTTYPE_CLOCK => clock_readiness(caller, subscription),
+        _ => Ok(PollReadiness::Unsupported(ERRNO_NOSYS)),
     }
+}
 
-    if pending_fd {
-        layout::write_nevents(&memory, &mut caller, nevents_ptr, 0)?;
-        return Ok(ERRNO_SUCCESS);
-    }
-
-    if subscriptions.len() != 1 {
-        return Ok(ERRNO_NOSYS);
-    }
-
-    guest_range(
-        &memory,
-        &caller,
-        guest_offset_at(in_ptr, 0, layout::SUBSCRIPTION_SIZE)?,
-        layout::SUBSCRIPTION_SIZE,
-    )?;
-    guest_range(
-        &memory,
-        &caller,
-        guest_offset_at(out_ptr, 0, layout::EVENT_SIZE)?,
-        layout::EVENT_SIZE,
-    )?;
-
-    let event = match clock_event(&caller, &subscriptions[0]) {
-        Ok(event) => event,
-        Err(errno) => return Ok(errno),
-    };
-
-    memory.write(&mut caller, guest_offset(out_ptr), &event)?;
-    layout::write_nevents(&memory, &mut caller, nevents_ptr, 1)?;
-    Ok(ERRNO_SUCCESS)
+fn clock_readiness(
+    caller: &Caller<'_, HostState>,
+    subscription: &layout::Subscription,
+) -> wasmtime::Result<PollReadiness> {
+    Ok(match immediate_clock_event(caller, subscription) {
+        Ok(Some(event)) => PollReadiness::Ready(event),
+        Ok(None) => PollReadiness::WaitingClock,
+        Err(errno) => PollReadiness::Unsupported(errno),
+    })
 }
 
 fn fd_event(
     caller: &Caller<'_, HostState>,
     subscription: &layout::Subscription,
-) -> wasmtime::Result<Result<Option<layout::Event>, i32>> {
-    let event_type = layout::subscription_tag(subscription);
-    let required_right = match event_type {
-        EVENTTYPE_FD_READ => RIGHT_FD_READ,
-        EVENTTYPE_FD_WRITE => RIGHT_FD_WRITE,
-        _ => return Ok(Err(ERRNO_NOSYS)),
-    };
+    event_type: u8,
+    required_right: u64,
+) -> wasmtime::Result<PollReadiness> {
     let Some(host) = caller.data().wasi_host() else {
-        return Ok(Err(ERRNO_NOSYS));
+        return Ok(PollReadiness::Unsupported(ERRNO_NOSYS));
     };
     let fd = layout::subscription_fd(subscription);
     let mut host = host
@@ -159,25 +128,43 @@ fn fd_event(
         Err(errno) => Some(errno),
     };
     if let Some(errno) = errno {
-        return Ok(Ok(Some(event_with_errno(
+        return Ok(PollReadiness::Ready(event_with_errno(
             subscription,
             event_type,
             Some(errno),
-        ))));
+        )));
     }
-    let ready = match event_type {
-        EVENTTYPE_FD_READ => host.fd_read_ready(fd),
-        EVENTTYPE_FD_WRITE => host.fd_write_ready(fd),
-        _ => unreachable!("fd event type checked above"),
+    Ok(fd_readiness_event(
+        host.as_mut(),
+        fd,
+        subscription,
+        event_type,
+    ))
+}
+
+fn fd_readiness_event(
+    host: &mut dyn super::QuickJsWasiHost,
+    fd: u32,
+    subscription: &layout::Subscription,
+    event_type: u8,
+) -> PollReadiness {
+    let ready = if event_type == EVENTTYPE_FD_READ {
+        host.fd_read_ready(fd)
+    } else {
+        host.fd_write_ready(fd)
     };
+    fd_ready_event(subscription, event_type, ready)
+}
+
+fn fd_ready_event(
+    subscription: &layout::Subscription,
+    event_type: u8,
+    ready: Result<bool, QuickJsWasiErrno>,
+) -> PollReadiness {
     match ready {
-        Ok(true) => Ok(Ok(Some(event_with_errno(subscription, event_type, None)))),
-        Ok(false) => Ok(Ok(None)),
-        Err(errno) => Ok(Ok(Some(event_with_errno(
-            subscription,
-            event_type,
-            Some(errno),
-        )))),
+        Ok(true) => PollReadiness::Ready(event_with_errno(subscription, event_type, None)),
+        Ok(false) => PollReadiness::PendingFd,
+        Err(errno) => PollReadiness::Ready(event_with_errno(subscription, event_type, Some(errno))),
     }
 }
 
@@ -216,27 +203,33 @@ fn clock_sleep_ns(
     caller: &Caller<'_, HostState>,
     subscription: &layout::Subscription,
 ) -> Result<u64, i32> {
+    validate_clock_subscription(subscription)?;
+    let timeout_ns = layout::subscription_clock_timeout(subscription);
+    let flags = layout::subscription_clock_flags(subscription);
+    Ok(clock_sleep_duration_ns(caller, timeout_ns, flags))
+}
+
+fn validate_clock_subscription(subscription: &layout::Subscription) -> Result<(), i32> {
     if layout::subscription_tag(subscription) != EVENTTYPE_CLOCK {
         return Err(ERRNO_NOSYS);
     }
-
     let clock_id = layout::subscription_clock_id(subscription);
     if clock_id != CLOCKID_REALTIME && clock_id != CLOCKID_MONOTONIC {
         return Err(ERRNO_NOSYS);
     }
-
-    let timeout_ns = layout::subscription_clock_timeout(subscription);
     let flags = layout::subscription_clock_flags(subscription);
     if flags & !SUBCLOCKFLAGS_ABSTIME != 0 {
         return Err(ERRNO_INVAL);
     }
+    Ok(())
+}
 
-    let sleep_ns = if flags & SUBCLOCKFLAGS_ABSTIME != 0 {
+fn clock_sleep_duration_ns(caller: &Caller<'_, HostState>, timeout_ns: u64, flags: u16) -> u64 {
+    if flags & SUBCLOCKFLAGS_ABSTIME != 0 {
         timeout_ns.saturating_sub(caller.data().config().clock_time_ns())
     } else {
         timeout_ns
-    };
-    Ok(sleep_ns)
+    }
 }
 
 fn event_with_errno(
