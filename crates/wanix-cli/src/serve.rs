@@ -29,6 +29,7 @@ const QJS_SHELL_WEBSOCKET_PATH: &str = "/.well-known/qjs-shell";
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
 const DIRECT_V86_DEFAULT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,aname=,cache=none,msize=131072 loglevel=3";
 const DIRECT_V86_DEFAULT_KERNEL_PATH: &str = "/boot/bzImage";
+const DIRECT_V86_INIT_PATH: &str = "/bin/init";
 const DIRECT_V86_MEMORY_SIZE: u32 = 1024 * 1024 * 1024;
 const DIRECT_V86_VGA_MEMORY_SIZE: u32 = 8 * 1024 * 1024;
 const DIRECT_V86_MODULE_PATH: &str = "/v86/lib/libv86.mjs";
@@ -949,6 +950,7 @@ fn direct_v86_bundle_html() -> String {
     #screen canvas { display: block; max-width: 100%; }
     #screen div { white-space: pre; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
     #serial { min-height: 180px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    #boot-log { max-height: 180px; overflow: auto; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #11141a; padding: 12px; border: 1px solid #363b44; }
     label { display: block; margin: 12px 0 4px; color: #c9d3e0; }
     input, textarea { box-sizing: border-box; width: 100%; padding: 8px; color: #f4f4f0; background: #11141a; border: 1px solid #4b5563; }
@@ -969,6 +971,7 @@ fn direct_v86_bundle_html() -> String {
       <textarea id="cmdline" spellcheck="false"></textarea>
       <button id="start" disabled>Start VM</button>
       <pre id="config"></pre>
+      <pre id="boot-log" aria-live="polite"></pre>
     </aside>
     <div id="screen"><canvas></canvas><div></div></div>
     <textarea id="serial" spellcheck="false" readonly></textarea>
@@ -991,6 +994,7 @@ fn direct_v86_bundle_html() -> String {
     const status = document.querySelector("#status");
     const start = document.querySelector("#start");
     const configOutput = document.querySelector("#config");
+    const bootLog = document.querySelector("#boot-log");
     const kernel = document.querySelector("#kernel");
     const initrd = document.querySelector("#initrd");
     const cmdline = document.querySelector("#cmdline");
@@ -998,6 +1002,21 @@ fn direct_v86_bundle_html() -> String {
     const params = new URLSearchParams(location.search);
     const hvc0Encoder = new TextEncoder();
     const hvc0Decoder = new TextDecoder();
+    window.wanixV86BootLog = [];
+
+    function logBoot(message) {
+      window.wanixV86BootLog.push(message);
+      bootLog.textContent = window.wanixV86BootLog.join("\n") + "\n";
+      bootLog.scrollTop = bootLog.scrollHeight;
+    }
+
+    function setStatus(message) {
+      status.textContent = message;
+      window.wanixV86Status = message;
+      logBoot(message);
+    }
+    window.addEventListener("error", event => setStatus("direct-v86 setup failed: " + event.message));
+    window.addEventListener("unhandledrejection", event => setStatus("direct-v86 setup failed: " + (event.reason?.message || event.reason)));
 
     const discovery = await fetch("/.well-known/wanix.json", { cache: "no-store" }).then(response => response.json());
     const v86Assets = discovery.v86?.assets || {};
@@ -1012,7 +1031,15 @@ fn direct_v86_bundle_html() -> String {
     cmdline.value = discovery.v86?.defaultCmdline || DEFAULT_CMDLINE;
     if (params.get("cmdline")) cmdline.value = params.get("cmdline");
     if (params.get("append")) cmdline.value = [cmdline.value, params.get("append")].filter(Boolean).join(" ");
-    status.textContent = "9P proxy: " + proxyUrl;
+    logBoot("9P proxy: " + proxyUrl);
+    if (v86Boot.ready) {
+      logBoot("Boot root ready: " + v86Boot.kernel + " with " + v86Boot.init);
+    } else if (Array.isArray(v86Boot.missing) && v86Boot.missing.length) {
+      logBoot("Boot root missing: " + v86Boot.missing.join(", "));
+    } else {
+      logBoot("Boot root readiness unknown");
+    }
+    setStatus("Ready: 9P proxy " + proxyUrl);
 
     function buildConfig() {
       const config = {
@@ -1063,6 +1090,24 @@ fn direct_v86_bundle_html() -> String {
       vm.bus.send("virtio-console0-input-bytes", bytes);
     }
 
+    function sendHvc0Resize(vm) {
+      const columns = Math.max(20, Math.floor(hvc0.clientWidth / 8) || 80);
+      const rows = Math.max(5, Math.floor(hvc0.clientHeight / 18) || 24);
+      vm.bus.send("virtio-console0-resize", [columns, rows]);
+    }
+
+    function connectHvc0Resize(vm) {
+      const resize = () => sendHvc0Resize(vm);
+      if ("ResizeObserver" in window) {
+        const observer = new ResizeObserver(resize);
+        observer.observe(hvc0);
+        window.wanixV86Hvc0ResizeObserver = observer;
+      }
+      window.addEventListener("resize", resize);
+      vm.add_listener("emulator-ready", resize);
+      vm.add_listener("emulator-loaded", resize);
+    }
+
     function connectHvc0(vm) {
       vm.add_listener("virtio-console0-output-bytes", appendHvc0);
       hvc0.addEventListener("keydown", event => {
@@ -1077,6 +1122,38 @@ fn direct_v86_bundle_html() -> String {
         event.preventDefault();
         sendHvc0(vm, hvc0Encoder.encode(text));
       });
+      connectHvc0Resize(vm);
+    }
+
+    function describeDownloadProgress(progress) {
+      if (!progress || typeof progress !== "object") return "download-progress";
+      const name = progress.file_name || progress.name || progress.url || "asset";
+      const loaded = progress.loaded ?? progress.done;
+      const total = progress.total ?? progress.size;
+      if (loaded !== undefined && total !== undefined) return name + " " + loaded + "/" + total;
+      if (loaded !== undefined) return name + " " + loaded;
+      return name;
+    }
+
+    function connectBootStatus(vm) {
+      vm.add_listener("download-progress", progress => logBoot("download: " + describeDownloadProgress(progress)));
+      vm.add_listener("emulator-loaded", () => logBoot("v86 runtime loaded"));
+      vm.add_listener("emulator-ready", () => setStatus("v86 ready"));
+      vm.add_listener("emulator-started", () => setStatus("v86 started"));
+      vm.add_listener("emulator-stopped", () => setStatus("v86 stopped"));
+      vm.add_listener("emulator-error", error => setStatus("v86 error: " + (error?.message || error)));
+    }
+
+    function startVm() {
+      if (window.wanixV86) return;
+      start.disabled = true;
+      setStatus("Starting v86");
+      const vm = new V86(buildConfig());
+      window.wanixV86 = vm;
+      connectBootStatus(vm);
+      connectHvc0(vm);
+      hvc0.focus();
+      return vm;
     }
 
     kernel.addEventListener("input", refreshConfig);
@@ -1084,13 +1161,9 @@ fn direct_v86_bundle_html() -> String {
     cmdline.addEventListener("input", refreshConfig);
     refreshConfig();
     start.disabled = false;
-    start.addEventListener("click", () => {
-      start.disabled = true;
-      const vm = new V86(buildConfig());
-      window.wanixV86 = vm;
-      connectHvc0(vm);
-      hvc0.focus();
-    });
+    window.wanixV86Start = startVm;
+    start.addEventListener("click", startVm);
+    if (params.get("autostart") === "1") startVm();
   </script>
 </body>
 </html>
@@ -1889,11 +1962,33 @@ fn serve_qjs_shell_route_json(roots: &ServeRoots, websocket_url: &str) -> String
 
 fn direct_v86_boot_json(static_root: &Path) -> String {
     let mut fields = Vec::new();
-    if let Some(kernel) = first_existing_static_route(static_root, DIRECT_V86_KERNEL_CANDIDATES) {
+    let kernel = first_existing_static_route(static_root, DIRECT_V86_KERNEL_CANDIDATES);
+    let initrd = first_existing_static_route(static_root, DIRECT_V86_INITRD_CANDIDATES);
+    let init = first_existing_static_route(static_root, &[DIRECT_V86_INIT_PATH]);
+    if let Some(kernel) = kernel {
         fields.push(format!("\"kernel\":{}", json_string(kernel)));
     }
-    if let Some(initrd) = first_existing_static_route(static_root, DIRECT_V86_INITRD_CANDIDATES) {
+    if let Some(initrd) = initrd {
         fields.push(format!("\"initrd\":{}", json_string(initrd)));
+    }
+    if let Some(init) = init {
+        fields.push(format!("\"init\":{}", json_string(init)));
+    }
+    let mut missing = Vec::new();
+    if kernel.is_none() {
+        missing.push(DIRECT_V86_DEFAULT_KERNEL_PATH);
+    }
+    if init.is_none() {
+        missing.push(DIRECT_V86_INIT_PATH);
+    }
+    fields.push(format!("\"ready\":{}", missing.is_empty()));
+    if !missing.is_empty() {
+        let missing = missing
+            .into_iter()
+            .map(json_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        fields.push(format!("\"missing\":[{missing}]"));
     }
     format!("{{{}}}", fields.join(","))
 }
@@ -2368,6 +2463,7 @@ mod tests {
             response.contains("bzimage_initrd_from_filesystem: false"),
             "{response}"
         );
+        assert!(response.contains("autostart: true"), "{response}");
         assert!(
             response.contains("memory_size: discovery.v86?.memorySize || DEFAULT_MEMORY_SIZE"),
             "{response}"
@@ -2389,7 +2485,29 @@ mod tests {
             "{response}"
         );
         assert!(
+            response.contains("<pre id=\"boot-log\" aria-live=\"polite\"></pre>"),
+            "{response}"
+        );
+        assert!(
             response.contains("const hvc0 = document.querySelector(\"#serial\")"),
+            "{response}"
+        );
+        assert!(
+            response.contains("window.wanixV86BootLog = []"),
+            "{response}"
+        );
+        assert!(response.contains("function startVm()"), "{response}");
+        assert!(
+            response.contains("if (params.get(\"autostart\") === \"1\") startVm()"),
+            "{response}"
+        );
+        assert!(response.contains("connectBootStatus(vm)"), "{response}");
+        assert!(
+            response.contains("vm.add_listener(\"download-progress\""),
+            "{response}"
+        );
+        assert!(
+            response.contains("vm.add_listener(\"emulator-started\""),
             "{response}"
         );
         assert!(
@@ -2398,6 +2516,18 @@ mod tests {
         );
         assert!(
             response.contains("vm.bus.send(\"virtio-console0-input-bytes\", bytes)"),
+            "{response}"
+        );
+        assert!(
+            response.contains("vm.bus.send(\"virtio-console0-resize\", [columns, rows])"),
+            "{response}"
+        );
+        assert!(
+            response.contains("vm.add_listener(\"emulator-ready\", resize)"),
+            "{response}"
+        );
+        assert!(
+            response.contains("window.addEventListener(\"unhandledrejection\""),
             "{response}"
         );
         assert!(response.contains("window.wanixV86 = vm"), "{response}");
@@ -2790,9 +2920,11 @@ mod tests {
     fn serve_once_returns_well_known_discovery_document() {
         let root = temp_dir("wanix-cli-serve-discovery");
         fs::create_dir_all(root.join("boot")).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
         fs::write(root.join("index.html"), b"wanix serve discovery").unwrap();
         fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
         fs::write(root.join("boot/initrd"), b"initrd").unwrap();
+        fs::write(root.join("bin/init"), b"init").unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let command = ServeCommand {
@@ -2871,7 +3003,7 @@ mod tests {
         );
         assert!(
             response
-                .contains("\"boot\":{\"kernel\":\"/boot/bzImage\",\"initrd\":\"/boot/initrd\"}"),
+                .contains("\"boot\":{\"kernel\":\"/boot/bzImage\",\"initrd\":\"/boot/initrd\",\"init\":\"/bin/init\",\"ready\":true}"),
             "{response}"
         );
         assert!(
@@ -3085,7 +3217,35 @@ std.writeFile("generated.txt", "generated by task " + id);
         );
 
         assert!(
-            body.contains("\"boot\":{\"kernel\":\"/bzImage\"}"),
+            body.contains(
+                "\"boot\":{\"kernel\":\"/bzImage\",\"ready\":false,\"missing\":[\"/bin/init\"]}"
+            ),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn serve_discovery_reports_direct_v86_boot_readiness_gaps() {
+        let root = temp_dir("wanix-cli-serve-discovery-boot-gaps");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("bin/init"), b"init").unwrap();
+        let roots = ServeRoots::new(
+            &root,
+            "127.0.0.1:7654".parse().unwrap(),
+            Some(DIRECT_V86_BUNDLE.to_owned()),
+            false,
+        )
+        .unwrap();
+
+        let body = serve_discovery_json(
+            &roots,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+        );
+
+        assert!(
+            body.contains(
+                "\"boot\":{\"init\":\"/bin/init\",\"ready\":false,\"missing\":[\"/boot/bzImage\"]}"
+            ),
             "{body}"
         );
     }

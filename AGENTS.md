@@ -176,15 +176,19 @@ advertises direct-v86 boot hints: the default 9P-root Linux cmdline, memory
 size, VGA memory size, virtio-console requirement, and embedded v86 asset
 routes. Discovery also reports guest boot asset URLs found in the served root,
 preferring `/boot/bzImage` over legacy `/bzImage` for the kernel and reporting a
-present initrd route when one is available. With `--bundle direct-v86`, Rust
+present initrd route when one is available. Discovery marks direct-v86 boot
+readiness by checking for a kernel and `/bin/init`, reporting missing required
+markers for smoke automation. With `--bundle direct-v86`, Rust
 serve owns the embedded `/v86/lib/libv86.mjs`, `/v86/lib/mod.js`,
 `/v86/lib/offscreen.js`, wasm, and BIOS routes so the browser emulator runtime
 does not have to live in the served root. The page accepts caller-supplied
-kernel/initrd/cmdline URLs or query overrides, so it is a boot handoff proof
-rather than a complete guest asset assembler. The same generated page bridges
-v86 `virtio-console0-output-bytes` into a visible console textarea and sends
-typed/pasted browser input back through `virtio-console0-input-bytes`, matching
-the guest's `hvc0` console path used by QEMU.
+kernel/initrd/cmdline URLs or query overrides, and `autostart=1` starts v86
+after discovery/configuration so the URL can be used as a repeatable browser
+boot smoke. The same generated page bridges v86
+`virtio-console0-output-bytes` into a visible console textarea, sends
+typed/pasted browser input back through `virtio-console0-input-bytes`, and
+sends browser console size changes as `virtio-console0-resize`, matching the
+guest's `hvc0` console path used by QEMU.
 `wanix-rust qemu --root DIR` prints a shell-quoted native QEMU/KVM virtio-9p
 command for the same Linux guest/rootfs shape, discovering `/boot/bzImage` or
 legacy `/bzImage` from the guest root unless `--kernel PATH` overrides it. The
@@ -516,6 +520,9 @@ cargo test --workspace --locked
   The served qjs-shell WebSocket route pumps bounded QuickJS event-loop work
   while idle so delayed terminal output can reach the workbench without another
   browser input frame.
+- [ADR 0100](docs/adrs/0100-direct-v86-boot-smoke-readiness.md):
+  The direct-v86 bundle supports `autostart=1`, boot logs, lifecycle status,
+  hvc0 resize, and discovery readiness markers for repeatable browser VM smokes.
 
 ## Cycle Rules
 
