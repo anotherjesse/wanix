@@ -4,6 +4,7 @@
 //! filesystems. It owns fid state and filesystem error mapping, while the
 //! protocol crate remains dependency-free and wire-only.
 
+mod dispatch;
 mod transport;
 
 use std::collections::BTreeMap;
@@ -19,14 +20,10 @@ use wanix_fs::{
 use wanix_protocol::{
     P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_CTIME, P9_SETATTR_GID,
     P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
-    P9_SETATTR_UID, P9_TATTACH, P9_TAUTH, P9_TCLUNK, P9_TFLUSH, P9_TFLUSHF, P9_TFSYNC, P9_TGETATTR,
-    P9_TGETLOCK, P9_TLCREATE, P9_TLINK, P9_TLOCK, P9_TLOPEN, P9_TMKDIR, P9_TMKNOD, P9_TREAD,
-    P9_TREADDIR, P9_TREADLINK, P9_TREMOVE, P9_TRENAME, P9_TRENAMEAT, P9_TSETATTR, P9_TSTATFS,
-    P9_TSYMLINK, P9_TUNLINKAT, P9_TVERSION, P9_TWALK, P9_TWALKGETATTR, P9_TWRITE, P9_TXATTRCREATE,
-    P9_TXATTRWALK, P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_1, P9_VERSION_9P2000_L_GOOGLE_2,
-    P9Attr, P9AttrBody, P9DirEntry, P9Error, P9Frame, P9FsStat, P9Lock, P9Qid, P9SetAttr,
-    P9Version, p9_decode_tattach, p9_decode_tauth, p9_decode_tclunk, p9_decode_tflush,
-    p9_decode_tflushf, p9_decode_tfsync, p9_decode_tgetattr, p9_decode_tgetlock,
+    P9_SETATTR_UID, P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_1,
+    P9_VERSION_9P2000_L_GOOGLE_2, P9Attr, P9AttrBody, P9DirEntry, P9Error, P9Frame, P9FsStat,
+    P9Lock, P9Qid, P9SetAttr, P9Version, p9_decode_tattach, p9_decode_tauth, p9_decode_tclunk,
+    p9_decode_tflush, p9_decode_tflushf, p9_decode_tfsync, p9_decode_tgetattr, p9_decode_tgetlock,
     p9_decode_tlcreate, p9_decode_tlink, p9_decode_tlock, p9_decode_tlopen, p9_decode_tmkdir,
     p9_decode_tmknod, p9_decode_tread, p9_decode_treaddir, p9_decode_treadlink, p9_decode_tremove,
     p9_decode_trename, p9_decode_trenameat, p9_decode_tsetattr, p9_decode_tstatfs,
@@ -157,51 +154,6 @@ impl P9Server {
             msize: DEFAULT_MAX_MSIZE,
             max_msize: DEFAULT_MAX_MSIZE,
             google_version: 0,
-        }
-    }
-
-    /// Handles one decoded 9P request frame and returns the response frame.
-    ///
-    /// Filesystem and unsupported-operation failures become `Rlerror` replies
-    /// using Linux errno values. Malformed typed payloads return
-    /// [`Wanix9pError`] because a caller may need to tear down the connection.
-    ///
-    /// # Errors
-    ///
-    /// Returns a protocol error when the request payload cannot be decoded.
-    pub fn handle_frame(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
-        match frame.message_type() {
-            P9_TVERSION => self.handle_version(frame),
-            P9_TSTATFS => self.handle_statfs(frame),
-            P9_TAUTH => self.handle_auth(frame),
-            P9_TATTACH => self.handle_attach(frame),
-            P9_TFLUSH => self.handle_flush(frame),
-            P9_TFLUSHF => self.handle_flushf(frame),
-            P9_TWALK => self.handle_walk(frame),
-            P9_TWALKGETATTR => self.handle_walkgetattr(frame),
-            P9_TLOPEN => self.handle_open(frame),
-            P9_TLCREATE => self.handle_create(frame),
-            P9_TSYMLINK => self.handle_symlink(frame),
-            P9_TMKNOD => self.handle_mknod(frame),
-            P9_TREADLINK => self.handle_readlink(frame),
-            P9_TGETATTR => self.handle_getattr(frame),
-            P9_TSETATTR => self.handle_setattr(frame),
-            P9_TXATTRWALK => self.handle_xattrwalk(frame),
-            P9_TXATTRCREATE => self.handle_xattrcreate(frame),
-            P9_TREADDIR => self.handle_readdir(frame),
-            P9_TFSYNC => self.handle_fsync(frame),
-            P9_TLOCK => self.handle_lock(frame),
-            P9_TGETLOCK => self.handle_getlock(frame),
-            P9_TREAD => self.handle_read(frame),
-            P9_TWRITE => self.handle_write(frame),
-            P9_TLINK => self.handle_link(frame),
-            P9_TMKDIR => self.handle_mkdir(frame),
-            P9_TRENAME => self.handle_rename(frame),
-            P9_TRENAMEAT => self.handle_renameat(frame),
-            P9_TREMOVE => self.handle_remove(frame),
-            P9_TUNLINKAT => self.handle_unlinkat(frame),
-            P9_TCLUNK => self.handle_clunk(frame),
-            _ => Ok(p9_rlerror(frame.tag(), EOPNOTSUPP)),
         }
     }
 
