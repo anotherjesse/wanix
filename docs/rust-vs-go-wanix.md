@@ -365,9 +365,10 @@ service-file `cmd`/`env`/`dir`, fd binds, `start`, and `exit` rather than a
 host-side shortcut; child stdio can flow through the parent terminal fds, file
 redirection can bind child fd `0`/`1`/`2` through the Wanix namespace, buffered
 terminal input after the qjs command line can be handed to the child fd `0`,
-the shell task's env flows into child `qjs` tasks, `ps` lists task metadata from
-`#task`, and `status` reports the last child `qjs` exit code observed from the
-child's `exit` service file.
+queued `#term/<id>/winch` resize messages are drained before shell command
+dispatch, the shell task's env flows into child `qjs` tasks, `ps` lists task
+metadata from `#task`, and `status` reports the last child `qjs` exit code
+observed from the child's `exit` service file.
 
 This is not yet a fully concurrent, production interactive scheduler. Raw mode
 still relies on the native host to put stdin into raw mode, but bytes then flow

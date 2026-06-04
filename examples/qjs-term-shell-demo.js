@@ -782,7 +782,6 @@ function runCommand(line) {
     return;
   }
   if (trimmed === "size") {
-    drainWinch();
     std.out.puts("size " + (terminalSize || "unknown") + "\n");
     prompt();
     return;
@@ -890,11 +889,11 @@ function drainWinch() {
     }
   }
 }
-
 std.out.puts("shell task: " + std.loadFile("#task/self/id").trim() + "\n");
 prompt();
 
 os.setReadHandler(0, () => {
+  drainWinch();
   const bytes = new Uint8Array(256);
   const count = os.read(0, bytes.buffer, 0, bytes.length);
   if (count < 0) {

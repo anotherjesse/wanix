@@ -80,7 +80,8 @@ tests.
   `unsetenv` task-environment commands, `ps` task-table inspection, and
   synchronous child `qjs` task launches with inherited env, direct terminal
   stdio including buffered foreground stdin handoff, namespace stdio
-  redirection, and observable child exit status for demos.
+  redirection, queued resize tracking from `#term/<id>/winch`, and observable
+  child exit status for demos.
 - `wanix-rust p9-stdio`, `p9-listen`, `p9-ws`, and `serve`: the Rust 9P server
   exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
   layers, with binary protocol traffic kept separate from diagnostics.
@@ -218,10 +219,11 @@ more feature work.
   `wanix-cli/src/lib.rs`, `wanix-qjs-engine/src/host/fs.rs`,
   `wanix-9p/src/lib.rs`, and `wanix-wasi/src/ctx.rs`; keep reducing the
   baseline before adding broad behavior in those areas.
-- Continue `qjs-shell` interactivity with signal-driven resize wakeups,
-  persistent foreground child-task terminal ownership, cancellation, command
-  execution beyond the current built-ins and synchronous `qjs` launcher with
-  file stdio redirection, and richer terminal/session lifecycle control.
+- Continue `qjs-shell` interactivity with true resize wakeups independent of
+  stdin handling, persistent foreground child-task terminal ownership,
+  cancellation, command execution beyond the current built-ins and synchronous
+  `qjs` launcher with file stdio redirection, and richer terminal/session
+  lifecycle control.
 - Decide the auth/WebSocket policy needed for browser v86 and VS Code
   integration, then extend the direct-v86 route into a complete qemu/v86 bundle,
   `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`

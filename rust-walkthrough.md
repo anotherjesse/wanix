@@ -369,6 +369,9 @@ $ bye
 > command line to the child fd `0`, and waits on the child's `exit` file. The
 > `status` command reports the last child `qjs` exit code, while `ps` shows
 > shell and child task metadata from service files.
+> The shell drains queued `#term/<id>/winch` resize messages before command
+> dispatch, so native and served terminal input observes the latest reported
+> terminal size without the `size` command polling the service file directly.
 > Served/workbench shell sessions keep WASI rooted at the served namespace root
 > while `#task/self/dir` tracks the logical shell cwd, so `cd` can navigate the
 > served tree without changing normal qjs script cwd semantics.
