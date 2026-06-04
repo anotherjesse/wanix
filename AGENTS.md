@@ -114,7 +114,7 @@ for human-readable CLI or transport errors. `wanix-rust p9-listen --root DIR
 --addr 127.0.0.1:5640` exposes the same `LocalFs` export over a native TCP
 listener. `wanix-rust p9-ws --root DIR --addr 127.0.0.1:7654` exposes the same
 server over binary WebSocket frames for browser/v86 experiments. `wanix-rust
-serve [DIR] [--listen HOST:PORT] [--bundle NAME]` serves static files with
+serve [DIR] [--listen HOST:PORT] [--bundle NAME] [--wanix-services]` serves static files with
 COOP/COEP/CORS headers and reuses the binary WebSocket 9P handler on the same
 listener, including the named `/.well-known/export9p` route, which is the first
 Rust-native serve shape for browser/v86/VS Code experiments.
@@ -125,6 +125,11 @@ remains a deterministic single-connection mode for tests and scripted demos.
 including base and Google.2 supported protocol strings, the optional bundle
 hint, and the explicitly unimplemented Ethernet route so browser/v86/VS Code
 clients can discover the current Rust serve contract.
+`serve --wanix-services` switches the 9P export from a bare host directory to a
+Wanix namespace that binds the host root at `/`, `#task` with a `noop` driver,
+and `#term`; discovery advertises those service roots through a `services`
+object. The 9P server now preserves device-stream behavior for non-seekable
+fids while keeping offset semantics for regular seekable files.
 When launched with `--bundle fs9p`, `/?bundle=fs9p` returns a generated browser
 filesystem smoke page that fetches discovery, opens the direct binary 9P
 WebSocket route, negotiates 9P2000.L, and exposes list/read/write/rename/delete
@@ -135,9 +140,13 @@ The web workbench extension now also has a direct 9P filesystem backend that
 matches the existing `WanixBridge` provider shape by consuming Rust serve
 discovery and issuing 9P operations for `stat`, directory listing, file
 read/write, mkdir, rename, copy, and removal. The classic MessagePort/CBOR
-backend remains preferred when an embedding browser Wanix system supplies one,
-and terminal creation still depends on a real `#task`/`#term` namespace rather
-than a plain served 9P directory.
+backend remains preferred when an embedding browser Wanix system supplies one.
+When discovery advertises services, the Rust-served launcher passes `#task` and
+`#term` paths into the extension and the direct 9P client can write existing
+service files and keep `#term/...` streams open. This proves service reachability
+over the workbench path, while a fully interactive QuickJS shell still needs a
+Rust-owned terminal/session route that can pump guest ready-IO outside a single
+9P request.
 When launched with `--bundle workbench-fs9p`, `/?bundle=workbench-fs9p`
 returns a generated filesystem-only VS Code web workbench launcher. The page
 loads Code OSS and the `workbench/` extension package from the served root,
@@ -147,11 +156,12 @@ Wanix MessagePort filesystem bridge. The
 intended backend remains the extension's Rust serve discovery path for direct
 9P filesystem access.
 This is a dev/demo launch path for local generated workbench assets, not a
-packaged Code OSS distribution and not a terminal/task integration. The first
-browser smoke now proves the Rust-served page boots Code OSS to the `wanix:/`
-workspace root, loads the served `wanix.workbench` extension, opens the Rust
-direct 9P WebSocket, and populates Explorer from the served root. Search
-providers, terminal creation, and `#task`/`#term` semantics remain follow-ups.
+packaged Code OSS distribution and not a complete terminal/task integration.
+The first browser smoke now proves the Rust-served page boots Code OSS to the
+`wanix:/` workspace root, loads the served `wanix.workbench` extension, opens
+the Rust direct 9P WebSocket, and populates Explorer from the served root.
+`--wanix-services` adds a test-covered service namespace export, but search
+providers and an interactive qjs-backed terminal/session route remain follow-ups.
 When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86
 `filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also
@@ -483,6 +493,10 @@ cargo test --workspace --locked
 - [ADR 0094](docs/adrs/0094-serve-workbench-fs9p-bundle.md):
   Rust `serve` provides a filesystem-only VS Code web workbench launch surface
   for the direct 9P workbench path as a dev/demo path.
+- [ADR 0095](docs/adrs/0095-serve-wanix-service-namespace.md):
+  `serve --wanix-services` exports `#task` and `#term` through a Wanix namespace
+  over direct 9P while leaving the full interactive qjs shell session route for
+  a later slice.
 
 ## Cycle Rules
 
@@ -498,6 +512,9 @@ cycle before starting the next one.
   intentional runtime decision.
 - Split large `wanix-qjs`, `wanix-cli`, and `wanix-wasi` modules before adding
   broad new behavior.
+- Add a Rust `serve` terminal/session WebSocket route that reuses the native
+  `qjs-shell` terminal setup and pumps guest ready-IO independently of one 9P
+  request.
 - Continue `qjs-shell` interactivity with a host loop that can wait on native
   input and guest output concurrently, signal handling, and live native resize
   propagation.

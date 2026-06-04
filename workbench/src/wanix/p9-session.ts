@@ -180,7 +180,7 @@ export class P9Session {
 		await this.rpc(P9_TATTACH, payload.done());
 	}
 
-	private async clunk(fid: number): Promise<void> {
+	async clunk(fid: number): Promise<void> {
 		const payload = new Writer();
 		payload.u32(fid);
 		await this.rpc(P9_TCLUNK, payload.done());

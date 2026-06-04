@@ -11,6 +11,9 @@ use std::time::Duration;
 
 use tungstenite::accept;
 use wanix_fs::{FileSystem, LocalFs};
+use wanix_task::TaskTable;
+use wanix_term::TermDevice;
+use wanix_vfs::{BindOptions, Namespace};
 
 use crate::p9_ws::{P9WsConnectionError, serve_websocket_connection};
 use crate::{CliError, write_process_output};
@@ -78,6 +81,7 @@ pub(super) struct ServeCommand {
     root_path: PathBuf,
     addr: String,
     bundle: Option<String>,
+    wanix_services: bool,
     once: bool,
 }
 
@@ -85,6 +89,7 @@ pub(super) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, Cli
     let mut root_path = None;
     let mut addr = None;
     let mut bundle = None;
+    let mut wanix_services = false;
     let mut once = false;
     let mut i = 0;
     while i < args.len() {
@@ -126,6 +131,12 @@ pub(super) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, Cli
             }
             once = true;
             i += 1;
+        } else if args[i] == "--wanix-services" {
+            if wanix_services {
+                return Err(CliError::usage("serve accepts only one --wanix-services"));
+            }
+            wanix_services = true;
+            i += 1;
         } else if args[i].to_string_lossy().starts_with('-') {
             return Err(CliError::usage(format!(
                 "unexpected serve argument: {}",
@@ -145,6 +156,7 @@ pub(super) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, Cli
         root_path,
         addr,
         bundle,
+        wanix_services,
         once,
     })
 }
@@ -187,7 +199,12 @@ fn run_serve_with_listener_inner(
     let local_addr = listener
         .local_addr()
         .map_err(|error| CliError::new(format!("failed to inspect serve address: {error}"), 1))?;
-    let roots = ServeRoots::new(&command.root_path, local_addr, command.bundle.clone())?;
+    let roots = ServeRoots::new(
+        &command.root_path,
+        local_addr,
+        command.bundle.clone(),
+        command.wanix_services,
+    )?;
 
     write_process_output(
         process_stderr,
@@ -329,6 +346,7 @@ struct ServeRoots {
     p9_root: Arc<dyn FileSystem>,
     local_addr: SocketAddr,
     bundle: Option<String>,
+    wanix_services: bool,
 }
 
 impl ServeRoots {
@@ -336,6 +354,7 @@ impl ServeRoots {
         root_path: &Path,
         local_addr: SocketAddr,
         bundle: Option<String>,
+        wanix_services: bool,
     ) -> Result<Self, CliError> {
         let static_root = fs::canonicalize(root_path).map_err(|error| {
             CliError::new(
@@ -343,22 +362,51 @@ impl ServeRoots {
                 1,
             )
         })?;
-        let p9_root = LocalFs::new(root_path).map_err(|error| {
-            CliError::new(
-                format!(
-                    "failed to open serve 9P root {}: {error}",
-                    root_path.display()
-                ),
-                1,
-            )
-        })?;
+        let p9_root = serve_p9_root(root_path, bundle.as_deref(), wanix_services)?;
         Ok(Self {
             static_root,
-            p9_root: Arc::new(p9_root),
+            p9_root,
             local_addr,
             bundle,
+            wanix_services,
         })
     }
+}
+
+fn serve_p9_root(
+    root_path: &Path,
+    bundle: Option<&str>,
+    wanix_services: bool,
+) -> Result<Arc<dyn FileSystem>, CliError> {
+    let host_root = Arc::new(LocalFs::new(root_path).map_err(|error| {
+        CliError::new(
+            format!(
+                "failed to open serve 9P root {}: {error}",
+                root_path.display()
+            ),
+            1,
+        )
+    })?);
+    if !wanix_services {
+        return Ok(host_root);
+    }
+
+    let table = TaskTable::new();
+    table.register_noop_driver("noop")?;
+    let terminal = Arc::new(TermDevice::new());
+    let mut namespace = Namespace::new();
+    namespace.bind(host_root, ".", ".", BindOptions::default())?;
+    namespace.bind(
+        Arc::new(table.filesystem()),
+        ".",
+        "#task",
+        BindOptions::default(),
+    )?;
+    namespace.bind(terminal, ".", "#term", BindOptions::default())?;
+    if bundle == Some(WORKBENCH_FS9P_BUNDLE) {
+        table.allocate_root_with_namespace("noop", namespace.clone())?;
+    }
+    Ok(Arc::new(namespace))
 }
 
 fn serve_one_connection(
@@ -1485,10 +1533,24 @@ fn workbench_fs9p_bundle_html() -> String {
       return new Promise((resolve, reject) => {
         amdRequire(["vs/workbench/workbench.web.main"], async (wb) => {
           try {
+            const workbenchConfig = { discoveryUrl };
+            if (discovery.services?.task && discovery.services?.term) {
+              workbenchConfig.ns = {
+                task: discovery.services.task,
+                term: discovery.services.term
+              };
+              workbenchConfig.shell = {
+                cmd: params.get("cmd") || "",
+                type: params.get("type") || "noop",
+                wd: params.get("wd") || "."
+              };
+              workbenchConfig.term = params.has("term");
+              workbenchConfig.raw = params.has("raw");
+            }
             const activationChannel = new MessageChannel();
             activationChannel.port2.onmessage = (event) => {
               if (event.data?.type === "_port" && event.data.port) {
-                event.data.port.postMessage({ config: { discoveryUrl } });
+                event.data.port.postMessage({ config: workbenchConfig });
               }
             };
             const config = {
@@ -1520,6 +1582,7 @@ fn workbench_fs9p_bundle_html() -> String {
             globalThis.wanixWorkbench = {
               activationPort: activationChannel.port2,
               assets: extensionRoot.href,
+              config: workbenchConfig,
               discovery,
               workspace: workspaceUri
             };
@@ -1572,6 +1635,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
         .as_deref()
         .map(json_string)
         .unwrap_or_else(|| "null".to_owned());
+    let services = serve_services_json(roots);
     let direct_v86_boot = direct_v86_boot_json(&roots.static_root);
     format!(
         "{{\"version\":1,\
@@ -1584,6 +1648,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
          \"v86\":{{\"assets\":{{\"module\":{},\"mod\":{},\"offscreen\":{},\"wasm\":{},\"bios\":{},\"vgaBios\":{}}},\
          \"boot\":{},\
          \"defaultCmdline\":{},\"memorySize\":{},\"vgaMemorySize\":{},\"virtioConsole\":true}},\
+         \"services\":{},\
          \"bundle\":{}}}",
         json_string(&p9_url),
         json_string(&ethernet_url),
@@ -1597,8 +1662,17 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
         json_string(DIRECT_V86_DEFAULT_CMDLINE),
         DIRECT_V86_MEMORY_SIZE,
         DIRECT_V86_VGA_MEMORY_SIZE,
+        services,
         bundle
     )
+}
+
+fn serve_services_json(roots: &ServeRoots) -> String {
+    if roots.wanix_services {
+        "{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\"]}".to_owned()
+    } else {
+        "null".to_owned()
+    }
 }
 
 fn direct_v86_boot_json(static_root: &Path) -> String {
@@ -1813,7 +1887,7 @@ mod tests {
         P9_RATTACH, P9_RGETATTR, P9_RLERROR, P9_RLOPEN, P9_RREAD, P9_RREMOVE, P9_RRENAME,
         P9_RSETATTR, P9_RVERSION, P9_RWALK, P9_RWALKGETATTR, P9_SETATTR_GID, P9_SETATTR_UID,
         P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_2, P9Frame, P9SetAttr, p9_decode_rgetattr,
-        p9_decode_rlerror, p9_decode_rread, p9_decode_rremove, p9_decode_rrename,
+        p9_decode_rlerror, p9_decode_rread, p9_decode_rremove, p9_decode_rrename, p9_decode_rwalk,
         p9_decode_rwalkgetattr, p9_tattach, p9_tauth, p9_tgetattr, p9_tlink, p9_tlopen, p9_tmknod,
         p9_tread, p9_tremove, p9_trename, p9_tsetattr, p9_tversion, p9_twalk, p9_twalkgetattr,
         p9_txattrcreate, p9_txattrwalk,
@@ -1831,6 +1905,7 @@ mod tests {
         assert_eq!(default_command.root_path, PathBuf::from("."));
         assert_eq!(default_command.addr, DEFAULT_SERVE_ADDR);
         assert_eq!(default_command.bundle, None);
+        assert!(!default_command.wanix_services);
         assert!(!default_command.once);
 
         let command = parse_serve_command(&[
@@ -1839,6 +1914,7 @@ mod tests {
             OsString::from(":7654"),
             OsString::from("--bundle"),
             OsString::from("vm-workbench"),
+            OsString::from("--wanix-services"),
             OsString::from("--once"),
         ])
         .unwrap();
@@ -1846,6 +1922,7 @@ mod tests {
         assert_eq!(command.root_path, PathBuf::from("examples"));
         assert_eq!(command.addr, "0.0.0.0:7654");
         assert_eq!(command.bundle, Some("vm-workbench".to_owned()));
+        assert!(command.wanix_services);
         assert!(command.once);
 
         let duplicate_dir =
@@ -1863,6 +1940,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: None,
+            wanix_services: false,
             once: true,
         };
 
@@ -1914,6 +1992,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: None,
+            wanix_services: false,
             once: true,
         };
 
@@ -1949,6 +2028,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: Some("vm-workbench".to_owned()),
+            wanix_services: false,
             once: true,
         };
 
@@ -1985,6 +2065,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
+            wanix_services: false,
             once: true,
         };
 
@@ -2117,6 +2198,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: Some(FS9P_BUNDLE.to_owned()),
+            wanix_services: false,
             once: true,
         };
 
@@ -2196,6 +2278,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+            wanix_services: false,
             once: true,
         };
 
@@ -2256,9 +2339,19 @@ mod tests {
             "{response}"
         );
         assert!(
-            response.contains("event.data.port.postMessage({ config: { discoveryUrl } })"),
+            response.contains("const workbenchConfig = { discoveryUrl }"),
             "{response}"
         );
+        assert!(
+            response.contains("if (discovery.services?.task && discovery.services?.term)"),
+            "{response}"
+        );
+        assert!(
+            response.contains("event.data.port.postMessage({ config: workbenchConfig })"),
+            "{response}"
+        );
+        assert!(response.contains("type: params.get(\"type\") || \"noop\""));
+        assert!(response.contains("workbenchConfig.term = params.has(\"term\")"));
         assert!(
             response.contains("messagePorts: new Map([[extensionId, activationChannel.port1]])"),
             "{response}"
@@ -2296,6 +2389,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
+            wanix_services: false,
             once: true,
         };
 
@@ -2338,6 +2432,7 @@ mod tests {
             &root,
             "127.0.0.1:0".parse().unwrap(),
             Some(DIRECT_V86_BUNDLE.to_owned()),
+            false,
         )
         .unwrap();
 
@@ -2377,6 +2472,7 @@ mod tests {
             &root,
             "127.0.0.1:0".parse().unwrap(),
             Some("vm-workbench".to_owned()),
+            false,
         )
         .unwrap();
         assert!(
@@ -2395,6 +2491,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: Some("vm-workbench".to_owned()),
+            wanix_services: false,
             once: true,
         };
 
@@ -2436,6 +2533,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: Some("vm-workbench".to_owned()),
+            wanix_services: false,
             once: true,
         };
 
@@ -2470,6 +2568,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: Some("vm-workbench".to_owned()),
+            wanix_services: false,
             once: true,
         };
 
@@ -2550,6 +2649,69 @@ mod tests {
             ),
             "{response}"
         );
+        assert!(response.contains("\"services\":null"), "{response}");
+    }
+
+    #[test]
+    fn serve_wanix_services_root_exports_task_and_terminal_services() {
+        let root = temp_dir("wanix-cli-serve-services-root");
+        fs::write(root.join("host.txt"), b"host file").unwrap();
+        let roots = ServeRoots::new(
+            &root,
+            "127.0.0.1:7654".parse().unwrap(),
+            Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+            true,
+        )
+        .unwrap();
+
+        let discovery = serve_discovery_json(
+            &roots,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+        );
+        assert!(
+            discovery.contains(
+                "\"services\":{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\"]}"
+            ),
+            "{discovery}"
+        );
+
+        let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
+        let response = server
+            .handle_frame(&p9_tattach(1, 1, 0xffff_ffff, "workbench", "", 0).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RATTACH);
+
+        let response = server
+            .handle_frame(&p9_twalk(2, 1, 2, &["#term", "new"]).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWALK);
+        assert_eq!(p9_decode_rwalk(&response).unwrap().len(), 2);
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(3, 2, 0))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+        let response = server.handle_frame(&p9_tread(4, 2, 0, 64)).unwrap();
+        assert_eq!(response.message_type(), P9_RREAD);
+        assert_eq!(p9_decode_rread(&response).unwrap(), b"1\n");
+
+        let response = server
+            .handle_frame(&p9_twalk(5, 1, 3, &["#task", "new", "noop"]).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWALK);
+        assert_eq!(p9_decode_rwalk(&response).unwrap().len(), 3);
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(6, 3, 0))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+        let response = server.handle_frame(&p9_tread(7, 3, 0, 64)).unwrap();
+        assert_eq!(response.message_type(), P9_RREAD);
+        assert_eq!(p9_decode_rread(&response).unwrap(), b"2\n");
     }
 
     #[test]
@@ -2559,6 +2721,7 @@ mod tests {
             &root,
             "0.0.0.0:7654".parse().unwrap(),
             Some("quote\"bundle".to_owned()),
+            false,
         )
         .unwrap();
         let body = serve_discovery_json(&roots, b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n");
@@ -2573,7 +2736,8 @@ mod tests {
             "{body}"
         );
 
-        let ipv6_roots = ServeRoots::new(&root, "[::1]:7654".parse().unwrap(), None).unwrap();
+        let ipv6_roots =
+            ServeRoots::new(&root, "[::1]:7654".parse().unwrap(), None, false).unwrap();
         let ipv6_body =
             serve_discovery_json(&ipv6_roots, b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n");
         assert!(
@@ -2590,6 +2754,7 @@ mod tests {
             &root,
             "127.0.0.1:7654".parse().unwrap(),
             Some(DIRECT_V86_BUNDLE.to_owned()),
+            false,
         )
         .unwrap();
 
@@ -2607,7 +2772,7 @@ mod tests {
     #[test]
     fn serve_discovery_ignores_unsafe_host_header() {
         let root = temp_dir("wanix-cli-serve-discovery-unsafe-host");
-        let roots = ServeRoots::new(&root, "127.0.0.1:7654".parse().unwrap(), None).unwrap();
+        let roots = ServeRoots::new(&root, "127.0.0.1:7654".parse().unwrap(), None, false).unwrap();
         let body = serve_discovery_json(
             &roots,
             b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654/escape\r\n\r\n",
@@ -2629,6 +2794,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: None,
+            wanix_services: false,
             once: true,
         };
 
@@ -2681,6 +2847,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
+            wanix_services: false,
             once: false,
         };
 
@@ -2732,6 +2899,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: None,
+            wanix_services: false,
             once: false,
         };
 
@@ -2787,6 +2955,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: None,
+            wanix_services: false,
             once: true,
         };
 
@@ -2852,6 +3021,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: None,
+            wanix_services: false,
             once: true,
         };
 
@@ -2906,6 +3076,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: None,
+            wanix_services: false,
             once: true,
         };
 
@@ -2982,6 +3153,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: None,
+            wanix_services: false,
             once: true,
         };
 
@@ -3026,6 +3198,7 @@ mod tests {
             root_path: root,
             addr: addr.to_string(),
             bundle: None,
+            wanix_services: false,
             once: true,
         };
 

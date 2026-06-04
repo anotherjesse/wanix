@@ -181,6 +181,9 @@ export class WanixP9Handle {
 	async writeFile(name: string, contents: Uint8Array | string): Promise<void> {
 		const data = typeof contents === "string" ? utf8.encode(contents) : contents;
 		this.logger(`writeFile ${name} len(${data.length})`);
+		if (await this.writeExistingFile(name, data).catch(() => false)) {
+			return;
+		}
 		const parent = await this.session.walkPath(parentPath(name));
 		try {
 			const payload = new Writer();
@@ -254,6 +257,9 @@ export class WanixP9Handle {
 
 	async openReadable(name: string): Promise<ReadableStream<Uint8Array>> {
 		this.logger(`openReadable ${name}`);
+		if (isLiveServiceStream(name)) {
+			return this.openLiveReadable(name);
+		}
 		const data = await this.readFile(name);
 		return new ReadableStream<Uint8Array>({
 			start(controller) {
@@ -265,6 +271,9 @@ export class WanixP9Handle {
 
 	async openWritable(name: string): Promise<WritableStream<Uint8Array>> {
 		this.logger(`openWritable ${name}`);
+		if (isLiveServiceStream(name)) {
+			return this.openLiveWritable(name);
+		}
 		const chunks: Uint8Array[] = [];
 		return new WritableStream<Uint8Array>({
 			write(chunk) {
@@ -283,6 +292,73 @@ export class WanixP9Handle {
 		});
 	}
 
+	private async writeExistingFile(name: string, data: Uint8Array): Promise<boolean> {
+		const fid = await this.session.walkPath(name);
+		try {
+			await this.session.open(fid, O_RDWR | O_TRUNC);
+			if (data.length > 0) {
+				await this.session.write(fid, 0, data);
+			}
+			return true;
+		} finally {
+			await this.session.clunkQuietly(fid);
+		}
+	}
+
+	private async openLiveReadable(name: string): Promise<ReadableStream<Uint8Array>> {
+		const fid = await this.session.walkPath(name);
+		await this.session.open(fid, O_RDONLY);
+		const session = this.session;
+		let closed = false;
+		return new ReadableStream<Uint8Array>({
+			start(controller) {
+				(async () => {
+					try {
+						while (!closed) {
+							const chunk = await session.read(fid, 0, READ_CHUNK_SIZE);
+							if (chunk.length > 0) {
+								controller.enqueue(chunk);
+							} else {
+								await delay(25);
+							}
+						}
+					} catch (error) {
+						if (!closed) {
+							controller.error(error);
+						}
+					} finally {
+						await session.clunkQuietly(fid);
+					}
+				})();
+			},
+			cancel() {
+				closed = true;
+			},
+		});
+	}
+
+	private async openLiveWritable(name: string): Promise<WritableStream<Uint8Array>> {
+		const fid = await this.session.walkPath(name);
+		await this.session.open(fid, O_RDWR);
+		const session = this.session;
+		return new WritableStream<Uint8Array>({
+			async write(chunk) {
+				await session.write(fid, 0, chunk);
+			},
+			async close() {
+				await session.clunkQuietly(fid);
+			},
+			async abort() {
+				await session.clunkQuietly(fid);
+			},
+		});
+	}
+
+}
+
+function isLiveServiceStream(name: string): boolean {
+	const normalized = normalizePath(name);
+	return normalized.startsWith("/#term/");
 }
 
 function resolveDiscoveryUrl(discoveryUrl: string): string {

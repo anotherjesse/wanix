@@ -610,7 +610,9 @@ impl P9Server {
         let Some(file) = entry.file.as_mut() else {
             return Ok(p9_rlerror(frame.tag(), EBADF));
         };
-        if let Err(error) = file.seek(FileSeekFrom::Start(read.offset)) {
+        if file.is_seekable()
+            && let Err(error) = file.seek(FileSeekFrom::Start(read.offset))
+        {
             return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
         }
         let count = read.count.min(self.msize.saturating_sub(RREAD_HEADER_LEN)) as usize;
@@ -637,7 +639,9 @@ impl P9Server {
         } else {
             FileSeekFrom::Start(write.offset)
         };
-        if let Err(error) = file.seek(seek_from) {
+        if file.is_seekable()
+            && let Err(error) = file.seek(seek_from)
+        {
             return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
         }
         let count = match file.write(&write.data) {
@@ -1123,11 +1127,13 @@ fn errno_for_fs(error: &FsError) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::fs;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use wanix_fs::{LocalFs, MemFs};
+    use wanix_fs::{DirEntry, FsResult, LocalFs, MemFs};
     use wanix_protocol::{
         P9_LOCK_TYPE_READ, P9_LOCK_TYPE_WRITE, P9_RATTACH, P9_RFLUSH, P9_RFLUSHF, P9_RFSYNC,
         P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLERROR, P9_RLOCK, P9_RLOPEN, P9_RMKDIR,
@@ -1462,6 +1468,36 @@ mod tests {
         assert_eq!(response.message_type(), P9_RWRITE);
         assert_eq!(p9_decode_rwrite(&response).unwrap(), 4);
         assert_eq!(fs.read_file("log.txt").unwrap(), b"base-one-two");
+    }
+
+    #[test]
+    fn non_seekable_file_reads_and_writes_without_offset_seek() {
+        let root: Arc<dyn FileSystem> = Arc::new(StreamFs::new(b"abc"));
+        let mut server = P9Server::new(root);
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["stream"]);
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(3, 2, O_RDWR))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+
+        let response = server.handle_frame(&p9_tread(4, 2, 99, 2)).unwrap();
+        assert_eq!(response.message_type(), P9_RREAD);
+        assert_eq!(p9_decode_rread(&response).unwrap(), b"ab");
+
+        let response = server
+            .handle_frame(&p9_twrite(5, 2, 42, b"de").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+        assert_eq!(p9_decode_rwrite(&response).unwrap(), 2);
+
+        let response = server.handle_frame(&p9_tread(6, 2, 0, 8)).unwrap();
+        assert_eq!(response.message_type(), P9_RREAD);
+        assert_eq!(p9_decode_rread(&response).unwrap(), b"cde");
     }
 
     #[test]
@@ -2571,6 +2607,80 @@ mod tests {
 
     fn entry_names(entries: &[P9DirEntry]) -> Vec<&str> {
         entries.iter().map(|entry| entry.name.as_str()).collect()
+    }
+
+    #[derive(Debug)]
+    struct StreamFs {
+        queue: Arc<Mutex<VecDeque<u8>>>,
+    }
+
+    impl StreamFs {
+        fn new(data: &[u8]) -> Self {
+            Self {
+                queue: Arc::new(Mutex::new(data.iter().copied().collect())),
+            }
+        }
+    }
+
+    impl FileSystem for StreamFs {
+        fn open(&self, path: &NormalizedPath, _options: OpenOptions) -> FsResult<Box<dyn File>> {
+            if path.as_str() != "stream" {
+                return Err(FsError::NotFound);
+            }
+            Ok(Box::new(StreamFile {
+                queue: Arc::clone(&self.queue),
+            }))
+        }
+
+        fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
+            match path.as_str() {
+                "." => Ok(Metadata::new(FileType::Directory, 2, 0o755)),
+                "stream" => Ok(Metadata::new(FileType::File, 0, 0o666)),
+                _ => Err(FsError::NotFound),
+            }
+        }
+
+        fn read_dir(&self, path: &NormalizedPath) -> FsResult<Vec<DirEntry>> {
+            if path.as_str() != "." {
+                return Err(FsError::NotDirectory);
+            }
+            Ok(vec![DirEntry::new(
+                "stream",
+                Metadata::new(FileType::File, 0, 0o666),
+            )])
+        }
+    }
+
+    #[derive(Debug)]
+    struct StreamFile {
+        queue: Arc<Mutex<VecDeque<u8>>>,
+    }
+
+    impl File for StreamFile {
+        fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
+            let mut queue = self
+                .queue
+                .lock()
+                .map_err(|_| FsError::Other("stream lock poisoned".to_owned()))?;
+            let len = queue.len().min(buf.len());
+            for slot in buf.iter_mut().take(len) {
+                *slot = queue.pop_front().expect("queue contains len bytes");
+            }
+            Ok(len)
+        }
+
+        fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
+            let mut queue = self
+                .queue
+                .lock()
+                .map_err(|_| FsError::Other("stream lock poisoned".to_owned()))?;
+            queue.extend(buf);
+            Ok(buf.len())
+        }
+
+        fn metadata(&self) -> FsResult<Metadata> {
+            Ok(Metadata::new(FileType::File, 0, 0o666))
+        }
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
