@@ -120,13 +120,33 @@ pub fn p9_rattach(tag: u16, qid: P9Qid) -> P9Frame {
 pub fn p9_decode_tauth(frame: &P9Frame) -> Result<P9Auth, P9Error> {
     expect_message_type(frame, P9_TAUTH)?;
     let mut cursor = PayloadCursor::new(frame.payload());
+    let auth = read_auth(&mut cursor)?;
+    cursor.finish()?;
+    Ok(auth)
+}
+
+fn read_auth(cursor: &mut PayloadCursor<'_>) -> Result<P9Auth, P9Error> {
     let afid = cursor.read_u32()?;
+    let identity = read_auth_identity(cursor)?;
+    Ok(P9Auth {
+        afid,
+        uname: identity.uname,
+        aname: identity.aname,
+        n_uname: identity.n_uname,
+    })
+}
+
+struct AuthIdentity {
+    uname: String,
+    aname: String,
+    n_uname: u32,
+}
+
+fn read_auth_identity(cursor: &mut PayloadCursor<'_>) -> Result<AuthIdentity, P9Error> {
     let uname = cursor.read_string()?;
     let aname = cursor.read_string()?;
     let n_uname = cursor.read_u32()?;
-    cursor.finish()?;
-    Ok(P9Auth {
-        afid,
+    Ok(AuthIdentity {
         uname,
         aname,
         n_uname,
@@ -152,18 +172,21 @@ pub fn p9_decode_rauth(frame: &P9Frame) -> Result<P9Qid, P9Error> {
 pub fn p9_decode_tattach(frame: &P9Frame) -> Result<P9Attach, P9Error> {
     expect_message_type(frame, P9_TATTACH)?;
     let mut cursor = PayloadCursor::new(frame.payload());
+    let attach = read_attach(&mut cursor)?;
+    cursor.finish()?;
+    Ok(attach)
+}
+
+fn read_attach(cursor: &mut PayloadCursor<'_>) -> Result<P9Attach, P9Error> {
     let fid = cursor.read_u32()?;
     let afid = cursor.read_u32()?;
-    let uname = cursor.read_string()?;
-    let aname = cursor.read_string()?;
-    let n_uname = cursor.read_u32()?;
-    cursor.finish()?;
+    let identity = read_auth_identity(cursor)?;
     Ok(P9Attach {
         fid,
         afid,
-        uname,
-        aname,
-        n_uname,
+        uname: identity.uname,
+        aname: identity.aname,
+        n_uname: identity.n_uname,
     })
 }
 

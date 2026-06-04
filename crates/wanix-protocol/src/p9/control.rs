@@ -194,11 +194,16 @@ pub fn p9_decode_rfsync(frame: &P9Frame) -> Result<(), P9Error> {
 pub fn p9_decode_tlock(frame: &P9Frame) -> Result<P9LockRequest, P9Error> {
     expect_message_type(frame, P9_TLOCK)?;
     let mut cursor = PayloadCursor::new(frame.payload());
+    let request = read_lock_request(&mut cursor)?;
+    cursor.finish()?;
+    Ok(request)
+}
+
+fn read_lock_request(cursor: &mut PayloadCursor<'_>) -> Result<P9LockRequest, P9Error> {
     let fid = cursor.read_u32()?;
     let lock_type = cursor.read_u8()?;
     let flags = cursor.read_u32()?;
     let lock = cursor.read_lock(lock_type)?;
-    cursor.finish()?;
     Ok(P9LockRequest { fid, flags, lock })
 }
 
@@ -225,10 +230,15 @@ pub fn p9_decode_rlock(frame: &P9Frame) -> Result<u8, P9Error> {
 pub fn p9_decode_tgetlock(frame: &P9Frame) -> Result<P9GetLockRequest, P9Error> {
     expect_message_type(frame, P9_TGETLOCK)?;
     let mut cursor = PayloadCursor::new(frame.payload());
+    let request = read_getlock_request(&mut cursor)?;
+    cursor.finish()?;
+    Ok(request)
+}
+
+fn read_getlock_request(cursor: &mut PayloadCursor<'_>) -> Result<P9GetLockRequest, P9Error> {
     let fid = cursor.read_u32()?;
     let lock_type = cursor.read_u8()?;
     let lock = cursor.read_lock(lock_type)?;
-    cursor.finish()?;
     Ok(P9GetLockRequest { fid, lock })
 }
 
