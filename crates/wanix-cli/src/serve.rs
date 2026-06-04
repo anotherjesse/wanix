@@ -1425,6 +1425,10 @@ mod tests {
             "{response}"
         );
         assert!(
+            !response.contains("__WANIX_DEFAULT_"),
+            "unexpanded template placeholder leaked: {response}"
+        );
+        assert!(
             response.contains("const v86Boot = discovery.v86?.boot || {}"),
             "{response}"
         );
@@ -1494,6 +1498,14 @@ mod tests {
             response.contains(
                 "const DEFAULT_CMDLINE = \"console=hvc0 init=/bin/init rw root=host9p rootfstype=9p"
             ),
+            "{response}"
+        );
+        assert!(
+            response.contains("const DEFAULT_MEMORY_SIZE = 1073741824"),
+            "{response}"
+        );
+        assert!(
+            response.contains("const DEFAULT_VGA_MEMORY_SIZE = 8388608"),
             "{response}"
         );
         assert!(
