@@ -125,6 +125,12 @@ remains a deterministic single-connection mode for tests and scripted demos.
 including base and Google.2 supported protocol strings, the optional bundle
 hint, and the explicitly unimplemented Ethernet route so browser/v86/VS Code
 clients can discover the current Rust serve contract.
+When launched with `--bundle fs9p`, `/?bundle=fs9p` returns a generated browser
+filesystem smoke page that fetches discovery, opens the direct binary 9P
+WebSocket route, negotiates 9P2000.L, and exposes list/read/write/rename/delete
+controls against the served root. This is the browser-side 9P transport proof
+for future workbench/VS Code filesystem integration, not the VS Code provider
+itself.
 When launched with `--bundle direct-v86`, `/?bundle=direct-v86` returns a small
 browser page that fetches the discovery document and configures v86
 `filesystem.proxy_url` with the Rust direct 9P WebSocket route. Discovery also
@@ -447,6 +453,9 @@ cargo test --workspace --locked
 - [ADR 0091](docs/adrs/0091-qjs-shell-raw-byte-pump.md):
   `qjs-shell --raw` feeds native bytes directly to the guest shell so QuickJS
   owns visible echo/editing behavior.
+- [ADR 0092](docs/adrs/0092-serve-fs9p-browser-filesystem-bundle.md):
+  `wanix-rust serve --bundle fs9p` serves a browser 9P filesystem smoke page
+  for future workbench/VS Code filesystem integration.
 
 ## Cycle Rules
 
