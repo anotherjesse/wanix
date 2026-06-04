@@ -15,33 +15,158 @@ pub(crate) struct ServeCommand {
 }
 
 pub(crate) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, CliError> {
-    let mut parts = ServeCommandParts::default();
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--root" {
-            i = parts.parse_root(args, i)?;
-        } else if args[i] == "--addr" || args[i] == "--listen" {
-            i = parts.parse_addr(args, i)?;
-        } else if args[i] == "--bundle" {
-            i = parts.parse_bundle(args, i)?;
-        } else if args[i] == "--once" {
-            parts.set_once()?;
-            i += 1;
-        } else if args[i] == "--wanix-services" {
-            parts.set_wanix_services()?;
-            i += 1;
-        } else if args[i].to_string_lossy().starts_with('-') {
-            return Err(CliError::usage(format!(
-                "unexpected serve argument: {}",
-                args[i].to_string_lossy()
-            )));
-        } else {
-            parts.set_positional_root(&args[i])?;
-            i += 1;
+    ServeCommandParser::new(args).parse()
+}
+
+struct ServeCommandParser<'a> {
+    args: &'a [OsString],
+    index: usize,
+    parts: ServeCommandParts,
+}
+
+impl<'a> ServeCommandParser<'a> {
+    fn new(args: &'a [OsString]) -> Self {
+        Self {
+            args,
+            index: 0,
+            parts: ServeCommandParts::default(),
         }
     }
 
-    Ok(parts.finish())
+    fn parse(mut self) -> Result<ServeCommand, CliError> {
+        while let Some(arg) = self.next_arg()? {
+            self.apply_arg(arg)?;
+        }
+        Ok(self.parts.finish())
+    }
+
+    fn next_arg(&self) -> Result<Option<ServeArg>, CliError> {
+        let Some(raw) = self.args.get(self.index) else {
+            return Ok(None);
+        };
+        if let Some(arg) = ServeArg::from_arg(raw) {
+            return Ok(Some(arg));
+        }
+        if raw.to_string_lossy().starts_with('-') {
+            return Err(CliError::usage(format!(
+                "unexpected serve argument: {}",
+                raw.to_string_lossy()
+            )));
+        }
+        Ok(Some(ServeArg::PositionalRoot))
+    }
+
+    fn apply_arg(&mut self, arg: ServeArg) -> Result<(), CliError> {
+        match arg {
+            ServeArg::Value(option) => self.apply_value(option),
+            ServeArg::Flag(option) => self.apply_flag(option),
+            ServeArg::PositionalRoot => self.set_positional_root(),
+        }
+    }
+
+    fn apply_value(&mut self, option: ServeValueOption) -> Result<(), CliError> {
+        let value = self.take_value(option)?;
+        match option {
+            ServeValueOption::Root => self.parts.set_root(value, "serve accepts only one --root"),
+            ServeValueOption::Addr | ServeValueOption::Listen => self.parts.set_addr(value),
+            ServeValueOption::Bundle => self.parts.set_bundle(value),
+        }
+    }
+
+    fn apply_flag(&mut self, option: ServeFlagOption) -> Result<(), CliError> {
+        match option {
+            ServeFlagOption::Once => self.parts.set_once()?,
+            ServeFlagOption::WanixServices => self.parts.set_wanix_services()?,
+        }
+        self.index += 1;
+        Ok(())
+    }
+
+    fn take_value(&mut self, option: ServeValueOption) -> Result<&'a OsString, CliError> {
+        self.index += 1;
+        let value = self.args.get(self.index).ok_or_else(|| {
+            CliError::usage(format!(
+                "{} expects {}",
+                option.label(),
+                option.value_name()
+            ))
+        })?;
+        self.index += 1;
+        Ok(value)
+    }
+
+    fn set_positional_root(&mut self) -> Result<(), CliError> {
+        self.parts
+            .set_root(&self.args[self.index], "serve accepts only one directory")?;
+        self.index += 1;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ServeArg {
+    Value(ServeValueOption),
+    Flag(ServeFlagOption),
+    PositionalRoot,
+}
+
+impl ServeArg {
+    fn from_arg(arg: &OsString) -> Option<Self> {
+        let arg = arg.to_str()?;
+        SERVE_VALUE_OPTIONS
+            .iter()
+            .find_map(|(name, option)| (*name == arg).then_some(Self::Value(*option)))
+            .or_else(|| {
+                SERVE_FLAG_OPTIONS
+                    .iter()
+                    .find_map(|(name, option)| (*name == arg).then_some(Self::Flag(*option)))
+            })
+    }
+}
+
+const SERVE_VALUE_OPTIONS: &[(&str, ServeValueOption)] = &[
+    ("--root", ServeValueOption::Root),
+    ("--addr", ServeValueOption::Addr),
+    ("--listen", ServeValueOption::Listen),
+    ("--bundle", ServeValueOption::Bundle),
+];
+
+const SERVE_FLAG_OPTIONS: &[(&str, ServeFlagOption)] = &[
+    ("--once", ServeFlagOption::Once),
+    ("--wanix-services", ServeFlagOption::WanixServices),
+];
+
+#[derive(Clone, Copy)]
+enum ServeValueOption {
+    Root,
+    Addr,
+    Listen,
+    Bundle,
+}
+
+impl ServeValueOption {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Root => "serve --root",
+            Self::Addr => "serve --addr",
+            Self::Listen => "serve --listen",
+            Self::Bundle => "serve --bundle",
+        }
+    }
+
+    fn value_name(self) -> &'static str {
+        match self {
+            Self::Root => "DIR",
+            Self::Addr | Self::Listen => "HOST:PORT",
+            Self::Bundle => "NAME",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ServeFlagOption {
+    Once,
+    WanixServices,
 }
 
 #[derive(Default)]
@@ -54,42 +179,29 @@ struct ServeCommandParts {
 }
 
 impl ServeCommandParts {
-    fn parse_root(&mut self, args: &[OsString], option_index: usize) -> Result<usize, CliError> {
-        let value_index = option_index + 1;
-        let value = args
-            .get(value_index)
-            .ok_or_else(|| CliError::usage("serve --root expects DIR"))?;
+    fn set_root(&mut self, value: &OsString, duplicate_message: &str) -> Result<(), CliError> {
         if self.root_path.is_some() {
-            return Err(CliError::usage("serve accepts only one --root"));
+            return Err(CliError::usage(duplicate_message));
         }
         self.root_path = Some(PathBuf::from(value));
-        Ok(value_index + 1)
+        Ok(())
     }
 
-    fn parse_addr(&mut self, args: &[OsString], option_index: usize) -> Result<usize, CliError> {
-        let option = args[option_index].to_string_lossy();
-        let value_index = option_index + 1;
-        let raw_value = args
-            .get(value_index)
-            .ok_or_else(|| CliError::usage(format!("serve {option} expects HOST:PORT")))?;
+    fn set_addr(&mut self, raw_value: &OsString) -> Result<(), CliError> {
         if self.addr.is_some() {
             return Err(CliError::usage("serve accepts only one --addr or --listen"));
         }
         let value = raw_value.to_string_lossy();
         self.addr = Some(normalize_listen_addr(&value));
-        Ok(value_index + 1)
+        Ok(())
     }
 
-    fn parse_bundle(&mut self, args: &[OsString], option_index: usize) -> Result<usize, CliError> {
-        let value_index = option_index + 1;
-        let value = args
-            .get(value_index)
-            .ok_or_else(|| CliError::usage("serve --bundle expects NAME"))?;
+    fn set_bundle(&mut self, value: &OsString) -> Result<(), CliError> {
         if self.bundle.is_some() {
             return Err(CliError::usage("serve accepts only one --bundle"));
         }
         self.bundle = Some(value.to_string_lossy().into_owned());
-        Ok(value_index + 1)
+        Ok(())
     }
 
     fn set_once(&mut self) -> Result<(), CliError> {
@@ -105,14 +217,6 @@ impl ServeCommandParts {
             return Err(CliError::usage("serve accepts only one --wanix-services"));
         }
         self.wanix_services = true;
-        Ok(())
-    }
-
-    fn set_positional_root(&mut self, value: &OsString) -> Result<(), CliError> {
-        if self.root_path.is_some() {
-            return Err(CliError::usage("serve accepts only one directory"));
-        }
-        self.root_path = Some(PathBuf::from(value));
         Ok(())
     }
 

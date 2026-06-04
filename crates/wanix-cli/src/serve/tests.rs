@@ -62,6 +62,22 @@ fn parse_serve_uses_go_like_defaults_and_options() {
 }
 
 #[test]
+fn parse_serve_reports_missing_option_values() {
+    for (option, expected) in [
+        ("--root", "serve --root expects DIR"),
+        ("--addr", "serve --addr expects HOST:PORT"),
+        ("--listen", "serve --listen expects HOST:PORT"),
+        ("--bundle", "serve --bundle expects NAME"),
+    ] {
+        let error = parse_serve_command(&[OsString::from(option)]).unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "{option} produced {error}"
+        );
+    }
+}
+
+#[test]
 fn serve_once_returns_static_file_with_browser_isolation_headers() {
     let root = temp_dir("wanix-cli-serve-http");
     fs::write(root.join("index.html"), b"wanix serve").unwrap();
