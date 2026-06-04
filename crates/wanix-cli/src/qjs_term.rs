@@ -21,6 +21,7 @@ use super::{
 const QJS_SHELL_SOURCE: &str = include_str!("../../../examples/qjs-term-shell-demo.js");
 const QJS_SHELL_SCRIPT_SENTINEL: &str = "__wanix_qjs_shell.js";
 const QJS_SHELL_READY_IO_TURNS: usize = 1;
+const QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS: u64 = 20;
 
 pub(super) struct QjsShellSession {
     task: Task,
@@ -109,6 +110,18 @@ impl QjsShellSession {
             &TermResize { columns, rows },
         )?;
         self.runtime.run_ready_io_turns(self.ready_io_turns)?;
+        self.finish_if_exited()?;
+        drain_terminal_output_bytes(&self.terminal, &self.terminal_id)
+    }
+
+    pub(super) fn pump(&mut self) -> Result<Vec<u8>, CliError> {
+        if self.finished {
+            return Ok(Vec::new());
+        }
+        self.runtime.run_event_loop_turns(
+            Duration::from_millis(QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS),
+            self.ready_io_turns,
+        )?;
         self.finish_if_exited()?;
         drain_terminal_output_bytes(&self.terminal, &self.terminal_id)
     }
@@ -1082,6 +1095,24 @@ mod tests {
         let output = session.input(b"echo hello ws\nexit\n").unwrap();
 
         assert_eq!(output, b"echo hello ws\r\nhello ws\r\n$ exit\r\nbye\r\n");
+        assert!(session.is_finished());
+    }
+
+    #[test]
+    fn qjs_shell_session_pumps_delayed_output_without_input() {
+        let root = temp_dir("wanix-qjs-shell-session-pump");
+        let (mut session, initial_output) = QjsShellSession::start(&root).unwrap();
+
+        assert_eq!(initial_output, b"shell task: 1\r\n$ ");
+        let output = session.input(b"later tick\n").unwrap();
+        assert_eq!(output, b"later tick\r\nscheduled\r\n");
+
+        let output = session.pump().unwrap();
+        assert_eq!(output, b"later: tick\r\n$ ");
+        assert!(!session.is_finished());
+
+        let output = session.input(b"exit\n").unwrap();
+        assert_eq!(output, b"exit\r\nbye\r\n");
         assert!(session.is_finished());
     }
 

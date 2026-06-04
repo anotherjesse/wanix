@@ -512,6 +512,10 @@ cargo test --workspace --locked
 - [ADR 0098](docs/adrs/0098-workbench-qjs-task-command.md):
   The Rust-served workbench can run the active `wanix:` JavaScript file as a
   `qjs` Wanix task by driving `#task` and `#term` over direct 9P.
+- [ADR 0099](docs/adrs/0099-serve-qjs-shell-idle-pump.md):
+  The served qjs-shell WebSocket route pumps bounded QuickJS event-loop work
+  while idle so delayed terminal output can reach the workbench without another
+  browser input frame.
 
 ## Cycle Rules
 

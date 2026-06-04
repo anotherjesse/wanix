@@ -44,6 +44,19 @@ function runCommand(line) {
     prompt();
     return;
   }
+  if (trimmed.startsWith("later ")) {
+    const message = trimmed.slice(6);
+    std.out.puts("scheduled\n");
+    os.setTimeout(() => {
+      if (!running) {
+        return;
+      }
+      std.out.puts("later: " + message + "\n");
+      prompt();
+      std.out.flush();
+    }, 1);
+    return;
+  }
   std.out.puts("unknown: " + trimmed + "\n");
   prompt();
 }

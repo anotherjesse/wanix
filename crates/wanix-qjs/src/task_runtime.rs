@@ -194,6 +194,24 @@ impl QuickJsTaskRuntime {
         self.drain_event_loop_if_running(Duration::ZERO, turns)
     }
 
+    /// Runs bounded event-loop work for an already evaluated task runtime.
+    ///
+    /// This is host lifecycle policy for interactive composition layers. It
+    /// lets a caller briefly wait for future timers and then run nonblocking
+    /// ready-fd turns without evaluating more guest source.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when QuickJS event-loop work fails, unless
+    /// the failure is due to a requested Wanix process exit.
+    pub fn run_event_loop_turns(
+        &mut self,
+        event_loop_wait_budget: Duration,
+        ready_io_turns: usize,
+    ) -> FsResult<()> {
+        self.drain_event_loop_if_running(event_loop_wait_budget, ready_io_turns)
+    }
+
     /// Returns the requested Wanix process exit code, if JavaScript has exited.
     ///
     /// # Errors
