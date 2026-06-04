@@ -137,10 +137,12 @@ serve owns the embedded `/v86/lib/libv86.mjs`, `/v86/lib/mod.js`,
 does not have to live in the served root. The page accepts caller-supplied
 kernel/initrd/cmdline URLs or query overrides, so it is a boot handoff proof
 rather than a complete guest asset assembler.
-`wanix-rust qemu --root DIR --kernel PATH` prints a shell-quoted native
-QEMU/KVM virtio-9p command for the same Linux guest/rootfs shape, using base
-`9p2000.L` root flags and `hvc0` virtconsole while leaving actual QEMU process
-supervision for a later cycle.
+`wanix-rust qemu --root DIR` prints a shell-quoted native QEMU/KVM virtio-9p
+command for the same Linux guest/rootfs shape, discovering `/boot/bzImage` or
+legacy `/bzImage` from the guest root unless `--kernel PATH` overrides it. The
+command uses base `9p2000.L` root flags and `hvc0` virtconsole by default,
+offers `--cmdline` and repeatable `--append` for guest boot tuning, and leaves
+actual QEMU process supervision for a later cycle.
 `/.well-known` routes are reserved for protocol endpoints;
 `/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
 lands. Listener commands accept `--once` for tests and scripted demos.
@@ -432,6 +434,9 @@ cargo test --workspace --locked
 - [ADR 0088](docs/adrs/0088-native-qemu-virtio9p-handoff-command.md):
   `wanix-rust qemu` prints a validated QEMU/KVM virtio-9p handoff command
   without becoming a VM process supervisor yet.
+- [ADR 0089](docs/adrs/0089-qemu-root-kernel-discovery-and-cmdline-options.md):
+  `wanix-rust qemu` discovers guest-root kernels and exposes cmdline
+  override/append options while staying a print-only handoff.
 
 ## Cycle Rules
 

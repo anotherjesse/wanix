@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use wanix_task::quote_cmd_argv;
 
@@ -8,15 +8,18 @@ use crate::{CliError, CliOutput};
 
 const DEFAULT_QEMU_BIN: &str = "qemu-system-i386";
 const DEFAULT_MEMORY_MB: u32 = 512;
-const QEMU_9P_ROOT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,msize=131072 loglevel=3";
+const DEFAULT_QEMU_9P_ROOT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,msize=131072 loglevel=3";
+const DEFAULT_KERNEL_CANDIDATES: &[&str] = &["boot/bzImage", "bzImage"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QemuCommand {
     root_path: PathBuf,
-    kernel_path: PathBuf,
+    kernel_path: Option<PathBuf>,
     qemu_bin: String,
     memory_mb: u32,
     kvm: bool,
+    cmdline: Option<String>,
+    append: Vec<String>,
 }
 
 pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliError> {
@@ -25,6 +28,8 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
     let mut qemu_bin = DEFAULT_QEMU_BIN.to_owned();
     let mut memory_mb = DEFAULT_MEMORY_MB;
     let mut kvm = true;
+    let mut cmdline = None;
+    let mut append = Vec::new();
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--root" {
@@ -39,7 +44,27 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
             let value = args
                 .get(i)
                 .ok_or_else(|| CliError::usage("qemu --kernel expects PATH"))?;
+            if kernel_path.is_some() {
+                return Err(CliError::usage("qemu accepts only one --kernel"));
+            }
             kernel_path = Some(PathBuf::from(value));
+            i += 1;
+        } else if args[i] == "--cmdline" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qemu --cmdline expects TEXT"))?;
+            if cmdline.is_some() {
+                return Err(CliError::usage("qemu accepts only one --cmdline"));
+            }
+            cmdline = Some(os_arg_to_string(value, "qemu --cmdline")?);
+            i += 1;
+        } else if args[i] == "--append" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qemu --append expects TEXT"))?;
+            append.push(os_arg_to_string(value, "qemu --append")?);
             i += 1;
         } else if args[i] == "--qemu-bin" {
             i += 1;
@@ -66,13 +91,14 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
         }
     }
     let root_path = root_path.ok_or_else(|| CliError::usage("qemu requires --root DIR"))?;
-    let kernel_path = kernel_path.ok_or_else(|| CliError::usage("qemu requires --kernel PATH"))?;
     Ok(QemuCommand {
         root_path,
         kernel_path,
         qemu_bin,
         memory_mb,
         kvm,
+        cmdline,
+        append,
     })
 }
 
@@ -90,7 +116,7 @@ fn qemu_virtio9p_argv(command: &QemuCommand) -> Result<Vec<String>, CliError> {
         ));
     }
     let root_path = canonical_existing_dir(&command.root_path, "qemu --root")?;
-    let kernel_path = canonical_existing_file(&command.kernel_path, "qemu --kernel")?;
+    let kernel_path = resolve_kernel_path(command, &root_path)?;
     let root = root_path.to_string_lossy();
     if root.contains(',') {
         return Err(CliError::usage(
@@ -115,7 +141,7 @@ fn qemu_virtio9p_argv(command: &QemuCommand) -> Result<Vec<String>, CliError> {
         "-kernel".to_owned(),
         kernel_path.to_string_lossy().into_owned(),
         "-append".to_owned(),
-        QEMU_9P_ROOT_CMDLINE.to_owned(),
+        qemu_cmdline(command),
         "-fsdev".to_owned(),
         format!("local,id=host9p,path={root},security_model=mapped-xattr"),
         "-device".to_owned(),
@@ -129,6 +155,44 @@ fn qemu_virtio9p_argv(command: &QemuCommand) -> Result<Vec<String>, CliError> {
         "-nographic".to_owned(),
     ]);
     Ok(argv)
+}
+
+fn resolve_kernel_path(command: &QemuCommand, root_path: &Path) -> Result<PathBuf, CliError> {
+    if let Some(kernel_path) = &command.kernel_path {
+        return canonical_existing_file(kernel_path, "qemu --kernel");
+    }
+    for candidate in DEFAULT_KERNEL_CANDIDATES {
+        let path = root_path.join(candidate);
+        if path.is_file() {
+            return canonical_existing_file(&path, "qemu discovered kernel");
+        }
+    }
+    Err(CliError::new(
+        format!(
+            "qemu could not find a guest kernel under {}; pass --kernel PATH \
+             (tried {})",
+            root_path.display(),
+            DEFAULT_KERNEL_CANDIDATES.join(", ")
+        ),
+        1,
+    ))
+}
+
+fn qemu_cmdline(command: &QemuCommand) -> String {
+    let mut cmdline = command
+        .cmdline
+        .clone()
+        .unwrap_or_else(|| DEFAULT_QEMU_9P_ROOT_CMDLINE.to_owned());
+    for append in &command.append {
+        if append.is_empty() {
+            continue;
+        }
+        if !cmdline.is_empty() {
+            cmdline.push(' ');
+        }
+        cmdline.push_str(append);
+    }
+    cmdline
 }
 
 fn canonical_existing_dir(path: &PathBuf, label: &str) -> Result<PathBuf, CliError> {

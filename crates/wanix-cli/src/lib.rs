@@ -54,7 +54,8 @@ const USAGE: &str = concat!(
     "       wanix-rust p9-stdio --root DIR\n",
     "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
-    "       wanix-rust qemu --root DIR --kernel PATH [--qemu-bin PATH] [--memory-mb N] ",
+    "       wanix-rust qemu --root DIR [--kernel PATH] [--cmdline TEXT] [--append TEXT ...] ",
+    "[--qemu-bin PATH] [--memory-mb N] ",
     "[--no-kvm]\n",
     "       wanix-rust serve [--root DIR | DIR] [--addr HOST:PORT | --listen HOST:PORT] ",
     "[--bundle NAME] [--once]\n",
@@ -1706,6 +1707,8 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-listen"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-ws"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qemu"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--cmdline TEXT"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("--append TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust serve"));
         assert!(output.stderr().is_empty());
     }
@@ -1722,8 +1725,6 @@ mod tests {
             "qemu".to_owned(),
             "--root".to_owned(),
             root.display().to_string(),
-            "--kernel".to_owned(),
-            kernel.display().to_string(),
         ])
         .unwrap();
 
@@ -1747,7 +1748,7 @@ mod tests {
     }
 
     #[test]
-    fn qemu_command_can_print_without_kvm_and_with_custom_memory() {
+    fn qemu_command_can_print_without_kvm_with_explicit_kernel_and_custom_memory() {
         let root = temp_dir("wanix-cli-qemu-no-kvm-root");
         let kernel = root.join("kernel");
         fs::write(&kernel, b"kernel").unwrap();
@@ -1773,13 +1774,72 @@ mod tests {
     }
 
     #[test]
+    fn qemu_command_uses_legacy_root_kernel_fallback() {
+        let root = temp_dir("wanix-cli-qemu-legacy-kernel-root");
+        let kernel = root.join("bzImage");
+        fs::write(&kernel, b"kernel").unwrap();
+
+        let output = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+        ])
+        .unwrap();
+
+        let stdout = String::from_utf8(output.stdout().to_vec()).unwrap();
+        let kernel = fs::canonicalize(kernel).unwrap();
+        assert!(stdout.contains(&format!("-kernel {}", kernel.display())));
+    }
+
+    #[test]
+    fn qemu_command_can_replace_and_extend_kernel_cmdline() {
+        let root = temp_dir("wanix-cli-qemu-cmdline-root");
+        let boot = root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        fs::write(boot.join("bzImage"), b"kernel").unwrap();
+
+        let appended = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--append".to_owned(),
+            "wanix.demo=1".to_owned(),
+            "--append".to_owned(),
+            "panic=1".to_owned(),
+        ])
+        .unwrap();
+        let stdout = String::from_utf8(appended.stdout().to_vec()).unwrap();
+        assert!(stdout.contains("loglevel=3 wanix.demo=1 panic=1"));
+
+        let replaced = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--cmdline".to_owned(),
+            "console=ttyS0 init=/bin/sh".to_owned(),
+            "--append".to_owned(),
+            "single".to_owned(),
+        ])
+        .unwrap();
+        let stdout = String::from_utf8(replaced.stdout().to_vec()).unwrap();
+        assert!(stdout.contains("-append 'console=ttyS0 init=/bin/sh single'"));
+        assert!(!stdout.contains("root=host9p"));
+    }
+
+    #[test]
     fn qemu_command_validates_required_paths_and_qemu_option_boundaries() {
-        let missing_kernel = run(["qemu", "--root", "."]).unwrap_err();
-        assert_eq!(missing_kernel.exit_code(), 2);
+        let missing_kernel_root = temp_dir("wanix-cli-qemu-missing-kernel-root");
+        let missing_kernel = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            missing_kernel_root.display().to_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(missing_kernel.exit_code(), 1);
         assert!(
             missing_kernel
                 .to_string()
-                .contains("qemu requires --kernel PATH")
+                .contains("could not find a guest kernel")
         );
 
         let root_parent = temp_dir("wanix-cli-qemu-comma-parent");
