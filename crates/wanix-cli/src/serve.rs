@@ -23,8 +23,10 @@ use crate::qjs_term::QjsShellSession;
 use crate::rootfs::rootfs_json_handoff_for_prepared_root;
 use crate::{CliError, quickjs_runner, write_process_output};
 
+mod boot;
 mod terminal_ws;
 
+use boot::{first_executable_init_route, first_existing_static_route};
 use terminal_ws::close_terminal_websocket_if_finished;
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
@@ -2173,11 +2175,11 @@ fn rootfs_handoff_response(roots: &ServeRoots, peer_addr: SocketAddr) -> StaticR
 fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr) -> String {
     let readiness = rootfs_handoff_readiness(static_root);
     let loopback = is_loopback_peer(peer_addr);
-    let mut ready = readiness.ready;
+    let mut ready = readiness.missing.is_empty();
     let mut error = None;
     let status = if !loopback {
         "local-only"
-    } else if readiness.ready {
+    } else if readiness.missing.is_empty() {
         match rootfs_json_handoff_for_prepared_root(static_root) {
             Ok(_) => "available",
             Err(manifest_error) => {
@@ -2211,13 +2213,12 @@ fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr)
 }
 
 struct RootfsHandoffReadiness {
-    ready: bool,
     missing: Vec<&'static str>,
 }
 
 fn rootfs_handoff_readiness(static_root: &Path) -> RootfsHandoffReadiness {
     let kernel = first_existing_static_route(static_root, DIRECT_V86_KERNEL_CANDIDATES);
-    let init = first_existing_static_route(static_root, &[DIRECT_V86_INIT_PATH]);
+    let init = first_executable_init_route(static_root, DIRECT_V86_INIT_PATH);
     let mut missing = Vec::new();
     if kernel.is_none() {
         missing.push(DIRECT_V86_DEFAULT_KERNEL_PATH);
@@ -2225,10 +2226,7 @@ fn rootfs_handoff_readiness(static_root: &Path) -> RootfsHandoffReadiness {
     if init.is_none() {
         missing.push(DIRECT_V86_INIT_PATH);
     }
-    RootfsHandoffReadiness {
-        ready: missing.is_empty(),
-        missing,
-    }
+    RootfsHandoffReadiness { missing }
 }
 
 fn is_loopback_peer(peer_addr: SocketAddr) -> bool {
@@ -2255,10 +2253,11 @@ fn serve_qjs_shell_route_json(roots: &ServeRoots, websocket_url: &str) -> String
 }
 
 fn direct_v86_boot_json(static_root: &Path) -> String {
+    let readiness = rootfs_handoff_readiness(static_root);
     let mut fields = Vec::new();
     let kernel = first_existing_static_route(static_root, DIRECT_V86_KERNEL_CANDIDATES);
     let initrd = first_existing_static_route(static_root, DIRECT_V86_INITRD_CANDIDATES);
-    let init = first_existing_static_route(static_root, &[DIRECT_V86_INIT_PATH]);
+    let init = first_executable_init_route(static_root, DIRECT_V86_INIT_PATH);
     if let Some(kernel) = kernel {
         fields.push(format!("\"kernel\":{}", json_string(kernel)));
     }
@@ -2268,16 +2267,10 @@ fn direct_v86_boot_json(static_root: &Path) -> String {
     if let Some(init) = init {
         fields.push(format!("\"init\":{}", json_string(init)));
     }
-    let mut missing = Vec::new();
-    if kernel.is_none() {
-        missing.push(DIRECT_V86_DEFAULT_KERNEL_PATH);
-    }
-    if init.is_none() {
-        missing.push(DIRECT_V86_INIT_PATH);
-    }
-    fields.push(format!("\"ready\":{}", missing.is_empty()));
-    if !missing.is_empty() {
-        let missing = missing
+    fields.push(format!("\"ready\":{}", readiness.missing.is_empty()));
+    if !readiness.missing.is_empty() {
+        let missing = readiness
+            .missing
             .into_iter()
             .map(json_string)
             .collect::<Vec<_>>()
@@ -2285,16 +2278,6 @@ fn direct_v86_boot_json(static_root: &Path) -> String {
         fields.push(format!("\"missing\":[{missing}]"));
     }
     format!("{{{}}}", fields.join(","))
-}
-
-fn first_existing_static_route(
-    static_root: &Path,
-    candidates: &[&'static str],
-) -> Option<&'static str> {
-    candidates
-        .iter()
-        .copied()
-        .find(|route| static_root.join(route.trim_start_matches('/')).is_file())
 }
 
 fn request_host(request: &[u8]) -> Option<String> {
@@ -3301,11 +3284,10 @@ mod tests {
     fn serve_once_returns_well_known_discovery_document() {
         let root = temp_dir("wanix-cli-serve-discovery");
         fs::create_dir_all(root.join("boot")).unwrap();
-        fs::create_dir_all(root.join("bin")).unwrap();
         fs::write(root.join("index.html"), b"wanix serve discovery").unwrap();
         fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
         fs::write(root.join("boot/initrd"), b"initrd").unwrap();
-        fs::write(root.join("bin/init"), b"init").unwrap();
+        write_boot_init(&root);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let command = ServeCommand {
@@ -3412,10 +3394,9 @@ mod tests {
     fn serve_once_returns_rootfs_handoff_manifest() {
         let root = temp_dir("wanix-cli-serve-rootfs-handoff");
         fs::create_dir_all(root.join("boot")).unwrap();
-        fs::create_dir_all(root.join("bin")).unwrap();
         fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
         fs::write(root.join("boot/initrd"), b"initrd").unwrap();
-        fs::write(root.join("bin/init"), b"init").unwrap();
+        write_boot_init(&root);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let command = ServeCommand {
@@ -3514,9 +3495,8 @@ mod tests {
     fn serve_rootfs_handoff_rejects_non_loopback_peers_without_paths() {
         let root = temp_dir("wanix-cli-serve-rootfs-handoff-remote");
         fs::create_dir_all(root.join("boot")).unwrap();
-        fs::create_dir_all(root.join("bin")).unwrap();
         fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
-        fs::write(root.join("bin/init"), b"init").unwrap();
+        write_boot_init(&root);
         let roots = ServeRoots::new(&root, "0.0.0.0:7654".parse().unwrap(), None, false).unwrap();
         let response = rootfs_handoff_response(&roots, "192.0.2.1:12345".parse().unwrap());
         let status = response.status.status_line();
@@ -3880,8 +3860,7 @@ std.writeFile("generated.txt", "generated by task " + id);
     #[test]
     fn serve_discovery_reports_direct_v86_boot_readiness_gaps() {
         let root = temp_dir("wanix-cli-serve-discovery-boot-gaps");
-        fs::create_dir_all(root.join("bin")).unwrap();
-        fs::write(root.join("bin/init"), b"init").unwrap();
+        write_boot_init(&root);
         let roots = ServeRoots::new(
             &root,
             "127.0.0.1:7654".parse().unwrap(),
@@ -3904,11 +3883,44 @@ std.writeFile("generated.txt", "generated by task " + id);
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn serve_discovery_requires_executable_direct_v86_init() {
+        let root = temp_dir("wanix-cli-serve-discovery-non-executable-init");
+        fs::create_dir_all(root.join("boot")).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
+        fs::write(root.join("bin/init"), b"init").unwrap();
+        let roots = ServeRoots::new(
+            &root,
+            "127.0.0.1:7654".parse().unwrap(),
+            Some(DIRECT_V86_BUNDLE.to_owned()),
+            false,
+        )
+        .unwrap();
+
+        let body = serve_discovery_json(
+            &roots,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+            "127.0.0.1:12345".parse().unwrap(),
+        );
+        let discovery: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let boot = &discovery["v86"]["boot"];
+        let rootfs = &discovery["routes"]["rootfs"];
+
+        assert_eq!(boot["kernel"], "/boot/bzImage");
+        assert!(boot["init"].is_null());
+        assert_eq!(boot["ready"], false);
+        assert_eq!(boot["missing"][0], "/bin/init");
+        assert_eq!(rootfs["status"], "unprepared");
+        assert_eq!(rootfs["ready"], false);
+        assert_eq!(rootfs["missing"][0], "/bin/init");
+    }
+
     #[test]
     fn serve_discovery_reports_rootfs_handoff_status() {
         let root = temp_dir("wanix-cli-serve-discovery-rootfs-status");
-        fs::create_dir_all(root.join("bin")).unwrap();
-        fs::write(root.join("bin/init"), b"init").unwrap();
+        write_boot_init(&root);
         let roots = ServeRoots::new(
             &root,
             "0.0.0.0:7654".parse().unwrap(),
@@ -3947,9 +3959,8 @@ std.writeFile("generated.txt", "generated by task " + id);
         let parent = temp_dir("wanix-cli-serve-discovery-rootfs-invalid");
         let root = parent.join("with,comma");
         fs::create_dir_all(root.join("boot")).unwrap();
-        fs::create_dir_all(root.join("bin")).unwrap();
         fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
-        fs::write(root.join("bin/init"), b"init").unwrap();
+        write_boot_init(&root);
         let roots = ServeRoots::new(
             &root,
             "127.0.0.1:7654".parse().unwrap(),
@@ -4388,13 +4399,13 @@ std.exit(6);
             .unwrap();
         socket
             .send(Message::binary(
-                b"pwd\nls\ncat inside.txt\nsize\nlater idle\n".as_slice(),
+                b"pwd\nls\ncat inside.txt\nstat inside.txt\nsize\nlater idle\n".as_slice(),
             ))
             .unwrap();
         match socket.read().unwrap() {
             Message::Binary(bytes) => assert_eq!(
                 bytes.as_ref(),
-                b"pwd\r\napp\r\n$ ls\r\ninside.txt\r\n$ cat inside.txt\r\ninside app\r\n$ size\r\nsize 100 40\r\n$ later idle\r\nscheduled\r\n"
+                b"pwd\r\napp\r\n$ ls\r\ninside.txt\r\n$ cat inside.txt\r\ninside app\r\n$ stat inside.txt\r\ninside.txt type file mode 100000 size 11\r\n$ size\r\nsize 100 40\r\n$ later idle\r\nscheduled\r\n"
             ),
             other => panic!("expected scheduled terminal output, got {other:?}"),
         }
@@ -4851,5 +4862,18 @@ std.exit(6);
         let path = std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn write_boot_init(root: &Path) {
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let init = bin.join("init");
+        fs::write(&init, b"init").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(init, fs::Permissions::from_mode(0o755)).unwrap();
+        }
     }
 }

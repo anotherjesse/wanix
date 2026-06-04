@@ -358,8 +358,9 @@ $ bye
 > the guest shell owns echo, simple editing, Ctrl-C line cancellation, Ctrl-D
 > exit, and command dispatch.
 > The bundled shell has a small filesystem command set (`cd`, `ls`, `cat`,
-> `write`, `mkdir`, `rm`, `rmdir`, `mv`, `cp`, `ln -s`, and `readlink`) for
-> Wanix namespace demos, `env`/`setenv`/`unsetenv` commands that edit the shell
+> `write`, `mkdir`, `rm`, `rmdir`, `mv`, `cp`, `ln -s`, `readlink`, `stat`, and
+> `lstat`) for Wanix namespace demos, `env`/`setenv`/`unsetenv` commands that
+> edit the shell
 > task's `#task/self/env`, `ps` task-table inspection through `#task`, plus a
 > synchronous
 > `qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]`
@@ -435,7 +436,8 @@ $WANIX qemu --root /tmp/wanix-rootfs --security-model none --mount-tag wanixroot
 If the prepared root includes `/boot/initrd`, QEMU handoffs include `-initrd`
 automatically; pass `--initrd PATH` to use a different initrd.
 The default QEMU cmdline expects the prepared root to include `/bin/init`; pass
-`--cmdline TEXT` when the guest should own a different init policy.
+`--cmdline TEXT` when the guest should own a different init policy. On Unix
+hosts, that default `/bin/init` marker must be executable.
 
 For scripts or editor integration, ask for the same validated handoff as JSON:
 
@@ -466,8 +468,8 @@ cmdline. If you replace the full cmdline with `--cmdline`, include the matching
 > argv. The shell and JSON QEMU outputs share one validated argv so scripts and
 > future UI surfaces can consume the handoff without reinterpreting a shell
 > string.
-> The default `/bin/init` marker and prepared-root initrds are part of that argv
-> contract when present.
+> The executable default `/bin/init` marker and prepared-root initrds are part
+> of that argv contract when present.
 > QEMU mount tags, local 9P security models, and QEMU/direct-v86 9P `msize`
 > stay explicit because they affect the guest boot contract and host filesystem
 > trust boundary.

@@ -76,7 +76,8 @@ tests.
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
   shell modes and served shell sessions use the same `#term` device contract,
   with a small filesystem command set (`cd`, `ls`, `cat`, `write`, `mkdir`,
-  `rm`, `rmdir`, `mv`, `cp`, `ln -s`, and `readlink`), `env`/`setenv`/
+  `rm`, `rmdir`, `mv`, `cp`, `ln -s`, `readlink`, `stat`, and `lstat`),
+  `env`/`setenv`/
   `unsetenv` task-environment commands, `ps` task-table inspection, and
   synchronous child `qjs` task launches with inherited env, direct terminal
   stdio including buffered foreground stdin handoff, namespace stdio
@@ -100,21 +101,21 @@ tests.
   direct 9P, boot-asset hints, hvc0 console bridging with Ctrl-C/Ctrl-D byte
   forwarding and a scriptable hvc0 send hook, direct-v86 9P `msize` discovery
   and query override, and autostart-friendly launch hooks. The generated page
-  reports rootfs handoff status and, for trusted loopback clients, exposes
-  `window.wanixRootfsHandoff` plus copyable
+  reports rootfs handoff status including executable `/bin/init` readiness and,
+  for trusted loopback clients, exposes `window.wanixRootfsHandoff` plus copyable
   QEMU/direct-v86 serve commands.
 - `wanix-rust rootfs --archive FILE.tgz --out DIR`: prepares a guest root,
-  rejects unsafe archive paths, validates VM boot markers, and emits shell or
-  `wanix-rootfs.v1` JSON handoffs for QEMU and direct-v86 without owning rootfs
-  build or VM lifecycle.
+  rejects unsafe archive paths, validates VM boot markers including executable
+  `/bin/init`, and emits shell or `wanix-rootfs.v1` JSON handoffs for QEMU and
+  direct-v86 without owning rootfs build or VM lifecycle.
 - `/.well-known/rootfs.json`: when loopback clients access `serve` on a
   prepared guest root, exposes the same `wanix-rootfs.v1` handoff for trusted
   local browser/editor/VM launchers.
 - `wanix-rust qemu --root DIR`: validates the same guest-root shape, including
-  the default `/bin/init` marker unless `--cmdline` owns init policy, and emits
-  a shell or `wanix-qemu-virtio9p.v1` JSON handoff with discovered or explicit
-  initrd support plus an explicit 9P `msize` boot knob; `--exec` is an explicit
-  foreground launch, not a Wanix VM supervisor.
+  an executable default `/bin/init` marker unless `--cmdline` owns init policy,
+  and emits a shell or `wanix-qemu-virtio9p.v1` JSON handoff with discovered or
+  explicit initrd support plus an explicit 9P `msize` boot knob; `--exec` is an
+  explicit foreground launch, not a Wanix VM supervisor.
 
 The biggest missing pieces remain interactive shell/session depth, broader
 Linux/v86/editor 9P compatibility, QEMU/v86 boot workflows, and Rust

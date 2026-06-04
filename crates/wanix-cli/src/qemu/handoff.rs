@@ -144,17 +144,58 @@ fn validate_default_init_path(command: &QemuCommand, root_path: &Path) -> Result
         return Ok(());
     }
     let init_path = root_path.join(DEFAULT_INIT_PATH);
-    if init_path.is_file() {
+    let metadata = fs::metadata(&init_path).map_err(|_| {
+        CliError::new(
+            format!(
+                "qemu default cmdline expects /{DEFAULT_INIT_PATH} under {}; pass --cmdline TEXT \
+                 to own init policy",
+                root_path.display()
+            ),
+            1,
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(CliError::new(
+            format!(
+                "qemu default cmdline expects /{DEFAULT_INIT_PATH} under {}; pass --cmdline TEXT \
+                 to own init policy",
+                root_path.display()
+            ),
+            1,
+        ));
+    }
+    validate_default_init_executable(&init_path, &metadata, root_path)
+}
+
+#[cfg(unix)]
+fn validate_default_init_executable(
+    init_path: &Path,
+    metadata: &fs::Metadata,
+    root_path: &Path,
+) -> Result<(), CliError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if metadata.permissions().mode() & 0o111 != 0 {
         return Ok(());
     }
     Err(CliError::new(
         format!(
-            "qemu default cmdline expects /{DEFAULT_INIT_PATH} under {}; pass --cmdline TEXT \
-             to own init policy",
-            root_path.display()
+            "qemu default cmdline expects /{DEFAULT_INIT_PATH} under {} to be executable; \
+             pass --cmdline TEXT to own init policy ({})",
+            root_path.display(),
+            init_path.display()
         ),
         1,
     ))
+}
+
+#[cfg(not(unix))]
+fn validate_default_init_executable(
+    _init_path: &Path,
+    _metadata: &fs::Metadata,
+    _root_path: &Path,
+) -> Result<(), CliError> {
+    Ok(())
 }
 
 fn qemu_cmdline(command: &QemuCommand) -> String {

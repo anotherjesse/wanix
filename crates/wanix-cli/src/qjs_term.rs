@@ -1716,6 +1716,44 @@ std.exit(7);
         assert!(session.is_finished());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn qjs_shell_session_reports_stat_metadata() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("wanix-qjs-shell-session-stat");
+        fs::write(root.join("visible.txt"), "served root\n").unwrap();
+        fs::create_dir(root.join("app")).unwrap();
+        symlink("visible.txt", root.join("link.txt")).unwrap();
+        let (mut session, initial_output) = QjsShellSession::start(&root).unwrap();
+
+        assert_eq!(initial_output, b"shell task: 1\r\n$ ");
+        let output = session
+            .input(
+                b"stat visible.txt\nstat app\nlstat link.txt\nstat link.txt\nstat missing.txt\nexit\n",
+            )
+            .unwrap();
+        let output = String::from_utf8(output).unwrap();
+
+        assert!(
+            output.contains("visible.txt type file mode 100"),
+            "{output}"
+        );
+        assert!(
+            output.contains("visible.txt type file") && output.contains("size 12"),
+            "{output}"
+        );
+        assert!(output.contains("app type dir mode 40"), "{output}");
+        assert!(
+            output.contains("link.txt type symlink mode 120"),
+            "{output}"
+        );
+        assert!(output.contains("link.txt type file mode 100"), "{output}");
+        assert!(output.contains("stat: missing.txt: errno "), "{output}");
+        assert!(output.ends_with("$ exit\r\nbye\r\n"), "{output}");
+        assert!(session.is_finished());
+    }
+
     #[test]
     fn qjs_shell_session_reports_served_resize() {
         let root = temp_dir("wanix-qjs-shell-session-resize");

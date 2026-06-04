@@ -177,16 +177,53 @@ fn prepared_rootfs_report(out_path: PathBuf) -> Result<RootfsReport, CliError> {
         )
     })?;
     let init_path = out_path.join(INIT_PATH);
-    if !init_path.is_file() {
+    let init_metadata = fs::metadata(&init_path).map_err(|_| {
+        CliError::new(
+            format!("rootfs {} is missing /{INIT_PATH}", out_path.display()),
+            1,
+        )
+    })?;
+    if !init_metadata.is_file() {
         return Err(CliError::new(
             format!("rootfs {} is missing /{INIT_PATH}", out_path.display()),
             1,
         ));
     }
+    validate_init_executable(&init_path, &init_metadata, &out_path)?;
     Ok(RootfsReport {
         out_path,
         kernel_route,
     })
+}
+
+#[cfg(unix)]
+fn validate_init_executable(
+    init_path: &Path,
+    metadata: &fs::Metadata,
+    out_path: &Path,
+) -> Result<(), CliError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if metadata.permissions().mode() & 0o111 != 0 {
+        return Ok(());
+    }
+    Err(CliError::new(
+        format!(
+            "rootfs {} has non-executable /{INIT_PATH} ({})",
+            out_path.display(),
+            init_path.display()
+        ),
+        1,
+    ))
+}
+
+#[cfg(not(unix))]
+fn validate_init_executable(
+    _init_path: &Path,
+    _metadata: &fs::Metadata,
+    _out_path: &Path,
+) -> Result<(), CliError> {
+    Ok(())
 }
 
 fn ensure_output_dir_ready(path: &Path) -> Result<(), CliError> {

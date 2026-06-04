@@ -613,6 +613,49 @@ function runReadlink(words) {
   prompt();
 }
 
+function fileType(mode) {
+  const kind = mode & os.S_IFMT;
+  if (kind === os.S_IFREG) {
+    return "file";
+  }
+  if (kind === os.S_IFDIR) {
+    return "dir";
+  }
+  if (kind === os.S_IFLNK) {
+    return "symlink";
+  }
+  return "other";
+}
+
+function octalMode(mode) {
+  return mode.toString(8);
+}
+
+function runStatCommand(words, followFinalSymlink) {
+  const command = followFinalSymlink ? "stat" : "lstat";
+  if (words.length < 2) {
+    std.out.puts(command + ": missing path\n");
+    prompt();
+    return;
+  }
+  for (const requested of words.slice(1)) {
+    const path = resolveShellPath(requested);
+    const [metadata, err] = followFinalSymlink ? os.stat(path) : os.lstat(path);
+    if (err !== 0) {
+      std.out.puts(command + ": " + requested + ": errno " + err + "\n");
+      continue;
+    }
+    std.out.puts(
+      requested
+        + " type " + fileType(metadata.mode)
+        + " mode " + octalMode(metadata.mode)
+        + " size " + metadata.size
+        + "\n"
+    );
+  }
+  prompt();
+}
+
 function runQjs(words) {
   if (words.length < 2) {
     std.out.puts("qjs: usage: qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]\n");
@@ -775,6 +818,14 @@ function runCommand(line) {
   }
   if (words[0] === "readlink") {
     runReadlink(words);
+    return;
+  }
+  if (words[0] === "stat") {
+    runStatCommand(words, true);
+    return;
+  }
+  if (words[0] === "lstat") {
+    runStatCommand(words, false);
     return;
   }
   if (words[0] === "qjs") {

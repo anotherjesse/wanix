@@ -28,8 +28,8 @@ execution substrate and QuickJS/WASI as the first serious task runtime.
 
 The Rust port now has native slices for QuickJS-backed Wanix tasks, terminal
 devices with service-file lifecycle control, `qjs-shell` with basic filesystem
-and environment commands including symlink/readlink, child `qjs` task launches,
-namespace stdio redirection, direct terminal stdio with buffered foreground
+and environment commands including symlink/readlink/stat metadata, child `qjs`
+task launches, namespace stdio redirection, direct terminal stdio with buffered foreground
 stdin handoff, queued resize tracking from `#term/<id>/winch`, `ps` task
 inspection, child exit status inspection, and served shell terminal cleanup, 9P
 exports over stdio/TCP/WebSocket, Rust `serve` discovery, browser filesystem
@@ -37,7 +37,7 @@ and workbench demos, direct-v86 handoff with tunable 9P `msize`, rootfs
 preparation with shell/JSON handoffs, trusted-local served prepared-root
 handoff discovery with copyable browser commands, hvc0 Ctrl-C/Ctrl-D forwarding
 plus a scriptable send hook, and initrd-aware native QEMU command/JSON handoff
-with default `/bin/init` validation and the same 9P `msize` policy.
+with default executable `/bin/init` validation and the same 9P `msize` policy.
 Wanix owns task identity, namespaces, cwd/env/cmd, stdio/fds, exit status, and
 WASI filesystem semantics; QuickJS is the execution engine inside a `qjs` task.
 

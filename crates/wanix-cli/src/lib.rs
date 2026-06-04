@@ -2143,6 +2143,33 @@ mod tests {
         assert!(!escaped.exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn rootfs_command_rejects_non_executable_init() {
+        let fixture = temp_dir("wanix-cli-rootfs-non-executable-init-fixture");
+        let archive = fixture.join("alpine-linux.tgz");
+        write_rootfs_archive(
+            &archive,
+            &[
+                ("boot/bzImage", 0o644, b"kernel".as_slice()),
+                ("bin/init", 0o644, b"#!/bin/sh\n".as_slice()),
+            ],
+        );
+        let out = temp_dir("wanix-cli-rootfs-non-executable-init-out-parent").join("root");
+
+        let error = run(vec![
+            "rootfs".to_owned(),
+            "--archive".to_owned(),
+            archive.display().to_string(),
+            "--out".to_owned(),
+            out.display().to_string(),
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("non-executable /bin/init"));
+    }
+
     #[test]
     fn rootfs_json_rejects_qemu_unsafe_root_before_extracting_archive() {
         let fixture = temp_dir("wanix-cli-rootfs-json-qemu-unsafe-fixture");
@@ -2531,6 +2558,42 @@ mod tests {
             missing_default_init.to_string().contains("--cmdline TEXT"),
             "{missing_default_init}"
         );
+
+        #[cfg(unix)]
+        {
+            let non_executable_init_root = temp_dir("wanix-cli-qemu-non-executable-init-root");
+            let boot = non_executable_init_root.join("boot");
+            let bin = non_executable_init_root.join("bin");
+            fs::create_dir_all(&boot).unwrap();
+            fs::create_dir_all(&bin).unwrap();
+            fs::write(boot.join("bzImage"), b"kernel").unwrap();
+            fs::write(bin.join("init"), b"init").unwrap();
+            let non_executable_init = run(vec![
+                "qemu".to_owned(),
+                "--root".to_owned(),
+                non_executable_init_root.display().to_string(),
+            ])
+            .unwrap_err();
+            assert_eq!(non_executable_init.exit_code(), 1);
+            assert!(
+                non_executable_init.to_string().contains("executable"),
+                "{non_executable_init}"
+            );
+            assert!(
+                non_executable_init.to_string().contains("--cmdline TEXT"),
+                "{non_executable_init}"
+            );
+
+            let custom_cmdline = run(vec![
+                "qemu".to_owned(),
+                "--root".to_owned(),
+                non_executable_init_root.display().to_string(),
+                "--cmdline".to_owned(),
+                "console=ttyS0 init=/bin/sh".to_owned(),
+            ])
+            .unwrap();
+            assert_eq!(custom_cmdline.exit_code(), 0);
+        }
 
         let invalid_mount_tag = run(vec![
             "qemu".to_owned(),
@@ -5676,7 +5739,14 @@ std.out.flush();
     fn write_qemu_default_init(root: &Path) {
         let bin = root.join("bin");
         fs::create_dir_all(&bin).unwrap();
-        fs::write(bin.join("init"), b"init").unwrap();
+        let init = bin.join("init");
+        fs::write(&init, b"init").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(init, fs::Permissions::from_mode(0o755)).unwrap();
+        }
     }
 
     fn write_rootfs_archive(path: &Path, entries: &[(&str, u32, &[u8])]) {

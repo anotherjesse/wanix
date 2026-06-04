@@ -357,8 +357,9 @@ terminal. It can feed input after eval, feed line-by-line scripts, pump
 ready-IO handlers, and send deterministic resize events. `qjs-shell` runs the
 bundled QuickJS shell source through the same terminal-backed task runtime,
 including a small filesystem command set (`cd`, `ls`, `cat`, `write`, `mkdir`,
-`rm`, `rmdir`, `mv`, `cp`, `ln -s`, and `readlink`), `env`/`setenv`/
-`unsetenv` task-environment commands, `ps` task-table inspection, and a
+`rm`, `rmdir`, `mv`, `cp`, `ln -s`, `readlink`, `stat`, and `lstat`),
+`env`/`setenv`/`unsetenv` task-environment commands, `ps` task-table
+inspection, and a
 synchronous `qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]` launcher
 for served namespace and workbench demos. The launcher uses `#task/new/qjs`,
 service-file `cmd`/`env`/`dir`, fd binds, `start`, and `exit` rather than a
@@ -534,10 +535,11 @@ from `?autostart=1`, exposes a visible
 boot log and `window.wanixV86BootLog`, reports v86 lifecycle status, sends
 browser console resize events, Ctrl-C/Ctrl-D bytes, scriptable input, and an
 explicit 9P `msize` override to hvc0/direct 9P boot config, reports boot
-readiness from the served root by checking for a kernel and `/bin/init`, and
-surfaces the trusted-local rootfs handoff as `window.wanixRootfsHandoff` when
-discovery says it is ready. For local handoff workflows, it also renders
-copyable QEMU and direct-v86 serve commands derived from that manifest.
+readiness from the served root by checking for a kernel and executable
+`/bin/init`, and surfaces the trusted-local rootfs handoff as
+`window.wanixRootfsHandoff` when discovery says it is ready. For local handoff
+workflows, it also renders copyable QEMU and direct-v86 serve commands derived
+from that manifest.
 
 That means the browser is still very much in the story. The difference is that
 the browser page discovers and attaches to a native Wanix export. It is a
@@ -578,15 +580,15 @@ Wanix, not a normal Wanix WASI task.
 
 Native QEMU is the other path. `wanix-rust qemu` targets real host execution of
 QEMU/KVM or software emulation with the same guest-root shape: a Linux kernel,
-the default `/bin/init` marker, an optional initrd, an hvc0 virtconsole, and a
-virtio-9p root mounted from a Wanix/host directory. It can tune the generated
-guest mount tag, explicit initrd, QEMU local 9P `security_model`, and guest 9P
-`msize` without changing the default `host9p`/`mapped-xattr`/`131072` handoff;
-a fully replaced kernel cmdline remains caller-owned. The direct-v86 page
-advertises the same default 9P `msize` through discovery and accepts a
-`p9-msize` query override for local browser boot tests. `wanix-rust rootfs
---json` can package the prepared root, boot markers, default QEMU manifest, and
-direct-v86 serve argv in a
+the executable default `/bin/init` marker, an optional initrd, an hvc0
+virtconsole, and a virtio-9p root mounted from a Wanix/host directory. It can
+tune the generated guest mount tag, explicit initrd, QEMU local 9P
+`security_model`, and guest 9P `msize` without changing the default
+`host9p`/`mapped-xattr`/`131072` handoff; a fully replaced kernel cmdline
+remains caller-owned. The direct-v86 page advertises the same default 9P
+`msize` through discovery and accepts a `p9-msize` query override for local
+browser boot tests. `wanix-rust rootfs --json` can package the prepared root,
+boot markers, default QEMU manifest, and direct-v86 serve argv in a
 `wanix-rootfs.v1` manifest. A served prepared root publishes the same manifest at
 `/.well-known/rootfs.json` to loopback clients, while
 `wanix-rust qemu --json` renders just the validated QEMU argv, discovered or
