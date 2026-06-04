@@ -11,9 +11,11 @@ use crate::{
 };
 
 mod handle;
+mod open;
 mod path;
 
 use handle::{Handle, OpenFileHandle};
+use open::FileOpenRequest;
 use path::{is_rooted_service_path, join_paths, wasi_path, wasi_symlink_target};
 
 const FIRST_PREOPEN_FD: u32 = 3;
@@ -212,37 +214,13 @@ impl WasiCtx {
         request: Option<WasiPathOpen>,
         parent_rights_inheriting: WasiRights,
     ) -> Result<WasiFd, Errno> {
-        let requested_file_rights = open_file_rights(options.read, options.write, true);
-        let default_file_rights = requested_file_rights.intersection(parent_rights_inheriting);
-        if request.is_none()
-            && ((options.read && !default_file_rights.contains(WasiRights::FD_READ))
-                || (options.write && !default_file_rights.contains(WasiRights::FD_WRITE)))
-        {
-            return Err(Errno::Notcapable);
-        }
-        if let Some(request) = request
-            && (!requested_file_rights.contains(request.file_rights_base())
-                || !parent_rights_inheriting.contains(request.file_rights_base()))
-        {
-            return Err(Errno::Notcapable);
-        }
+        let request = FileOpenRequest::new(options, request, parent_rights_inheriting)?;
         let fd = self.next_file_fd()?;
         let file = self
             .namespace
             .open(&resolved, OpenOptions::from(options))
             .map_err(Errno::from)?;
-        let supported_rights = open_file_rights(options.read, options.write, file.is_seekable());
-        let rights_base = if let Some(request) = request {
-            let file_rights_base = request.file_rights_base().intersection(supported_rights);
-            if (options.read && !file_rights_base.contains(WasiRights::FD_READ))
-                || (options.write && !file_rights_base.contains(WasiRights::FD_WRITE))
-            {
-                return Err(Errno::Notcapable);
-            }
-            file_rights_base
-        } else {
-            supported_rights.intersection(parent_rights_inheriting)
-        };
+        let rights_base = request.rights_base_for_opened_file(file.is_seekable())?;
         let file = WasiFile::new(
             file,
             resolved.as_str(),
@@ -888,20 +866,6 @@ fn attached_file_rights(file: &WasiFile) -> Result<WasiRights, Errno> {
         rights |= WasiRights::FD_SEEK | WasiRights::FD_TELL;
     }
     Ok(rights)
-}
-
-fn open_file_rights(read: bool, write: bool, seekable: bool) -> WasiRights {
-    let mut rights = WasiRights::FD_FILESTAT_GET | WasiRights::FD_FILESTAT_SET_TIMES;
-    if read {
-        rights |= WasiRights::FD_READ;
-    }
-    if write {
-        rights |= WasiRights::FD_WRITE | WasiRights::FD_FILESTAT_SET_SIZE;
-    }
-    if seekable {
-        rights |= WasiRights::FD_SEEK | WasiRights::FD_TELL;
-    }
-    rights
 }
 
 fn file_seek_from(offset: i64, whence: WasiWhence) -> Result<FileSeekFrom, Errno> {
