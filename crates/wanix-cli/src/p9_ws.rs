@@ -208,36 +208,65 @@ pub(super) fn serve_websocket_connection(
     let mut frames = P9FrameBuffer::new();
 
     loop {
-        let message = match socket.read() {
-            Ok(message) => message,
-            Err(WsError::ConnectionClosed) if frames.buffered_len() == 0 => return Ok(()),
-            Err(WsError::ConnectionClosed) => {
-                return Err(P9WsConnectionError::TruncatedFrame {
-                    buffered_len: frames.buffered_len(),
-                });
-            }
-            Err(error) => return Err(P9WsConnectionError::WebSocket(error)),
+        let Some(message) = read_websocket_message(&mut socket, frames.buffered_len())? else {
+            return Ok(());
         };
-        match message {
-            Message::Binary(bytes) => {
-                for request in frames.push(&bytes)? {
-                    let response = server.handle_frame(&request)?;
-                    let response_bytes = response.encode()?;
-                    socket.send(Message::binary(response_bytes))?;
-                }
-            }
-            Message::Close(_) => {
-                if frames.buffered_len() != 0 {
-                    return Err(P9WsConnectionError::TruncatedFrame {
-                        buffered_len: frames.buffered_len(),
-                    });
-                }
-                return Ok(());
-            }
-            Message::Ping(bytes) => socket.send(Message::Pong(bytes))?,
-            Message::Text(_) | Message::Pong(_) | Message::Frame(_) => {}
+        if !handle_websocket_message(&mut server, &mut frames, &mut socket, message)? {
+            return Ok(());
         }
     }
+}
+
+fn read_websocket_message(
+    socket: &mut WebSocket<TcpStream>,
+    buffered_len: usize,
+) -> Result<Option<Message>, P9WsConnectionError> {
+    match socket.read() {
+        Ok(message) => Ok(Some(message)),
+        Err(WsError::ConnectionClosed) if buffered_len == 0 => Ok(None),
+        Err(WsError::ConnectionClosed) => Err(P9WsConnectionError::TruncatedFrame { buffered_len }),
+        Err(error) => Err(P9WsConnectionError::WebSocket(error)),
+    }
+}
+
+fn handle_websocket_message(
+    server: &mut P9Server,
+    frames: &mut P9FrameBuffer,
+    socket: &mut WebSocket<TcpStream>,
+    message: Message,
+) -> Result<bool, P9WsConnectionError> {
+    match message {
+        Message::Binary(bytes) => handle_binary_websocket_message(server, frames, socket, &bytes),
+        Message::Close(_) => close_websocket_connection(frames),
+        Message::Ping(bytes) => {
+            socket.send(Message::Pong(bytes))?;
+            Ok(true)
+        }
+        Message::Text(_) | Message::Pong(_) | Message::Frame(_) => Ok(true),
+    }
+}
+
+fn handle_binary_websocket_message(
+    server: &mut P9Server,
+    frames: &mut P9FrameBuffer,
+    socket: &mut WebSocket<TcpStream>,
+    bytes: &[u8],
+) -> Result<bool, P9WsConnectionError> {
+    for request in frames.push(bytes)? {
+        let response = server.handle_frame(&request)?;
+        let response_bytes = response.encode()?;
+        socket.send(Message::binary(response_bytes))?;
+    }
+    Ok(true)
+}
+
+fn close_websocket_connection(frames: &P9FrameBuffer) -> Result<bool, P9WsConnectionError> {
+    if frames.buffered_len() != 0 {
+        return Err(P9WsConnectionError::TruncatedFrame {
+            buffered_len: frames.buffered_len(),
+        });
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
