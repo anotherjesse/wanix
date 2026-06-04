@@ -1228,7 +1228,7 @@ fn direct_v86_bundle_html() -> String {
     }
 
     function hvc0KeyBytes(event) {
-      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "d") return Uint8Array.of(4);
+      const control = event.key.toLowerCase(); if (event.ctrlKey && !event.altKey && !event.metaKey && (control === "c" || control === "d")) return Uint8Array.of(control === "c" ? 3 : 4);
       if (event.metaKey || event.altKey || event.ctrlKey) return null;
       if (event.key === "Enter") return hvc0Encoder.encode("\n");
       if (event.key === "Backspace") return Uint8Array.of(0x7f);
@@ -1237,9 +1237,9 @@ fn direct_v86_bundle_html() -> String {
       return null;
     }
 
-    function sendHvc0(vm, bytes) {
-      vm.bus.send("virtio-console0-input-bytes", bytes);
-    }
+    function hvc0InputBytes(input) { if (input === undefined || input === null) return new Uint8Array(); if (input instanceof Uint8Array) return input; if (input instanceof ArrayBuffer) return new Uint8Array(input); if (ArrayBuffer.isView(input)) return new Uint8Array(input.buffer, input.byteOffset, input.byteLength); if (Array.isArray(input)) return Uint8Array.from(input); return hvc0Encoder.encode(String(input)); }
+    function sendHvc0(vm, bytes) { vm.bus.send("virtio-console0-input-bytes", bytes); }
+    window.wanixV86SendHvc0 = input => { const vm = window.wanixV86; if (!vm) throw new Error("v86 is not started"); sendHvc0(vm, hvc0InputBytes(input)); };
 
     function sendHvc0Resize(vm) {
       const columns = Math.max(20, Math.floor(hvc0.clientWidth / 8) || 80);
@@ -2864,6 +2864,19 @@ mod tests {
             response.contains("vm.bus.send(\"virtio-console0-input-bytes\", bytes)"),
             "{response}"
         );
+        assert!(response.contains("control === \"c\" ? 3 : 4"), "{response}");
+        assert!(
+            response.contains("window.wanixV86SendHvc0 = input =>"),
+            "{response}"
+        );
+        assert!(
+            response.contains("if (!vm) throw new Error(\"v86 is not started\")"),
+            "{response}"
+        );
+        assert!(
+            response.contains("return hvc0Encoder.encode(String(input))"),
+            "{response}"
+        );
         assert!(
             response.contains("vm.bus.send(\"virtio-console0-resize\", [columns, rows])"),
             "{response}"
@@ -4354,6 +4367,16 @@ std.exit(6);
         match initial {
             Message::Binary(bytes) => assert_eq!(bytes.as_ref(), b"shell task: 1\r\n$ "),
             other => panic!("expected initial terminal output, got {other:?}"),
+        }
+
+        socket
+            .send(Message::binary(b"echo nope\x03echo yes\n".as_slice()))
+            .unwrap();
+        match socket.read().unwrap() {
+            Message::Binary(bytes) => {
+                assert_eq!(bytes.as_ref(), b"echo nope^C\r\n$ echo yes\r\nyes\r\n$ ")
+            }
+            other => panic!("expected Ctrl-C line cancellation output, got {other:?}"),
         }
 
         socket

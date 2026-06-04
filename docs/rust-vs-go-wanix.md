@@ -526,11 +526,12 @@ cmdline needed to mount the 9P export as `root=host9p`, memory settings, VGA
 memory, and the virtio-console requirement. The direct-v86 page can autostart
 from `?autostart=1`, exposes a visible
 boot log and `window.wanixV86BootLog`, reports v86 lifecycle status, sends
-browser console resize events to hvc0, reports boot readiness from the served
-root by checking for a kernel and `/bin/init`, and surfaces the trusted-local
-rootfs handoff as `window.wanixRootfsHandoff` when discovery says it is ready.
-For local handoff workflows, it also renders copyable QEMU and direct-v86 serve
-commands derived from that manifest.
+browser console resize events, Ctrl-C/Ctrl-D bytes, and scriptable input to
+hvc0, reports boot readiness from the served root by checking for a kernel and
+`/bin/init`, and surfaces the trusted-local rootfs handoff as
+`window.wanixRootfsHandoff` when discovery says it is ready. For local handoff
+workflows, it also renders copyable QEMU and direct-v86 serve commands derived
+from that manifest.
 
 That means the browser is still very much in the story. The difference is that
 the browser page discovers and attaches to a native Wanix export. It is a
@@ -642,7 +643,8 @@ The Rust implementation is still a vertical slice.
 It does not yet have the full browser service surface from Go. It does not yet
 have the whole web component authoring model. `qjs-shell` has a native raw path
 and a served terminal/session route, but it is not a complete production
-terminal scheduler with signals, cancellation, and rich lifecycle control.
+terminal scheduler with signal delivery, cancellation, and rich lifecycle
+control.
 Direct-v86 is becoming a reproducible browser boot path, but it is not a full
 assembled VM distribution, not a vnet bridge, and not a native VM supervisor.
 The Rust-served workbench path can browse, edit, copy directory trees, search,

@@ -95,9 +95,10 @@ tests.
   and can open qjs-backed terminal sessions when services are enabled. Direct
   terminal disposal writes `close` through `#term/<id>/ctl`.
 - `serve --bundle direct-v86`: browser v86 handoff over Rust serve discovery,
-  direct 9P, boot-asset hints, hvc0 console bridging, and autostart-friendly
-  launch hooks. The generated page reports rootfs handoff status and, for
-  trusted loopback clients, exposes `window.wanixRootfsHandoff` plus copyable
+  direct 9P, boot-asset hints, hvc0 console bridging with Ctrl-C/Ctrl-D byte
+  forwarding and a scriptable hvc0 send hook, and autostart-friendly launch
+  hooks. The generated page reports rootfs handoff status and, for trusted
+  loopback clients, exposes `window.wanixRootfsHandoff` plus copyable
   QEMU/direct-v86 serve commands.
 - `wanix-rust rootfs --archive FILE.tgz --out DIR`: prepares a guest root,
   rejects unsafe archive paths, validates VM boot markers, and emits shell or
@@ -171,7 +172,8 @@ These are current guardrails for keeping retired bridge ideas out of new work:
   read-only virtual files are fixture support only.
 - Raw shell input should flow through `#term`; guest shells own echo, simple
   editing, newline handling, Ctrl-C line cancellation, Ctrl-D exit, and command
-  dispatch.
+  dispatch. Browser/editor/VM terminal clients should forward control bytes;
+  they should not invent task cancellation semantics around them.
 - Rust-served workbench paths should pass discovered direct-9P routes into the
   extension; the MessagePort/CBOR bridge is browser-embedded compatibility only.
 
