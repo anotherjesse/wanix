@@ -362,10 +362,10 @@ and a synchronous
 `qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]` launcher for served
 namespace and workbench demos. The launcher uses `#task/new/qjs`, service-file
 `cmd`/`env`/`dir`, fd binds, `start`, and `exit` rather than a host-side
-shortcut; file redirection binds child fd `0`/`1`/`2` through the Wanix
-namespace, the shell task's env flows into child `qjs` tasks, and `status`
-reports the last child `qjs` exit code observed from the child's `exit`
-service file.
+shortcut; child stdio can flow through the parent terminal fds, file
+redirection can bind child fd `0`/`1`/`2` through the Wanix namespace, the shell
+task's env flows into child `qjs` tasks, and `status` reports the last child
+`qjs` exit code observed from the child's `exit` service file.
 
 This is not yet a fully concurrent, production interactive scheduler. Raw mode
 still relies on the native host to put stdin into raw mode, but bytes then flow
