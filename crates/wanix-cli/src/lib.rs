@@ -1556,15 +1556,19 @@ mod tests {
     use super::{run, run_with_process_io, run_with_process_stdin};
     use wanix_protocol::{
         P9_LOCK_STATUS_OK, P9_LOCK_TYPE_READ, P9_LOCK_TYPE_UNLOCK, P9_LOCK_TYPE_WRITE, P9_NOFID,
-        P9_RATTACH, P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLOCK, P9_RLOPEN, P9_RREAD,
-        P9_RREADDIR, P9_RSETATTR, P9_RVERSION, P9_RWALK, P9_RWRITE, P9_SETATTR_PERMISSIONS,
-        P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer, P9Lock, P9SetAttr, p9_decode_rgetattr,
-        p9_decode_rgetlock, p9_decode_rlock, p9_decode_rread, p9_decode_rreaddir, p9_decode_rwrite,
-        p9_tattach, p9_tgetattr, p9_tgetlock, p9_tlcreate, p9_tlock, p9_tlopen, p9_tread,
-        p9_treaddir, p9_tsetattr, p9_tversion, p9_twalk, p9_twrite,
+        P9_RATTACH, P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLERROR, P9_RLOCK, P9_RLOPEN,
+        P9_RREAD, P9_RREADDIR, P9_RSETATTR, P9_RVERSION, P9_RWALK, P9_RWRITE,
+        P9_SETATTR_PERMISSIONS, P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer, P9Lock, P9SetAttr,
+        p9_decode_rgetattr, p9_decode_rgetlock, p9_decode_rlerror, p9_decode_rlock,
+        p9_decode_rread, p9_decode_rreaddir, p9_decode_rwrite, p9_tattach, p9_tauth, p9_tgetattr,
+        p9_tgetlock, p9_tlcreate, p9_tlink, p9_tlock, p9_tlopen, p9_tmknod, p9_tread, p9_treaddir,
+        p9_tsetattr, p9_tversion, p9_twalk, p9_twrite, p9_txattrcreate, p9_txattrwalk,
     };
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    const EBADF: u32 = 9;
+    const ENOSYS: u32 = 38;
+    const EOPNOTSUPP: u32 = 95;
     const P9_O_WRONLY: u32 = 0o1;
     const P9_O_APPEND: u32 = 0o2000;
 
@@ -1915,6 +1919,57 @@ mod tests {
                 client_id: String::new()
             }
         );
+    }
+
+    #[test]
+    fn p9_stdio_answers_compatibility_probes_over_binary_stdio() {
+        let root = temp_dir("wanix-cli-p9-stdio-compat-probes");
+        fs::write(root.join("target.txt"), b"target").unwrap();
+        let input = request_stream([
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tauth(2, 9, "root", "", 0).unwrap(),
+            p9_tattach(3, 1, P9_NOFID, "root", "", 0).unwrap(),
+            p9_twalk(4, 1, 2, &["target.txt"]).unwrap(),
+            p9_tmknod(5, 1, "tty0", 0o020620, 4, 0, 0).unwrap(),
+            p9_tlink(6, 1, 2, "hard.txt").unwrap(),
+            p9_txattrwalk(7, 2, 3, "user.foo").unwrap(),
+            p9_txattrcreate(8, 2, "user.foo", 12, 0).unwrap(),
+            p9_txattrwalk(9, 99, 3, "user.foo").unwrap(),
+        ]);
+
+        let output = run_with_process_stdin(
+            ["p9-stdio".into(), "--root".into(), root.into_os_string()],
+            input.as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.stderr().is_empty());
+        let frames = decode_response_stream(output.stdout());
+        assert_eq!(
+            frame_types(&frames),
+            [
+                P9_RVERSION,
+                P9_RLERROR,
+                P9_RATTACH,
+                P9_RWALK,
+                P9_RLERROR,
+                P9_RLERROR,
+                P9_RLERROR,
+                P9_RLERROR,
+                P9_RLERROR
+            ]
+        );
+        assert_eq!(
+            frames.iter().map(P9Frame::tag).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
+        );
+        assert_eq!(p9_decode_rlerror(&frames[1]).unwrap().ecode, ENOSYS);
+        assert_eq!(p9_decode_rlerror(&frames[4]).unwrap().ecode, EOPNOTSUPP);
+        assert_eq!(p9_decode_rlerror(&frames[5]).unwrap().ecode, EOPNOTSUPP);
+        assert_eq!(p9_decode_rlerror(&frames[6]).unwrap().ecode, EOPNOTSUPP);
+        assert_eq!(p9_decode_rlerror(&frames[7]).unwrap().ecode, EOPNOTSUPP);
+        assert_eq!(p9_decode_rlerror(&frames[8]).unwrap().ecode, EBADF);
     }
 
     #[test]

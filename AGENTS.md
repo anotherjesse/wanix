@@ -125,6 +125,9 @@ bundle assembler.
 `/.well-known` routes are reserved for protocol endpoints;
 `/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
 lands. Listener commands accept `--once` for tests and scripted demos.
+`p9-stdio` and the `serve` well-known WebSocket route both have compatibility
+probe smokes for auth, mknod, hard-link, and xattr requests, pinning the
+externally visible errno contract used by Linux/v86/editor clients.
 
 ## Code Quality Guardrails
 
