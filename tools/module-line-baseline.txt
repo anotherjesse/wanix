@@ -4,7 +4,7 @@
 1108 crates/wanix-cli/src/serve.rs
 1916 crates/wanix-protocol/src/p9.rs
 1502 crates/wanix-cli/src/lib.rs
-1373 crates/wanix-cli/src/qjs_term.rs
+940 crates/wanix-cli/src/qjs_term.rs
 1326 crates/wanix-qjs-engine/src/host/fs.rs
 1030 crates/wanix-9p/src/lib.rs
 922 crates/wanix-wasi/src/ctx.rs
