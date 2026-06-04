@@ -148,6 +148,43 @@ So no — the stack is not slow or expensive at massive concurrency, *provided*
 tasks share a resident host rather than fork per call. The expense is the OS
 process, not `wasmtime/wasi -> quickjs`.
 
+### Real work, not just sleeping
+
+Sleeping proves the orchestration is cheap, not that work scales. `concurrency_bench`
+with `WORKLOAD=cpu` runs a tight arithmetic loop (20 M iterations) per task, and
+also runs the identical loop in native Rust. On an 18-core machine (6 perf + 12
+efficiency):
+
+| concurrent CPU tasks | wall    | throughput  | scaling vs 1 task |
+| -------------------- | ------- | ----------- | ----------------- |
+| 1                    | 1.02 s  | 1 task/s    | 1.0x              |
+| 18 (= cores)         | 1.44 s  | 13 tasks/s  | 13.2x             |
+| 100                  | 7.67 s  | 13 tasks/s  | 13.7x             |
+| 1000                 | 82.8 s  | 12 tasks/s  | 12.3x             |
+
+Two honest takeaways:
+
+1. **Concurrency scales with cores and then holds flat.** Throughput saturates
+   near the core count (~13 effective; efficiency cores are slower) and stays
+   there from 18 to 1000 concurrent tasks — no thrashing or collapse under load.
+   Past the core count, more tasks queue and total time grows linearly; they do
+   not degrade each other.
+2. **QuickJS does not make JS fast.** The same loop is **~60–65x slower** than
+   native Rust, because QuickJS is a bytecode interpreter. Wanix buys cheap,
+   scalable *isolation*, not raw compute speed. CPU-heavy guest code is bounded
+   by `cores × interpreter speed`; for hot numeric kernels, native/WASM-compiled
+   code is the right tool, not interpreted JS.
+
+IO through the full Wanix path (`qjs:std` → WASI → namespace → in-memory FS) is
+fast and parallel. A single task sustains **~520k filesystem ops/s** (256-byte
+write+read pairs); 50 concurrent IO tasks reach **~9 M ops/s** aggregate, since
+each task has its own isolated filesystem.
+
+The summary for "does it stay fast": **throughput scales to the hardware and
+holds steady under heavy concurrency.** It is core-bound for CPU work (as any
+system is) and interpreter-speed per task — not magic, but it does not fall apart
+at scale.
+
 ### Known limitation: thread-per-task, not a single-thread reactor
 
 Today the public event-loop pump blocks a host thread for the duration of a
@@ -166,7 +203,10 @@ without thread overhead.
   thread (single-thread reactor) instead of one thread per waiting task.
 - Make the `serve` daemon a resident qjs task host that shares one deserialized
   module, so real workloads pay ~150 µs / ~0.25 MiB per task, not ~18 ms / ~10 MiB.
-- These figures cover no-op/sleep workloads. CPU-bound and allocation-heavy guest
-  JS still need their own benchmarks; the bounded event-loop and GC policies in
-  `wanix-qjs` exist for exactly that and are not yet measured here.
+- CPU-bound and IO workloads are now measured (see "Real work" above);
+  allocation/GC-heavy guest JS and per-task memory/CPU enforcement under
+  hostile load still need their own benchmarks.
+- Before running untrusted code in-process, wire Wasmtime epoch/fuel (hard CPU
+  preemption) and a `ResourceLimiter`/`StoreLimits` (hard linear-memory caps);
+  today's limits are QuickJS-level only.
 ```
