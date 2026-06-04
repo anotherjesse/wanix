@@ -9,6 +9,7 @@ mod p9_ws;
 mod qemu;
 mod qjs_args;
 mod qjs_restore;
+mod qjs_support;
 mod qjs_term;
 mod rootfs;
 mod serve;
@@ -16,25 +17,26 @@ mod terminal_mode;
 
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
-#[cfg(test)]
-use std::sync::OnceLock;
-use std::time::Duration;
 
-use wanix_fs::{FileSystem, FsError, LocalFs, MemFs, NormalizedPath, OpenOptions};
-use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
-use wanix_task::{Fd, Task, TaskSpec, TaskTable, quote_cmd_argv};
+use wanix_fs::{FsError, MemFs};
+use wanix_qjs::QuickJsTaskDriver;
+use wanix_task::TaskTable;
 use wanix_vfs::BindOptions;
 
 pub use native::run_native_process;
 use qjs_args::{
-    HostMount, QjsCommand, QjsSnapshotFileCommand, os_arg_to_string, parse_qjs_command,
-    parse_qjs_command_for, parse_qjs_snapshot_file_command, read_qjs_stdin,
+    QjsCommand, QjsSnapshotFileCommand, os_arg_to_string, parse_qjs_command, parse_qjs_command_for,
+    parse_qjs_snapshot_file_command, read_qjs_stdin,
+};
+pub(crate) use qjs_support::{
+    QJS_GUEST_SCRIPT, apply_qjs_task_runtime_limits, attach_task_stdio,
+    bind_child_output_to_parent, bind_host_mounts, configure_qjs_task, copy_script_directory,
+    copy_script_directory_into, ensure_snapshot_task_fds_closed, eval_qjs_source,
+    finish_cli_task_output, guest_path_in_cwd, parse_exit, quickjs_runner, read_file,
+    read_utf8_script,
 };
 pub use terminal_mode::{NativeRawTerminalMode, command_requests_raw_tty};
-
-const QJS_GUEST_SCRIPT: &str = "main.js";
 
 /// Captured native CLI output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -424,11 +426,6 @@ fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutpu
     }
     table.register_driver("qjs", Arc::new(driver))?;
     let task = table.allocate_root("qjs")?;
-    let task_spec = qjs_task_spec(QJS_GUEST_SCRIPT, &command.args, &command.env, &command.cwd)?;
-    let task_cmd = task_cmd(QJS_GUEST_SCRIPT, &command.args);
-    let task_env = command.env.join("\n");
-    let task_dir = command.cwd.to_string();
-
     let root = Arc::new(MemFs::new());
     copy_script_directory(script_path, &root, &command.cwd)?;
     let guest_script = guest_path_in_cwd(&command.cwd, QJS_GUEST_SCRIPT)?;
@@ -436,10 +433,13 @@ fn run_qjs(command: QjsCommand, process_stdin: &mut dyn Read) -> Result<CliOutpu
     task.bind(root, ".", ".", BindOptions::default())?;
     bind_host_mounts(&task, &command.mounts)?;
     let (stdout, stderr) = attach_task_stdio(&task, stdin_bytes)?;
-    task.set_spec(task_spec)?;
-    task.set_cmd(task_cmd)?;
-    task.set_env_lines(task_env)?;
-    task.set_dir(task_dir)?;
+    configure_qjs_task(
+        &task,
+        QJS_GUEST_SCRIPT,
+        &command.args,
+        &command.env,
+        &command.cwd,
+    )?;
 
     let start_result = table.start(task.id());
     let stdout = read_file(&*stdout, "stdout")?;
@@ -573,350 +573,6 @@ fn run_qjs_resume(
     })();
 
     finish_cli_task_output("qjs-resume", resume_result, &task, &stdout, &stderr)
-}
-
-fn task_cmd(program: &str, args: &[String]) -> String {
-    quote_cmd_argv(std::iter::once(program).chain(args.iter().map(String::as_str)))
-}
-
-fn qjs_task_spec(
-    program: &str,
-    args: &[String],
-    env: &[String],
-    cwd: &NormalizedPath,
-) -> Result<TaskSpec, CliError> {
-    let mut spec = TaskSpec::new(program)?;
-    spec.args = args.to_vec();
-    spec.env = env_map(env);
-    spec.cwd = cwd.clone();
-    Ok(spec)
-}
-
-pub(crate) fn configure_qjs_task(
-    task: &Task,
-    program: &str,
-    args: &[String],
-    env: &[String],
-    cwd: &NormalizedPath,
-) -> Result<(), CliError> {
-    task.set_spec(qjs_task_spec(program, args, env, cwd)?)?;
-    task.set_cmd(task_cmd(program, args))?;
-    task.set_env_lines(env.join("\n"))?;
-    task.set_dir(cwd.to_string())?;
-    Ok(())
-}
-
-pub(crate) fn bind_child_output_to_parent(child: &Task, parent: &Task) -> Result<(), CliError> {
-    let parent_id = parent.id().get();
-    child.bind_fd_from_namespace(format!("#task/{parent_id}/fd/1"), Fd::STDOUT)?;
-    child.bind_fd_from_namespace(format!("#task/{parent_id}/fd/2"), Fd::STDERR)?;
-    Ok(())
-}
-
-pub(crate) fn attach_task_stdio(
-    task: &Task,
-    stdin_bytes: Option<Vec<u8>>,
-) -> Result<(Arc<MemFs>, Arc<MemFs>), CliError> {
-    attach_task_stdin(task, stdin_bytes)?;
-    let stdout = Arc::new(MemFs::new());
-    stdout.write_file("stdout", b"")?;
-    task.insert_fd(
-        Fd::STDOUT,
-        stdout.open(&NormalizedPath::new("stdout")?, OpenOptions::read_write())?,
-        NormalizedPath::new("stdout")?,
-    )?;
-    let stderr = Arc::new(MemFs::new());
-    stderr.write_file("stderr", b"")?;
-    task.insert_fd(
-        Fd::STDERR,
-        stderr.open(&NormalizedPath::new("stderr")?, OpenOptions::read_write())?,
-        NormalizedPath::new("stderr")?,
-    )?;
-    Ok((stdout, stderr))
-}
-
-fn attach_task_stdin(task: &Task, stdin_bytes: Option<Vec<u8>>) -> Result<(), CliError> {
-    if let Some(stdin_bytes) = stdin_bytes {
-        let stdin = Arc::new(MemFs::new());
-        stdin.write_file("stdin", stdin_bytes)?;
-        task.insert_fd(
-            Fd::STDIN,
-            stdin.open(&NormalizedPath::new("stdin")?, OpenOptions::read())?,
-            NormalizedPath::new("stdin")?,
-        )?;
-    }
-    Ok(())
-}
-
-fn finish_cli_task_output(
-    command: &str,
-    result: Result<(), CliError>,
-    task: &Task,
-    stdout: &Arc<MemFs>,
-    stderr: &Arc<MemFs>,
-) -> Result<CliOutput, CliError> {
-    let stdout = read_file(stdout.as_ref(), "stdout")?;
-    let mut stderr = read_file(stderr.as_ref(), "stderr")?;
-    match result {
-        Ok(()) => Ok(CliOutput::new(stdout, stderr, parse_exit(&task.exit()))),
-        Err(error) => {
-            if !stderr.is_empty() && !stderr.ends_with(b"\n") {
-                stderr.push(b'\n');
-            }
-            stderr.extend_from_slice(format!("wanix-rust {command}: {error}\n").as_bytes());
-            Ok(CliOutput::new(stdout, stderr, 1))
-        }
-    }
-}
-
-pub(crate) fn bind_host_mounts(task: &Task, mounts: &[HostMount]) -> Result<(), CliError> {
-    for mount in mounts {
-        let local = Arc::new(LocalFs::new(&mount.host_path).map_err(|error| {
-            CliError::new(
-                format!(
-                    "failed to mount {} at {}: {error}",
-                    mount.host_path.display(),
-                    mount.guest_path
-                ),
-                1,
-            )
-        })?);
-        task.bind(
-            local,
-            ".",
-            mount.guest_path.as_str(),
-            BindOptions::default(),
-        )?;
-    }
-    Ok(())
-}
-
-pub(crate) fn ensure_snapshot_task_fds_closed(task: &Task) -> Result<(), CliError> {
-    let dynamic_fds = task
-        .fd_numbers()
-        .into_iter()
-        .filter(|fd| fd.get() > Fd::STDERR.get())
-        .map(|fd| fd.get().to_string())
-        .collect::<Vec<_>>();
-    if dynamic_fds.is_empty() {
-        return Ok(());
-    }
-    Err(CliError::new(
-        format!(
-            "cannot snapshot qjs task with open Wanix task fds: {}",
-            dynamic_fds.join(", ")
-        ),
-        1,
-    ))
-}
-
-fn apply_qjs_task_runtime_limits(
-    runtime: &mut QuickJsTaskRuntime,
-    interrupt_poll_budget: Option<usize>,
-    bytes: Option<u32>,
-) -> Result<(), CliError> {
-    if let Some(polls) = interrupt_poll_budget {
-        runtime.set_interrupt_poll_budget(polls)?;
-    }
-    if let Some(bytes) = bytes {
-        runtime.set_memory_limit(bytes)?;
-    }
-    Ok(())
-}
-
-pub(crate) fn eval_qjs_source(
-    runtime: &mut QuickJsTaskRuntime,
-    source: &str,
-    filename: &str,
-    event_loop_wait_budget: Duration,
-    ready_io_turns: usize,
-) -> Result<(), CliError> {
-    if uses_module_syntax(source) {
-        runtime.eval_module_discard_with_event_loop_limits(
-            source,
-            filename,
-            event_loop_wait_budget,
-            ready_io_turns,
-        )?;
-    } else {
-        runtime.eval_discard_with_event_loop_limits(
-            source,
-            event_loop_wait_budget,
-            ready_io_turns,
-        )?;
-    }
-    Ok(())
-}
-
-fn uses_module_syntax(source: &str) -> bool {
-    source.lines().any(|line| {
-        let line = line.trim_start();
-        line.starts_with("import ") || line.starts_with("export ")
-    })
-}
-
-fn env_map(lines: &[String]) -> std::collections::BTreeMap<String, String> {
-    lines
-        .iter()
-        .filter_map(|line| {
-            let (key, value) = line.split_once('=')?;
-            Some((key.to_owned(), value.to_owned()))
-        })
-        .collect()
-}
-
-pub(crate) fn quickjs_runner() -> Result<Arc<QuickJsRunner>, CliError> {
-    match std::env::var_os("WANIX_QJS_WASM") {
-        Some(path) => QuickJsRunner::from_wasm_file(PathBuf::from(path)).map(Arc::new),
-        None => bundled_quickjs_runner(),
-    }
-    .map_err(CliError::from)
-}
-
-#[cfg(not(test))]
-fn bundled_quickjs_runner() -> Result<Arc<QuickJsRunner>, FsError> {
-    QuickJsRunner::from_bundled_wasm().map(Arc::new)
-}
-
-#[cfg(test)]
-fn bundled_quickjs_runner() -> Result<Arc<QuickJsRunner>, FsError> {
-    static RUNNER: OnceLock<Result<Arc<QuickJsRunner>, String>> = OnceLock::new();
-    match RUNNER.get_or_init(|| {
-        QuickJsRunner::from_bundled_wasm()
-            .map(Arc::new)
-            .map_err(|err| err.to_string())
-    }) {
-        Ok(runner) => Ok(Arc::clone(runner)),
-        Err(error) => Err(FsError::Other(error.clone())),
-    }
-}
-
-fn copy_script_directory(
-    script_path: &Path,
-    root: &MemFs,
-    cwd: &NormalizedPath,
-) -> Result<(), CliError> {
-    copy_script_directory_into(script_path, root, cwd, ".")
-}
-
-pub(crate) fn copy_script_directory_into(
-    script_path: &Path,
-    root: &MemFs,
-    cwd: &NormalizedPath,
-    guest_dir: &str,
-) -> Result<(), CliError> {
-    let base = script_path.parent().unwrap_or_else(|| Path::new("."));
-    let guest_dir = NormalizedPath::new(guest_dir)?;
-    copy_directory_tree(base, base, root, cwd, &guest_dir)
-}
-
-fn copy_directory_tree(
-    base: &Path,
-    dir: &Path,
-    root: &MemFs,
-    cwd: &NormalizedPath,
-    guest_dir: &NormalizedPath,
-) -> Result<(), CliError> {
-    for entry in std::fs::read_dir(dir).map_err(|error| {
-        CliError::new(
-            format!("failed to read directory {}: {error}", dir.display()),
-            1,
-        )
-    })? {
-        let entry = entry.map_err(|error| {
-            CliError::new(
-                format!(
-                    "failed to read directory entry in {}: {error}",
-                    dir.display()
-                ),
-                1,
-            )
-        })?;
-        let path = entry.path();
-        let file_type = entry.file_type().map_err(|error| {
-            CliError::new(format!("failed to stat {}: {error}", path.display()), 1)
-        })?;
-        if file_type.is_dir() {
-            copy_directory_tree(base, &path, root, cwd, guest_dir)?;
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        let Some(guest_path) = guest_path_for_host_file(base, &path)? else {
-            continue;
-        };
-        let bytes = std::fs::read(&path).map_err(|error| {
-            CliError::new(format!("failed to read {}: {error}", path.display()), 1)
-        })?;
-        let guest_path = guest_path_under_dir(guest_dir, &guest_path)?;
-        let guest_path = guest_path_in_cwd(cwd, &guest_path)?;
-        root.write_file(guest_path, bytes)?;
-    }
-    Ok(())
-}
-
-fn guest_path_under_dir(guest_dir: &NormalizedPath, path: &str) -> Result<String, CliError> {
-    if guest_dir.as_str() == "." {
-        return Ok(path.to_owned());
-    }
-    Ok(NormalizedPath::new(format!("{guest_dir}/{path}"))?.to_string())
-}
-
-pub(crate) fn guest_path_in_cwd(cwd: &NormalizedPath, path: &str) -> Result<String, CliError> {
-    if cwd.as_str() == "." {
-        return Ok(path.to_owned());
-    }
-    Ok(NormalizedPath::new(format!("{cwd}/{path}"))?.to_string())
-}
-
-fn guest_path_for_host_file(base: &Path, path: &Path) -> Result<Option<String>, CliError> {
-    let relative = path.strip_prefix(base).map_err(|error| {
-        CliError::new(
-            format!(
-                "failed to map {} under {}: {error}",
-                path.display(),
-                base.display()
-            ),
-            1,
-        )
-    })?;
-    let Some(path) = relative.to_str() else {
-        return Ok(None);
-    };
-    let path = path.replace(std::path::MAIN_SEPARATOR, "/");
-    if path.is_empty() || NormalizedPath::new(&path).is_err() {
-        return Ok(None);
-    }
-    Ok(Some(path))
-}
-
-pub(crate) fn read_utf8_script(path: &Path) -> Result<String, CliError> {
-    let script = std::fs::read(path)
-        .map_err(|error| CliError::new(format!("failed to read {}: {error}", path.display()), 1))?;
-    String::from_utf8(script).map_err(|error| {
-        CliError::new(
-            format!("script {} is not valid UTF-8: {error}", path.display()),
-            1,
-        )
-    })
-}
-
-pub(crate) fn read_file(fs: &dyn FileSystem, path: &str) -> Result<Vec<u8>, CliError> {
-    let mut file = fs.open(&NormalizedPath::new(path)?, OpenOptions::read())?;
-    let mut out = Vec::new();
-    let mut buf = [0; 1024];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            return Ok(out);
-        }
-        out.extend_from_slice(&buf[..n]);
-    }
-}
-
-pub(crate) fn parse_exit(exit: &str) -> i32 {
-    exit.trim().parse().unwrap_or(0)
 }
 
 #[cfg(test)]
