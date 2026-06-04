@@ -1,8 +1,52 @@
 use std::fs;
+use std::io::{self, Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
+
+use super::{ServeConnectionError, ServeRoots};
+
+mod routes;
+
+const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 
 pub(super) fn header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+pub(super) fn peek_request_target(header_bytes: &[u8]) -> Option<&str> {
+    request_target(header_bytes)
+}
+
+pub(super) fn peek_request_headers(stream: &TcpStream) -> io::Result<Vec<u8>> {
+    let mut buffer = [0; MAX_HTTP_HEADER_BYTES];
+    loop {
+        let len = stream.peek(&mut buffer)?;
+        if len == 0 || header_end(&buffer[..len]).is_some() || len == buffer.len() {
+            return Ok(buffer[..len].to_vec());
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+pub(super) fn is_websocket_upgrade(header_bytes: &[u8]) -> bool {
+    let header = String::from_utf8_lossy(header_bytes);
+    let mut has_connection_upgrade = false;
+    let mut has_websocket_upgrade = false;
+    for line in header.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("connection") {
+            has_connection_upgrade = value
+                .split([' ', ','])
+                .any(|part| part.trim().eq_ignore_ascii_case("upgrade"));
+        } else if name.trim().eq_ignore_ascii_case("upgrade") {
+            has_websocket_upgrade = value.trim().eq_ignore_ascii_case("websocket");
+        }
+    }
+    has_connection_upgrade && has_websocket_upgrade
 }
 
 pub(super) fn parse_http_request(bytes: &[u8]) -> Result<PathBuf, HttpStatus> {
@@ -99,6 +143,74 @@ pub(super) fn read_static_response(static_root: &Path, relative_path: &Path) -> 
     }
 }
 
+pub(super) fn serve_http_connection(
+    roots: &ServeRoots,
+    mut stream: TcpStream,
+    peer_addr: SocketAddr,
+) -> Result<(), ServeConnectionError> {
+    let request = read_http_request(&mut stream)?;
+    let response = match parse_http_request(&request) {
+        Ok(path) => routes::http_route_response(roots, &path, &request, peer_addr)
+            .unwrap_or_else(|| read_static_response(&roots.static_root, &path)),
+        Err(status) => StaticResponse::plain(status, status.reason()),
+    };
+    write_static_response(stream, response)
+}
+
+pub(super) fn write_static_response(
+    mut stream: TcpStream,
+    response: StaticResponse,
+) -> Result<(), ServeConnectionError> {
+    stream.write_all(&response.encode())?;
+    stream.flush()?;
+    Ok(())
+}
+
+fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, ServeConnectionError> {
+    let mut request = Vec::new();
+    let mut buffer = [0; 1024];
+    while request.len() < MAX_HTTP_HEADER_BYTES {
+        let len = stream.read(&mut buffer)?;
+        if len == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..len]);
+        if header_end(&request).is_some() {
+            return Ok(request);
+        }
+    }
+    Err(ServeConnectionError::Http(
+        "HTTP request header was incomplete or too large".to_owned(),
+    ))
+}
+
+pub(super) fn websocket_rejection_response(raw_path: Option<&str>) -> Option<StaticResponse> {
+    let raw_path = raw_path?;
+    let path = raw_path.split_once('?').map_or(raw_path, |(path, _)| path);
+    if path == "/.well-known/export9p" {
+        return None;
+    }
+    if path == "/.well-known/ethernet" {
+        return Some(StaticResponse::plain(
+            HttpStatus::NotImplemented,
+            "ethernet websocket bridge is not implemented in rust serve",
+        ));
+    }
+    if path.starts_with("/.well-known/") {
+        return Some(StaticResponse::plain(HttpStatus::NotFound, "not found"));
+    }
+    None
+}
+
+fn request_target(header_bytes: &[u8]) -> Option<&str> {
+    let header_end = header_end(header_bytes)?;
+    let header = std::str::from_utf8(&header_bytes[..header_end]).ok()?;
+    let request_line = header.lines().next()?;
+    let mut parts = request_line.split_whitespace();
+    parts.next()?;
+    parts.next()
+}
+
 fn content_type(path: &Path) -> &'static str {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("html") => "text/html; charset=utf-8",
@@ -147,6 +259,7 @@ impl StaticResponse {
 }
 
 #[derive(Copy, Clone)]
+#[repr(usize)]
 pub(super) enum HttpStatus {
     Ok,
     BadRequest,
@@ -158,27 +271,30 @@ pub(super) enum HttpStatus {
 }
 
 impl HttpStatus {
+    const REASONS: [&'static str; 7] = [
+        "ok",
+        "bad request",
+        "conflict",
+        "forbidden",
+        "not found",
+        "method not allowed",
+        "not implemented",
+    ];
+    const STATUS_LINES: [&'static str; 7] = [
+        "200 OK",
+        "400 Bad Request",
+        "409 Conflict",
+        "403 Forbidden",
+        "404 Not Found",
+        "405 Method Not Allowed",
+        "501 Not Implemented",
+    ];
+
     pub(super) fn status_line(self) -> &'static str {
-        match self {
-            Self::Ok => "200 OK",
-            Self::BadRequest => "400 Bad Request",
-            Self::Conflict => "409 Conflict",
-            Self::Forbidden => "403 Forbidden",
-            Self::NotFound => "404 Not Found",
-            Self::MethodNotAllowed => "405 Method Not Allowed",
-            Self::NotImplemented => "501 Not Implemented",
-        }
+        Self::STATUS_LINES[self as usize]
     }
 
     pub(super) fn reason(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::BadRequest => "bad request",
-            Self::Conflict => "conflict",
-            Self::Forbidden => "forbidden",
-            Self::NotFound => "not found",
-            Self::MethodNotAllowed => "method not allowed",
-            Self::NotImplemented => "not implemented",
-        }
+        Self::REASONS[self as usize]
     }
 }
