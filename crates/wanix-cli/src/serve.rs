@@ -3604,6 +3604,81 @@ mod tests {
     }
 
     #[test]
+    fn serve_wanix_services_terminal_ctl_close_is_visible_over_9p() {
+        let root = temp_dir("wanix-cli-serve-services-term-close");
+        let roots = ServeRoots::new(
+            &root,
+            "127.0.0.1:7654".parse().unwrap(),
+            Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+            true,
+        )
+        .unwrap();
+        let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
+
+        assert_eq!(
+            server
+                .handle_frame(&p9_tattach(1, 1, 0xffff_ffff, "workbench", "", 0).unwrap())
+                .unwrap()
+                .message_type(),
+            P9_RATTACH
+        );
+        assert_eq!(
+            p9_read_file(&mut server, 1, 2, 100, &["#term", "new"]),
+            b"1\n"
+        );
+
+        let response = server
+            .handle_frame(&p9_twalk(110, 1, 3, &["#term", "1", "data"]).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWALK);
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(111, 3, P9_O_RDWR))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+        let response = server
+            .handle_frame(&p9_twrite(112, 3, 0, b"before close").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+
+        let response = server
+            .handle_frame(&p9_twalk(120, 1, 4, &["#term", "1", "ctl"]).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWALK);
+        assert_eq!(
+            server
+                .handle_frame(&p9_tlopen(121, 4, P9_O_WRONLY))
+                .unwrap()
+                .message_type(),
+            P9_RLOPEN
+        );
+        let response = server
+            .handle_frame(&p9_twrite(122, 4, 0, b"clo").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+        let response = server
+            .handle_frame(&p9_twrite(123, 3, 0, b"still open").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+        let response = server
+            .handle_frame(&p9_twrite(124, 4, 0, b"se\n").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWRITE);
+
+        let response = server
+            .handle_frame(&p9_twalk(140, 1, 6, &["#term", "1", "data"]).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        let response = server
+            .handle_frame(&p9_twrite(150, 3, 0, b"after close").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EBADF);
+    }
+
+    #[test]
     fn serve_wanix_services_can_start_qjs_task_through_9p_task_service() {
         let root = temp_dir("wanix-cli-serve-services-qjs-task");
         fs::write(

@@ -28,6 +28,13 @@ fn new_allocates_incrementing_resources() {
         .map(|entry| entry.name().to_owned())
         .collect::<Vec<_>>();
     assert_eq!(entries, ["new", "1", "2"]);
+    let resource_entries = terms
+        .read_dir(&NormalizedPath::new("1").unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.name().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(resource_entries, ["ctl", "data", "id", "program", "winch"]);
 }
 
 #[test]
@@ -92,6 +99,62 @@ fn winch_broadcasts_to_open_readers() {
     assert!(second.read_ready().unwrap());
     assert_eq!(read_exact(&mut *second, 5), b"80x24");
     assert!(!second.read_ready().unwrap());
+}
+
+#[test]
+fn ctl_close_removes_resource_and_invalidates_open_handles() {
+    let terms = TermDevice::new();
+    let id = terms.alloc().unwrap();
+    let mut data = terms
+        .open(
+            &NormalizedPath::new(format!("{id}/data")).unwrap(),
+            OpenOptions::read_write(),
+        )
+        .unwrap();
+    let mut program = terms
+        .open(
+            &NormalizedPath::new(format!("{id}/program")).unwrap(),
+            OpenOptions::read_write(),
+        )
+        .unwrap();
+    let mut ctl = terms
+        .open(
+            &NormalizedPath::new(format!("{id}/ctl")).unwrap(),
+            OpenOptions {
+                write: true,
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+
+    ctl.write(b"clo").unwrap();
+    program.write(b"still open\n").unwrap();
+    assert_eq!(read_exact(&mut *data, 12), b"still open\r\n");
+
+    ctl.write(b"se\n").unwrap();
+
+    assert!(matches!(
+        terms.open(
+            &NormalizedPath::new(format!("{id}/data")).unwrap(),
+            OpenOptions::read()
+        ),
+        Err(wanix_fs::FsError::NotFound)
+    ));
+    assert_eq!(
+        data.write(b"input").unwrap_err(),
+        wanix_fs::FsError::InvalidFd
+    );
+    assert_eq!(
+        program.write(b"output").unwrap_err(),
+        wanix_fs::FsError::InvalidFd
+    );
+    let entries = terms
+        .read_dir(&NormalizedPath::new(".").unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.name().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, ["new"]);
 }
 
 #[test]

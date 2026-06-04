@@ -352,6 +352,9 @@ $ bye
 > Wanix device contract, not browser xterm glue. `qjs-shell --raw` puts native
 > stdin in raw mode on Unix hosts, then feeds bytes through `#term/<id>/data` so
 > the guest shell owns echo, simple editing, Ctrl-D, and command dispatch.
+> Clients that own a terminal resource can release it by writing `close` to
+> `#term/<id>/ctl`; that cleans up the terminal resource without pretending to
+> be task cancellation.
 
 ## 9. Inspect Protocol, Editor, And VM Entrypoints
 
@@ -420,7 +423,8 @@ the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
 > clients browsing the same Wanix namespace. `serve --wanix-services` exports
 > `#task` and `#term` over direct 9P so browser/workbench clients can start qjs
 > tasks, attach terminals, start served qjs-shell sessions in the requested
-> Wanix cwd, forward resizes through `#term/<id>/winch`, and observe exit state.
+> Wanix cwd, forward resizes through `#term/<id>/winch`, close owned terminals
+> through `#term/<id>/ctl`, and observe exit state.
 > `rootfs` and `qemu` are the native VM handoff path, not a VM manager yet.
 > `rootfs --json` emits `wanix-rootfs.v1` with the prepared root, boot markers,
 > default QEMU manifest, and direct-v86 serve argv. `/.well-known/rootfs.json`

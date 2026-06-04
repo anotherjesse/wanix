@@ -339,6 +339,7 @@ The Rust `wanix-term` crate exposes:
 
 - `#term/new`;
 - `#term/<id>/id`;
+- `#term/<id>/ctl`;
 - `#term/<id>/data`;
 - `#term/<id>/program`;
 - `#term/<id>/winch`.
@@ -360,7 +361,9 @@ This is not yet a fully concurrent, production interactive scheduler. Raw mode
 still relies on the native host to put stdin into raw mode, but bytes then flow
 through `#term/<id>/data` and the guest shell owns echo, simple editing, Ctrl-D,
 and command dispatch. Signal handling, cancellation, and richer lifecycle
-control need more work.
+control need more work. Resource cleanup is explicit: clients that own a
+terminal can write `close` to `#term/<id>/ctl` to remove it from the service and
+invalidate existing handles.
 
 But the direction is important: terminal behavior is not browser xterm
 plumbing. It is a Wanix device surface. A browser xterm, a local terminal, a
@@ -496,7 +499,8 @@ and can run the current JavaScript file as a real Wanix `qjs` task by driving
 `#task` and `#term` over 9P. The served qjs-shell WebSocket route gives the
 workbench a terminal/session path backed by the same native task and terminal
 model; it can start in the configured Wanix cwd and deliver terminal resize
-frames through `#term/<id>/winch`.
+frames through `#term/<id>/winch`. Direct workbench terminals dispose of owned
+terminal resources through `#term/<id>/ctl`.
 
 With `--bundle direct-v86`, Rust `serve` generates a browser page that fetches
 the discovery document and configures v86 `filesystem.proxy_url` to the Rust 9P
@@ -626,7 +630,7 @@ Direct-v86 is becoming a reproducible browser boot path, but it is not a full
 assembled VM distribution, not a vnet bridge, and not a native VM supervisor.
 The Rust-served workbench path can browse, edit, search, open a qjs shell route,
 start that shell in the configured Wanix cwd, forward terminal resizes, close
-terminals from observed task exit state, and run a qjs task, but it is
+owned terminal resources through service files, and run a qjs task, but it is
 still an integration demo rather than the full Go browser environment. Public
 auth, writable export policy, HTTPS, Ethernet/vnet, QEMU supervision,
 multi-tenant isolation, and cloud orchestration remain open design work.

@@ -27,7 +27,7 @@ integration.
   byte-stream transport helpers.
 - `wanix-vfs`: Plan 9-style namespace binding and resolution.
 - `wanix-task`: task model, `#task`, fd table, and driver registry.
-- `wanix-term`: terminal device filesystem for `#term/new`,
+- `wanix-term`: terminal device filesystem for `#term/new`, `<id>/ctl`,
   `<id>/data`, `<id>/program`, and `<id>/winch`.
 - `wanix-wasi`: custom WASI Preview 1 imports backed by Wanix namespaces and
   task fds supplied by adapter configuration.
@@ -84,7 +84,8 @@ tests.
 - `serve --bundle fs9p`: browser filesystem client over direct 9P.
 - `serve --bundle workbench-fs9p`: local Code OSS/workbench launch path where
   the extension discovers Rust serve, browses `wanix:/` over direct 9P, and
-  can open qjs-backed terminal sessions when services are enabled.
+  can open qjs-backed terminal sessions when services are enabled. Direct
+  terminal disposal writes `close` through `#term/<id>/ctl`.
 - `serve --bundle direct-v86`: browser v86 handoff over Rust serve discovery,
   direct 9P, boot-asset hints, hvc0 console bridging, and autostart-friendly
   launch hooks. The generated page reports rootfs handoff status and, for

@@ -24,6 +24,8 @@ production code. It implements the terminal filesystem contract:
 
 - `new` allocates incrementing terminal resource ids.
 - `<id>/id` reports the resource id.
+- `<id>/ctl` accepts lifecycle commands. The initial command is `close`, which
+  removes the resource from `#term` and invalidates existing handles.
 - `<id>/data` is the terminal/client side.
 - `<id>/program` is the program/task side.
 - `<id>/winch` broadcasts textual resize payloads as `columns rows\n` to open
@@ -39,7 +41,9 @@ unless a file implementation overrides it.
 Terminal-backed tasks bind fd 0/1/2 to the program side of a terminal. Human,
 browser, editor, and VM clients attach to the data side. Resize travels through
 `#term/<id>/winch` as textual `columns rows\n` payloads, and WASI cwd remapping
-must not re-root `#term` service paths.
+must not re-root `#term` service paths. Client disposal should write `close` to
+`#term/<id>/ctl` when it owns the terminal resource; that is a resource cleanup
+signal, not a task cancellation or process-group signal.
 
 Composition layers may provide cooked or raw native shells, browser/workbench
 pseudoterminals, deterministic fixtures, or future VM/editor terminals. Those
@@ -58,8 +62,9 @@ Wanix scheduler, signal system, cancellation model, or process-group contract.
 Rust Wanix has one terminal contract that can be used by native CLI demos,
 served browser/workbench sessions, and future VM/editor clients. JavaScript
 running as a Wanix `qjs` task observes terminals through ordinary fd readiness
-and service files such as `#term/<id>/winch`, while Wanix continues to own task
-identity, fds, namespace, stdio, and exit state.
+and service files such as `#term/<id>/winch`; clients can release terminal
+resources through `#term/<id>/ctl`, while Wanix continues to own task identity,
+fds, namespace, stdio, and exit state.
 
 Exact command, route, and fixture coverage belongs in tests, examples, and
 current-state docs. Future signal delivery, cancellation, process-group,

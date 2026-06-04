@@ -304,6 +304,20 @@ async function createTerminal(fsys: any, config: Config) {
 	let closed = false;
 	let buffer = '';
 	let lastOutputAt = Date.now();
+	const closeTerminalResource = () => {
+		(async () => {
+			try {
+				const ctl = (await fsys.openWritable(`${termPath}/ctl`)).getWriter();
+				try {
+					await ctl.write(enc.encode("close"));
+				} finally {
+					await ctl.close();
+				}
+			} catch (error) {
+				console.warn("Wanix terminal close failed", error);
+			}
+		})();
+	};
 	const closeWriter = () => {
 		writable.close().catch((error: unknown) => {
 			console.warn("Wanix terminal input close failed", error);
@@ -319,6 +333,7 @@ async function createTerminal(fsys: any, config: Config) {
 			return;
 		}
 		closed = true;
+		closeTerminalResource();
 		closeWriter();
 		cancelReader();
 		closeEmitter.fire(code);
@@ -386,6 +401,7 @@ async function createTerminal(fsys: any, config: Config) {
 				return;
 			}
 			closed = true;
+			closeTerminalResource();
 			closeWriter();
 			cancelReader();
 		},

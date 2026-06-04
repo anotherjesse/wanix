@@ -2,7 +2,7 @@
 //!
 //! `TermDevice` provides the first Rust-native version of the Go `#term`
 //! service shape: reading `new` allocates a terminal resource, and each
-//! resource exposes `id`, `data`, `program`, and `winch` files.
+//! resource exposes `id`, `ctl`, `data`, `program`, and `winch` files.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
@@ -48,6 +48,7 @@ struct TermResource {
     id: String,
     io: Mutex<TermIo>,
     winch: Mutex<WinchState>,
+    closed: Mutex<bool>,
 }
 
 #[derive(Debug, Default)]
@@ -99,9 +100,30 @@ impl TermDevice {
             id: id.clone(),
             io: Mutex::new(TermIo::default()),
             winch: Mutex::new(WinchState::default()),
+            closed: Mutex::new(false),
         });
         state.resources.insert(id.clone(), resource);
         Ok(id)
+    }
+
+    /// Closes and removes a terminal resource.
+    ///
+    /// Existing handles become invalid; new opens of the resource fail with
+    /// `NotFound`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the resource does not exist or device
+    /// state cannot be locked.
+    pub fn close(&self, id: &str) -> FsResult<()> {
+        let resource = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| FsError::Other("term device lock poisoned".to_owned()))?;
+            state.resources.remove(id).ok_or(FsError::NotFound)?
+        };
+        resource.close()
     }
 
     fn resource(&self, id: &str) -> FsResult<Arc<TermResource>> {
@@ -110,6 +132,29 @@ impl TermDevice {
             .lock()
             .map_err(|_| FsError::Other("term device lock poisoned".to_owned()))?;
         state.resources.get(id).cloned().ok_or(FsError::NotFound)
+    }
+}
+
+impl TermResource {
+    fn close(&self) -> FsResult<()> {
+        let mut closed = self
+            .closed
+            .lock()
+            .map_err(|_| FsError::Other("term resource close lock poisoned".to_owned()))?;
+        *closed = true;
+        Ok(())
+    }
+
+    fn ensure_open(&self) -> FsResult<()> {
+        let closed = self
+            .closed
+            .lock()
+            .map_err(|_| FsError::Other("term resource close lock poisoned".to_owned()))?;
+        if *closed {
+            Err(FsError::InvalidFd)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -128,6 +173,11 @@ impl FileSystem for TermDevice {
                     format!("{}\n", resource.id).into_bytes(),
                 )))
             }
+            TermPath::Ctl(id) => Ok(Box::new(ControlFile::new(
+                self.clone(),
+                id.to_owned(),
+                access(options)?,
+            ))),
             TermPath::Data(id) => {
                 require_file_open(options)?;
                 Ok(Box::new(TermFile::new(self.resource(id)?, TermSide::Data)))
@@ -162,6 +212,10 @@ impl FileSystem for TermDevice {
                 let resource = self.resource(id)?;
                 Ok(file_metadata((resource.id.len() + 1) as u64, 0o555))
             }
+            TermPath::Ctl(id) => {
+                self.resource(id)?;
+                Ok(file_metadata(0, 0o755))
+            }
             TermPath::Data(id) | TermPath::Program(id) | TermPath::Winch(id) => {
                 self.resource(id)?;
                 Ok(file_metadata(0, 0o666))
@@ -188,6 +242,7 @@ impl FileSystem for TermDevice {
             TermPath::Resource(id) => {
                 self.resource(id)?;
                 Ok(vec![
+                    DirEntry::new("ctl", file_metadata(0, 0o755)),
                     DirEntry::new("data", file_metadata(0, 0o666)),
                     DirEntry::new("id", file_metadata((id.len() + 1) as u64, 0o555)),
                     DirEntry::new("program", file_metadata(0, 0o666)),
@@ -205,6 +260,7 @@ enum TermPath<'a> {
     New,
     Resource(&'a str),
     Id(&'a str),
+    Ctl(&'a str),
     Data(&'a str),
     Program(&'a str),
     Winch(&'a str),
@@ -219,6 +275,7 @@ fn parse_path(path: &NormalizedPath) -> FsResult<TermPath<'_>> {
         ["new"] => Ok(TermPath::New),
         [id] => Ok(TermPath::Resource(id)),
         [id, "id"] => Ok(TermPath::Id(id)),
+        [id, "ctl"] => Ok(TermPath::Ctl(id)),
         [id, "data"] => Ok(TermPath::Data(id)),
         [id, "program"] => Ok(TermPath::Program(id)),
         [id, "winch"] => Ok(TermPath::Winch(id)),
@@ -244,6 +301,43 @@ fn require_file_open(options: OpenOptions) -> FsResult<()> {
         return Err(FsError::PermissionDenied);
     }
     Ok(())
+}
+
+fn access(options: OpenOptions) -> FsResult<FileAccess> {
+    if !options.read && !options.write {
+        return Err(FsError::PermissionDenied);
+    }
+    if options.create {
+        return Err(FsError::PermissionDenied);
+    }
+    Ok(FileAccess {
+        read: options.read,
+        write: options.write,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FileAccess {
+    read: bool,
+    write: bool,
+}
+
+impl FileAccess {
+    fn can_read(self) -> FsResult<()> {
+        if self.read {
+            Ok(())
+        } else {
+            Err(FsError::PermissionDenied)
+        }
+    }
+
+    fn can_write(self) -> FsResult<()> {
+        if self.write {
+            Ok(())
+        } else {
+            Err(FsError::PermissionDenied)
+        }
+    }
 }
 
 fn directory_metadata() -> Metadata {
@@ -313,6 +407,53 @@ impl File for BytesFile {
     }
 }
 
+#[derive(Debug)]
+struct ControlFile {
+    device: TermDevice,
+    id: String,
+    access: FileAccess,
+    data: Vec<u8>,
+}
+
+impl ControlFile {
+    fn new(device: TermDevice, id: String, access: FileAccess) -> Self {
+        Self {
+            device,
+            id,
+            access,
+            data: Vec::new(),
+        }
+    }
+}
+
+impl File for ControlFile {
+    fn read(&mut self, _buf: &mut [u8]) -> FsResult<usize> {
+        self.access.can_read()?;
+        Ok(0)
+    }
+
+    fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
+        self.access.can_write()?;
+        self.data.extend_from_slice(buf);
+        let command = String::from_utf8_lossy(&self.data).trim().to_owned();
+        if command.is_empty() {
+            return Ok(buf.len());
+        }
+        if "close".starts_with(command.as_str()) {
+            if command == "close" {
+                self.device.close(&self.id)?;
+                self.data.clear();
+            }
+            return Ok(buf.len());
+        }
+        Err(FsError::NotSupported)
+    }
+
+    fn metadata(&self) -> FsResult<Metadata> {
+        Ok(file_metadata(0, 0o755))
+    }
+}
+
 fn read_from_slice(bytes: &[u8], offset: &mut usize, buf: &mut [u8]) -> FsResult<usize> {
     let remaining = bytes.len().saturating_sub(*offset);
     let len = remaining.min(buf.len());
@@ -340,6 +481,7 @@ impl TermFile {
 
 impl File for TermFile {
     fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
+        self.resource.ensure_open()?;
         let mut io = self
             .resource
             .io
@@ -353,6 +495,7 @@ impl File for TermFile {
     }
 
     fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
+        self.resource.ensure_open()?;
         let mut io = self
             .resource
             .io
@@ -374,6 +517,7 @@ impl File for TermFile {
     }
 
     fn read_ready(&self) -> FsResult<bool> {
+        self.resource.ensure_open()?;
         let io = self
             .resource
             .io
@@ -440,6 +584,7 @@ impl WinchFile {
 
 impl File for WinchFile {
     fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
+        self.resource.ensure_open()?;
         let Some(subscriber) = self.subscriber else {
             return Err(FsError::PermissionDenied);
         };
@@ -459,6 +604,7 @@ impl File for WinchFile {
         if !self.writable {
             return Err(FsError::PermissionDenied);
         }
+        self.resource.ensure_open()?;
         let mut winch = self
             .resource
             .winch
@@ -475,6 +621,7 @@ impl File for WinchFile {
     }
 
     fn read_ready(&self) -> FsResult<bool> {
+        self.resource.ensure_open()?;
         let Some(subscriber) = self.subscriber else {
             return Ok(false);
         };
