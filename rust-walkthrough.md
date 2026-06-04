@@ -392,6 +392,10 @@ curl http://127.0.0.1:7654/.well-known/wanix.json
 curl http://127.0.0.1:7654/.well-known/rootfs.json
 ```
 
+The generated direct-v86 page also reads that discovery route. When the handoff
+is available, it renders a rootfs summary and exposes the full manifest as
+`window.wanixRootfsHandoff` for local browser tooling.
+
 For host-specific 9P policy, tune the generated QEMU command before launching:
 
 ```sh

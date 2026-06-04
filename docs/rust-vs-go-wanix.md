@@ -505,8 +505,9 @@ cmdline needed to mount the 9P export as `root=host9p`, memory settings, VGA
 memory, and the virtio-console requirement. The direct-v86 page can autostart
 from `?autostart=1`, exposes a visible
 boot log and `window.wanixV86BootLog`, reports v86 lifecycle status, sends
-browser console resize events to hvc0, and reports boot readiness from the
-served root by checking for a kernel and `/bin/init`.
+browser console resize events to hvc0, reports boot readiness from the served
+root by checking for a kernel and `/bin/init`, and surfaces the trusted-local
+rootfs handoff as `window.wanixRootfsHandoff` when discovery says it is ready.
 
 That means the browser is still very much in the story. The difference is that
 the browser page discovers and attaches to a native Wanix export. It is a

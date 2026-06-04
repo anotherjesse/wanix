@@ -1008,7 +1008,7 @@ fn direct_v86_bundle_html() -> String {
     #screen canvas { display: block; max-width: 100%; }
     #screen div { white-space: pre; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
     #serial { min-height: 180px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    #boot-log { max-height: 180px; overflow: auto; }
+    #boot-log, #rootfs { max-height: 180px; overflow: auto; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #11141a; padding: 12px; border: 1px solid #363b44; }
     label { display: block; margin: 12px 0 4px; color: #c9d3e0; }
     input, textarea { box-sizing: border-box; width: 100%; padding: 8px; color: #f4f4f0; background: #11141a; border: 1px solid #4b5563; }
@@ -1029,6 +1029,8 @@ fn direct_v86_bundle_html() -> String {
       <textarea id="cmdline" spellcheck="false"></textarea>
       <button id="start" disabled>Start VM</button>
       <pre id="config"></pre>
+      <label for="rootfs">rootfs handoff</label>
+      <pre id="rootfs" aria-live="polite"></pre>
       <pre id="boot-log" aria-live="polite"></pre>
     </aside>
     <div id="screen"><canvas></canvas><div></div></div>
@@ -1052,6 +1054,7 @@ fn direct_v86_bundle_html() -> String {
     const status = document.querySelector("#status");
     const start = document.querySelector("#start");
     const configOutput = document.querySelector("#config");
+    const rootfsOutput = document.querySelector("#rootfs");
     const bootLog = document.querySelector("#boot-log");
     const kernel = document.querySelector("#kernel");
     const initrd = document.querySelector("#initrd");
@@ -1079,6 +1082,7 @@ fn direct_v86_bundle_html() -> String {
     const discovery = await fetch("/.well-known/wanix.json", { cache: "no-store" }).then(response => response.json());
     const v86Assets = discovery.v86?.assets || {};
     const v86Boot = discovery.v86?.boot || {};
+    void loadRootfsHandoff(discovery.routes?.rootfs || {});
     const { V86 } = await import(v86Assets.module || "/v86/lib/libv86.mjs");
     const proxyUrl = discovery.routes.p9.websocket;
     kernel.value = v86Boot.kernel || DEFAULT_KERNEL_URL;
@@ -1098,6 +1102,52 @@ fn direct_v86_bundle_html() -> String {
       logBoot("Boot root readiness unknown");
     }
     setStatus("Ready: 9P proxy " + proxyUrl);
+
+    async function loadRootfsHandoff(route) {
+      route = route || {};
+      window.wanixRootfsRoute = route;
+      window.wanixRootfsHandoff = null;
+      const status = route.status || "unknown";
+      const summary = {
+        status,
+        ready: route.ready === true,
+        url: route.url || null,
+        missing: Array.isArray(route.missing) ? route.missing : []
+      };
+      if (status !== "available" || route.ready !== true || !route.url) {
+        rootfsOutput.textContent = JSON.stringify(summary, null, 2);
+        const missing = summary.missing.length ? ": " + summary.missing.join(", ") : "";
+        logBoot("Rootfs handoff " + status + missing);
+        return null;
+      }
+      try {
+        const response = await fetch(route.url, { cache: "no-store" });
+        if (!response.ok) {
+          rootfsOutput.textContent = JSON.stringify({ ...summary, fetchStatus: response.status }, null, 2);
+          logBoot("Rootfs handoff fetch failed: HTTP " + response.status);
+          return null;
+        }
+        const handoff = await response.json();
+        window.wanixRootfsHandoff = handoff;
+        rootfsOutput.textContent = JSON.stringify({
+          kind: handoff.kind,
+          rootPath: handoff.rootPath,
+          kernelRoute: handoff.kernelRoute,
+          initRoute: handoff.initRoute,
+          qemuArgv: handoff.qemu?.argv || [],
+          serveArgv: handoff.serveDirectV86?.argv || []
+        }, null, 2);
+        logBoot("Rootfs handoff ready: " + handoff.rootPath);
+        return handoff;
+      } catch (error) {
+        rootfsOutput.textContent = JSON.stringify({
+          ...summary,
+          error: error?.message || String(error)
+        }, null, 2);
+        logBoot("Rootfs handoff fetch failed: " + (error?.message || error));
+        return null;
+      }
+    }
 
     function buildConfig() {
       const config = {
@@ -2043,10 +2093,20 @@ fn rootfs_handoff_response(roots: &ServeRoots, peer_addr: SocketAddr) -> StaticR
 
 fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr) -> String {
     let readiness = rootfs_handoff_readiness(static_root);
-    let status = if !is_loopback_peer(peer_addr) {
+    let loopback = is_loopback_peer(peer_addr);
+    let mut ready = readiness.ready;
+    let mut error = None;
+    let status = if !loopback {
         "local-only"
     } else if readiness.ready {
-        "available"
+        match rootfs_json_handoff_for_prepared_root(static_root) {
+            Ok(_) => "available",
+            Err(manifest_error) => {
+                ready = false;
+                error = Some(manifest_error.to_string());
+                "invalid"
+            }
+        }
     } else {
         "unprepared"
     };
@@ -2054,7 +2114,7 @@ fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr)
         format!("\"url\":{}", json_string(url)),
         "\"kind\":\"wanix-rootfs.v1\"".to_owned(),
         format!("\"status\":{}", json_string(status)),
-        format!("\"ready\":{}", readiness.ready),
+        format!("\"ready\":{}", ready),
     ];
     if !readiness.missing.is_empty() {
         let missing = readiness
@@ -2064,6 +2124,9 @@ fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr)
             .collect::<Vec<_>>()
             .join(",");
         fields.push(format!("\"missing\":[{missing}]"));
+    }
+    if let Some(error) = error {
+        fields.push(format!("\"error\":{}", json_string(&error)));
     }
     format!("{{{}}}", fields.join(","))
 }
@@ -2559,6 +2622,35 @@ mod tests {
             "{response}"
         );
         assert!(
+            response.contains("void loadRootfsHandoff(discovery.routes?.rootfs || {})"),
+            "{response}"
+        );
+        assert!(response.contains("route = route || {}"), "{response}");
+        assert!(
+            response.contains("window.wanixRootfsRoute = route"),
+            "{response}"
+        );
+        assert!(
+            response.contains("window.wanixRootfsHandoff = null"),
+            "{response}"
+        );
+        assert!(
+            response.contains("window.wanixRootfsHandoff = handoff"),
+            "{response}"
+        );
+        assert!(
+            response.contains("qemuArgv: handoff.qemu?.argv || []"),
+            "{response}"
+        );
+        assert!(
+            response.contains("serveArgv: handoff.serveDirectV86?.argv || []"),
+            "{response}"
+        );
+        assert!(
+            response.contains("Rootfs handoff fetch failed: "),
+            "{response}"
+        );
+        assert!(
             response.contains(
                 "const { V86 } = await import(v86Assets.module || \"/v86/lib/libv86.mjs\")"
             ),
@@ -2624,6 +2716,14 @@ mod tests {
         );
         assert!(
             response.contains("<pre id=\"boot-log\" aria-live=\"polite\"></pre>"),
+            "{response}"
+        );
+        assert!(
+            response.contains("<pre id=\"rootfs\" aria-live=\"polite\"></pre>"),
+            "{response}"
+        );
+        assert!(
+            response.contains("<label for=\"rootfs\">rootfs handoff</label>"),
             "{response}"
         );
         assert!(
@@ -3623,6 +3723,41 @@ std.writeFile("generated.txt", "generated by task " + id);
         );
         let remote_discovery: serde_json::Value = serde_json::from_str(&remote_body).unwrap();
         assert_eq!(remote_discovery["routes"]["rootfs"]["status"], "local-only");
+    }
+
+    #[test]
+    fn serve_discovery_does_not_overpromise_invalid_rootfs_handoff() {
+        let parent = temp_dir("wanix-cli-serve-discovery-rootfs-invalid");
+        let root = parent.join("with,comma");
+        fs::create_dir_all(root.join("boot")).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
+        fs::write(root.join("bin/init"), b"init").unwrap();
+        let roots = ServeRoots::new(
+            &root,
+            "127.0.0.1:7654".parse().unwrap(),
+            Some(DIRECT_V86_BUNDLE.to_owned()),
+            false,
+        )
+        .unwrap();
+
+        let body = serve_discovery_json(
+            &roots,
+            b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+            "127.0.0.1:12345".parse().unwrap(),
+        );
+        let discovery: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let rootfs = &discovery["routes"]["rootfs"];
+        assert_eq!(rootfs["status"], "invalid");
+        assert_eq!(rootfs["ready"], false);
+        assert!(
+            rootfs["error"]
+                .as_str()
+                .unwrap()
+                .contains("cannot contain ','"),
+            "{rootfs}"
+        );
+        assert!(rootfs.get("missing").is_none(), "{rootfs}");
     }
 
     #[test]
