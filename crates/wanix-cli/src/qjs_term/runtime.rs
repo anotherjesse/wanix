@@ -164,7 +164,7 @@ fn run_prepared_terminal_program(
     mut streams: TerminalRunStreams<'_>,
 ) -> Result<(), CliError> {
     let mut runtime = create_limited_task_runtime(runner, task, qjs_command, program)?;
-    eval_prepared_terminal_program(&mut runtime, qjs_command, &prepared, &mut streams)?;
+    eval_prepared_terminal_program(&mut runtime, qjs_command, program, &prepared, &mut streams)?;
     let finish_result = runtime.finish();
     drain_terminal_output(
         &streams.terminal.device,
@@ -196,10 +196,11 @@ fn create_limited_task_runtime(
 fn eval_prepared_terminal_program(
     runtime: &mut QuickJsTaskRuntime,
     qjs_command: &QjsCommand,
+    program: QjsTermProgram,
     prepared: &PreparedQjsTermProgram,
     streams: &mut TerminalRunStreams<'_>,
 ) -> Result<(), CliError> {
-    let eval_ready_io_turns = eval_ready_io_turns(&streams.feed_after_eval, qjs_command);
+    let eval_ready_io_turns = eval_ready_io_turns(&streams.feed_after_eval, qjs_command, program);
     let eval_result = eval_qjs_source(
         runtime,
         &prepared.script,
@@ -216,10 +217,15 @@ fn eval_prepared_terminal_program(
     run_terminal_post_eval_feeds(runtime, qjs_command, streams)
 }
 
-fn eval_ready_io_turns(feed_after_eval: &[PostEvalFeed], qjs_command: &QjsCommand) -> usize {
-    match feed_after_eval.is_empty() {
-        true => qjs_command.ready_io_turns,
-        false => 0,
+fn eval_ready_io_turns(
+    feed_after_eval: &[PostEvalFeed],
+    qjs_command: &QjsCommand,
+    program: QjsTermProgram,
+) -> usize {
+    if feed_after_eval.is_empty() || program == QjsTermProgram::BundledShell {
+        qjs_command.ready_io_turns
+    } else {
+        0
     }
 }
 

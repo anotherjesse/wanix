@@ -486,7 +486,7 @@ mod tests {
     use super::run_with_process_io_and_resize_queue;
     #[cfg(unix)]
     use super::run_with_process_io_and_stdin_fd;
-    use super::{run, run_with_process_io, run_with_process_stdin};
+    use super::{quickjs_runner, run, run_with_process_io, run_with_process_stdin};
     use wanix_protocol::{
         P9_LOCK_STATUS_OK, P9_LOCK_TYPE_READ, P9_LOCK_TYPE_UNLOCK, P9_LOCK_TYPE_WRITE, P9_NOFID,
         P9_RATTACH, P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLERROR, P9_RLINK, P9_RLOCK,
@@ -564,7 +564,6 @@ mod tests {
 
     impl Write for MarkerStdout {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            eprintln!("SIGNALING STDOUT WRITE: {:?}", String::from_utf8_lossy(buf));
             self.bytes.extend_from_slice(buf);
             if self
                 .bytes
@@ -636,6 +635,11 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[cfg(unix)]
+    fn warm_qjs_runner_for_timeout_sensitive_terminal_test() {
+        let _runner = quickjs_runner().unwrap();
     }
 
     struct EofForbiddenStdin {
@@ -2451,6 +2455,7 @@ std.out.flush();
     #[cfg(unix)]
     #[test]
     fn qjs_shell_fd_aware_loop_pumps_delayed_output_while_native_input_is_idle() {
+        warm_qjs_runner_for_timeout_sensitive_terminal_test();
         let (input_reader, mut input_writer) = UnixStream::pair().unwrap();
         let input_fd = input_reader.as_raw_fd();
         let (prompt_sender, prompt_receiver) = mpsc::channel();
@@ -2490,6 +2495,7 @@ std.out.flush();
     #[cfg(unix)]
     #[test]
     fn qjs_shell_fd_aware_loop_delivers_resize_before_next_native_input() {
+        warm_qjs_runner_for_timeout_sensitive_terminal_test();
         let (input_reader, mut input_writer) = UnixStream::pair().unwrap();
         let input_fd = input_reader.as_raw_fd();
         let resize_queue = Arc::new(Mutex::new(VecDeque::new()));
