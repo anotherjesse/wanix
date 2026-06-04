@@ -9,6 +9,7 @@ declare const navigator: unknown;
 
 type Config = {
 	discoveryUrl?: string;
+	qjsShellUrl?: string;
 	term?: boolean;
 	raw?: boolean;
 	ns?: {
@@ -39,11 +40,11 @@ export async function activate(context: vscode.ExtensionContext) {
 		fsys.logger = (...args: any[]) => {
 			// console.log(...args);
 		};
-		if (config.shell) {
+		if (config.qjsShellUrl || config.shell) {
 			context.subscriptions.push(vscode.commands.registerCommand('workbench.createTerminal', async () => {
 				const term = vscode.window.createTerminal({ 
 					name: 'Shell', 
-					pty: await createTerminal(fsys, config)
+					pty: config.qjsShellUrl ? createQjsShellTerminal(config) : await createTerminal(fsys, config)
 				});
 				term.show();
 				context.subscriptions.push(term);
@@ -107,6 +108,70 @@ function createWanixHandle(context: vscode.ExtensionContext, setConfig: (config:
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createQjsShellTerminal(config: Config) {
+	const writeEmitter = new vscode.EventEmitter<string>();
+	const dec = new TextDecoder();
+	const enc = new TextEncoder();
+	let socket: WebSocket | undefined;
+	let opened = false;
+	const pending: Uint8Array[] = [];
+	const sendInput = (bytes: Uint8Array) => {
+		if (opened && socket?.readyState === WebSocket.OPEN) {
+			socket.send(bytes);
+		} else {
+			pending.push(bytes);
+		}
+	};
+	return {
+		onDidWrite: writeEmitter.event,
+		open: () => {
+			socket = new WebSocket(config.qjsShellUrl || "");
+			socket.binaryType = "arraybuffer";
+			socket.onopen = () => {
+				opened = true;
+				while (pending.length > 0) {
+					socket?.send(pending.shift()!);
+				}
+			};
+			socket.onmessage = async (event) => {
+				if (typeof event.data === "string") {
+					try {
+						const message = JSON.parse(event.data);
+						if (message.type === "error") {
+							writeEmitter.fire(`\r\n${message.message}\r\n`);
+						}
+					} catch {
+						// Ignore lifecycle text frames that are not terminal output.
+					}
+					return;
+				}
+				const bytes = event.data instanceof Blob
+					? await event.data.arrayBuffer()
+					: event.data;
+				writeEmitter.fire(dec.decode(bytes));
+			};
+			socket.onerror = () => {
+				writeEmitter.fire("\r\nterminal websocket failed\r\n");
+			};
+		},
+		close: () => {
+			socket?.close();
+		},
+		handleInput: (data: string) => {
+			sendInput(enc.encode(data));
+		},
+		setDimensions: (dimensions: vscode.TerminalDimensions) => {
+			if (socket?.readyState === WebSocket.OPEN) {
+				socket.send(JSON.stringify({
+					type: "resize",
+					columns: dimensions.columns,
+					rows: dimensions.rows
+				}));
+			}
+		}
+	};
 }
 
 async function createTerminal(fsys: any, config: Config) {

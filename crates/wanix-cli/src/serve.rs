@@ -9,13 +9,14 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use tungstenite::accept;
+use tungstenite::{Error as WsError, Message, WebSocket, accept};
 use wanix_fs::{FileSystem, LocalFs};
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
 use wanix_vfs::{BindOptions, Namespace};
 
 use crate::p9_ws::{P9WsConnectionError, serve_websocket_connection};
+use crate::qjs_term::QjsShellSession;
 use crate::{CliError, write_process_output};
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
@@ -23,6 +24,7 @@ const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
 const DIRECT_V86_BUNDLE: &str = "direct-v86";
 const FS9P_BUNDLE: &str = "fs9p";
 const WORKBENCH_FS9P_BUNDLE: &str = "workbench-fs9p";
+const QJS_SHELL_WEBSOCKET_PATH: &str = "/.well-known/qjs-shell";
 const DIRECT_V86_DEFAULT_CMDLINE: &str = "console=hvc0 init=/bin/init rw root=host9p rootfstype=9p rootflags=trans=virtio,version=9p2000.L,aname=,cache=none,msize=131072 loglevel=3";
 const DIRECT_V86_DEFAULT_KERNEL_PATH: &str = "/boot/bzImage";
 const DIRECT_V86_MEMORY_SIZE: u32 = 1024 * 1024 * 1024;
@@ -433,7 +435,20 @@ fn serve_one_connection(
 fn serve_connection(roots: &ServeRoots, stream: TcpStream) -> Result<(), ServeConnectionError> {
     let request = peek_request_headers(&stream)?;
     if is_websocket_upgrade(&request) {
-        if let Some(response) = websocket_rejection_response(peek_request_target(&request)) {
+        let target = peek_request_target(&request);
+        if is_qjs_shell_websocket_path(target) {
+            if !roots.wanix_services {
+                return write_static_response(
+                    stream,
+                    StaticResponse::plain(HttpStatus::NotFound, "not found"),
+                );
+            }
+            let socket = accept(stream).map_err(|error| {
+                ServeConnectionError::WebSocket(P9WsConnectionError::Handshake(error.to_string()))
+            })?;
+            return serve_terminal_websocket_connection(&roots.static_root, socket);
+        }
+        if let Some(response) = websocket_rejection_response(target) {
             return write_static_response(stream, response);
         }
         let socket = accept(stream).map_err(|error| {
@@ -444,6 +459,147 @@ fn serve_connection(roots: &ServeRoots, stream: TcpStream) -> Result<(), ServeCo
     }
 
     serve_http_connection(roots, stream)
+}
+
+fn is_qjs_shell_websocket_path(raw_path: Option<&str>) -> bool {
+    raw_path.map(|path| path.split_once('?').map_or(path, |(path, _)| path))
+        == Some(QJS_SHELL_WEBSOCKET_PATH)
+}
+
+fn serve_terminal_websocket_connection(
+    root_path: &Path,
+    mut socket: WebSocket<TcpStream>,
+) -> Result<(), ServeConnectionError> {
+    let (mut session, initial_output) =
+        QjsShellSession::start(root_path).map_err(ServeConnectionError::Terminal)?;
+    send_terminal_output(&mut socket, initial_output)?;
+    loop {
+        let message = match socket.read() {
+            Ok(message) => message,
+            Err(WsError::ConnectionClosed) => return Ok(()),
+            Err(error) => {
+                return Err(ServeConnectionError::WebSocket(
+                    P9WsConnectionError::WebSocket(error),
+                ));
+            }
+        };
+        match message {
+            Message::Binary(bytes) => {
+                let output = session
+                    .input(bytes.as_ref())
+                    .map_err(ServeConnectionError::Terminal)?;
+                send_terminal_output(&mut socket, output)?;
+                if close_terminal_websocket_if_finished(&mut socket, &session)? {
+                    return Ok(());
+                }
+            }
+            Message::Text(text) => {
+                let text = text.as_str();
+                let output = if let Some((columns, rows)) = parse_terminal_resize_message(text) {
+                    session
+                        .resize(columns, rows)
+                        .map_err(ServeConnectionError::Terminal)?
+                } else {
+                    session
+                        .input(text.as_bytes())
+                        .map_err(ServeConnectionError::Terminal)?
+                };
+                send_terminal_output(&mut socket, output)?;
+                if close_terminal_websocket_if_finished(&mut socket, &session)? {
+                    return Ok(());
+                }
+            }
+            Message::Close(_) => return Ok(()),
+            Message::Ping(bytes) => socket.send(Message::Pong(bytes)).map_err(|error| {
+                ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error))
+            })?,
+            Message::Pong(_) | Message::Frame(_) => {}
+        }
+    }
+}
+
+fn close_terminal_websocket_if_finished(
+    socket: &mut WebSocket<TcpStream>,
+    session: &QjsShellSession,
+) -> Result<bool, ServeConnectionError> {
+    if !session.is_finished() {
+        return Ok(false);
+    }
+    let exit_code = session
+        .exit_code()
+        .map_err(ServeConnectionError::Terminal)?
+        .unwrap_or(0);
+    send_terminal_exit(socket, exit_code)?;
+    socket
+        .close(None)
+        .map_err(|error| ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error)))?;
+    Ok(true)
+}
+
+fn send_terminal_output(
+    socket: &mut WebSocket<TcpStream>,
+    output: Vec<u8>,
+) -> Result<(), ServeConnectionError> {
+    if output.is_empty() {
+        return Ok(());
+    }
+    socket
+        .send(Message::binary(output))
+        .map_err(|error| ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error)))
+}
+
+fn send_terminal_exit(
+    socket: &mut WebSocket<TcpStream>,
+    code: i32,
+) -> Result<(), ServeConnectionError> {
+    socket
+        .send(Message::text(format!(
+            "{{\"type\":\"exit\",\"code\":{code}}}"
+        )))
+        .map_err(|error| ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error)))
+}
+
+fn parse_terminal_resize_message(text: &str) -> Option<(u16, u16)> {
+    if let Some(resize) = parse_terminal_resize_json(text) {
+        return Some(resize);
+    }
+    let mut parts = text.split_whitespace();
+    if parts.next()? != "resize" {
+        return None;
+    }
+    let columns = parts.next()?.parse().ok()?;
+    let rows = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || columns == 0 || rows == 0 {
+        return None;
+    }
+    Some((columns, rows))
+}
+
+fn parse_terminal_resize_json(text: &str) -> Option<(u16, u16)> {
+    let compact = text
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if !compact.contains("\"type\":\"resize\"") {
+        return None;
+    }
+    let columns = json_u16_field(&compact, "columns")?;
+    let rows = json_u16_field(&compact, "rows")?;
+    Some((columns, rows))
+}
+
+fn json_u16_field(compact_json: &str, field: &str) -> Option<u16> {
+    let marker = format!("\"{field}\":");
+    let start = compact_json.find(&marker)? + marker.len();
+    let digits = compact_json[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+    let value = digits.parse().ok()?;
+    (value != 0).then_some(value)
 }
 
 fn peek_request_target(header_bytes: &[u8]) -> Option<&str> {
@@ -664,6 +820,14 @@ fn well_known_response(
             }
         }
         Some(Component::Normal(component)) if component == "export9p" && !has_extra_components => {
+            Some(StaticResponse::plain(
+                HttpStatus::BadRequest,
+                "websocket upgrade required",
+            ))
+        }
+        Some(Component::Normal(component))
+            if component == "qjs-shell" && !has_extra_components && roots.wanix_services =>
+        {
             Some(StaticResponse::plain(
                 HttpStatus::BadRequest,
                 "websocket upgrade required",
@@ -1534,6 +1698,10 @@ fn workbench_fs9p_bundle_html() -> String {
         amdRequire(["vs/workbench/workbench.web.main"], async (wb) => {
           try {
             const workbenchConfig = { discoveryUrl };
+            if (discovery.routes?.qjsShell?.websocket) {
+              workbenchConfig.qjsShellUrl = discovery.routes.qjsShell.websocket;
+              workbenchConfig.term = params.has("term");
+            }
             if (discovery.services?.task && discovery.services?.term) {
               workbenchConfig.ns = {
                 task: discovery.services.task,
@@ -1629,6 +1797,7 @@ fn serve_discovery_response(roots: &ServeRoots, request: &[u8]) -> StaticRespons
 fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
     let host = request_host(request).unwrap_or_else(|| display_host(roots.local_addr));
     let p9_url = format!("ws://{host}/.well-known/export9p");
+    let qjs_shell_url = format!("ws://{host}{QJS_SHELL_WEBSOCKET_PATH}");
     let ethernet_url = format!("ws://{host}/.well-known/ethernet");
     let bundle = roots
         .bundle
@@ -1636,6 +1805,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
         .map(json_string)
         .unwrap_or_else(|| "null".to_owned());
     let services = serve_services_json(roots);
+    let qjs_shell_route = serve_qjs_shell_route_json(roots, &qjs_shell_url);
     let direct_v86_boot = direct_v86_boot_json(&roots.static_root);
     format!(
         "{{\"version\":1,\
@@ -1643,6 +1813,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
          \"routes\":{{\
          \"p9\":{{\"websocket\":{},\"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\",\
          \"supportedProtocols\":[\"9P2000.L\",\"9P2000.L.Google.2\"]}},\
+         \"qjsShell\":{},\
          \"ethernet\":{{\"websocket\":{},\"status\":\"not-implemented\"}}\
          }},\
          \"v86\":{{\"assets\":{{\"module\":{},\"mod\":{},\"offscreen\":{},\"wasm\":{},\"bios\":{},\"vgaBios\":{}}},\
@@ -1651,6 +1822,7 @@ fn serve_discovery_json(roots: &ServeRoots, request: &[u8]) -> String {
          \"services\":{},\
          \"bundle\":{}}}",
         json_string(&p9_url),
+        qjs_shell_route,
         json_string(&ethernet_url),
         json_string(DIRECT_V86_MODULE_PATH),
         json_string(DIRECT_V86_MOD_REEXPORT_PATH),
@@ -1672,6 +1844,17 @@ fn serve_services_json(roots: &ServeRoots) -> String {
         "{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\"]}".to_owned()
     } else {
         "null".to_owned()
+    }
+}
+
+fn serve_qjs_shell_route_json(roots: &ServeRoots, websocket_url: &str) -> String {
+    if roots.wanix_services {
+        format!(
+            "{{\"websocket\":{},\"protocol\":\"wanix-qjs-shell.v1\",\"mode\":\"raw-bytes\",\"status\":\"available\"}}",
+            json_string(websocket_url)
+        )
+    } else {
+        "{\"status\":\"disabled\"}".to_owned()
     }
 }
 
@@ -1846,6 +2029,7 @@ enum ServeConnectionError {
     Io(io::Error),
     Http(String),
     WebSocket(P9WsConnectionError),
+    Terminal(CliError),
 }
 
 impl fmt::Display for ServeConnectionError {
@@ -1854,6 +2038,7 @@ impl fmt::Display for ServeConnectionError {
             Self::Io(error) => write!(f, "I/O failed: {error}"),
             Self::Http(error) => f.write_str(error),
             Self::WebSocket(error) => write!(f, "websocket 9P failed: {error}"),
+            Self::Terminal(error) => write!(f, "websocket terminal failed: {error}"),
         }
     }
 }
@@ -1863,6 +2048,7 @@ impl Error for ServeConnectionError {
         match self {
             Self::Io(error) => Some(error),
             Self::WebSocket(error) => Some(error),
+            Self::Terminal(error) => Some(error),
             Self::Http(_) => None,
         }
     }
@@ -1880,9 +2066,9 @@ mod tests {
     use std::io::{self, Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::thread;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use tungstenite::{Message, connect};
+    use tungstenite::{Message, connect, stream::MaybeTlsStream};
     use wanix_protocol::{
         P9_RATTACH, P9_RGETATTR, P9_RLERROR, P9_RLOPEN, P9_RREAD, P9_RREMOVE, P9_RRENAME,
         P9_RSETATTR, P9_RVERSION, P9_RWALK, P9_RWALKGETATTR, P9_SETATTR_GID, P9_SETATTR_UID,
@@ -2347,6 +2533,14 @@ mod tests {
             "{response}"
         );
         assert!(
+            response.contains("if (discovery.routes?.qjsShell?.websocket)"),
+            "{response}"
+        );
+        assert!(
+            response.contains("workbenchConfig.qjsShellUrl = discovery.routes.qjsShell.websocket"),
+            "{response}"
+        );
+        assert!(
             response.contains("event.data.port.postMessage({ config: workbenchConfig })"),
             "{response}"
         );
@@ -2607,6 +2801,10 @@ mod tests {
             "{response}"
         );
         assert!(
+            response.contains("\"qjsShell\":{\"status\":\"disabled\"}"),
+            "{response}"
+        );
+        assert!(
             response.contains("\"bundle\":\"vm-workbench\""),
             "{response}"
         );
@@ -2671,6 +2869,14 @@ mod tests {
         assert!(
             discovery.contains(
                 "\"services\":{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\"]}"
+            ),
+            "{discovery}"
+        );
+        assert!(
+            discovery.contains(
+                "\"qjsShell\":{\"websocket\":\"ws://demo.local:7654/.well-known/qjs-shell\",\
+                 \"protocol\":\"wanix-qjs-shell.v1\",\"mode\":\"raw-bytes\",\
+                 \"status\":\"available\"}"
             ),
             "{discovery}"
         );
@@ -3012,6 +3218,67 @@ mod tests {
     }
 
     #[test]
+    fn serve_once_exports_qjs_shell_terminal_websocket() {
+        let root = temp_dir("wanix-cli-serve-qjs-shell-ws");
+        fs::write(root.join("visible.txt"), b"served root").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+            wanix_services: true,
+            once: false,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code =
+                run_serve_with_listener_for_connections(command, listener, &mut stderr, 1).unwrap();
+            (exit_code, stderr)
+        });
+
+        let mut socket = connect(format!("ws://{addr}/.well-known/qjs-shell"))
+            .unwrap()
+            .0;
+        if let MaybeTlsStream::Plain(stream) = socket.get_mut() {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(60)))
+                .unwrap();
+        }
+        let initial = socket.read().unwrap();
+        match initial {
+            Message::Binary(bytes) => assert_eq!(bytes.as_ref(), b"shell task: 1\r\n$ "),
+            other => panic!("expected initial terminal output, got {other:?}"),
+        }
+
+        socket
+            .send(Message::binary(b"echo hello ws\nexit\n".as_slice()))
+            .unwrap();
+        let mut transcript = Vec::new();
+        let mut exit = None;
+        while exit.is_none() {
+            match socket.read().unwrap() {
+                Message::Binary(bytes) => transcript.extend_from_slice(bytes.as_ref()),
+                Message::Text(text) => exit = Some(text.to_string()),
+                Message::Close(_) => break,
+                Message::Ping(bytes) => socket.send(Message::Pong(bytes)).unwrap(),
+                Message::Pong(_) | Message::Frame(_) => {}
+            }
+        }
+        let _ = socket.close(None);
+        let (exit_code, stderr) = handle.join().unwrap();
+        let stderr = String::from_utf8(stderr).unwrap();
+
+        assert_eq!(exit_code, 0, "{stderr}");
+        assert_eq!(
+            transcript,
+            b"echo hello ws\r\nhello ws\r\n$ exit\r\nbye\r\n"
+        );
+        assert_eq!(exit.as_deref(), Some("{\"type\":\"exit\",\"code\":0}"));
+    }
+
+    #[test]
     fn serve_once_exports_google_2_walkgetattr_on_well_known_path() {
         let root = temp_dir("wanix-cli-serve-export9p-google2");
         fs::write(root.join("hello.txt"), b"hello google2").unwrap();
@@ -3211,6 +3478,46 @@ mod tests {
         let response = http_request(
             addr,
             b"GET /.well-known/export9p HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        );
+        let (exit_code, _stderr) = handle.join().unwrap();
+
+        assert_eq!(exit_code, 0);
+        let response = String::from_utf8(response).unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "{response}"
+        );
+        assert!(
+            response.contains("websocket upgrade required"),
+            "{response}"
+        );
+        assert!(!response.contains("not static"), "{response}");
+    }
+
+    #[test]
+    fn serve_http_keeps_qjs_shell_route_reserved_when_services_enabled() {
+        let root = temp_dir("wanix-cli-serve-qjs-shell-http");
+        fs::create_dir(root.join(".well-known")).unwrap();
+        fs::write(root.join(".well-known").join("qjs-shell"), b"not static").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let command = ServeCommand {
+            root_path: root,
+            addr: addr.to_string(),
+            bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+            wanix_services: true,
+            once: true,
+        };
+
+        let handle = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+            (exit_code, stderr)
+        });
+
+        let response = http_request(
+            addr,
+            b"GET /.well-known/qjs-shell HTTP/1.1\r\nHost: localhost\r\n\r\n",
         );
         let (exit_code, _stderr) = handle.join().unwrap();
 

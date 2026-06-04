@@ -48,10 +48,8 @@ The Rust serve/workbench path can now prove that browser-side clients can reach
 Wanix service files over direct 9P. A test covers reading `#term/new` and
 `#task/new/noop` through the same 9P server root used by `serve`.
 
-This is not yet a complete interactive QuickJS shell in VS Code. The current
-QuickJS shell lifecycle still needs a host pump that can run guest ready-IO
-while accepting browser input and terminal resize events. The next visible
-terminal slice should likely be a discovery-advertised terminal/session
+This was not yet a complete interactive QuickJS shell in VS Code. ADR 0096
+adds the next visible terminal slice: a discovery-advertised terminal/session
 WebSocket route owned by Rust `serve`, with the session host reusing the native
 `qjs-shell` terminal setup.
 
