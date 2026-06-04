@@ -26,7 +26,26 @@ pub(super) struct QemuCommand {
     security_model: String,
     cmdline: Option<String>,
     append: Vec<String>,
+    output_format: QemuOutputFormat,
     exec: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QemuOutputFormat {
+    Shell,
+    Json,
+}
+
+struct QemuHandoff {
+    root_path: PathBuf,
+    kernel_path: PathBuf,
+    qemu_bin: String,
+    memory_mb: u32,
+    kvm: bool,
+    mount_tag: String,
+    security_model: String,
+    cmdline: String,
+    argv: Vec<String>,
 }
 
 pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliError> {
@@ -39,6 +58,7 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
     let mut security_model = DEFAULT_SECURITY_MODEL.to_owned();
     let mut cmdline = None;
     let mut append = Vec::new();
+    let mut output_format = QemuOutputFormat::Shell;
     let mut exec = false;
     let mut i = 0;
     while i < args.len() {
@@ -104,6 +124,9 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
                 .ok_or_else(|| CliError::usage("qemu --security-model expects MODEL"))?;
             security_model = parse_security_model(value)?;
             i += 1;
+        } else if args[i] == "--json" {
+            output_format = QemuOutputFormat::Json;
+            i += 1;
         } else if args[i] == "--no-kvm" {
             kvm = false;
             i += 1;
@@ -118,6 +141,11 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
         }
     }
     let root_path = root_path.ok_or_else(|| CliError::usage("qemu requires --root DIR"))?;
+    if exec && output_format == QemuOutputFormat::Json {
+        return Err(CliError::usage(
+            "qemu --json cannot be combined with --exec",
+        ));
+    }
     Ok(QemuCommand {
         root_path,
         kernel_path,
@@ -128,6 +156,7 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
         security_model,
         cmdline,
         append,
+        output_format,
         exec,
     })
 }
@@ -138,8 +167,12 @@ pub(super) fn run_qemu_command(command: QemuCommand) -> Result<CliOutput, CliErr
             "qemu --exec requires live process IO; use the wanix-rust binary",
         ));
     }
-    let argv = qemu_virtio9p_argv(&command)?;
-    let mut output = quote_cmd_argv(argv.iter().map(String::as_str)).into_bytes();
+    let handoff = qemu_virtio9p_handoff(&command)?;
+    let output = match command.output_format {
+        QemuOutputFormat::Shell => quote_cmd_argv(handoff.argv.iter().map(String::as_str)),
+        QemuOutputFormat::Json => qemu_handoff_json(&handoff),
+    };
+    let mut output = output.into_bytes();
     output.push(b'\n');
     Ok(CliOutput::new(output, Vec::new(), 0))
 }
@@ -151,7 +184,8 @@ pub(super) fn run_qemu_streaming(
     if !command.exec {
         return Ok(run_qemu_command(command)?.exit_code());
     }
-    let argv = qemu_virtio9p_argv(&command)?;
+    let handoff = qemu_virtio9p_handoff(&command)?;
+    let argv = handoff.argv;
     let quoted = quote_cmd_argv(argv.iter().map(String::as_str));
     writeln!(process_stderr, "wanix-rust qemu exec: {quoted}")
         .map_err(|error| CliError::new(format!("failed to write process stderr: {error}"), 1))?;
@@ -178,7 +212,7 @@ pub(super) fn qemu_command_exec(command: &QemuCommand) -> bool {
     command.exec
 }
 
-fn qemu_virtio9p_argv(command: &QemuCommand) -> Result<Vec<String>, CliError> {
+fn qemu_virtio9p_handoff(command: &QemuCommand) -> Result<QemuHandoff, CliError> {
     if command.memory_mb == 0 {
         return Err(CliError::usage(
             "qemu --memory-mb expects a positive integer",
@@ -188,6 +222,7 @@ fn qemu_virtio9p_argv(command: &QemuCommand) -> Result<Vec<String>, CliError> {
     let kernel_path = resolve_kernel_path(command, &root_path)?;
     let root = root_path.to_string_lossy();
     validate_qemu_option_fragment(&root, "qemu --root path")?;
+    let cmdline = qemu_cmdline(command);
 
     let mut argv = Vec::new();
     argv.push(command.qemu_bin.clone());
@@ -206,7 +241,7 @@ fn qemu_virtio9p_argv(command: &QemuCommand) -> Result<Vec<String>, CliError> {
         "-kernel".to_owned(),
         kernel_path.to_string_lossy().into_owned(),
         "-append".to_owned(),
-        qemu_cmdline(command),
+        cmdline.clone(),
         "-fsdev".to_owned(),
         format!(
             "local,id=host9p,path={root},security_model={}",
@@ -222,7 +257,17 @@ fn qemu_virtio9p_argv(command: &QemuCommand) -> Result<Vec<String>, CliError> {
         "stdio,id=con".to_owned(),
         "-nographic".to_owned(),
     ]);
-    Ok(argv)
+    Ok(QemuHandoff {
+        root_path,
+        kernel_path,
+        qemu_bin: command.qemu_bin.clone(),
+        memory_mb: command.memory_mb,
+        kvm: command.kvm,
+        mount_tag: command.mount_tag.clone(),
+        security_model: command.security_model.clone(),
+        cmdline,
+        argv,
+    })
 }
 
 fn resolve_kernel_path(command: &QemuCommand, root_path: &Path) -> Result<PathBuf, CliError> {
@@ -355,6 +400,51 @@ fn validate_qemu_option_fragment(value: &str, label: &str) -> Result<(), CliErro
         )));
     }
     Ok(())
+}
+
+fn qemu_handoff_json(handoff: &QemuHandoff) -> String {
+    format!(
+        "{{\n  \"kind\":\"wanix-qemu-virtio9p.v1\",\n  \"qemuBin\":{},\n  \"argv\":{},\n  \"rootPath\":{},\n  \"kernelPath\":{},\n  \"cmdline\":{},\n  \"memoryMb\":{},\n  \"kvm\":{},\n  \"mountTag\":{},\n  \"securityModel\":{},\n  \"console\":\"hvc0\",\n  \"rootFilesystem\":\"9p\"\n}}",
+        json_string(&handoff.qemu_bin),
+        json_string_array(&handoff.argv),
+        json_string(handoff.root_path.to_string_lossy().as_ref()),
+        json_string(handoff.kernel_path.to_string_lossy().as_ref()),
+        json_string(&handoff.cmdline),
+        handoff.memory_mb,
+        if handoff.kvm { "true" } else { "false" },
+        json_string(&handoff.mount_tag),
+        json_string(&handoff.security_model),
+    )
+}
+
+fn json_string_array(values: &[String]) -> String {
+    let mut json = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str(&json_string(value));
+    }
+    json.push(']');
+    json
+}
+
+fn json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => escaped.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped.push('"');
+    escaped
 }
 
 fn os_arg_to_string(arg: &OsString, label: &str) -> Result<String, CliError> {

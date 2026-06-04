@@ -59,7 +59,7 @@ const USAGE: &str = concat!(
     "       wanix-rust qemu --root DIR [--kernel PATH] [--cmdline TEXT] [--append TEXT ...] ",
     "[--qemu-bin PATH] [--memory-mb N] ",
     "[--mount-tag TAG] [--security-model MODEL] ",
-    "[--no-kvm] [--exec]\n",
+    "[--json] [--no-kvm] [--exec]\n",
     "       wanix-rust serve [--root DIR | DIR] [--addr HOST:PORT | --listen HOST:PORT] ",
     "[--bundle NAME] [--wanix-services] [--once]\n",
     "       wanix-rust --help",
@@ -2145,6 +2145,90 @@ mod tests {
     }
 
     #[test]
+    fn qemu_command_can_emit_json_handoff() {
+        let root = temp_dir("wanix-cli-qemu-json-root");
+        let boot = root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        let kernel = boot.join("bzImage");
+        fs::write(&kernel, b"kernel").unwrap();
+        let qemu_bin = r#"qemu "quoted" \bin"#;
+        let append = "panic=1 note=\"json\" slash=\\ tab=\t line\nnext";
+
+        let output = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--qemu-bin".to_owned(),
+            qemu_bin.to_owned(),
+            "--mount-tag".to_owned(),
+            "wanixroot".to_owned(),
+            "--security-model".to_owned(),
+            "none".to_owned(),
+            "--append".to_owned(),
+            append.to_owned(),
+            "--json".to_owned(),
+        ])
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.stderr().is_empty());
+        let root = fs::canonicalize(root).unwrap();
+        let kernel = fs::canonicalize(kernel).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(output.stdout()).unwrap();
+        let cmdline = format!(
+            "console=hvc0 init=/bin/init rw root=wanixroot rootfstype=9p \
+             rootflags=trans=virtio,version=9p2000.L,msize=131072 loglevel=3 {append}"
+        );
+        let expected_argv = vec![
+            qemu_bin.to_owned(),
+            "-enable-kvm".to_owned(),
+            "-cpu".to_owned(),
+            "host".to_owned(),
+            "-m".to_owned(),
+            "512".to_owned(),
+            "-smp".to_owned(),
+            "1".to_owned(),
+            "-kernel".to_owned(),
+            kernel.display().to_string(),
+            "-append".to_owned(),
+            cmdline.clone(),
+            "-fsdev".to_owned(),
+            format!(
+                "local,id=host9p,path={},security_model=none",
+                root.display()
+            ),
+            "-device".to_owned(),
+            "virtio-9p-pci,fsdev=host9p,mount_tag=wanixroot".to_owned(),
+            "-device".to_owned(),
+            "virtio-serial-pci".to_owned(),
+            "-device".to_owned(),
+            "virtconsole,chardev=con".to_owned(),
+            "-chardev".to_owned(),
+            "stdio,id=con".to_owned(),
+            "-nographic".to_owned(),
+        ];
+        let argv = manifest["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(manifest["kind"], "wanix-qemu-virtio9p.v1");
+        assert_eq!(manifest["qemuBin"], qemu_bin);
+        assert_eq!(argv, expected_argv);
+        assert_eq!(manifest["rootPath"], root.display().to_string());
+        assert_eq!(manifest["kernelPath"], kernel.display().to_string());
+        assert_eq!(manifest["cmdline"], cmdline);
+        assert_eq!(manifest["memoryMb"], 512);
+        assert_eq!(manifest["kvm"], true);
+        assert_eq!(manifest["mountTag"], "wanixroot");
+        assert_eq!(manifest["securityModel"], "none");
+        assert_eq!(manifest["console"], "hvc0");
+        assert_eq!(manifest["rootFilesystem"], "9p");
+    }
+
+    #[test]
     fn qemu_command_uses_legacy_root_kernel_fallback() {
         let root = temp_dir("wanix-cli-qemu-legacy-kernel-root");
         let kernel = root.join("bzImage");
@@ -2268,6 +2352,21 @@ mod tests {
             invalid_security_model
                 .to_string()
                 .contains("expects one of mapped-xattr, mapped-file, passthrough, none")
+        );
+
+        let invalid_json_exec = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            missing_kernel_root.display().to_string(),
+            "--json".to_owned(),
+            "--exec".to_owned(),
+        ])
+        .unwrap_err();
+        assert_eq!(invalid_json_exec.exit_code(), 2);
+        assert!(
+            invalid_json_exec
+                .to_string()
+                .contains("qemu --json cannot be combined with --exec")
         );
     }
 

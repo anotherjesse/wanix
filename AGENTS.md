@@ -230,9 +230,11 @@ legacy `/bzImage` from the guest root unless `--kernel PATH` overrides it. The
 command uses base `9p2000.L` root flags and `hvc0` virtconsole by default,
 offers `--cmdline`, repeatable `--append`, configurable 9P mount tags, and
 validated QEMU local 9P `security_model` choices for host-specific boot tuning,
-and accepts `--exec` as an explicit foreground launch mode. Exec mode spawns
-the same validated argv, lets QEMU inherit native stdin/stdout/stderr for
-`-nographic` console ownership, and returns QEMU's exit status; richer VM
+and can emit the same validated argv and boot policy as a
+`wanix-qemu-virtio9p.v1` JSON handoff for scripts and future editor/serve
+surfaces. It accepts `--exec` as an explicit foreground launch mode. Exec mode
+spawns the same validated argv, lets QEMU inherit native stdin/stdout/stderr
+for `-nographic` console ownership, and returns QEMU's exit status; richer VM
 lifecycle, rootfs build automation, signal policy, and network bridging remain
 follow-ups.
 `/.well-known` routes are reserved for protocol endpoints;

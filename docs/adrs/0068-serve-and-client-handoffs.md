@@ -86,6 +86,9 @@ Native QEMU is a validated command handoff:
   supplied, supports cmdline override, append options, mount-tag override, and
   a validated QEMU local 9P `security_model`, and prints a shell-quoted
   QEMU/KVM virtio-9p command by default.
+- `wanix-rust qemu --json` prints the same validated handoff as a
+  machine-readable `wanix-qemu-virtio9p.v1` manifest, including argv, root,
+  kernel, cmdline, mount tag, security model, console, memory, and KVM policy.
 - By default, the native QEMU command uses the same 9P-root guest shape where
   practical, with `host9p`, base `9p2000.L` root flags, `mapped-xattr` local 9P
   security, and `hvc0` virtconsole defaults.

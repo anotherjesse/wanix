@@ -438,7 +438,7 @@ That set of commands says a lot about the intended shape:
 - expose a namespace over WebSocket;
 - print a native QEMU/KVM virtio-9p handoff command with explicit host 9P
   mount tag and security-model knobs for the same guest-root shape as
-  direct-v86;
+  direct-v86, or emit the same handoff as a machine-readable argv manifest;
 - serve browser assets, protocol routes, optional Wanix services, workbench,
   and direct-v86 entrypoints from one native listener.
 
@@ -535,10 +535,12 @@ QEMU/KVM or software emulation with the same guest-root shape: a Linux kernel,
 an hvc0 virtconsole, and a virtio-9p root mounted from a Wanix/host directory.
 It can tune the generated guest mount tag and QEMU local 9P `security_model`
 without changing the default `host9p`/`mapped-xattr` handoff; a fully replaced
-kernel cmdline remains caller-owned. That path is closer to "use the hardware
-when available." Today it is a validated handoff command, not a supervised
-Wanix VM process, but it is the right native parity path for serious Linux VM
-work.
+kernel cmdline remains caller-owned. The same validated handoff can be rendered
+as JSON for scripts or future editor/serve surfaces that need argv, paths, and
+boot policy without parsing a shell string. That path is closer to "use the
+hardware when available." Today it is a validated handoff command, not a
+supervised Wanix VM process, but it is the right native parity path for serious
+Linux VM work.
 
 So the current split is:
 

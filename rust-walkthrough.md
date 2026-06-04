@@ -382,17 +382,26 @@ For host-specific 9P policy, tune the generated QEMU command before launching:
 $WANIX qemu --root /tmp/wanix-rootfs --security-model none --mount-tag wanixroot
 ```
 
+For scripts or editor integration, ask for the same validated handoff as JSON:
+
+```sh
+$WANIX qemu --root /tmp/wanix-rootfs --json
+```
+
 `--mount-tag` also updates the generated default kernel cmdline. If you replace
 the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
+`--json` is an inspection format; it cannot be combined with `--exec`.
 
 > Developer aside: `p9-*` and `serve` are the path toward Linux/v86/editor
 > clients browsing the same Wanix namespace. `serve --wanix-services` exports
 > `#task` and `#term` over direct 9P so browser/workbench clients can start qjs
 > tasks, attach terminals, start served qjs-shell sessions in the requested
 > Wanix cwd, forward resizes through `#term/<id>/winch`, and observe exit state.
-> `rootfs` and `qemu` are the native VM handoff path, not a VM manager yet; QEMU
-> mount tags and local 9P security models stay explicit because they affect the
-> guest boot contract and host filesystem trust boundary.
+> `rootfs` and `qemu` are the native VM handoff path, not a VM manager yet. The
+> shell and JSON QEMU outputs share one validated argv so scripts and future
+> UI surfaces can consume the handoff without reinterpreting a shell string.
+> QEMU mount tags and local 9P security models stay explicit because they
+> affect the guest boot contract and host filesystem trust boundary.
 
 ## 10. Snapshot And Restore In One Command
 
