@@ -33,16 +33,18 @@ The supported contract includes:
   `9P2000.L.Google.2`, and explicit rejection of unsupported versions;
 - attach, walk, clunk, open, create, read, write, and error replies;
 - directory reads using opaque one-based cookies;
-- metadata through `Tgetattr`, POSIX file-type mode bits, virtual uid/gid, and
-  permission updates where Wanix filesystems support them;
+- metadata through `Tgetattr`, POSIX file-type mode bits, host-backed link
+  counts, virtual uid/gid, and permission updates where Wanix filesystems
+  support them;
 - `Tstatfs` synthetic mount probes;
 - file and directory mutations including create, mkdir, unlink, remove,
-  rename, legacy fid-oriented rename/remove, symlink, and readlink;
+  rename, legacy fid-oriented rename/remove, symlink, readlink, and hard-link
+  creation where the backing filesystem supports it;
 - setattr for size, access/modification times, and permissions;
 - append mode as opened-fid state, so writes append at EOF regardless of client
   offsets;
 - compatibility probe handling for `Tflush`, `Tfsync`, lock/getlock, auth,
-  mknod, hard-link, and xattr requests; and
+  mknod, and xattr requests; and
 - Google.2 `Twalkgetattr`/`Rwalkgetattr` and `Tflushf`/`Rflushf` compatibility
   where useful for v86/Linux clients.
 
@@ -52,8 +54,10 @@ output out of binary response streams.
 
 Unsupported features should return deliberate protocol errors until Wanix has a
 backing contract. In particular, Rust Wanix does not currently require a
-separate 9P auth phase, special-file creation, hard links, or extended
-attributes.
+separate 9P auth phase, special-file creation, or extended attributes. Hard
+links are exposed through the Wanix filesystem contract and may still return
+unsupported errors for virtual filesystems that do not have shared-inode
+semantics.
 
 ## Consequences
 

@@ -208,6 +208,25 @@ impl FileSystem for LocalFs {
         create_symlink(target, &host_path)
     }
 
+    fn hard_link(&self, old_path: &NormalizedPath, new_path: &NormalizedPath) -> FsResult<()> {
+        if old_path.as_str() == "." || new_path.as_str() == "." {
+            return Err(FsError::PermissionDenied);
+        }
+
+        let old_host_path = self.existing_host_path(old_path)?;
+        if fs::metadata(&old_host_path).map_err(map_io_error)?.is_dir() {
+            return Err(FsError::IsDirectory);
+        }
+
+        let new_host_path = self.host_path_for_final_component_operation(new_path)?;
+        match fs::symlink_metadata(&new_host_path) {
+            Ok(_) => return Err(FsError::AlreadyExists),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(map_io_error(error)),
+        }
+        fs::hard_link(old_host_path, new_host_path).map_err(map_io_error)
+    }
+
     fn create_dir(&self, path: &NormalizedPath) -> FsResult<()> {
         if path.as_str() == "." {
             return Err(FsError::AlreadyExists);
@@ -398,10 +417,11 @@ fn metadata_from_host(metadata: &fs::Metadata) -> Metadata {
     } else {
         FileType::File
     };
-    Metadata::new_with_times(
+    Metadata::new_with_times_and_links(
         file_type,
         metadata.len(),
         metadata_mode(metadata),
+        metadata_link_count(metadata),
         metadata_accessed_time_ns(metadata),
         metadata_modified_time_ns(metadata),
         metadata_changed_time_ns(metadata),
@@ -424,6 +444,18 @@ fn metadata_mode(metadata: &fs::Metadata) -> u32 {
     } else {
         0o644
     }
+}
+
+#[cfg(unix)]
+fn metadata_link_count(metadata: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+
+    metadata.nlink()
+}
+
+#[cfg(not(unix))]
+fn metadata_link_count(_metadata: &fs::Metadata) -> u64 {
+    1
 }
 
 #[cfg(unix)]
@@ -742,6 +774,44 @@ mod tests {
         );
         assert_eq!(
             fs.rename(&path("."), &path("root")),
+            Err(FsError::PermissionDenied)
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn localfs_hard_link_creates_second_name_inside_root() {
+        let root = temp_root();
+        fs::write(root.join("source.txt"), b"source").unwrap();
+        fs::create_dir(root.join("dir")).unwrap();
+        fs::write(root.join("existing.txt"), b"existing").unwrap();
+        let fs = LocalFs::new(&root).unwrap();
+
+        fs.hard_link(&path("source.txt"), &path("hard.txt"))
+            .unwrap();
+
+        assert_eq!(std::fs::read(root.join("hard.txt")).unwrap(), b"source");
+        assert_eq!(fs.metadata(&path("source.txt")).unwrap().link_count(), 2);
+        assert_eq!(fs.metadata(&path("hard.txt")).unwrap().link_count(), 2);
+        std::fs::write(root.join("hard.txt"), b"updated").unwrap();
+        assert_eq!(std::fs::read(root.join("source.txt")).unwrap(), b"updated");
+
+        assert_eq!(
+            fs.hard_link(&path("missing.txt"), &path("missing-hard.txt")),
+            Err(FsError::NotFound)
+        );
+        assert_eq!(
+            fs.hard_link(&path("dir"), &path("dir-hard")),
+            Err(FsError::IsDirectory)
+        );
+        assert_eq!(
+            fs.hard_link(&path("source.txt"), &path("existing.txt")),
+            Err(FsError::AlreadyExists)
+        );
+        assert_eq!(
+            fs.hard_link(&path("source.txt"), &path(".")),
             Err(FsError::PermissionDenied)
         );
 

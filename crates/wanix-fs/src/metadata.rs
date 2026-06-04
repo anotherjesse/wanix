@@ -15,6 +15,7 @@ pub struct Metadata {
     file_type: FileType,
     len: u64,
     mode: u32,
+    link_count: u64,
     accessed_time_ns: u64,
     modified_time_ns: u64,
     changed_time_ns: u64,
@@ -37,10 +38,33 @@ impl Metadata {
         modified_time_ns: u64,
         changed_time_ns: u64,
     ) -> Self {
+        Self::new_with_times_and_links(
+            file_type,
+            len,
+            mode,
+            1,
+            accessed_time_ns,
+            modified_time_ns,
+            changed_time_ns,
+        )
+    }
+
+    /// Creates metadata with explicit timestamps and link count.
+    #[must_use]
+    pub fn new_with_times_and_links(
+        file_type: FileType,
+        len: u64,
+        mode: u32,
+        link_count: u64,
+        accessed_time_ns: u64,
+        modified_time_ns: u64,
+        changed_time_ns: u64,
+    ) -> Self {
         Self {
             file_type,
             len,
             mode,
+            link_count,
             accessed_time_ns,
             modified_time_ns,
             changed_time_ns,
@@ -69,6 +93,12 @@ impl Metadata {
     #[must_use]
     pub fn mode(&self) -> u32 {
         self.mode
+    }
+
+    /// Returns the number of filesystem links to this file when known.
+    #[must_use]
+    pub fn link_count(&self) -> u64 {
+        self.link_count
     }
 
     /// Returns the last-access timestamp as nanoseconds since the Unix epoch.
@@ -134,14 +164,19 @@ mod tests {
         assert_eq!(metadata.file_type(), FileType::File);
         assert_eq!(metadata.len(), 4);
         assert_eq!(metadata.mode(), 0o644);
+        assert_eq!(metadata.link_count(), 1);
         assert_eq!(metadata.accessed_time_ns(), 0);
         assert_eq!(metadata.modified_time_ns(), 0);
         assert_eq!(metadata.changed_time_ns(), 0);
         assert!(!metadata.is_empty());
 
         let timed = Metadata::new_with_times(FileType::File, 4, 0o644, 1, 2, 3);
+        assert_eq!(timed.link_count(), 1);
         assert_eq!(timed.accessed_time_ns(), 1);
         assert_eq!(timed.modified_time_ns(), 2);
         assert_eq!(timed.changed_time_ns(), 3);
+
+        let linked = Metadata::new_with_times_and_links(FileType::File, 4, 0o644, 2, 1, 2, 3);
+        assert_eq!(linked.link_count(), 2);
     }
 }

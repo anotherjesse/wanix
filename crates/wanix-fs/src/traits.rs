@@ -203,6 +203,17 @@ pub trait FileSystem: Send + Sync {
         Err(FsError::NotSupported)
     }
 
+    /// Creates a hard link from `new_path` to the existing file at `old_path`.
+    ///
+    /// Implementations should reject directories and cross-filesystem links.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the link cannot be created.
+    fn hard_link(&self, _old_path: &NormalizedPath, _new_path: &NormalizedPath) -> FsResult<()> {
+        Err(FsError::NotSupported)
+    }
+
     /// Creates one directory at `path`.
     ///
     /// # Errors

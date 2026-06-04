@@ -759,6 +759,7 @@ fn symlink_operations_flow_through_namespace_bind_resolution() {
         fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
             match path.as_str() {
                 "root" => Ok(Metadata::new(FileType::Directory, 2, 0o755)),
+                "root/source.txt" => Ok(Metadata::new(FileType::File, 6, 0o644)),
                 _ => Err(FsError::NotFound),
             }
         }
@@ -783,6 +784,15 @@ fn symlink_operations_flow_through_namespace_bind_resolution() {
             ));
             Ok(())
         }
+
+        fn hard_link(&self, old_path: &NormalizedPath, new_path: &NormalizedPath) -> FsResult<()> {
+            self.calls.lock().expect("test calls lock").push(format!(
+                "hard_link:{}:{}",
+                old_path.as_str(),
+                new_path.as_str()
+            ));
+            Ok(())
+        }
     }
 
     let backing = Arc::new(LinkFs::default());
@@ -792,12 +802,31 @@ fn symlink_operations_flow_through_namespace_bind_resolution() {
 
     assert_eq!(ns.read_link(&path("mnt/link")).unwrap(), b"target.txt");
     ns.symlink(b"target.txt", &path("mnt/created")).unwrap();
+    ns.hard_link(&path("mnt/source.txt"), &path("mnt/hard.txt"))
+        .unwrap();
 
     assert_eq!(
         backing.calls.lock().expect("test calls lock").as_slice(),
         &[
             "read:root/link".to_owned(),
             "symlink:target.txt:root/created".to_owned(),
+            "hard_link:root/source.txt:root/hard.txt".to_owned(),
         ]
+    );
+}
+
+#[test]
+fn hard_links_reject_cross_filesystem_namespace_targets() {
+    let source = fixture(&[("file.txt", b"source")]);
+    let destination = fixture(&[]);
+    let mut ns = Namespace::new();
+    ns.bind(source, ".", "source", BindOptions::default())
+        .unwrap();
+    ns.bind(destination, ".", "destination", BindOptions::default())
+        .unwrap();
+
+    assert_eq!(
+        ns.hard_link(&path("source/file.txt"), &path("destination/hard.txt")),
+        Err(FsError::NotSupported)
     );
 }

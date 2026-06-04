@@ -103,18 +103,18 @@ serve/v86 experiments so external clients can browse a Wanix namespace. The
 server core already negotiates 9P2000.L and caps Google-extension negotiation
 at `9P2000.L.Google.2`, attaches, walks, opens regular files and read-only
 directories, reads/writes regular files, lists directories with `Treaddir`,
-clunks fids, reports no-follow metadata with `Tgetattr` and Google.2
-`Twalkgetattr`, creates
-and reads symbolic links with `Tsymlink` and `Treadlink`, and handles core mount
+clunks fids, reports no-follow metadata and host-backed link counts with
+`Tgetattr` and Google.2 `Twalkgetattr`, creates and reads symbolic links with
+`Tsymlink` and `Treadlink`, creates host-backed hard links with `Tlink` when the
+exported filesystem supports them, and handles core mount
 and mutation ops with `Tstatfs`, `Tlcreate`, `Tmkdir`, legacy `Trename` and
 `Tremove`, `Trenameat`, and `Tunlinkat`, file size, permission, and timestamp
 mutation with `Tsetattr`,
 session-virtual uid/gid ownership through `Tsetattr`/`Tgetattr`,
 advisory-lock compatibility probes with `Tlock`/`Tgetlock`, synchronous
 compatibility probes with `Tflush`, Google.1 `Tflushf`, and `Tfsync`, and
-append-open write semantics for `O_APPEND` fids; it also decodes `Tmknod`,
-`Tlink`, and xattr
-probes as typed compatibility requests and returns intentional unsupported
+append-open write semantics for `O_APPEND` fids; it also decodes `Tmknod` and
+xattr probes as typed compatibility requests and returns intentional unsupported
 errors until Wanix grows backing contracts, while `Tauth` returns explicit
 `ENOSYS` because Rust Wanix does not require a separate 9P auth phase yet. It
 serves encoded request/response frames through a synchronous stream loop.
@@ -226,9 +226,9 @@ rootfs build automation, signal policy, and network bridging remain follow-ups.
 `/.well-known/ethernet` is explicitly unimplemented until the qemu/vnet bridge
 lands. Listener commands accept `--once` for tests and scripted demos.
 `p9-stdio` and the `serve` well-known WebSocket route both have compatibility
-probe smokes for auth, mknod, hard-link, xattr, legacy rename, and legacy
-remove requests, and the serve WebSocket path has a Google.2 `Twalkgetattr`
-smoke, pinning the externally visible contract used by
+probe smokes for auth, mknod, xattr, legacy rename, and legacy remove requests,
+plus host-backed hard-link success smokes; the serve WebSocket path also has a
+Google.2 `Twalkgetattr` smoke, pinning the externally visible contract used by
 Linux/v86/editor clients.
 
 ## Code Quality Guardrails
@@ -343,5 +343,5 @@ more feature work.
   integration, then extend the direct-v86 route into a complete qemu/v86 bundle,
   `/.well-known/ethernet`, vnet, and VS Code routes on the Rust `serve`
   endpoint.
-- Add backing contracts for 9P special files, hard links, or extended
-  attributes only when a Linux/v86/editor workflow proves they are required.
+- Add backing contracts for 9P special files or extended attributes only when a
+  Linux/v86/editor workflow proves they are required.

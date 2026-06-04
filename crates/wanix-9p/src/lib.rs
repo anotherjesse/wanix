@@ -33,9 +33,9 @@ use wanix_protocol::{
     p9_decode_tsymlink, p9_decode_tunlinkat, p9_decode_tversion, p9_decode_twalk,
     p9_decode_twalkgetattr, p9_decode_twrite, p9_decode_txattrcreate, p9_decode_txattrwalk,
     p9_dir_entry_encoded_len, p9_rattach, p9_rclunk, p9_rflush, p9_rflushf, p9_rfsync, p9_rgetattr,
-    p9_rgetlock, p9_rlcreate, p9_rlerror, p9_rlock, p9_rlopen, p9_rmkdir, p9_rread, p9_rreaddir,
-    p9_rreadlink, p9_rremove, p9_rrename, p9_rrenameat, p9_rsetattr, p9_rstatfs, p9_rsymlink,
-    p9_runlinkat, p9_rversion, p9_rwalk, p9_rwalkgetattr, p9_rwrite,
+    p9_rgetlock, p9_rlcreate, p9_rlerror, p9_rlink, p9_rlock, p9_rlopen, p9_rmkdir, p9_rread,
+    p9_rreaddir, p9_rreadlink, p9_rremove, p9_rrename, p9_rrenameat, p9_rsetattr, p9_rstatfs,
+    p9_rsymlink, p9_runlinkat, p9_rversion, p9_rwalk, p9_rwalkgetattr, p9_rwrite,
 };
 
 pub use transport::{P9TransportError, P9TransportStats};
@@ -656,11 +656,17 @@ impl P9Server {
         let Some(dir_path) = self.fids.get(&link.dir_fid).map(|entry| entry.path.clone()) else {
             return Ok(p9_rlerror(frame.tag(), EBADF));
         };
-        if !self.fids.contains_key(&link.fid) {
+        let Some(old_path) = self.fids.get(&link.fid).map(|entry| entry.path.clone()) else {
             return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        let path = join_walk_component(&dir_path, &link.name)?;
+        match self.root.hard_link(&old_path, &path) {
+            Ok(()) => {
+                self.owners.insert(path, self.owner_attrs(&old_path));
+                Ok(p9_rlink(frame.tag()))
+            }
+            Err(error) => Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         }
-        let _path = join_walk_component(&dir_path, &link.name)?;
-        Ok(p9_rlerror(frame.tag(), EOPNOTSUPP))
     }
 
     fn handle_mkdir(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -1003,7 +1009,7 @@ fn attr_for_metadata(
         mode: p9_mode_for_metadata(&metadata),
         uid: owner.uid.unwrap_or(0),
         gid: owner.gid.unwrap_or(0),
-        nlink: 1,
+        nlink: metadata.link_count(),
         rdev: 0,
         size: metadata.len(),
         block_size: P9_DEFAULT_BLOCK_SIZE,
@@ -1136,15 +1142,15 @@ mod tests {
     use wanix_fs::{DirEntry, FsResult, LocalFs, MemFs};
     use wanix_protocol::{
         P9_LOCK_TYPE_READ, P9_LOCK_TYPE_WRITE, P9_RATTACH, P9_RFLUSH, P9_RFLUSHF, P9_RFSYNC,
-        P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLERROR, P9_RLOCK, P9_RLOPEN, P9_RMKDIR,
-        P9_RREAD, P9_RREADDIR, P9_RREADLINK, P9_RREMOVE, P9_RRENAME, P9_RRENAMEAT, P9_RSETATTR,
-        P9_RSTATFS, P9_RSYMLINK, P9_RUNLINKAT, P9_RVERSION, P9_RWALK, P9_RWALKGETATTR, P9_RWRITE,
-        P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_MTIME,
+        P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLERROR, P9_RLINK, P9_RLOCK, P9_RLOPEN,
+        P9_RMKDIR, P9_RREAD, P9_RREADDIR, P9_RREADLINK, P9_RREMOVE, P9_RRENAME, P9_RRENAMEAT,
+        P9_RSETATTR, P9_RSTATFS, P9_RSYMLINK, P9_RUNLINKAT, P9_RVERSION, P9_RWALK, P9_RWALKGETATTR,
+        P9_RWRITE, P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_MTIME,
         P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
         P9_VERSION_9P2000_L_GOOGLE_1, P9_VERSION_9P2000_L_GOOGLE_2, P9DirEntry, P9Lock, P9SetAttr,
         p9_decode_rflush, p9_decode_rflushf, p9_decode_rfsync, p9_decode_rgetattr,
-        p9_decode_rgetlock, p9_decode_rlcreate, p9_decode_rlerror, p9_decode_rlock,
-        p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread, p9_decode_rreaddir,
+        p9_decode_rgetlock, p9_decode_rlcreate, p9_decode_rlerror, p9_decode_rlink,
+        p9_decode_rlock, p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread, p9_decode_rreaddir,
         p9_decode_rreadlink, p9_decode_rremove, p9_decode_rrename, p9_decode_rsetattr,
         p9_decode_rstatfs, p9_decode_rsymlink, p9_decode_rversion, p9_decode_rwalk,
         p9_decode_rwalkgetattr, p9_decode_rwrite, p9_dir_entry_encoded_len, p9_tattach, p9_tauth,
@@ -1896,6 +1902,39 @@ mod tests {
 
         assert_eq!(response.message_type(), P9_RLERROR);
         assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, EINVAL);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn hard_link_mutates_host_backed_filesystem() {
+        let root = temp_dir("wanix-9p-hard-link");
+        fs::write(root.join("target.txt"), b"linked data").unwrap();
+        let local = Arc::new(LocalFs::new(&root).unwrap());
+        let root_fs: Arc<dyn FileSystem> = local;
+        let mut server = P9Server::new(root_fs);
+
+        attach_root(&mut server);
+        walk(&mut server, 1, 2, &["target.txt"]);
+        let response = server
+            .handle_frame(&p9_tlink(3, 1, 2, "hard.txt").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLINK);
+        p9_decode_rlink(&response).unwrap();
+        assert_eq!(fs::read(root.join("hard.txt")).unwrap(), b"linked data");
+
+        let response = server.handle_frame(&p9_tgetattr(4, 2, u64::MAX)).unwrap();
+        assert_eq!(response.message_type(), P9_RGETATTR);
+        assert_eq!(p9_decode_rgetattr(&response).unwrap().nlink, 2);
+
+        let response = server
+            .handle_frame(&p9_twalk(5, 1, 3, &["hard.txt"]).unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RWALK);
+        let response = server.handle_frame(&p9_tlopen(6, 3, 0)).unwrap();
+        assert_eq!(response.message_type(), P9_RLOPEN);
+        let response = server.handle_frame(&p9_tread(7, 3, 0, 11)).unwrap();
+        assert_eq!(response.message_type(), P9_RREAD);
+        assert_eq!(p9_decode_rread(&response).unwrap(), b"linked data");
     }
 
     #[test]

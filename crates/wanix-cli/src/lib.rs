@@ -1718,14 +1718,14 @@ mod tests {
     use super::{run, run_with_process_io, run_with_process_stdin};
     use wanix_protocol::{
         P9_LOCK_STATUS_OK, P9_LOCK_TYPE_READ, P9_LOCK_TYPE_UNLOCK, P9_LOCK_TYPE_WRITE, P9_NOFID,
-        P9_RATTACH, P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLERROR, P9_RLOCK, P9_RLOPEN,
-        P9_RREAD, P9_RREADDIR, P9_RREMOVE, P9_RRENAME, P9_RSETATTR, P9_RVERSION, P9_RWALK,
-        P9_RWRITE, P9_SETATTR_PERMISSIONS, P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer, P9Lock,
-        P9SetAttr, p9_decode_rgetattr, p9_decode_rgetlock, p9_decode_rlerror, p9_decode_rlock,
-        p9_decode_rread, p9_decode_rreaddir, p9_decode_rremove, p9_decode_rrename,
-        p9_decode_rwrite, p9_tattach, p9_tauth, p9_tgetattr, p9_tgetlock, p9_tlcreate, p9_tlink,
-        p9_tlock, p9_tlopen, p9_tmknod, p9_tread, p9_treaddir, p9_tremove, p9_trename, p9_tsetattr,
-        p9_tversion, p9_twalk, p9_twrite, p9_txattrcreate, p9_txattrwalk,
+        P9_RATTACH, P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLERROR, P9_RLINK, P9_RLOCK,
+        P9_RLOPEN, P9_RREAD, P9_RREADDIR, P9_RREMOVE, P9_RRENAME, P9_RSETATTR, P9_RVERSION,
+        P9_RWALK, P9_RWRITE, P9_SETATTR_PERMISSIONS, P9_VERSION_9P2000_L, P9Frame, P9FrameBuffer,
+        P9Lock, P9SetAttr, p9_decode_rgetattr, p9_decode_rgetlock, p9_decode_rlerror,
+        p9_decode_rlink, p9_decode_rlock, p9_decode_rread, p9_decode_rreaddir, p9_decode_rremove,
+        p9_decode_rrename, p9_decode_rwrite, p9_tattach, p9_tauth, p9_tgetattr, p9_tgetlock,
+        p9_tlcreate, p9_tlink, p9_tlock, p9_tlopen, p9_tmknod, p9_tread, p9_treaddir, p9_tremove,
+        p9_trename, p9_tsetattr, p9_tversion, p9_twalk, p9_twrite, p9_txattrcreate, p9_txattrwalk,
     };
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -2587,7 +2587,7 @@ mod tests {
                 P9_RATTACH,
                 P9_RWALK,
                 P9_RLERROR,
-                P9_RLERROR,
+                P9_RLINK,
                 P9_RLERROR,
                 P9_RLERROR,
                 P9_RLERROR,
@@ -2603,7 +2603,7 @@ mod tests {
         );
         assert_eq!(p9_decode_rlerror(&frames[1]).unwrap().ecode, ENOSYS);
         assert_eq!(p9_decode_rlerror(&frames[4]).unwrap().ecode, EOPNOTSUPP);
-        assert_eq!(p9_decode_rlerror(&frames[5]).unwrap().ecode, EOPNOTSUPP);
+        p9_decode_rlink(&frames[5]).unwrap();
         assert_eq!(p9_decode_rlerror(&frames[6]).unwrap().ecode, EOPNOTSUPP);
         assert_eq!(p9_decode_rlerror(&frames[7]).unwrap().ecode, EOPNOTSUPP);
         assert_eq!(p9_decode_rlerror(&frames[8]).unwrap().ecode, EBADF);
@@ -2613,6 +2613,7 @@ mod tests {
         assert_eq!(p9_decode_rlerror(&frames[12]).unwrap().ecode, EBADF);
         assert!(!root.join("target.txt").exists());
         assert!(!root.join("renamed.txt").exists());
+        assert_eq!(fs::read(root.join("hard.txt")).unwrap(), b"target");
     }
 
     #[test]
