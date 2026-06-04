@@ -88,7 +88,8 @@ tests.
 - `serve --bundle direct-v86`: browser v86 handoff over Rust serve discovery,
   direct 9P, boot-asset hints, hvc0 console bridging, and autostart-friendly
   launch hooks. The generated page reports rootfs handoff status and, for
-  trusted loopback clients, exposes `window.wanixRootfsHandoff`.
+  trusted loopback clients, exposes `window.wanixRootfsHandoff` plus copyable
+  QEMU/direct-v86 serve commands.
 - `wanix-rust rootfs --archive FILE.tgz --out DIR`: prepares a guest root,
   rejects unsafe archive paths, validates VM boot markers, and emits shell or
   `wanix-rootfs.v1` JSON handoffs for QEMU and direct-v86 without owning rootfs
@@ -97,8 +98,9 @@ tests.
   prepared guest root, exposes the same `wanix-rootfs.v1` handoff for trusted
   local browser/editor/VM launchers.
 - `wanix-rust qemu --root DIR`: validates the same guest-root shape and emits a
-  shell or `wanix-qemu-virtio9p.v1` JSON handoff; `--exec` is an explicit
-  foreground launch, not a Wanix VM supervisor.
+  shell or `wanix-qemu-virtio9p.v1` JSON handoff with discovered or explicit
+  initrd support; `--exec` is an explicit foreground launch, not a Wanix VM
+  supervisor.
 
 The biggest missing pieces remain interactive shell/session depth, broader
 Linux/v86/editor 9P compatibility, QEMU/v86 boot workflows, and Rust

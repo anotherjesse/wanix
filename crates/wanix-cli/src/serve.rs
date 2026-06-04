@@ -1030,6 +1030,8 @@ fn direct_v86_bundle_html() -> String {
       <button id="start" disabled>Start VM</button>
       <pre id="config"></pre>
       <label for="rootfs">rootfs handoff</label>
+      <button id="copy-qemu" disabled>Copy QEMU command</button>
+      <button id="copy-serve" disabled>Copy serve command</button>
       <pre id="rootfs" aria-live="polite"></pre>
       <pre id="boot-log" aria-live="polite"></pre>
     </aside>
@@ -1055,6 +1057,8 @@ fn direct_v86_bundle_html() -> String {
     const start = document.querySelector("#start");
     const configOutput = document.querySelector("#config");
     const rootfsOutput = document.querySelector("#rootfs");
+    const copyQemu = document.querySelector("#copy-qemu");
+    const copyServe = document.querySelector("#copy-serve");
     const bootLog = document.querySelector("#boot-log");
     const kernel = document.querySelector("#kernel");
     const initrd = document.querySelector("#initrd");
@@ -1064,6 +1068,7 @@ fn direct_v86_bundle_html() -> String {
     const hvc0Encoder = new TextEncoder();
     const hvc0Decoder = new TextDecoder();
     window.wanixV86BootLog = [];
+    let rootfsHandoffCommands = null;
 
     function logBoot(message) {
       window.wanixV86BootLog.push(message);
@@ -1107,6 +1112,9 @@ fn direct_v86_bundle_html() -> String {
       route = route || {};
       window.wanixRootfsRoute = route;
       window.wanixRootfsHandoff = null;
+      rootfsHandoffCommands = null;
+      copyQemu.disabled = true;
+      copyServe.disabled = true;
       const status = route.status || "unknown";
       const summary = {
         status,
@@ -1128,15 +1136,25 @@ fn direct_v86_bundle_html() -> String {
           return null;
         }
         const handoff = await response.json();
+        const qemuArgv = handoff.qemu?.argv || [];
+        const serveArgv = handoff.serveDirectV86?.argv || [];
+        rootfsHandoffCommands = {
+          qemu: shellCommand(qemuArgv),
+          serve: shellCommand(serveArgv)
+        };
         window.wanixRootfsHandoff = handoff;
         rootfsOutput.textContent = JSON.stringify({
           kind: handoff.kind,
           rootPath: handoff.rootPath,
           kernelRoute: handoff.kernelRoute,
           initRoute: handoff.initRoute,
-          qemuArgv: handoff.qemu?.argv || [],
-          serveArgv: handoff.serveDirectV86?.argv || []
+          qemuArgv,
+          qemuCommand: rootfsHandoffCommands.qemu,
+          serveArgv,
+          serveCommand: rootfsHandoffCommands.serve
         }, null, 2);
+        copyQemu.disabled = rootfsHandoffCommands.qemu.length === 0;
+        copyServe.disabled = rootfsHandoffCommands.serve.length === 0;
         logBoot("Rootfs handoff ready: " + handoff.rootPath);
         return handoff;
       } catch (error) {
@@ -1148,6 +1166,31 @@ fn direct_v86_bundle_html() -> String {
         return null;
       }
     }
+
+    function shellCommand(argv) {
+      if (!Array.isArray(argv)) return "";
+      return argv.map(shellQuoteArg).join(" ");
+    }
+
+    function shellQuoteArg(value) {
+      const text = String(value);
+      if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(text)) return text;
+      return "'" + text.replace(/'/g, "'\"'\"'") + "'";
+    }
+
+    async function copyCommand(kind) {
+      const command = rootfsHandoffCommands?.[kind] || "";
+      if (!command) return;
+      if (!navigator.clipboard?.writeText) {
+        logBoot("Clipboard API unavailable for " + kind + " command");
+        return;
+      }
+      await navigator.clipboard.writeText(command);
+      logBoot("Copied " + kind + " command");
+    }
+
+    copyQemu.addEventListener("click", () => void copyCommand("qemu"));
+    copyServe.addEventListener("click", () => void copyCommand("serve"));
 
     function buildConfig() {
       const config = {
@@ -2635,15 +2678,30 @@ mod tests {
             "{response}"
         );
         assert!(
+            response.contains("rootfsHandoffCommands = null"),
+            "{response}"
+        );
+        assert!(response.contains("copyQemu.disabled = true"), "{response}");
+        assert!(response.contains("copyServe.disabled = true"), "{response}");
+        assert!(
             response.contains("window.wanixRootfsHandoff = handoff"),
             "{response}"
         );
+        assert!(response.contains("rootfsHandoffCommands = {"), "{response}");
+        assert!(response.contains("qemuArgv,"), "{response}");
+        assert!(response.contains("qemuCommand:"), "{response}");
+        assert!(response.contains("serveArgv,"), "{response}");
+        assert!(response.contains("serveCommand:"), "{response}");
         assert!(
-            response.contains("qemuArgv: handoff.qemu?.argv || []"),
+            response.contains("function shellCommand(argv)"),
             "{response}"
         );
         assert!(
-            response.contains("serveArgv: handoff.serveDirectV86?.argv || []"),
+            response.contains("function shellQuoteArg(value)"),
+            "{response}"
+        );
+        assert!(
+            response.contains("await navigator.clipboard.writeText(command)"),
             "{response}"
         );
         assert!(
@@ -2724,6 +2782,14 @@ mod tests {
         );
         assert!(
             response.contains("<label for=\"rootfs\">rootfs handoff</label>"),
+            "{response}"
+        );
+        assert!(
+            response.contains("<button id=\"copy-qemu\" disabled>Copy QEMU command</button>"),
+            "{response}"
+        );
+        assert!(
+            response.contains("<button id=\"copy-serve\" disabled>Copy serve command</button>"),
             "{response}"
         );
         assert!(
@@ -3276,6 +3342,7 @@ mod tests {
         fs::create_dir_all(root.join("boot")).unwrap();
         fs::create_dir_all(root.join("bin")).unwrap();
         fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
+        fs::write(root.join("boot/initrd"), b"initrd").unwrap();
         fs::write(root.join("bin/init"), b"init").unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -3309,6 +3376,7 @@ mod tests {
         let manifest: serde_json::Value = serde_json::from_slice(body).unwrap();
         let root = fs::canonicalize(root).unwrap();
         let kernel = root.join("boot/bzImage");
+        let initrd = root.join("boot/initrd");
         let init = root.join("bin/init");
         let qemu = &manifest["qemu"];
         let serve = &manifest["serveDirectV86"];
@@ -3322,6 +3390,7 @@ mod tests {
         assert_eq!(qemu["kind"], "wanix-qemu-virtio9p.v1");
         assert_eq!(qemu["rootPath"], root.display().to_string());
         assert_eq!(qemu["kernelPath"], kernel.display().to_string());
+        assert_eq!(qemu["initrdPath"], initrd.display().to_string());
         assert_eq!(qemu["mountTag"], "host9p");
         assert_eq!(qemu["securityModel"], "mapped-xattr");
         assert_eq!(serve["bundle"], "direct-v86");

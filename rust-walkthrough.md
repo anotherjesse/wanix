@@ -394,13 +394,17 @@ curl http://127.0.0.1:7654/.well-known/rootfs.json
 
 The generated direct-v86 page also reads that discovery route. When the handoff
 is available, it renders a rootfs summary and exposes the full manifest as
-`window.wanixRootfsHandoff` for local browser tooling.
+`window.wanixRootfsHandoff` for local browser tooling. It also renders copyable
+QEMU and direct-v86 serve commands from the trusted local manifest.
 
 For host-specific 9P policy, tune the generated QEMU command before launching:
 
 ```sh
 $WANIX qemu --root /tmp/wanix-rootfs --security-model none --mount-tag wanixroot
 ```
+
+If the prepared root includes `/boot/initrd`, QEMU handoffs include `-initrd`
+automatically; pass `--initrd PATH` to use a different initrd.
 
 For scripts or editor integration, ask for the same validated handoff as JSON:
 
@@ -425,6 +429,7 @@ the full cmdline with `--cmdline`, include the matching `root=TAG` yourself.
 > argv. The shell and JSON QEMU outputs share one validated argv so scripts and
 > future UI surfaces can consume the handoff without reinterpreting a shell
 > string.
+> Prepared-root initrds are part of that argv contract when present.
 > QEMU mount tags and local 9P security models stay explicit because they
 > affect the guest boot contract and host filesystem trust boundary.
 

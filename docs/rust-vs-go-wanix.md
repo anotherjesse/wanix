@@ -440,7 +440,7 @@ That set of commands says a lot about the intended shape:
 - prepare a Linux guest root and emit shell or `wanix-rootfs.v1` JSON handoffs
   for native QEMU and direct-v86;
 - print a native QEMU/KVM virtio-9p handoff command with explicit host 9P
-  mount tag and security-model knobs for the same guest-root shape as
+  mount tag, initrd, and security-model knobs for the same guest-root shape as
   direct-v86, or emit the same handoff as a machine-readable argv manifest;
 - serve browser assets, protocol routes, optional Wanix services, workbench,
   and direct-v86 entrypoints from one native listener.
@@ -508,6 +508,8 @@ boot log and `window.wanixV86BootLog`, reports v86 lifecycle status, sends
 browser console resize events to hvc0, reports boot readiness from the served
 root by checking for a kernel and `/bin/init`, and surfaces the trusted-local
 rootfs handoff as `window.wanixRootfsHandoff` when discovery says it is ready.
+For local handoff workflows, it also renders copyable QEMU and direct-v86 serve
+commands derived from that manifest.
 
 That means the browser is still very much in the story. The difference is that
 the browser page discovers and attaches to a native Wanix export. It is a
@@ -548,15 +550,17 @@ Wanix, not a normal Wanix WASI task.
 
 Native QEMU is the other path. `wanix-rust qemu` targets real host execution of
 QEMU/KVM or software emulation with the same guest-root shape: a Linux kernel,
-an hvc0 virtconsole, and a virtio-9p root mounted from a Wanix/host directory.
-It can tune the generated guest mount tag and QEMU local 9P `security_model`
-without changing the default `host9p`/`mapped-xattr` handoff; a fully replaced
-kernel cmdline remains caller-owned. `wanix-rust rootfs --json` can package the
-prepared root, boot markers, default QEMU manifest, and direct-v86 serve argv in
-a `wanix-rootfs.v1` manifest. A served prepared root publishes the same manifest
+an optional initrd, an hvc0 virtconsole, and a virtio-9p root mounted from a
+Wanix/host directory. It can tune the generated guest mount tag, explicit
+initrd, and QEMU local 9P `security_model` without changing the default
+`host9p`/`mapped-xattr` handoff; a fully replaced kernel cmdline remains
+caller-owned. `wanix-rust rootfs --json` can package the prepared root, boot
+markers, default QEMU manifest, and direct-v86 serve argv in a
+`wanix-rootfs.v1` manifest. A served prepared root publishes the same manifest
 at `/.well-known/rootfs.json` to loopback clients, while
-`wanix-rust qemu --json` renders just the validated QEMU argv and boot policy
-for scripts or future editor/serve surfaces.
+`wanix-rust qemu --json` renders just the validated QEMU argv, discovered or
+explicit initrd path, and boot policy for scripts or future editor/serve
+surfaces.
 That path is closer to "use the hardware when available." Today it is a validated
 handoff command, not a
 supervised Wanix VM process, but it is the right native parity path for serious

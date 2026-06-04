@@ -57,7 +57,7 @@ const USAGE: &str = concat!(
     "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust rootfs --archive FILE.tgz --out DIR [--json]\n",
-    "       wanix-rust qemu --root DIR [--kernel PATH] [--cmdline TEXT] [--append TEXT ...] ",
+    "       wanix-rust qemu --root DIR [--kernel PATH] [--initrd PATH] [--cmdline TEXT] [--append TEXT ...] ",
     "[--qemu-bin PATH] [--memory-mb N] ",
     "[--mount-tag TAG] [--security-model MODEL] ",
     "[--json] [--no-kvm] [--exec]\n",
@@ -1988,6 +1988,7 @@ mod tests {
             &archive,
             &[
                 ("boot/bzImage", 0o644, b"kernel".as_slice()),
+                ("boot/initrd", 0o644, b"initrd".as_slice()),
                 ("bin/init", 0o755, b"#!/bin/sh\n".as_slice()),
                 ("etc/motd", 0o644, b"hello rootfs\n".as_slice()),
             ],
@@ -2009,6 +2010,7 @@ mod tests {
         assert_eq!(fs::read(out.join("etc/motd")).unwrap(), b"hello rootfs\n");
         let out = fs::canonicalize(out).unwrap();
         let kernel = out.join("boot/bzImage");
+        let initrd = out.join("boot/initrd");
         let init = out.join("bin/init");
         let manifest: serde_json::Value = serde_json::from_slice(output.stdout()).unwrap();
         let qemu = &manifest["qemu"];
@@ -2027,6 +2029,8 @@ mod tests {
             "1".to_owned(),
             "-kernel".to_owned(),
             kernel.display().to_string(),
+            "-initrd".to_owned(),
+            initrd.display().to_string(),
             "-append".to_owned(),
             cmdline.clone(),
             "-fsdev".to_owned(),
@@ -2074,6 +2078,7 @@ mod tests {
         assert_eq!(qemu["kind"], "wanix-qemu-virtio9p.v1");
         assert_eq!(qemu["rootPath"], out.display().to_string());
         assert_eq!(qemu["kernelPath"], kernel.display().to_string());
+        assert_eq!(qemu["initrdPath"], initrd.display().to_string());
         assert_eq!(qemu["cmdline"], cmdline);
         assert_eq!(qemu["mountTag"], "host9p");
         assert_eq!(qemu["securityModel"], "mapped-xattr");
@@ -2363,6 +2368,7 @@ mod tests {
         assert_eq!(argv, expected_argv);
         assert_eq!(manifest["rootPath"], root.display().to_string());
         assert_eq!(manifest["kernelPath"], kernel.display().to_string());
+        assert!(manifest["initrdPath"].is_null());
         assert_eq!(manifest["cmdline"], cmdline);
         assert_eq!(manifest["memoryMb"], 512);
         assert_eq!(manifest["kvm"], true);
@@ -2388,6 +2394,55 @@ mod tests {
         let stdout = String::from_utf8(output.stdout().to_vec()).unwrap();
         let kernel = fs::canonicalize(kernel).unwrap();
         assert!(stdout.contains(&format!("-kernel {}", kernel.display())));
+    }
+
+    #[test]
+    fn qemu_command_includes_discovered_and_explicit_initrd() {
+        let root = temp_dir("wanix-cli-qemu-initrd-root");
+        let boot = root.join("boot");
+        fs::create_dir_all(&boot).unwrap();
+        let kernel = boot.join("bzImage");
+        let initrd = boot.join("initrd");
+        let custom_initrd = root.join("custom-initrd");
+        fs::write(&kernel, b"kernel").unwrap();
+        fs::write(&initrd, b"initrd").unwrap();
+        fs::write(&custom_initrd, b"custom initrd").unwrap();
+
+        let discovered = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+        ])
+        .unwrap();
+
+        let stdout = String::from_utf8(discovered.stdout().to_vec()).unwrap();
+        let initrd = fs::canonicalize(initrd).unwrap();
+        assert!(stdout.contains(&format!("-initrd {}", initrd.display())));
+
+        let explicit = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--initrd".to_owned(),
+            custom_initrd.display().to_string(),
+            "--json".to_owned(),
+        ])
+        .unwrap();
+
+        let custom_initrd = fs::canonicalize(custom_initrd).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(explicit.stdout()).unwrap();
+        let argv = manifest["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        let custom_initrd_arg = custom_initrd.display().to_string();
+        assert_eq!(manifest["initrdPath"], custom_initrd_arg);
+        assert!(
+            argv.windows(2)
+                .any(|window| window[0] == "-initrd" && window[1] == custom_initrd_arg)
+        );
     }
 
     #[test]
@@ -2496,6 +2551,38 @@ mod tests {
             invalid_security_model
                 .to_string()
                 .contains("expects one of mapped-xattr, mapped-file, passthrough, none")
+        );
+
+        let initrd_root = temp_dir("wanix-cli-qemu-missing-initrd-root");
+        let initrd_boot = initrd_root.join("boot");
+        fs::create_dir_all(&initrd_boot).unwrap();
+        fs::write(initrd_boot.join("bzImage"), b"kernel").unwrap();
+        let missing_initrd = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            initrd_root.display().to_string(),
+            "--initrd".to_owned(),
+            initrd_root.join("missing-initrd").display().to_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(missing_initrd.exit_code(), 1);
+        assert!(missing_initrd.to_string().contains("qemu --initrd"));
+
+        let duplicate_initrd = run(vec![
+            "qemu".to_owned(),
+            "--root".to_owned(),
+            initrd_root.display().to_string(),
+            "--initrd".to_owned(),
+            initrd_root.join("first").display().to_string(),
+            "--initrd".to_owned(),
+            initrd_root.join("second").display().to_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(duplicate_initrd.exit_code(), 2);
+        assert!(
+            duplicate_initrd
+                .to_string()
+                .contains("qemu accepts only one --initrd")
         );
 
         let invalid_json_exec = run(vec![

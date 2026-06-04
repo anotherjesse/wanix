@@ -15,11 +15,14 @@ const DEFAULT_MOUNT_TAG: &str = "host9p";
 const DEFAULT_SECURITY_MODEL: &str = "mapped-xattr";
 const VALID_SECURITY_MODELS: &[&str] = &["mapped-xattr", "mapped-file", "passthrough", "none"];
 const DEFAULT_KERNEL_CANDIDATES: &[&str] = &["boot/bzImage", "bzImage"];
+const DEFAULT_INITRD_CANDIDATES: &[&str] =
+    &["boot/initrd", "boot/initrd.img", "initrd", "initrd.img"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QemuCommand {
     root_path: PathBuf,
     kernel_path: Option<PathBuf>,
+    initrd_path: Option<PathBuf>,
     qemu_bin: String,
     memory_mb: u32,
     kvm: bool,
@@ -40,6 +43,7 @@ enum QemuOutputFormat {
 struct QemuHandoff {
     root_path: PathBuf,
     kernel_path: PathBuf,
+    initrd_path: Option<PathBuf>,
     qemu_bin: String,
     memory_mb: u32,
     kvm: bool,
@@ -52,6 +56,7 @@ struct QemuHandoff {
 pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliError> {
     let mut root_path = None;
     let mut kernel_path = None;
+    let mut initrd_path = None;
     let mut qemu_bin = DEFAULT_QEMU_BIN.to_owned();
     let mut memory_mb = DEFAULT_MEMORY_MB;
     let mut kvm = true;
@@ -79,6 +84,16 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
                 return Err(CliError::usage("qemu accepts only one --kernel"));
             }
             kernel_path = Some(PathBuf::from(value));
+            i += 1;
+        } else if args[i] == "--initrd" {
+            i += 1;
+            let value = args
+                .get(i)
+                .ok_or_else(|| CliError::usage("qemu --initrd expects PATH"))?;
+            if initrd_path.is_some() {
+                return Err(CliError::usage("qemu accepts only one --initrd"));
+            }
+            initrd_path = Some(PathBuf::from(value));
             i += 1;
         } else if args[i] == "--cmdline" {
             i += 1;
@@ -150,6 +165,7 @@ pub(super) fn parse_qemu_command(args: &[OsString]) -> Result<QemuCommand, CliEr
     Ok(QemuCommand {
         root_path,
         kernel_path,
+        initrd_path,
         qemu_bin,
         memory_mb,
         kvm,
@@ -217,6 +233,7 @@ pub(crate) fn qemu_default_json_handoff_for_root(root_path: &Path) -> Result<Str
     let command = QemuCommand {
         root_path: root_path.to_path_buf(),
         kernel_path: None,
+        initrd_path: None,
         qemu_bin: DEFAULT_QEMU_BIN.to_owned(),
         memory_mb: DEFAULT_MEMORY_MB,
         kvm: true,
@@ -244,6 +261,7 @@ fn qemu_virtio9p_handoff(command: &QemuCommand) -> Result<QemuHandoff, CliError>
     }
     let root_path = canonical_existing_dir(&command.root_path, "qemu --root")?;
     let kernel_path = resolve_kernel_path(command, &root_path)?;
+    let initrd_path = resolve_initrd_path(command, &root_path)?;
     qemu_validate_root_path_for_handoff(&root_path)?;
     let root = root_path.to_string_lossy();
     let cmdline = qemu_cmdline(command);
@@ -264,6 +282,14 @@ fn qemu_virtio9p_handoff(command: &QemuCommand) -> Result<QemuHandoff, CliError>
         "1".to_owned(),
         "-kernel".to_owned(),
         kernel_path.to_string_lossy().into_owned(),
+    ]);
+    if let Some(initrd_path) = &initrd_path {
+        argv.extend([
+            "-initrd".to_owned(),
+            initrd_path.to_string_lossy().into_owned(),
+        ]);
+    }
+    argv.extend([
         "-append".to_owned(),
         cmdline.clone(),
         "-fsdev".to_owned(),
@@ -284,6 +310,7 @@ fn qemu_virtio9p_handoff(command: &QemuCommand) -> Result<QemuHandoff, CliError>
     Ok(QemuHandoff {
         root_path,
         kernel_path,
+        initrd_path,
         qemu_bin: command.qemu_bin.clone(),
         memory_mb: command.memory_mb,
         kvm: command.kvm,
@@ -313,6 +340,22 @@ fn resolve_kernel_path(command: &QemuCommand, root_path: &Path) -> Result<PathBu
         ),
         1,
     ))
+}
+
+fn resolve_initrd_path(
+    command: &QemuCommand,
+    root_path: &Path,
+) -> Result<Option<PathBuf>, CliError> {
+    if let Some(initrd_path) = &command.initrd_path {
+        return canonical_existing_file(initrd_path, "qemu --initrd").map(Some);
+    }
+    for candidate in DEFAULT_INITRD_CANDIDATES {
+        let path = root_path.join(candidate);
+        if path.is_file() {
+            return canonical_existing_file(&path, "qemu discovered initrd").map(Some);
+        }
+    }
+    Ok(None)
 }
 
 fn qemu_cmdline(command: &QemuCommand) -> String {
@@ -427,12 +470,18 @@ fn validate_qemu_option_fragment(value: &str, label: &str) -> Result<(), CliErro
 }
 
 fn qemu_handoff_json(handoff: &QemuHandoff) -> String {
+    let initrd_path = handoff
+        .initrd_path
+        .as_ref()
+        .map(|path| json_string(path.to_string_lossy().as_ref()))
+        .unwrap_or_else(|| "null".to_owned());
     format!(
-        "{{\n  \"kind\":\"wanix-qemu-virtio9p.v1\",\n  \"qemuBin\":{},\n  \"argv\":{},\n  \"rootPath\":{},\n  \"kernelPath\":{},\n  \"cmdline\":{},\n  \"memoryMb\":{},\n  \"kvm\":{},\n  \"mountTag\":{},\n  \"securityModel\":{},\n  \"console\":\"hvc0\",\n  \"rootFilesystem\":\"9p\"\n}}",
+        "{{\n  \"kind\":\"wanix-qemu-virtio9p.v1\",\n  \"qemuBin\":{},\n  \"argv\":{},\n  \"rootPath\":{},\n  \"kernelPath\":{},\n  \"initrdPath\":{},\n  \"cmdline\":{},\n  \"memoryMb\":{},\n  \"kvm\":{},\n  \"mountTag\":{},\n  \"securityModel\":{},\n  \"console\":\"hvc0\",\n  \"rootFilesystem\":\"9p\"\n}}",
         json_string(&handoff.qemu_bin),
         json_string_array(&handoff.argv),
         json_string(handoff.root_path.to_string_lossy().as_ref()),
         json_string(handoff.kernel_path.to_string_lossy().as_ref()),
+        initrd_path,
         json_string(&handoff.cmdline),
         handoff.memory_mb,
         if handoff.kvm { "true" } else { "false" },
