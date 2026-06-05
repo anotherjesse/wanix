@@ -1,65 +1,24 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use crate::{
-    DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
-};
+use crate::{DirEntry, File, FileSystem, FsError, FsResult, Metadata, NormalizedPath, OpenOptions};
 
 mod file;
+mod node;
+mod open;
+mod rename;
 mod tree;
 
 use file::MemFile;
-use tree::{direct_children, is_descendant_path, rebased_path};
+use node::{DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, Node, PERMISSION_MODE_MASK};
+use open::prepare_open;
+use rename::rename_node_tree;
+use tree::direct_children;
 
 /// In-memory filesystem used by the first Rust Wanix tests and demos.
 #[derive(Debug, Clone)]
 pub struct MemFs {
     nodes: Arc<RwLock<BTreeMap<NormalizedPath, Node>>>,
-}
-
-#[derive(Debug, Clone)]
-struct Node {
-    kind: FileType,
-    mode: u32,
-    data: Vec<u8>,
-    accessed_time_ns: u64,
-    modified_time_ns: u64,
-    changed_time_ns: u64,
-}
-
-impl Node {
-    fn dir(mode: u32) -> Self {
-        Self {
-            kind: FileType::Directory,
-            mode,
-            data: Vec::new(),
-            accessed_time_ns: 0,
-            modified_time_ns: 0,
-            changed_time_ns: 0,
-        }
-    }
-
-    fn file(data: Vec<u8>, mode: u32) -> Self {
-        Self {
-            kind: FileType::File,
-            mode,
-            data,
-            accessed_time_ns: 0,
-            modified_time_ns: 0,
-            changed_time_ns: 0,
-        }
-    }
-
-    fn metadata(&self, len: u64) -> Metadata {
-        Metadata::new_with_times(
-            self.kind,
-            len,
-            self.mode,
-            self.accessed_time_ns,
-            self.modified_time_ns,
-            self.changed_time_ns,
-        )
-    }
 }
 
 impl Default for MemFs {
@@ -73,7 +32,7 @@ impl MemFs {
     #[must_use]
     pub fn new() -> Self {
         let mut nodes = BTreeMap::new();
-        nodes.insert(NormalizedPath::root(), Node::dir(0o755));
+        nodes.insert(NormalizedPath::root(), Node::dir(DEFAULT_DIR_MODE));
         Self {
             nodes: Arc::new(RwLock::new(nodes)),
         }
@@ -99,12 +58,12 @@ impl MemFs {
             .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
         for dir in stack.into_iter().rev() {
             match nodes.get(&dir) {
-                Some(node) if node.kind != FileType::Directory => {
+                Some(node) if !node.is_directory() => {
                     return Err(FsError::NotDirectory);
                 }
                 Some(_) => {}
                 None => {
-                    nodes.insert(dir, Node::dir(0o755));
+                    nodes.insert(dir, Node::dir(DEFAULT_DIR_MODE));
                 }
             }
         }
@@ -129,10 +88,10 @@ impl MemFs {
             .nodes
             .write()
             .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
-        if matches!(nodes.get(&path), Some(node) if node.kind == FileType::Directory) {
+        if matches!(nodes.get(&path), Some(node) if node.is_directory()) {
             return Err(FsError::IsDirectory);
         }
-        nodes.insert(path, Node::file(data.as_ref().to_vec(), 0o644));
+        nodes.insert(path, Node::file(data.as_ref().to_vec(), DEFAULT_FILE_MODE));
         Ok(())
     }
 
@@ -148,7 +107,7 @@ impl MemFs {
             .read()
             .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
         let node = nodes.get(&path).ok_or(FsError::NotFound)?;
-        if node.kind == FileType::Directory {
+        if node.is_directory() {
             return Err(FsError::IsDirectory);
         }
         Ok(node.data.clone())
@@ -159,9 +118,10 @@ impl MemFs {
         path: &NormalizedPath,
     ) -> FsResult<Metadata> {
         let node = nodes.get(path).ok_or(FsError::NotFound)?;
-        let len = match node.kind {
-            FileType::Directory => 2 + direct_children(nodes, path).count() as u64,
-            FileType::File | FileType::Symlink => node.data.len() as u64,
+        let len = if node.is_directory() {
+            2 + direct_children(nodes, path).count() as u64
+        } else {
+            node.data.len() as u64
         };
         Ok(node.metadata(len))
     }
@@ -169,38 +129,12 @@ impl MemFs {
 
 impl FileSystem for MemFs {
     fn open(&self, path: &NormalizedPath, options: OpenOptions) -> FsResult<Box<dyn File>> {
-        if options.create && !options.write {
-            return Err(FsError::PermissionDenied);
-        }
-        if options.truncate && !options.write {
-            return Err(FsError::PermissionDenied);
-        }
-        if path.as_str() == "." && (options.write || options.create || options.truncate) {
-            return Err(FsError::IsDirectory);
-        }
-
         {
             let mut nodes = self
                 .nodes
                 .write()
                 .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
-            if options.create && !nodes.contains_key(path) {
-                let parent = path.parent().ok_or(FsError::IsDirectory)?;
-                match nodes.get(&parent) {
-                    Some(node) if node.kind == FileType::Directory => {}
-                    Some(_) => return Err(FsError::NotDirectory),
-                    None => return Err(FsError::NotFound),
-                }
-                nodes.insert(path.clone(), Node::file(Vec::new(), 0o644));
-            }
-
-            let node = nodes.get_mut(path).ok_or(FsError::NotFound)?;
-            if node.kind == FileType::Directory {
-                return Err(FsError::IsDirectory);
-            }
-            if options.truncate {
-                node.data.clear();
-            }
+            prepare_open(&mut nodes, path, options)?;
         }
 
         Ok(Box::new(MemFile::new(
@@ -224,7 +158,7 @@ impl FileSystem for MemFs {
             .read()
             .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
         let node = nodes.get(path).ok_or(FsError::NotFound)?;
-        if node.kind != FileType::Directory {
+        if !node.is_directory() {
             return Err(FsError::NotDirectory);
         }
 
@@ -249,11 +183,11 @@ impl FileSystem for MemFs {
         }
         let parent = path.parent().ok_or(FsError::AlreadyExists)?;
         match nodes.get(&parent) {
-            Some(node) if node.kind == FileType::Directory => {}
+            Some(node) if node.is_directory() => {}
             Some(_) => return Err(FsError::NotDirectory),
             None => return Err(FsError::NotFound),
         }
-        nodes.insert(path.clone(), Node::dir(0o755));
+        nodes.insert(path.clone(), Node::dir(DEFAULT_DIR_MODE));
         Ok(())
     }
 
@@ -263,7 +197,7 @@ impl FileSystem for MemFs {
             .write()
             .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
         let node = nodes.get(path).ok_or(FsError::NotFound)?;
-        if node.kind == FileType::Directory {
+        if node.is_directory() {
             return Err(FsError::IsDirectory);
         }
         nodes.remove(path);
@@ -279,7 +213,7 @@ impl FileSystem for MemFs {
             .write()
             .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
         let node = nodes.get(path).ok_or(FsError::NotFound)?;
-        if node.kind != FileType::Directory {
+        if !node.is_directory() {
             return Err(FsError::NotDirectory);
         }
         if direct_children(&nodes, path).next().is_some() {
@@ -290,65 +224,11 @@ impl FileSystem for MemFs {
     }
 
     fn rename(&self, old_path: &NormalizedPath, new_path: &NormalizedPath) -> FsResult<()> {
-        if old_path.as_str() == "." || new_path.as_str() == "." {
-            return Err(FsError::PermissionDenied);
-        }
-
         let mut nodes = self
             .nodes
             .write()
             .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
-        let old_node = nodes.get(old_path).cloned().ok_or(FsError::NotFound)?;
-        if old_path == new_path {
-            return Ok(());
-        }
-        if old_node.kind == FileType::Directory && is_descendant_path(new_path, old_path) {
-            return Err(FsError::PermissionDenied);
-        }
-        let new_parent = new_path.parent().ok_or(FsError::PermissionDenied)?;
-        match nodes.get(&new_parent) {
-            Some(node) if node.kind == FileType::Directory => {}
-            Some(_) => return Err(FsError::NotDirectory),
-            None => return Err(FsError::NotFound),
-        }
-
-        if let Some(new_node) = nodes.get(new_path) {
-            match (old_node.kind, new_node.kind) {
-                (FileType::Directory, FileType::Directory)
-                    if direct_children(&nodes, new_path).next().is_some() =>
-                {
-                    return Err(FsError::NotEmpty);
-                }
-                (FileType::Directory, FileType::Directory) => {}
-                (FileType::Directory, _) => return Err(FsError::NotDirectory),
-                (_, FileType::Directory) => return Err(FsError::IsDirectory),
-                _ => {}
-            }
-        }
-        nodes.remove(new_path);
-
-        if old_node.kind == FileType::Directory {
-            let mut moved = Vec::new();
-            for (path, node) in nodes.iter() {
-                if path == old_path || is_descendant_path(path, old_path) {
-                    moved.push((
-                        path.clone(),
-                        rebased_path(path, old_path, new_path)?,
-                        node.clone(),
-                    ));
-                }
-            }
-            for (old, _, _) in &moved {
-                nodes.remove(old);
-            }
-            for (_, new, node) in moved {
-                nodes.insert(new, node);
-            }
-        } else {
-            nodes.remove(old_path);
-            nodes.insert(new_path.clone(), old_node);
-        }
-        Ok(())
+        rename_node_tree(&mut nodes, old_path, new_path)
     }
 
     fn set_times(
@@ -362,8 +242,7 @@ impl FileSystem for MemFs {
             .write()
             .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
         let node = nodes.get_mut(path).ok_or(FsError::NotFound)?;
-        node.accessed_time_ns = accessed_time_ns;
-        node.modified_time_ns = modified_time_ns;
+        node.set_times(accessed_time_ns, modified_time_ns);
         Ok(())
     }
 
@@ -373,7 +252,7 @@ impl FileSystem for MemFs {
             .write()
             .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
         let node = nodes.get_mut(path).ok_or(FsError::NotFound)?;
-        node.mode = permissions & 0o7777;
+        node.set_permissions(permissions & PERMISSION_MODE_MASK);
         Ok(())
     }
 }

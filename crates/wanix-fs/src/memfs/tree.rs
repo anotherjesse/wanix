@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{FsError, FsResult, NormalizedPath};
 
-use super::Node;
+use super::node::Node;
 
 pub(super) fn direct_children<'a>(
     nodes: &'a BTreeMap<NormalizedPath, Node>,

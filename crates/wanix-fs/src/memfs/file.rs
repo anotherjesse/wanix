@@ -5,7 +5,7 @@ use crate::{
     File, FileSeekFrom, FileType, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
 };
 
-use super::{MemFs, Node};
+use super::{MemFs, node::Node};
 
 #[derive(Debug)]
 pub(super) struct MemFile {
