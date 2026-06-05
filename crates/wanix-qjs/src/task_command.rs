@@ -4,15 +4,13 @@
 //! lives in [`wanix_task`]; this module re-exports it and keeps the qjs-only
 //! test helper.
 
-pub(crate) use wanix_task::{
-    task_command, task_program_for_check, task_wasi_argv, task_wasi_cwd, task_wasi_env,
-};
+pub(crate) use wanix_task::{task_command, task_program_for_check, task_wasi_argv};
 
 #[cfg(test)]
 use std::collections::BTreeMap;
 
 #[cfg(test)]
-use wanix_task::Task;
+use wanix_task::{Task, task_wasi_env};
 
 #[cfg(test)]
 pub(crate) fn task_env_map(task: &Task) -> BTreeMap<String, String> {

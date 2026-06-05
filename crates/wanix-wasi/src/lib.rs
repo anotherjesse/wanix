@@ -9,6 +9,7 @@ mod config;
 mod ctx;
 mod error;
 mod fd;
+mod task_config;
 
 #[cfg(test)]
 mod tests;
@@ -20,6 +21,7 @@ pub use fd::{
     FileStat, WasiFd, WasiFdStat, WasiFileAccess, WasiFileType, WasiFilestatSetTimes,
     WasiLookupFlags, WasiOpenOptions, WasiPathOpen, WasiPrestat, WasiRights,
 };
+pub use task_config::task_wasi_config;
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix-backed wasi imports";

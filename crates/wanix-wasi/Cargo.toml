@@ -9,10 +9,8 @@ version.workspace = true
 
 [dependencies]
 wanix-fs = { path = "../wanix-fs" }
-wanix-vfs = { path = "../wanix-vfs" }
-
-[dev-dependencies]
 wanix-task = { path = "../wanix-task" }
+wanix-vfs = { path = "../wanix-vfs" }
 
 [lib]
 name = "wanix_wasi"
