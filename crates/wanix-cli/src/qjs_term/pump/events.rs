@@ -65,16 +65,7 @@ impl ProcessResizeSource {
             #[cfg(unix)]
             Self::TerminalSizeFd(source) => source.next_resize(),
             #[cfg(all(test, unix))]
-            Self::Queue(queue) => {
-                let Some((columns, rows)) = queue
-                    .lock()
-                    .map_err(|_| CliError::new("test resize queue lock poisoned", 1))?
-                    .pop_front()
-                else {
-                    return Ok(None);
-                };
-                Ok(Some(TermResize { columns, rows }))
-            }
+            Self::Queue(queue) => next_queued_resize(queue),
         }
     }
 }
@@ -138,17 +129,23 @@ impl TerminalSizeSource {
     }
 }
 
-impl TermResize {
-    pub(in crate::qjs_term) fn payload(&self) -> Vec<u8> {
-        format!("{} {}\n", self.columns, self.rows).into_bytes()
-    }
+#[cfg(all(test, unix))]
+fn next_queued_resize(
+    queue: &Arc<Mutex<VecDeque<(u16, u16)>>>,
+) -> Result<Option<TermResize>, CliError> {
+    let Some((columns, rows)) = queue
+        .lock()
+        .map_err(|_| CliError::new("test resize queue lock poisoned", 1))?
+        .pop_front()
+    else {
+        return Ok(None);
+    };
+    Ok(Some(TermResize { columns, rows }))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ProcessEventSources, ProcessInputMode, ProcessResizeSource, TermResize, TerminalPumpPolicy,
-    };
+    use super::{ProcessEventSources, ProcessInputMode, ProcessResizeSource, TerminalPumpPolicy};
     use std::time::Duration;
 
     #[test]
@@ -158,16 +155,6 @@ mod tests {
         assert_eq!(sources.input_mode, ProcessInputMode::Blocking);
         assert!(matches!(sources.resize_source, ProcessResizeSource::None));
         assert_eq!(sources.resize_source.next_resize().unwrap(), None);
-    }
-
-    #[test]
-    fn terminal_resize_payload_matches_winch_contract() {
-        let resize = TermResize {
-            columns: 132,
-            rows: 43,
-        };
-
-        assert_eq!(resize.payload(), b"132 43\n");
     }
 
     #[test]
@@ -219,14 +206,14 @@ mod tests {
         assert_eq!(sources.input_mode, ProcessInputMode::PollFd(9));
         assert_eq!(
             sources.resize_source.next_resize().unwrap(),
-            Some(TermResize {
+            Some(super::TermResize {
                 columns: 80,
                 rows: 24
             })
         );
         assert_eq!(
             sources.resize_source.next_resize().unwrap(),
-            Some(TermResize {
+            Some(super::TermResize {
                 columns: 100,
                 rows: 30
             })

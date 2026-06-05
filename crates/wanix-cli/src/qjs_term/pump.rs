@@ -149,8 +149,12 @@ pub(super) fn feed_terminal_resize_after_eval(
             ..OpenOptions::default()
         },
     )?;
-    winch.write(&resize.payload())?;
+    winch.write(&terminal_resize_payload(resize))?;
     Ok(())
+}
+
+fn terminal_resize_payload(resize: &TermResize) -> Vec<u8> {
+    format!("{} {}\n", resize.columns, resize.rows).into_bytes()
 }
 
 pub(super) fn drain_terminal_output(
@@ -184,5 +188,20 @@ pub(super) fn drain_terminal_output_bytes(
             return Ok(output);
         }
         output.extend_from_slice(&buf[..count]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TermResize, terminal_resize_payload};
+
+    #[test]
+    fn terminal_resize_payload_matches_winch_contract() {
+        let resize = TermResize {
+            columns: 132,
+            rows: 43,
+        };
+
+        assert_eq!(terminal_resize_payload(&resize), b"132 43\n");
     }
 }
