@@ -98,6 +98,57 @@ fn task_carries_id_spec_and_namespace() {
 }
 
 #[test]
+fn task_debug_summarizes_state_without_environment_or_namespace() {
+    let task = Task::new(
+        TaskId::new(7),
+        TaskSpec::new("bin/app").unwrap(),
+        wanix_vfs::Namespace::new(),
+    );
+    task.set_cmd("bin/app --flag").unwrap();
+    task.set_env_lines("SECRET=value").unwrap();
+    task.set_dir("work").unwrap();
+    task.set_exit("13").unwrap();
+    task.bind(
+        Arc::new(MemFs::new()),
+        ".",
+        "mounted-secret",
+        BindOptions::default(),
+    )
+    .unwrap();
+
+    let debug = format!("{task:?}");
+
+    assert!(debug.contains("Task"));
+    assert!(debug.contains("id: TaskId(7)"));
+    assert!(debug.contains("kind: \"manual\""));
+    assert!(debug.contains("cmd: \"bin/app --flag\""));
+    assert!(debug.contains("dir: NormalizedPath(\"work\")"));
+    assert!(debug.contains("exit: \"13\""));
+    assert!(!debug.contains("env"));
+    assert!(!debug.contains("namespace"));
+    assert!(!debug.contains("spec"));
+    assert!(!debug.contains("SECRET=value"));
+    assert!(!debug.contains("mounted-secret"));
+}
+
+#[test]
+fn task_table_debug_summarizes_task_and_driver_keys() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    table.register_noop_driver("noop").unwrap();
+    table.allocate_root("qjs").unwrap();
+    table.allocate_root("noop").unwrap();
+
+    let debug = format!("{table:?}");
+
+    assert!(debug.contains("TaskTable"));
+    assert!(debug.contains("next_id: 2"));
+    assert!(debug.contains("tasks: [TaskId(1), TaskId(2)]"));
+    assert!(debug.contains("drivers: [\"noop\", \"qjs\"]"));
+    assert!(!debug.contains("Task {"));
+}
+
+#[test]
 fn task_spec_can_be_replaced_without_mutating_task_fields() {
     let task = Task::new(
         TaskId::new(1),
