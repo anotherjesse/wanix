@@ -1,7 +1,12 @@
 use wanix_fs::{DirEntry, File, FileSeekFrom, FileType, FsError, FsResult, Metadata};
 
-use crate::cmd::parse_cmd_argv;
-use crate::{Fd, OpenFile, Task, TaskId, TaskTable};
+use crate::{OpenFile, Task};
+
+mod control;
+mod new_task;
+
+pub(crate) use control::ControlFile;
+pub(crate) use new_task::NewTaskFile;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FileAccess {
@@ -52,6 +57,15 @@ pub(crate) enum Field {
     Dir,
     Exit,
 }
+
+const TASK_FIELDS: &[(&str, Field)] = &[
+    ("id", Field::Id),
+    ("kind", Field::Kind),
+    ("cmd", Field::Cmd),
+    ("env", Field::Env),
+    ("dir", Field::Dir),
+    ("exit", Field::Exit),
+];
 
 #[derive(Debug)]
 pub(crate) struct FieldFile {
@@ -132,184 +146,6 @@ impl File for FieldFile {
 }
 
 #[derive(Debug)]
-pub(crate) struct ControlFile {
-    table: TaskTable,
-    task: Task,
-    access: FileAccess,
-    data: Vec<u8>,
-}
-
-impl ControlFile {
-    pub(crate) fn new(table: TaskTable, task: Task, access: FileAccess) -> Self {
-        Self {
-            table,
-            task,
-            access,
-            data: Vec::new(),
-        }
-    }
-}
-
-impl File for ControlFile {
-    fn read(&mut self, _buf: &mut [u8]) -> FsResult<usize> {
-        self.access.can_read()?;
-        Ok(0)
-    }
-
-    fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
-        self.access.can_write()?;
-        self.data.extend_from_slice(buf);
-        let command = String::from_utf8_lossy(&self.data).trim().to_owned();
-        match parse_control_command(&self.task, &command)? {
-            ControlCommand::Pending => {}
-            ControlCommand::Start => {
-                self.table.start(self.task.id())?;
-                self.data.clear();
-            }
-            ControlCommand::Bind { source, fd } => {
-                self.task.bind_fd_from_namespace(source, fd)?;
-                self.data.clear();
-            }
-        }
-        Ok(buf.len())
-    }
-
-    fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o755))
-    }
-}
-
-enum ControlCommand {
-    Pending,
-    Start,
-    Bind { source: String, fd: Fd },
-}
-
-fn parse_control_command(task: &Task, command: &str) -> FsResult<ControlCommand> {
-    if command.is_empty() {
-        return Ok(ControlCommand::Pending);
-    }
-    if "start".starts_with(command) {
-        return Ok(if command == "start" {
-            ControlCommand::Start
-        } else {
-            ControlCommand::Pending
-        });
-    }
-
-    let parts = match parse_cmd_argv(command) {
-        Ok(Some(parts)) => parts,
-        Ok(None) => return Ok(ControlCommand::Pending),
-        Err(FsError::Other(message))
-            if message.starts_with("unterminated ") && command_may_be_bind(command) =>
-        {
-            return Ok(ControlCommand::Pending);
-        }
-        Err(err) => return Err(err),
-    };
-    if parts.is_empty() || ("bind".starts_with(parts[0].as_str()) && parts.len() < 3) {
-        return Ok(ControlCommand::Pending);
-    }
-    if let [command, source, destination] = parts.as_slice()
-        && command == "bind"
-    {
-        return Ok(ControlCommand::Bind {
-            source: source.clone(),
-            fd: control_fd_destination(task, destination)?,
-        });
-    }
-    Err(FsError::NotSupported)
-}
-
-fn command_may_be_bind(command: &str) -> bool {
-    command
-        .split_whitespace()
-        .next()
-        .is_some_and(|word| "bind".starts_with(word))
-}
-
-fn control_fd_destination(task: &Task, destination: &str) -> FsResult<Fd> {
-    let parts = destination.split('/').collect::<Vec<_>>();
-    match parts.as_slice() {
-        ["fd", fd] => parse_control_fd(fd),
-        ["#task", "self", "fd", fd] => parse_control_fd(fd),
-        ["#task", task_id, "fd", fd] => {
-            let task_id = task_id.parse::<u64>().map_err(|_| FsError::NotSupported)?;
-            if task_id == task.id().get() {
-                parse_control_fd(fd)
-            } else {
-                Err(FsError::NotSupported)
-            }
-        }
-        _ => Err(FsError::NotSupported),
-    }
-}
-
-fn parse_control_fd(fd: &str) -> FsResult<Fd> {
-    Ok(Fd::new(fd.parse().map_err(|_| FsError::InvalidFd)?))
-}
-
-#[derive(Debug)]
-pub(crate) struct NewTaskFile {
-    table: TaskTable,
-    parent: Option<TaskId>,
-    kind: String,
-    data: Option<Vec<u8>>,
-    offset: usize,
-}
-
-impl NewTaskFile {
-    pub(crate) fn new(table: TaskTable, parent: Option<TaskId>, kind: impl Into<String>) -> Self {
-        Self {
-            table,
-            parent,
-            kind: kind.into(),
-            data: None,
-            offset: 0,
-        }
-    }
-}
-
-impl File for NewTaskFile {
-    fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
-        if self.data.is_none() {
-            let task = match self.parent {
-                Some(parent) => self.table.allocate_child(&self.kind, parent)?,
-                None => self.table.allocate_root(&self.kind)?,
-            };
-            self.data = Some(format!("{}\n", task.id().get()).into_bytes());
-        }
-        read_from_slice(
-            self.data.as_ref().expect("allocation populated data"),
-            &mut self.offset,
-            buf,
-        )
-    }
-
-    fn write(&mut self, _buf: &[u8]) -> FsResult<usize> {
-        Err(FsError::PermissionDenied)
-    }
-
-    fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o555))
-    }
-
-    fn seek(&mut self, from: FileSeekFrom) -> FsResult<u64> {
-        let len = self.data.as_ref().map_or(0, Vec::len);
-        self.offset = seek_offset(self.offset, len, from)?;
-        Ok(self.offset as u64)
-    }
-
-    fn tell(&self) -> FsResult<u64> {
-        Ok(self.offset as u64)
-    }
-
-    fn is_seekable(&self) -> bool {
-        true
-    }
-}
-
-#[derive(Debug)]
 pub(crate) struct FdProxyFile {
     file: OpenFile,
     access: FileAccess,
@@ -368,16 +204,10 @@ pub(crate) fn field_text(task: &Task, field: Field) -> String {
 }
 
 pub(crate) fn field_metadata(task: &Task, field: &str) -> FsResult<Metadata> {
-    let field = match field {
-        "ctl" => return Ok(file_metadata(0, 0o755)),
-        "id" => Field::Id,
-        "kind" => Field::Kind,
-        "cmd" => Field::Cmd,
-        "env" => Field::Env,
-        "dir" => Field::Dir,
-        "exit" => Field::Exit,
-        _ => return Err(FsError::NotFound),
-    };
+    if field == "ctl" {
+        return Ok(file_metadata(0, 0o755));
+    }
+    let field = field_from_name(field)?;
     Ok(file_metadata(
         field_text(task, field).len() as u64,
         field_mode(field),
@@ -413,6 +243,13 @@ fn field_mode(field: Field) -> u32 {
         Field::Id | Field::Kind => 0o555,
         Field::Cmd | Field::Env | Field::Dir | Field::Exit => 0o755,
     }
+}
+
+fn field_from_name(name: &str) -> FsResult<Field> {
+    TASK_FIELDS
+        .iter()
+        .find_map(|(field_name, field)| (*field_name == name).then_some(*field))
+        .ok_or(FsError::NotFound)
 }
 
 fn read_from_slice(data: &[u8], offset: &mut usize, buf: &mut [u8]) -> FsResult<usize> {
