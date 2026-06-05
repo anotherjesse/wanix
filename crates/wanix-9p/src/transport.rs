@@ -222,6 +222,24 @@ mod tests {
         assert!(output.is_empty());
     }
 
+    #[test]
+    fn transport_error_sources_preserve_wrapped_errors() {
+        use std::error::Error as _;
+
+        let io_error = P9TransportError::Io(io::Error::other("closed pipe"));
+        assert!(io_error.source().unwrap().is::<io::Error>());
+
+        let protocol_error = P9TransportError::Protocol(P9Error::InvalidFrameSize { size: 4 });
+        assert!(protocol_error.source().unwrap().is::<P9Error>());
+
+        let server_error =
+            P9TransportError::Server(Wanix9pError::InvalidPath("../escape".to_owned()));
+        assert!(server_error.source().unwrap().is::<Wanix9pError>());
+
+        let truncated = P9TransportError::TruncatedFrame { buffered_len: 4 };
+        assert!(truncated.source().is_none());
+    }
+
     fn server(fs: Arc<MemFs>) -> P9Server {
         let root: Arc<dyn FileSystem> = fs;
         P9Server::new(root)
