@@ -6,12 +6,16 @@ use super::{
     P9Attr, P9AttrBody, P9DirEntry, P9Error, P9Frame, P9FsStat, P9Lock, P9Qid, P9SetAttr, P9Version,
 };
 
+const P9_U16_FIELD_LEN: usize = 2;
+const P9_U32_FIELD_LEN: usize = 4;
+const P9_VERSION_PAYLOAD_PREFIX_LEN: usize = P9_U32_FIELD_LEN + P9_U16_FIELD_LEN;
+
 pub(super) fn encode_version_payload(msize: u32, version: &str) -> Result<Vec<u8>, P9Error> {
     let version_bytes = version.as_bytes();
     let version_len = u16::try_from(version_bytes.len()).map_err(|_| P9Error::StringTooLong {
         len: version_bytes.len(),
     })?;
-    let mut payload = Vec::with_capacity(6 + version_bytes.len());
+    let mut payload = Vec::with_capacity(P9_VERSION_PAYLOAD_PREFIX_LEN + version_bytes.len());
     payload.extend_from_slice(&msize.to_le_bytes());
     payload.extend_from_slice(&version_len.to_le_bytes());
     payload.extend_from_slice(version_bytes);
