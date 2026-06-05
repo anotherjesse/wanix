@@ -1,4 +1,3 @@
 # Existing oversized production modules. The first column is the maximum
 # allowed non-test line count for that path; counts may shrink but must not grow.
 # Remove entries as cleanup passes split files below the 350-line hard limit.
-500 crates/wanix-vfs/src/lib.rs
