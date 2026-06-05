@@ -10,6 +10,8 @@ use super::super::pump::{
 };
 use super::super::{CliError, QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS};
 
+const PROCESS_STDIN_READ_CHUNK_BYTES: usize = 1024;
+
 pub(super) fn run_process_polled_feed_session_after_eval(
     process_stdin: &mut dyn Read,
     input_fd: libc::c_int,
@@ -20,7 +22,7 @@ pub(super) fn run_process_polled_feed_session_after_eval(
     process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let _nonblocking = NonBlockingFd::enter(input_fd)?;
-    let mut bytes = [0; 1024];
+    let mut bytes = [0; PROCESS_STDIN_READ_CHUNK_BYTES];
     let poll_timeout = Duration::from_millis(QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS);
     let policy = pump_state.policy;
     let idle_budget = qjs_shell_idle_event_loop_budget(policy.event_loop_wait_budget);

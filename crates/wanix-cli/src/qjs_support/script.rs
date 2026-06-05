@@ -4,6 +4,8 @@ use wanix_fs::{File, FileSystem, MemFs, NormalizedPath, OpenOptions};
 
 use crate::CliError;
 
+const WANIX_FILE_READ_CHUNK_BYTES: usize = 1024;
+
 pub(crate) fn copy_script_directory(
     script_path: &Path,
     root: &MemFs,
@@ -197,7 +199,7 @@ pub(crate) fn read_file(fs: &dyn FileSystem, path: &str) -> Result<Vec<u8>, CliE
 }
 
 fn read_next_chunk(file: &mut dyn File, out: &mut Vec<u8>) -> Result<bool, CliError> {
-    let mut buf = [0; 1024];
+    let mut buf = [0; WANIX_FILE_READ_CHUNK_BYTES];
     let n = file.read(&mut buf)?;
     if n == 0 {
         return Ok(false);

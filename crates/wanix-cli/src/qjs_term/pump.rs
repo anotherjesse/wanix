@@ -11,6 +11,8 @@ use super::CliError;
 
 mod events;
 
+const TERMINAL_OUTPUT_READ_CHUNK_BYTES: usize = 1024;
+
 pub(super) use events::{
     ProcessEventSources, ProcessInputMode, TermResize, TerminalPumpPolicy, TerminalPumpState,
 };
@@ -194,7 +196,7 @@ pub(super) fn drain_terminal_output_bytes(
         },
     )?;
     let mut output = Vec::new();
-    let mut buf = [0; 1024];
+    let mut buf = [0; TERMINAL_OUTPUT_READ_CHUNK_BYTES];
     loop {
         let count = data.read(&mut buf)?;
         if count == 0 {
