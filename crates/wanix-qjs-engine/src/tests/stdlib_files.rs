@@ -49,6 +49,16 @@ enum OpenKind {
     Directory,
 }
 
+struct PathOpenRequest {
+    dirfd: u32,
+    dirflags: u32,
+    path: String,
+    oflags: u16,
+    rights_base: u64,
+    rights_inheriting: u64,
+    fdflags: u16,
+}
+
 #[derive(Clone)]
 struct LiveFileHost {
     calls: Arc<Mutex<Vec<String>>>,
@@ -115,6 +125,78 @@ impl LiveFileHost {
             Ok(format!("{}/{path}", open.path))
         }
     }
+
+    fn kind_for_path_open(
+        &self,
+        request: &PathOpenRequest,
+    ) -> std::result::Result<OpenKind, QuickJsWasiErrno> {
+        if path_open_creates_file(request) {
+            self.create_open_file(request)
+        } else {
+            self.existing_open_kind(&request.path)
+        }
+    }
+
+    fn create_open_file(
+        &self,
+        request: &PathOpenRequest,
+    ) -> std::result::Result<OpenKind, QuickJsWasiErrno> {
+        let mut files = self.files.lock().expect("test files lock");
+        let symlinks = self.symlinks.lock().expect("test symlink lock");
+        if path_exists(&files, &symlinks, &request.path) {
+            return Err(QuickJsWasiErrno::Isdir);
+        }
+        if path_open_directory_requested(request) {
+            return Err(QuickJsWasiErrno::Notcapable);
+        }
+        drop(symlinks);
+        files.insert(request.path.clone(), Vec::new());
+        Ok(OpenKind::File)
+    }
+
+    fn existing_open_kind(&self, path: &str) -> std::result::Result<OpenKind, QuickJsWasiErrno> {
+        let files = self.files.lock().expect("test files lock");
+        let symlinks = self.symlinks.lock().expect("test symlink lock");
+        open_path_kind(&files, &symlinks, path).ok_or(QuickJsWasiErrno::Noent)
+    }
+
+    fn insert_open_file(&mut self, request: PathOpenRequest, kind: OpenKind) -> u32 {
+        let fd = self.next_fd;
+        self.next_fd += 1;
+        self.open.insert(
+            fd,
+            OpenFile {
+                path: request.path,
+                offset: 0,
+                rights_base: request.rights_base,
+                kind,
+            },
+        );
+        fd
+    }
+
+    fn seek_target_offset(
+        &self,
+        fd: u32,
+        offset: i64,
+        whence: QuickJsWasiWhence,
+    ) -> std::result::Result<usize, QuickJsWasiErrno> {
+        let open = self.open.get(&fd).ok_or(QuickJsWasiErrno::Badf)?;
+        if open.kind != OpenKind::File {
+            return Err(QuickJsWasiErrno::Inval);
+        }
+        let len = self.open_file_len(open)?;
+        let base = seek_base_offset(open.offset, len, whence)?;
+        checked_seek_offset(base, offset)
+    }
+
+    fn open_file_len(&self, open: &OpenFile) -> std::result::Result<usize, QuickJsWasiErrno> {
+        let files = self.files.lock().expect("test files lock");
+        files
+            .get(&open.path)
+            .map(Vec::len)
+            .ok_or(QuickJsWasiErrno::Noent)
+    }
 }
 
 impl QuickJsWasiHost for LiveFileHost {
@@ -141,50 +223,20 @@ impl QuickJsWasiHost for LiveFileHost {
     ) -> std::result::Result<u32, QuickJsWasiErrno> {
         let path =
             self.resolve_dir_path(dirfd, &normalize_test_path(&String::from_utf8_lossy(path)))?;
-        self.record(format!(
-            "open:{dirfd}:{dirflags}:{path}:{oflags}:{rights_base}:{rights_inheriting}:{fdflags}"
-        ));
-        if oflags & !(OFLAGS_CREATE_TRUNCATE | OFLAGS_DIRECTORY) != 0
-            || fdflags & !FDFLAGS_NONBLOCK != 0
-        {
-            return Err(QuickJsWasiErrno::Notcapable);
-        }
-        let directory_requested = oflags & OFLAGS_DIRECTORY != 0;
-        let mut files = self.files.lock().expect("test files lock");
-        let kind = if oflags & OFLAGS_CREATE_TRUNCATE != 0 {
-            let symlinks = self.symlinks.lock().expect("test symlink lock");
-            if path_exists(&files, &symlinks, &path) {
-                return Err(QuickJsWasiErrno::Isdir);
-            }
-            if directory_requested {
-                return Err(QuickJsWasiErrno::Notcapable);
-            }
-            drop(symlinks);
-            files.insert(path.clone(), Vec::new());
-            OpenKind::File
-        } else {
-            let symlinks = self.symlinks.lock().expect("test symlink lock");
-            open_path_kind(&files, &symlinks, &path).ok_or(QuickJsWasiErrno::Noent)?
+        let request = PathOpenRequest {
+            dirfd,
+            dirflags,
+            path,
+            oflags,
+            rights_base,
+            rights_inheriting,
+            fdflags,
         };
-        if directory_requested && kind != OpenKind::Directory {
-            return Err(QuickJsWasiErrno::Notdir);
-        }
-        if kind == OpenKind::File && fdflags != 0 {
-            return Err(QuickJsWasiErrno::Notcapable);
-        }
-        drop(files);
-        let fd = self.next_fd;
-        self.next_fd += 1;
-        self.open.insert(
-            fd,
-            OpenFile {
-                path,
-                offset: 0,
-                rights_base,
-                kind,
-            },
-        );
-        Ok(fd)
+        self.record(path_open_record(&request));
+        validate_path_open_flags(&request)?;
+        let kind = self.kind_for_path_open(&request)?;
+        validate_path_open_kind(&request, kind)?;
+        Ok(self.insert_open_file(request, kind))
     }
 
     fn fd_read(&mut self, fd: u32, buf: &mut [u8]) -> std::result::Result<usize, QuickJsWasiErrno> {
@@ -245,25 +297,8 @@ impl QuickJsWasiHost for LiveFileHost {
         offset: i64,
         whence: QuickJsWasiWhence,
     ) -> std::result::Result<u64, QuickJsWasiErrno> {
-        let open = self.open.get_mut(&fd).ok_or(QuickJsWasiErrno::Badf)?;
-        if open.kind != OpenKind::File {
-            return Err(QuickJsWasiErrno::Inval);
-        }
-        let files = self.files.lock().expect("test files lock");
-        let len = files.get(&open.path).ok_or(QuickJsWasiErrno::Noent)?.len();
-        let base = match whence {
-            QuickJsWasiWhence::Set => 0,
-            QuickJsWasiWhence::Cur => {
-                i64::try_from(open.offset).map_err(|_| QuickJsWasiErrno::Inval)?
-            }
-            QuickJsWasiWhence::End => i64::try_from(len).map_err(|_| QuickJsWasiErrno::Inval)?,
-        };
-        let next = base.checked_add(offset).ok_or(QuickJsWasiErrno::Inval)?;
-        if next < 0 {
-            return Err(QuickJsWasiErrno::Inval);
-        }
-        open.offset = usize::try_from(next).map_err(|_| QuickJsWasiErrno::Inval)?;
-        let next_offset = open.offset;
+        let next_offset = self.seek_target_offset(fd, offset, whence)?;
+        self.open.get_mut(&fd).ok_or(QuickJsWasiErrno::Badf)?.offset = next_offset;
         self.record(format!("seek:{fd}:{offset}:{whence:?}"));
         u64::try_from(next_offset).map_err(|_| QuickJsWasiErrno::Inval)
     }
@@ -430,6 +465,72 @@ fn symlink_stat(target: &[u8]) -> std::result::Result<QuickJsWasiFileStat, Quick
         QuickJsWasiFileType::SymbolicLink,
         u64::try_from(target.len()).map_err(|_| QuickJsWasiErrno::Inval)?,
     ))
+}
+
+fn path_open_record(request: &PathOpenRequest) -> String {
+    let PathOpenRequest {
+        dirfd,
+        dirflags,
+        path,
+        oflags,
+        rights_base,
+        rights_inheriting,
+        fdflags,
+    } = request;
+    format!("open:{dirfd}:{dirflags}:{path}:{oflags}:{rights_base}:{rights_inheriting}:{fdflags}")
+}
+
+const fn path_open_creates_file(request: &PathOpenRequest) -> bool {
+    request.oflags & OFLAGS_CREATE_TRUNCATE != 0
+}
+
+const fn path_open_directory_requested(request: &PathOpenRequest) -> bool {
+    request.oflags & OFLAGS_DIRECTORY != 0
+}
+
+fn validate_path_open_flags(
+    request: &PathOpenRequest,
+) -> std::result::Result<(), QuickJsWasiErrno> {
+    if request.oflags & !(OFLAGS_CREATE_TRUNCATE | OFLAGS_DIRECTORY) == 0
+        && request.fdflags & !FDFLAGS_NONBLOCK == 0
+    {
+        Ok(())
+    } else {
+        Err(QuickJsWasiErrno::Notcapable)
+    }
+}
+
+fn validate_path_open_kind(
+    request: &PathOpenRequest,
+    kind: OpenKind,
+) -> std::result::Result<(), QuickJsWasiErrno> {
+    if path_open_directory_requested(request) && kind != OpenKind::Directory {
+        return Err(QuickJsWasiErrno::Notdir);
+    }
+    if kind == OpenKind::File && request.fdflags != 0 {
+        return Err(QuickJsWasiErrno::Notcapable);
+    }
+    Ok(())
+}
+
+fn seek_base_offset(
+    current: usize,
+    len: usize,
+    whence: QuickJsWasiWhence,
+) -> std::result::Result<i64, QuickJsWasiErrno> {
+    match whence {
+        QuickJsWasiWhence::Set => Ok(0),
+        QuickJsWasiWhence::Cur => i64::try_from(current).map_err(|_| QuickJsWasiErrno::Inval),
+        QuickJsWasiWhence::End => i64::try_from(len).map_err(|_| QuickJsWasiErrno::Inval),
+    }
+}
+
+fn checked_seek_offset(base: i64, offset: i64) -> std::result::Result<usize, QuickJsWasiErrno> {
+    let next = base.checked_add(offset).ok_or(QuickJsWasiErrno::Inval)?;
+    if next < 0 {
+        return Err(QuickJsWasiErrno::Inval);
+    }
+    usize::try_from(next).map_err(|_| QuickJsWasiErrno::Inval)
 }
 
 fn normalize_test_path(path: &str) -> String {
