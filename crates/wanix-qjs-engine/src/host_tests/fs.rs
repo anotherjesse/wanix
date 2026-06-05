@@ -765,6 +765,73 @@ fn live_wasi_host_supplies_path_symlink() -> Result<()> {
 }
 
 #[test]
+fn virtual_path_symlink_validates_paths_before_reporting_unsupported() -> Result<()> {
+    let mut harness = VirtualFsHarness::new(virtual_fs_config()?)?;
+    harness.write_bytes(PATH_PTR, b"target-file.txt")?;
+    harness.write_bytes(PATH_PTR + 32, b"created-link")?;
+
+    assert_eq!(
+        harness.path_symlink.call(
+            &mut harness.store,
+            (
+                test_guest_i32(PATH_PTR, "target pointer")?,
+                15,
+                PREOPEN_ROOT_FD,
+                test_guest_i32(PATH_PTR + 32, "path pointer")?,
+                12,
+            ),
+        )?,
+        ERRNO_NOSYS
+    );
+    assert_eq!(
+        harness.path_symlink.call(
+            &mut harness.store,
+            (
+                test_guest_i32(PATH_PTR, "target pointer")?,
+                15,
+                99,
+                test_guest_i32(PATH_PTR + 32, "path pointer")?,
+                12,
+            ),
+        )?,
+        ERRNO_BADF
+    );
+
+    let too_long_path = "a".repeat(MAX_VIRTUAL_FILE_PATH_BYTES + 1);
+    harness.write_bytes(PATH_PTR, too_long_path.as_bytes())?;
+    assert_eq!(
+        harness.path_symlink.call(
+            &mut harness.store,
+            (
+                test_guest_i32(PATH_PTR, "target pointer")?,
+                test_guest_i32(too_long_path.len(), "target length")?,
+                PREOPEN_ROOT_FD,
+                test_guest_i32(PATH_PTR + 32, "path pointer")?,
+                12,
+            ),
+        )?,
+        ERRNO_NAMETOOLONG
+    );
+
+    harness.write_bytes(PATH_PTR, b"target-file.txt")?;
+    harness.write_bytes(PATH_PTR + 32, too_long_path.as_bytes())?;
+    assert_eq!(
+        harness.path_symlink.call(
+            &mut harness.store,
+            (
+                test_guest_i32(PATH_PTR, "target pointer")?,
+                15,
+                PREOPEN_ROOT_FD,
+                test_guest_i32(PATH_PTR + 32, "path pointer")?,
+                test_guest_i32(too_long_path.len(), "path length")?,
+            ),
+        )?,
+        ERRNO_NAMETOOLONG
+    );
+    Ok(())
+}
+
+#[test]
 fn live_wasi_host_supplies_path_remove_directory() -> Result<()> {
     let host = MetadataWasiHost::default();
     let calls = Arc::clone(&host.calls);
