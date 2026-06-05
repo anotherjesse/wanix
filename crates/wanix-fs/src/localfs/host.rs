@@ -10,6 +10,17 @@ use crate::{FileType, FsError, FsResult, Metadata};
 
 use super::map_io_error;
 
+#[cfg(not(unix))]
+const READ_ONLY_FILE_MODE: u32 = 0o444;
+#[cfg(not(unix))]
+const DEFAULT_DIR_MODE: u32 = 0o755;
+#[cfg(not(unix))]
+const DEFAULT_FILE_MODE: u32 = 0o644;
+#[cfg(unix)]
+const PERMISSION_MODE_MASK: u32 = 0o7777;
+#[cfg(not(unix))]
+const WRITE_PERMISSION_BITS: u32 = 0o222;
+
 pub(super) fn metadata_from_host(metadata: &fs::Metadata) -> Metadata {
     let file_type = if metadata.is_dir() {
         FileType::Directory
@@ -41,11 +52,11 @@ fn metadata_mode(metadata: &fs::Metadata) -> u32 {
 #[cfg(not(unix))]
 fn metadata_mode(metadata: &fs::Metadata) -> u32 {
     if metadata.permissions().readonly() {
-        0o444
+        READ_ONLY_FILE_MODE
     } else if metadata.is_dir() {
-        0o755
+        DEFAULT_DIR_MODE
     } else {
-        0o644
+        DEFAULT_FILE_MODE
     }
 }
 
@@ -65,14 +76,17 @@ fn metadata_link_count(_metadata: &fs::Metadata) -> u64 {
 pub(super) fn set_host_permissions(path: &Path, permissions: u32) -> FsResult<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    fs::set_permissions(path, fs::Permissions::from_mode(permissions & 0o7777))
-        .map_err(map_io_error)
+    fs::set_permissions(
+        path,
+        fs::Permissions::from_mode(permissions & PERMISSION_MODE_MASK),
+    )
+    .map_err(map_io_error)
 }
 
 #[cfg(not(unix))]
 pub(super) fn set_host_permissions(path: &Path, permissions: u32) -> FsResult<()> {
     let mut current = fs::metadata(path).map_err(map_io_error)?.permissions();
-    current.set_readonly(permissions & 0o222 == 0);
+    current.set_readonly(permissions & WRITE_PERMISSION_BITS == 0);
     fs::set_permissions(path, current).map_err(map_io_error)
 }
 
