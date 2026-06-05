@@ -8,6 +8,7 @@ use wanix_qjs::QuickJsTaskDriver;
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
 use wanix_vfs::{BindOptions, BindPosition, Namespace};
+use wanix_wasm::WasmTaskDriver;
 
 use crate::{CliError, quickjs_runner};
 
@@ -107,5 +108,23 @@ fn serve_task_table() -> Result<TaskTable, CliError> {
     let table = TaskTable::new();
     table.register_noop_driver("noop")?;
     table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(quickjs_runner()?)))?;
+    table.register_driver("wasm", Arc::new(WasmTaskDriver::new()))?;
     Ok(table)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serve_task_table;
+
+    #[test]
+    fn serve_task_table_registers_wasm_driver_alongside_qjs() {
+        // The `#task` service exposes `#task/new/<kind>` per registered driver, so
+        // registering `wasm` here is what makes `#task/new/wasm` (and auto-start of
+        // a `.wasm` cmd) a first-class Wanix task in `wanix serve`.
+        let table = serve_task_table().expect("build serve task table");
+        let kinds = table.driver_kinds();
+        assert!(kinds.contains(&"auto".to_owned()), "kinds: {kinds:?}");
+        assert!(kinds.contains(&"qjs".to_owned()), "kinds: {kinds:?}");
+        assert!(kinds.contains(&"wasm".to_owned()), "kinds: {kinds:?}");
+    }
 }

@@ -173,4 +173,44 @@ mod tests {
             "source should be gone after the guest rename"
         );
     }
+
+    #[test]
+    fn auto_task_starts_wasm_driver_and_writes_shared_namespace() {
+        // Task-level proof (distinct from `driver.start` called directly): a task
+        // allocated as `auto` from a shared `Namespace`, with the real
+        // `WasmTaskDriver` registered, is claimed by `check()` and auto-started
+        // through `TaskTable::start`. The exit is observable on the task and the
+        // file the guest writes is visible back through the shared MemFs.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("guest.wasm", RUST_GUEST).expect("seed wasm");
+        fs.create_dir_all("shared").expect("make /shared");
+        fs.write_file("shared/in.txt", b"shared input")
+            .expect("seed input");
+
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let task = table
+            .allocate_root_with_namespace("auto", namespace_on(&fs))
+            .expect("allocate auto task");
+        task.set_cmd("guest.wasm /shared/in.txt /shared/out.txt")
+            .expect("set cmd");
+
+        // Auto-start: the table selects the wasm driver via `check()`.
+        table.start(task.id()).expect("auto-start wasm task");
+
+        assert_eq!(task.kind(), "wasm", "auto task resolved to the wasm driver");
+        assert_eq!(task.exit(), "0", "observable task exit should be 0");
+
+        let out = String::from_utf8(
+            fs.read_file("shared/out.txt")
+                .expect("guest output visible in shared namespace"),
+        )
+        .expect("utf8");
+        assert_eq!(
+            out, "rust-wasm saw: shared input",
+            "the file the wasm task wrote is visible through the shared MemFs"
+        );
+    }
 }
