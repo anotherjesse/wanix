@@ -8,7 +8,9 @@ use crate::qjs::file_task::{
     allocate_qjs_task, build_qjs_driver, finish_qjs_start, prepare_qjs_file_task,
     read_qjs_file_script,
 };
-use crate::qjs::snapshot::{read_qjs_resume_inputs, resume_qjs_file_task, snapshot_qjs_file_task};
+use crate::qjs::snapshot::{
+    QjsResumeTaskRequest, read_qjs_resume_inputs, resume_qjs_file_task, snapshot_qjs_file_task,
+};
 use crate::qjs_args::{QjsCommand, QjsSnapshotFileCommand};
 use crate::{CliError, CliOutput, finish_cli_task_output, quickjs_runner};
 
@@ -68,14 +70,14 @@ pub(super) fn run_qjs_resume(
     let table = TaskTable::new();
     let task = allocate_qjs_task(&table, QuickJsTaskDriver::new(Arc::clone(&runner)))?;
     let prepared = prepare_qjs_file_task(&task, &script, &command)?;
-    let resume_result = resume_qjs_file_task(
-        &runner,
-        &task,
-        &snapshot,
-        &script.source,
-        &prepared,
-        &command,
-    );
+    let resume_result = resume_qjs_file_task(QjsResumeTaskRequest {
+        runner: &runner,
+        task: &task,
+        snapshot: &snapshot,
+        script: &script.source,
+        prepared: &prepared,
+        command: &command,
+    });
 
     finish_cli_task_output(
         "qjs-resume",

@@ -38,6 +38,15 @@ pub(super) fn snapshot_qjs_file_task(
     finish_snapshot_runtime(runtime, command)
 }
 
+pub(super) struct QjsResumeTaskRequest<'a> {
+    pub(super) runner: &'a wanix_qjs::QuickJsRunner,
+    pub(super) task: &'a Task,
+    pub(super) snapshot: &'a [u8],
+    pub(super) script: &'a str,
+    pub(super) prepared: &'a PreparedQjsFileTask,
+    pub(super) command: &'a QjsSnapshotFileCommand,
+}
+
 fn eval_snapshot_runtime(
     runtime: &mut wanix_qjs::QuickJsTaskRuntime,
     task: &Task,
@@ -60,21 +69,22 @@ fn eval_snapshot_runtime(
     ensure_snapshot_task_fds_closed(task)
 }
 
-pub(super) fn resume_qjs_file_task(
-    runner: &wanix_qjs::QuickJsRunner,
-    task: &Task,
-    snapshot: &[u8],
-    script: &str,
-    prepared: &PreparedQjsFileTask,
-    command: &QjsSnapshotFileCommand,
-) -> Result<(), CliError> {
-    let mut runtime = runner.restore_task_runtime_from_bytes(task, snapshot)?;
+pub(super) fn resume_qjs_file_task(request: QjsResumeTaskRequest<'_>) -> Result<(), CliError> {
+    let mut runtime = request
+        .runner
+        .restore_task_runtime_from_bytes(request.task, request.snapshot)?;
     apply_qjs_task_runtime_limits(
         &mut runtime,
-        command.interrupt_poll_budget,
-        command.memory_limit_bytes,
+        request.command.interrupt_poll_budget,
+        request.command.memory_limit_bytes,
     )?;
-    eval_qjs_resume_source(&mut runtime, task, script, prepared, command)?;
+    eval_qjs_resume_source(
+        &mut runtime,
+        request.task,
+        request.script,
+        request.prepared,
+        request.command,
+    )?;
     Ok(runtime.finish()?)
 }
 
