@@ -28,10 +28,24 @@ pub fn bundled_module_cache_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("WANIX_QJS_CACHE_DIR") {
         return PathBuf::from(dir);
     }
-    user_cache_home()
-        .unwrap_or_else(uid_scoped_temp_dir)
+    bundled_module_cache_dir_from_parts(None, user_cache_home())
+}
+
+fn bundled_module_cache_dir_from_parts(
+    override_dir: Option<std::ffi::OsString>,
+    user_cache_home: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(dir) = override_dir {
+        return PathBuf::from(dir);
+    }
+    user_cache_home
+        .unwrap_or_else(default_cache_home)
         .join("wanix")
         .join("qjs-module-cache")
+}
+
+fn default_cache_home() -> PathBuf {
+    uid_scoped_temp_dir()
 }
 
 /// Per-user cache home, if the platform exposes one.
@@ -85,35 +99,33 @@ fn current_user_id() -> u64 {
 mod tests {
     use super::*;
 
-    // The override and default cases share one process-global env var, so they
-    // live in a single serial test to avoid racing each other's mutation.
     #[test]
     fn resolves_override_then_per_user_default() {
-        let saved = std::env::var_os("WANIX_QJS_CACHE_DIR");
-
-        // 1. Explicit override is honored verbatim.
-        // SAFETY: single-threaded within this test; restored below.
-        unsafe { std::env::set_var("WANIX_QJS_CACHE_DIR", "/tmp/explicit-qjs-cache") };
         assert_eq!(
-            bundled_module_cache_dir(),
+            bundled_module_cache_dir_from_parts(
+                Some("/tmp/explicit-qjs-cache".into()),
+                Some(PathBuf::from("/tmp/cache-home")),
+            ),
             PathBuf::from("/tmp/explicit-qjs-cache")
         );
 
-        // 2. Without the override the default is a namespaced per-user dir, not
-        //    the bare shared temp dir.
-        // SAFETY: single-threaded within this test; restored below.
-        unsafe { std::env::remove_var("WANIX_QJS_CACHE_DIR") };
-        let dir = bundled_module_cache_dir();
+        let dir = bundled_module_cache_dir_from_parts(None, Some(PathBuf::from("/tmp/cache-home")));
         assert_ne!(dir, std::env::temp_dir());
+        assert_eq!(
+            dir,
+            PathBuf::from("/tmp/cache-home")
+                .join("wanix")
+                .join("qjs-module-cache")
+        );
         assert!(
             dir.to_string_lossy().contains("wanix"),
             "default cache dir should be namespaced: {dir:?}"
         );
 
-        // SAFETY: restore the prior environment for any other tests.
-        match saved {
-            Some(value) => unsafe { std::env::set_var("WANIX_QJS_CACHE_DIR", value) },
-            None => unsafe { std::env::remove_var("WANIX_QJS_CACHE_DIR") },
-        }
+        let fallback = bundled_module_cache_dir_from_parts(None, None);
+        assert_eq!(
+            fallback,
+            uid_scoped_temp_dir().join("wanix").join("qjs-module-cache")
+        );
     }
 }
