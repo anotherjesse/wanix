@@ -9,7 +9,7 @@ pub(super) use runtime::run_p9_ws_streaming;
 #[cfg(test)]
 use command::P9WsCommand;
 #[cfg(test)]
-use runtime::run_p9_ws_with_listener;
+use runtime::{p9_ws_listening_message, run_p9_ws_with_listener};
 
 #[cfg(test)]
 mod tests {
@@ -142,6 +142,32 @@ mod tests {
                 "{error} did not contain {expected}"
             );
         }
+    }
+
+    #[test]
+    fn p9_ws_streaming_reports_bind_errors() {
+        let command = P9WsCommand {
+            root_path: PathBuf::from("."),
+            addr: "127.0.0.1:bad-port".to_owned(),
+            once: true,
+        };
+        let mut stderr = Vec::new();
+
+        let error = run_p9_ws_streaming(command, &mut stderr).unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("failed to bind p9-ws address"));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn p9_ws_listening_message_uses_websocket_scheme() {
+        let addr = "127.0.0.1:4711".parse().unwrap();
+
+        assert_eq!(
+            p9_ws_listening_message(addr),
+            "wanix-rust p9-ws: listening on ws://127.0.0.1:4711/\n"
+        );
     }
 
     #[test]

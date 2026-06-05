@@ -66,7 +66,7 @@ impl P9WsRuntime {
         write_process_output(
             process_stderr,
             "stderr",
-            format!("wanix-rust p9-ws: listening on ws://{}/\n", self.local_addr).as_bytes(),
+            p9_ws_listening_message(self.local_addr).as_bytes(),
         )
     }
 
@@ -126,4 +126,8 @@ fn write_continue_after_error(process_stderr: &mut dyn Write) -> Result<(), CliE
         "stderr",
         b"wanix-rust p9-ws: continuing after websocket error\n",
     )
+}
+
+pub(in crate::p9_ws) fn p9_ws_listening_message(local_addr: SocketAddr) -> String {
+    format!("wanix-rust p9-ws: listening on ws://{local_addr}/\n")
 }
