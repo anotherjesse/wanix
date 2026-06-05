@@ -5,7 +5,7 @@ use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
 use wanix_task::{Task, TaskTable};
 
 use super::PostEvalFeed;
-use super::post_eval::run_post_eval_feeds;
+use super::post_eval::{PostEvalFeedContext, run_post_eval_feeds};
 use super::program_spec::{
     PreparedQjsTermProgram, QjsTermProgram, prepare_qjs_term_namespace, read_qjs_term_program,
     terminal_task_env,
@@ -239,18 +239,20 @@ fn run_terminal_post_eval_feeds(
     }
     run_post_eval_feeds(
         std::mem::take(&mut streams.feed_after_eval),
-        streams.process_stdin,
-        &streams.terminal.device,
-        &streams.terminal.id,
-        runtime,
-        TerminalPumpState {
-            policy: TerminalPumpPolicy {
-                ready_io_turns: qjs_command.ready_io_turns,
-                event_loop_wait_budget: qjs_command.event_loop_wait_budget,
-                input_mode: streams.event_sources.input_mode,
+        PostEvalFeedContext {
+            process_stdin: streams.process_stdin,
+            terminal: &streams.terminal.device,
+            terminal_id: &streams.terminal.id,
+            runtime,
+            pump_state: TerminalPumpState {
+                policy: TerminalPumpPolicy {
+                    ready_io_turns: qjs_command.ready_io_turns,
+                    event_loop_wait_budget: qjs_command.event_loop_wait_budget,
+                    input_mode: streams.event_sources.input_mode,
+                },
+                resize_source: streams.event_sources.resize_source.clone(),
             },
-            resize_source: streams.event_sources.resize_source.clone(),
+            process_stdout: streams.process_stdout,
         },
-        streams.process_stdout,
     )
 }

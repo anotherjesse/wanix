@@ -17,32 +17,26 @@ use super::pump::{
 
 pub(super) fn run_post_eval_feeds(
     feeds: Vec<PostEvalFeed>,
-    process_stdin: &mut dyn Read,
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
-    pump_state: TerminalPumpState,
-    process_stdout: &mut dyn Write,
+    context: PostEvalFeedContext<'_>,
 ) -> Result<(), CliError> {
     let mut runner = PostEvalFeedRunner {
-        process_stdin,
-        terminal,
-        terminal_id,
-        runtime,
-        pump_state,
-        process_stdout,
+        context,
         current_batch: Vec::new(),
     };
     runner.run(feeds)
 }
 
+pub(super) struct PostEvalFeedContext<'a> {
+    pub(super) process_stdin: &'a mut dyn Read,
+    pub(super) terminal: &'a TermDevice,
+    pub(super) terminal_id: &'a str,
+    pub(super) runtime: &'a mut QuickJsTaskRuntime,
+    pub(super) pump_state: TerminalPumpState,
+    pub(super) process_stdout: &'a mut dyn Write,
+}
+
 struct PostEvalFeedRunner<'a> {
-    process_stdin: &'a mut dyn Read,
-    terminal: &'a TermDevice,
-    terminal_id: &'a str,
-    runtime: &'a mut QuickJsTaskRuntime,
-    pump_state: TerminalPumpState,
-    process_stdout: &'a mut dyn Write,
+    context: PostEvalFeedContext<'a>,
     current_batch: Vec<Vec<u8>>,
 }
 
@@ -102,12 +96,12 @@ impl PostEvalFeedRunner<'_> {
             return Ok(true);
         }
         run_process_line_feed_session_after_eval(
-            self.process_stdin,
-            self.terminal,
-            self.terminal_id,
-            self.runtime,
-            &mut self.pump_state,
-            self.process_stdout,
+            self.context.process_stdin,
+            self.context.terminal,
+            self.context.terminal_id,
+            self.context.runtime,
+            &mut self.context.pump_state,
+            self.context.process_stdout,
         )?;
         Ok(false)
     }
@@ -117,12 +111,12 @@ impl PostEvalFeedRunner<'_> {
             return Ok(true);
         }
         run_process_raw_byte_feed_session_after_eval(
-            self.process_stdin,
-            self.terminal,
-            self.terminal_id,
-            self.runtime,
-            &mut self.pump_state,
-            self.process_stdout,
+            self.context.process_stdin,
+            self.context.terminal,
+            self.context.terminal_id,
+            self.context.runtime,
+            &mut self.context.pump_state,
+            self.context.process_stdout,
         )?;
         Ok(false)
     }
@@ -131,22 +125,23 @@ impl PostEvalFeedRunner<'_> {
         if self.flush_batch_and_task_exited()? {
             return Ok(true);
         }
-        let policy = self.pump_state.policy;
+        let policy = self.context.pump_state.policy;
         feed_terminal_resize_and_pump(
-            self.terminal,
-            self.terminal_id,
-            self.runtime,
+            self.context.terminal,
+            self.context.terminal_id,
+            self.context.runtime,
             &resize,
             policy.ready_io_turns,
             policy.event_loop_wait_budget,
-            self.process_stdout,
+            self.context.process_stdout,
         )?;
         self.task_exited()
     }
 
     fn read_process_stdin(&mut self) -> Result<Vec<u8>, CliError> {
         let mut bytes = Vec::new();
-        self.process_stdin
+        self.context
+            .process_stdin
             .read_to_end(&mut bytes)
             .map_err(|error| {
                 CliError::new(
@@ -163,33 +158,33 @@ impl PostEvalFeedRunner<'_> {
     }
 
     fn flush_batch(&mut self) -> Result<(), CliError> {
-        let policy = self.pump_state.policy;
+        let policy = self.context.pump_state.policy;
         flush_terminal_feed_batch(
-            self.terminal,
-            self.terminal_id,
-            self.runtime,
+            self.context.terminal,
+            self.context.terminal_id,
+            self.context.runtime,
             &mut self.current_batch,
             policy.ready_io_turns,
             policy.event_loop_wait_budget,
-            self.process_stdout,
+            self.context.process_stdout,
         )
     }
 
     fn feed_batch(&mut self, batch: &[Vec<u8>]) -> Result<(), CliError> {
-        let policy = self.pump_state.policy;
+        let policy = self.context.pump_state.policy;
         feed_terminal_batch_and_pump(
-            self.terminal,
-            self.terminal_id,
-            self.runtime,
+            self.context.terminal,
+            self.context.terminal_id,
+            self.context.runtime,
             batch,
             policy.ready_io_turns,
             policy.event_loop_wait_budget,
-            self.process_stdout,
+            self.context.process_stdout,
         )
     }
 
     fn task_exited(&self) -> Result<bool, CliError> {
-        task_exited(self.runtime)
+        task_exited(self.context.runtime)
     }
 }
 
