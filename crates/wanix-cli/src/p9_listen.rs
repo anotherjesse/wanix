@@ -57,7 +57,7 @@ fn write_p9_listen_startup(
     write_process_output(
         process_stderr,
         "stderr",
-        format!("wanix-rust p9-listen: listening on {local_addr}\n").as_bytes(),
+        p9_listen_startup_message(local_addr).as_bytes(),
     )
 }
 
@@ -122,6 +122,10 @@ fn serve_stream_connection(
     server.serve_stream(reader, stream)
 }
 
+fn p9_listen_startup_message(local_addr: std::net::SocketAddr) -> String {
+    format!("wanix-rust p9-listen: listening on {local_addr}\n")
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -138,6 +142,36 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn p9_listen_streaming_reports_bind_errors() {
+        let command = P9ListenCommand {
+            root_path: PathBuf::from("."),
+            addr: "127.0.0.1:bad-port".to_owned(),
+            once: true,
+        };
+        let mut stderr = Vec::new();
+
+        let error = run_p9_listen_streaming(command, &mut stderr).unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(
+            error
+                .to_string()
+                .contains("failed to bind p9-listen address")
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn p9_listen_startup_message_reports_bound_address() {
+        let addr = "127.0.0.1:4712".parse().unwrap();
+
+        assert_eq!(
+            p9_listen_startup_message(addr),
+            "wanix-rust p9-listen: listening on 127.0.0.1:4712\n"
+        );
+    }
 
     #[test]
     fn p9_listen_once_serves_host_file_over_tcp() {
