@@ -6,6 +6,8 @@ use wanix_protocol::{P9Error, P9FrameBuffer};
 
 use crate::{P9Server, Wanix9pError};
 
+const STREAM_READ_BUFFER_BYTES: usize = 8192;
+
 /// Summary returned after a 9P byte stream reaches EOF cleanly.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct P9TransportStats {
@@ -97,7 +99,7 @@ impl P9Server {
     ) -> Result<P9TransportStats, P9TransportError> {
         let mut frames = P9FrameBuffer::new();
         let mut stats = P9TransportStats::default();
-        let mut buf = [0_u8; 8192];
+        let mut buf = [0_u8; STREAM_READ_BUFFER_BYTES];
 
         loop {
             let count = reader.read(&mut buf)?;
