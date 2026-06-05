@@ -9,12 +9,18 @@ use crate::write_process_output;
 use super::CliError;
 
 mod events;
+mod resize;
 
 const TERMINAL_OUTPUT_READ_CHUNK_BYTES: usize = 1024;
 
 pub(super) use events::{
-    ProcessEventSources, ProcessInputMode, TermResize, TerminalPumpPolicy, TerminalPumpState,
+    ProcessEventSources, ProcessInputMode, TerminalPumpPolicy, TerminalPumpState,
 };
+#[cfg(unix)]
+pub(super) use resize::terminal_size_source;
+pub(super) use resize::{ProcessResizeSource, TermResize};
+#[cfg(all(test, unix))]
+pub(super) use resize::{ResizeQueue, resize_queue_source};
 
 pub(super) struct TerminalPumpContext<'a> {
     pub(super) terminal: &'a TermDevice,

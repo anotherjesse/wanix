@@ -1,35 +1,16 @@
-#[cfg(all(test, unix))]
-use std::collections::VecDeque;
-#[cfg(all(test, unix))]
-use std::sync::Arc;
-#[cfg(all(test, unix))]
-use std::sync::Mutex;
 use std::time::Duration;
 
-use super::super::CliError;
+use super::ProcessResizeSource;
+#[cfg(all(test, unix))]
+use super::resize_queue_source;
 #[cfg(unix)]
-use super::super::process::terminal_size_for_fd;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::qjs_term) struct TermResize {
-    pub(in crate::qjs_term) columns: u16,
-    pub(in crate::qjs_term) rows: u16,
-}
+use super::terminal_size_source;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::qjs_term) enum ProcessInputMode {
     Blocking,
     #[cfg(unix)]
     PollFd(libc::c_int),
-}
-
-#[derive(Debug, Clone)]
-pub(in crate::qjs_term) enum ProcessResizeSource {
-    None,
-    #[cfg(unix)]
-    TerminalSizeFd(TerminalSizeSource),
-    #[cfg(all(test, unix))]
-    Queue(Arc<Mutex<VecDeque<(u16, u16)>>>),
 }
 
 #[derive(Debug, Clone)]
@@ -51,30 +32,11 @@ pub(in crate::qjs_term) struct TerminalPumpState {
     pub(in crate::qjs_term) resize_source: ProcessResizeSource,
 }
 
-#[cfg(unix)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::qjs_term) struct TerminalSizeSource {
-    fd: libc::c_int,
-    last: Option<TermResize>,
-}
-
-impl ProcessResizeSource {
-    pub(in crate::qjs_term) fn next_resize(&mut self) -> Result<Option<TermResize>, CliError> {
-        match self {
-            Self::None => Ok(None),
-            #[cfg(unix)]
-            Self::TerminalSizeFd(source) => source.next_resize(),
-            #[cfg(all(test, unix))]
-            Self::Queue(queue) => next_queued_resize(queue),
-        }
-    }
-}
-
 impl ProcessEventSources {
     pub(in crate::qjs_term) fn blocking() -> Self {
         Self {
             input_mode: ProcessInputMode::Blocking,
-            resize_source: ProcessResizeSource::None,
+            resize_source: ProcessResizeSource::none(),
         }
     }
 
@@ -82,7 +44,7 @@ impl ProcessEventSources {
     pub(in crate::qjs_term) fn input_fd(input_fd: libc::c_int) -> Self {
         Self {
             input_mode: ProcessInputMode::PollFd(input_fd),
-            resize_source: ProcessResizeSource::None,
+            resize_source: ProcessResizeSource::none(),
         }
     }
 
@@ -93,59 +55,26 @@ impl ProcessEventSources {
     ) -> Self {
         Self {
             input_mode: ProcessInputMode::PollFd(input_fd),
-            resize_source: ProcessResizeSource::TerminalSizeFd(TerminalSizeSource::new(
-                terminal_size_fd,
-            )),
+            resize_source: terminal_size_source(terminal_size_fd),
         }
     }
 
     #[cfg(all(test, unix))]
     pub(in crate::qjs_term) fn resize_queue(
         input_fd: libc::c_int,
-        resize_queue: Arc<Mutex<VecDeque<(u16, u16)>>>,
+        resize_queue: super::ResizeQueue,
     ) -> Self {
         Self {
             input_mode: ProcessInputMode::PollFd(input_fd),
-            resize_source: ProcessResizeSource::Queue(resize_queue),
+            resize_source: resize_queue_source(resize_queue),
         }
     }
-}
-
-#[cfg(unix)]
-impl TerminalSizeSource {
-    fn new(fd: libc::c_int) -> Self {
-        Self { fd, last: None }
-    }
-
-    fn next_resize(&mut self) -> Result<Option<TermResize>, CliError> {
-        let Some(resize) = terminal_size_for_fd(self.fd)? else {
-            return Ok(None);
-        };
-        if self.last == Some(resize) {
-            return Ok(None);
-        }
-        self.last = Some(resize);
-        Ok(Some(resize))
-    }
-}
-
-#[cfg(all(test, unix))]
-fn next_queued_resize(
-    queue: &Arc<Mutex<VecDeque<(u16, u16)>>>,
-) -> Result<Option<TermResize>, CliError> {
-    let Some((columns, rows)) = queue
-        .lock()
-        .map_err(|_| CliError::new("test resize queue lock poisoned", 1))?
-        .pop_front()
-    else {
-        return Ok(None);
-    };
-    Ok(Some(TermResize { columns, rows }))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessEventSources, ProcessInputMode, ProcessResizeSource, TerminalPumpPolicy};
+    use super::{ProcessEventSources, ProcessInputMode, TerminalPumpPolicy};
+    use crate::qjs_term::pump::TermResize;
     use std::time::Duration;
 
     #[test]
@@ -153,7 +82,7 @@ mod tests {
         let mut sources = ProcessEventSources::blocking();
 
         assert_eq!(sources.input_mode, ProcessInputMode::Blocking);
-        assert!(matches!(sources.resize_source, ProcessResizeSource::None));
+        assert!(sources.resize_source.is_none());
         assert_eq!(sources.resize_source.next_resize().unwrap(), None);
     }
 
@@ -176,13 +105,7 @@ mod tests {
         let sources = ProcessEventSources::terminal_fds(3, 4);
 
         assert_eq!(sources.input_mode, ProcessInputMode::PollFd(3));
-        match sources.resize_source {
-            ProcessResizeSource::TerminalSizeFd(source) => {
-                assert_eq!(source.fd, 4);
-                assert_eq!(source.last, None);
-            }
-            other => panic!("unexpected resize source: {other:?}"),
-        }
+        assert_eq!(sources.resize_source.terminal_size_fd(), Some(4));
     }
 
     #[cfg(unix)]
@@ -191,7 +114,7 @@ mod tests {
         let mut sources = ProcessEventSources::input_fd(5);
 
         assert_eq!(sources.input_mode, ProcessInputMode::PollFd(5));
-        assert!(matches!(sources.resize_source, ProcessResizeSource::None));
+        assert!(sources.resize_source.is_none());
         assert_eq!(sources.resize_source.next_resize().unwrap(), None);
     }
 
@@ -206,14 +129,14 @@ mod tests {
         assert_eq!(sources.input_mode, ProcessInputMode::PollFd(9));
         assert_eq!(
             sources.resize_source.next_resize().unwrap(),
-            Some(super::TermResize {
+            Some(TermResize {
                 columns: 80,
                 rows: 24
             })
         );
         assert_eq!(
             sources.resize_source.next_resize().unwrap(),
-            Some(super::TermResize {
+            Some(TermResize {
                 columns: 100,
                 rows: 30
             })
