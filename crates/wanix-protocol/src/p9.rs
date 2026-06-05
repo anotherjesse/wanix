@@ -34,10 +34,20 @@ pub use session::*;
 pub use types::*;
 pub use walk::*;
 
+const P9_U8_FIELD_LEN: usize = 1;
+const P9_U16_FIELD_LEN: usize = 2;
+const P9_U32_FIELD_LEN: usize = 4;
+const P9_U64_FIELD_LEN: usize = 8;
+const P9_QID_FIELD_LEN: usize = P9_U8_FIELD_LEN + P9_U32_FIELD_LEN + P9_U64_FIELD_LEN;
+const P9_COUNTED_DATA_PREFIX_LEN: usize = P9_U32_FIELD_LEN;
+const P9_TREADDIR_PAYLOAD_LEN: usize = P9_U32_FIELD_LEN + P9_U64_FIELD_LEN + P9_U32_FIELD_LEN;
+const P9_DIRENTRY_FIXED_LEN: usize =
+    P9_QID_FIELD_LEN + P9_U64_FIELD_LEN + P9_U8_FIELD_LEN + P9_U16_FIELD_LEN;
+
 /// Builds a `Treaddir` frame.
 #[must_use]
 pub fn p9_treaddir(tag: u16, fid: u32, offset: u64, count: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(16);
+    let mut payload = Vec::with_capacity(P9_TREADDIR_PAYLOAD_LEN);
     push_u32(&mut payload, fid);
     push_u64(&mut payload, offset);
     push_u32(&mut payload, count);
@@ -55,7 +65,7 @@ pub fn p9_rreaddir(tag: u16, entries: &[P9DirEntry]) -> Result<P9Frame, P9Error>
     for entry in entries {
         push_dir_entry(&mut data, entry)?;
     }
-    let mut payload = Vec::with_capacity(4 + data.len());
+    let mut payload = Vec::with_capacity(P9_COUNTED_DATA_PREFIX_LEN + data.len());
     push_counted_data(&mut payload, &data)?;
     Ok(P9Frame::new(P9_RREADDIR, tag, payload))
 }
@@ -69,13 +79,13 @@ pub fn p9_dir_entry_encoded_len(entry: &P9DirEntry) -> Result<usize, P9Error> {
     let name_len = u16::try_from(entry.name.len()).map_err(|_| P9Error::StringTooLong {
         len: entry.name.len(),
     })? as usize;
-    Ok(13 + 8 + 1 + 2 + name_len)
+    Ok(P9_DIRENTRY_FIXED_LEN + name_len)
 }
 
 /// Builds a `Tclunk` frame.
 #[must_use]
 pub fn p9_tclunk(tag: u16, fid: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(4);
+    let mut payload = Vec::with_capacity(P9_U32_FIELD_LEN);
     push_u32(&mut payload, fid);
     P9Frame::new(P9_TCLUNK, tag, payload)
 }
