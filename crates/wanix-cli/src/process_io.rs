@@ -8,6 +8,35 @@ use crate::{
     write_process_output,
 };
 
+/// Unix fd pair used by terminal-aware CLI entrypoints.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UnixTerminalFds {
+    stdin_fd: libc::c_int,
+    terminal_size_fd: libc::c_int,
+}
+
+#[cfg(unix)]
+impl UnixTerminalFds {
+    /// Builds a terminal fd pair from the input fd and the fd used for terminal
+    /// size queries.
+    #[must_use]
+    pub fn new(stdin_fd: libc::c_int, terminal_size_fd: libc::c_int) -> Self {
+        Self {
+            stdin_fd,
+            terminal_size_fd,
+        }
+    }
+
+    pub(crate) fn stdin_fd(self) -> libc::c_int {
+        self.stdin_fd
+    }
+
+    pub(crate) fn terminal_size_fd(self) -> libc::c_int {
+        self.terminal_size_fd
+    }
+}
+
 #[cfg(all(unix, test))]
 pub(super) fn run_with_resize_queue(
     args: Vec<OsString>,

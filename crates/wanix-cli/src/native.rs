@@ -3,9 +3,9 @@ use std::io;
 
 #[cfg(not(unix))]
 use super::run_with_process_io;
-#[cfg(unix)]
-use super::run_with_process_io_and_terminal_fds;
 use super::{CliError, NativeRawTerminalMode, command_requests_raw_tty};
+#[cfg(unix)]
+use super::{UnixTerminalFds, run_with_process_io_and_terminal_fds};
 
 /// Runs the native CLI against the current process stdio handles.
 ///
@@ -36,8 +36,7 @@ where
         run_with_process_io_and_terminal_fds(
             args,
             stdin.lock(),
-            libc::STDIN_FILENO,
-            libc::STDOUT_FILENO,
+            UnixTerminalFds::new(libc::STDIN_FILENO, libc::STDOUT_FILENO),
             stdout.lock(),
             stderr.lock(),
         )

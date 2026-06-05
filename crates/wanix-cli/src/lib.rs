@@ -27,6 +27,8 @@ use std::io::{self, Read, Write};
 use wanix_fs::FsError;
 
 pub use native::run_native_process;
+#[cfg(unix)]
+pub use process_io::UnixTerminalFds;
 use qjs_args::{
     QjsCommand, os_arg_to_string, parse_qjs_command, parse_qjs_command_for,
     parse_qjs_snapshot_file_command, read_qjs_stdin,
@@ -223,8 +225,7 @@ where
 pub fn run_with_process_io_and_terminal_fds<I, S, R, W, E>(
     args: I,
     mut process_stdin: R,
-    stdin_fd: libc::c_int,
-    terminal_size_fd: libc::c_int,
+    terminal_fds: UnixTerminalFds,
     mut process_stdout: W,
     mut process_stderr: E,
 ) -> Result<i32, CliError>
@@ -238,15 +239,38 @@ where
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
     let mut io =
         process_io::ProcessIo::new(&mut process_stdin, &mut process_stdout, &mut process_stderr);
-    process_io::run_with_terminal_fds(args, &mut io, stdin_fd, terminal_size_fd)
+    process_io::run_with_terminal_fds(
+        args,
+        &mut io,
+        terminal_fds.stdin_fd(),
+        terminal_fds.terminal_size_fd(),
+    )
+}
+
+#[cfg(all(unix, test))]
+struct TestResizeInput {
+    stdin_fd: libc::c_int,
+    resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
+}
+
+#[cfg(all(unix, test))]
+impl TestResizeInput {
+    fn new(
+        stdin_fd: libc::c_int,
+        resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
+    ) -> Self {
+        Self {
+            stdin_fd,
+            resize_queue,
+        }
+    }
 }
 
 #[cfg(all(unix, test))]
 fn run_with_process_io_and_resize_queue<I, S, R, W, E>(
     args: I,
     mut process_stdin: R,
-    stdin_fd: libc::c_int,
-    resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
+    resize_input: TestResizeInput,
     mut process_stdout: W,
     mut process_stderr: E,
 ) -> Result<i32, CliError>
@@ -260,7 +284,12 @@ where
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
     let mut io =
         process_io::ProcessIo::new(&mut process_stdin, &mut process_stdout, &mut process_stderr);
-    process_io::run_with_resize_queue(args, &mut io, stdin_fd, resize_queue)
+    process_io::run_with_resize_queue(
+        args,
+        &mut io,
+        resize_input.stdin_fd,
+        resize_input.resize_queue,
+    )
 }
 
 fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
@@ -307,6 +336,8 @@ mod tests {
     use super::run_with_process_io_and_stdin_fd;
     #[cfg(unix)]
     use super::run_with_process_io_and_terminal_fds;
+    #[cfg(unix)]
+    use super::{TestResizeInput, UnixTerminalFds};
     use super::{quickjs_runner, run, run_with_process_io, run_with_process_stdin};
     use wanix_protocol::{
         P9_LOCK_STATUS_OK, P9_LOCK_TYPE_READ, P9_LOCK_TYPE_UNLOCK, P9_LOCK_TYPE_WRITE, P9_NOFID,
@@ -2318,8 +2349,7 @@ std.out.flush();
         let exit_code = run_with_process_io_and_resize_queue(
             ["qjs-shell"],
             input_reader,
-            input_fd,
-            resize_queue,
+            TestResizeInput::new(input_fd, resize_queue),
             &mut stdout,
             &mut stderr,
         )
@@ -2360,8 +2390,7 @@ std.out.flush();
         let exit_code = run_with_process_io_and_terminal_fds(
             ["qjs-shell"],
             input_reader,
-            input_fd,
-            terminal_size_fd,
+            UnixTerminalFds::new(input_fd, terminal_size_fd),
             &mut stdout,
             &mut stderr,
         )
