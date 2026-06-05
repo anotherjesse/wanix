@@ -163,3 +163,103 @@ fn validate_env_line(line: &str, label: &str) -> Result<(), CliError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use super::{
+        QjsStdin, parse_duration_millis, parse_host_mount, parse_u32, parse_usize, set_qjs_stdin,
+        validate_env_line,
+    };
+
+    #[test]
+    fn qjs_stdin_source_can_only_be_set_once() {
+        let mut stdin = None;
+
+        set_qjs_stdin(&mut stdin, QjsStdin::Bytes(b"hello".to_vec()), "qjs").unwrap();
+        let error = set_qjs_stdin(&mut stdin, QjsStdin::Process, "qjs").unwrap_err();
+
+        assert_eq!(stdin, Some(QjsStdin::Bytes(b"hello".to_vec())));
+        assert_eq!(error.exit_code(), 2);
+        assert!(
+            error
+                .to_string()
+                .contains("qjs accepts only one of --stdin or --stdin-file")
+        );
+    }
+
+    #[test]
+    fn qjs_host_mount_parser_accepts_host_equals_guest() {
+        let mount = parse_host_mount("/host/data=guest/data", "qjs --mount").unwrap();
+
+        assert_eq!(mount.host_path, PathBuf::from("/host/data"));
+        assert_eq!(mount.guest_path.as_str(), "guest/data");
+    }
+
+    #[test]
+    fn qjs_host_mount_parser_rejects_boundary_errors() {
+        for value in ["missing-separator", "=guest", "host=", "host=."] {
+            let error = parse_host_mount(value, "qjs --mount").unwrap_err();
+            assert_eq!(error.exit_code(), 2);
+            assert!(
+                error.to_string().contains("qjs --mount expects HOST=GUEST")
+                    || error
+                        .to_string()
+                        .contains("qjs --mount guest path must not be .")
+            );
+        }
+    }
+
+    #[test]
+    fn qjs_numeric_parsers_accept_expected_widths() {
+        assert_eq!(
+            parse_duration_millis(&OsString::from("25"), "qjs --event-loop-ms").unwrap(),
+            Duration::from_millis(25)
+        );
+        assert_eq!(
+            parse_usize(&OsString::from("7"), "qjs --ready-io-turns").unwrap(),
+            7
+        );
+        assert_eq!(
+            parse_u32(&OsString::from("1024"), "qjs --memory-limit-bytes").unwrap(),
+            1024
+        );
+    }
+
+    #[test]
+    fn qjs_numeric_parsers_report_invalid_values() {
+        assert_usage_error(
+            parse_duration_millis(&OsString::from("-1"), "qjs --event-loop-ms"),
+            "qjs --event-loop-ms expects a non-negative integer",
+        );
+        assert_usage_error(
+            parse_usize(&OsString::from("abc"), "qjs --ready-io-turns"),
+            "qjs --ready-io-turns expects a non-negative integer",
+        );
+        assert_usage_error(
+            parse_u32(&OsString::from("4294967296"), "qjs --memory-limit-bytes"),
+            "qjs --memory-limit-bytes expects a 32-bit non-negative integer",
+        );
+    }
+
+    #[test]
+    fn qjs_env_lines_require_nonempty_plain_keys() {
+        validate_env_line("MODE=test", "qjs --env").unwrap();
+        validate_env_line("EMPTY=", "qjs --env").unwrap();
+
+        for value in ["MODE", "=empty", "BAD KEY=value", "BAD\nKEY=value"] {
+            let error = validate_env_line(value, "qjs --env").unwrap_err();
+            assert_eq!(error.exit_code(), 2);
+            assert!(error.to_string().contains("qjs --env expects KEY=VALUE"));
+        }
+    }
+
+    fn assert_usage_error<T: std::fmt::Debug>(result: Result<T, crate::CliError>, expected: &str) {
+        let error = result.unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains(expected));
+    }
+}
