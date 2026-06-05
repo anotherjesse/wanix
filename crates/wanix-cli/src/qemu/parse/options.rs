@@ -11,6 +11,11 @@ use super::{
     os_arg_to_string, parse_memory_mb, parse_mount_tag, parse_p9_msize, parse_security_model,
 };
 
+mod definition;
+
+pub(super) use definition::QemuOption;
+use definition::QemuOptionKind;
+
 pub(super) struct QemuOptions {
     pub(super) root_path: Option<PathBuf>,
     pub(super) kernel_path: Option<PathBuf>,
@@ -47,117 +52,7 @@ impl Default for QemuOptions {
     }
 }
 
-const QEMU_OPTIONS: &[QemuOption] = &[
-    QemuOption::value("--root", "qemu --root", "DIR", QemuOptionKind::Root),
-    QemuOption::value("--kernel", "qemu --kernel", "PATH", QemuOptionKind::Kernel),
-    QemuOption::value("--initrd", "qemu --initrd", "PATH", QemuOptionKind::Initrd),
-    QemuOption::value(
-        "--cmdline",
-        "qemu --cmdline",
-        "TEXT",
-        QemuOptionKind::Cmdline,
-    ),
-    QemuOption::value("--append", "qemu --append", "TEXT", QemuOptionKind::Append),
-    QemuOption::value(
-        "--qemu-bin",
-        "qemu --qemu-bin",
-        "PATH",
-        QemuOptionKind::QemuBin,
-    ),
-    QemuOption::value(
-        "--memory-mb",
-        "qemu --memory-mb",
-        "N",
-        QemuOptionKind::MemoryMb,
-    ),
-    QemuOption::value(
-        "--p9-msize",
-        "qemu --p9-msize",
-        "N",
-        QemuOptionKind::P9Msize,
-    ),
-    QemuOption::value(
-        "--mount-tag",
-        "qemu --mount-tag",
-        "TAG",
-        QemuOptionKind::MountTag,
-    ),
-    QemuOption::value(
-        "--security-model",
-        "qemu --security-model",
-        "MODEL",
-        QemuOptionKind::SecurityModel,
-    ),
-    QemuOption::flag("--json", "qemu --json", QemuOptionKind::Json),
-    QemuOption::flag("--no-kvm", "qemu --no-kvm", QemuOptionKind::NoKvm),
-    QemuOption::flag("--exec", "qemu --exec", QemuOptionKind::Exec),
-];
-
-#[derive(Clone, Copy)]
-pub(super) struct QemuOption {
-    flag: &'static str,
-    label: &'static str,
-    expected: Option<&'static str>,
-    kind: QemuOptionKind,
-}
-
-#[derive(Clone, Copy)]
-enum QemuOptionKind {
-    Root,
-    Kernel,
-    Initrd,
-    Cmdline,
-    Append,
-    QemuBin,
-    MemoryMb,
-    P9Msize,
-    MountTag,
-    SecurityModel,
-    Json,
-    NoKvm,
-    Exec,
-}
-
 impl QemuOption {
-    const fn value(
-        flag: &'static str,
-        label: &'static str,
-        expected: &'static str,
-        kind: QemuOptionKind,
-    ) -> Self {
-        Self {
-            flag,
-            label,
-            expected: Some(expected),
-            kind,
-        }
-    }
-
-    const fn flag(flag: &'static str, label: &'static str, kind: QemuOptionKind) -> Self {
-        Self {
-            flag,
-            label,
-            expected: None,
-            kind,
-        }
-    }
-
-    pub(super) fn from_arg(arg: &OsString) -> Option<Self> {
-        let arg = arg.to_str()?;
-        QEMU_OPTIONS
-            .iter()
-            .find(|option| option.flag == arg)
-            .copied()
-    }
-
-    pub(super) fn label(self) -> &'static str {
-        self.label
-    }
-
-    pub(super) fn expected_value(self) -> Option<&'static str> {
-        self.expected
-    }
-
     pub(super) fn apply_value(
         self,
         value: &OsString,
@@ -247,40 +142,4 @@ fn set_single_path(
     }
     *target = Some(PathBuf::from(value));
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::ffi::OsString;
-
-    use super::QemuOption;
-
-    #[test]
-    fn qemu_options_report_expected_value_names() {
-        let value_options = [
-            ("--root", Some("DIR")),
-            ("--kernel", Some("PATH")),
-            ("--initrd", Some("PATH")),
-            ("--cmdline", Some("TEXT")),
-            ("--append", Some("TEXT")),
-            ("--qemu-bin", Some("PATH")),
-            ("--memory-mb", Some("N")),
-            ("--p9-msize", Some("N")),
-            ("--mount-tag", Some("TAG")),
-            ("--security-model", Some("MODEL")),
-        ];
-
-        for (flag, expected) in value_options {
-            let option = QemuOption::from_arg(&OsString::from(flag)).unwrap();
-            assert_eq!(option.expected_value(), expected);
-        }
-    }
-
-    #[test]
-    fn qemu_flags_do_not_expect_values() {
-        for flag in ["--json", "--no-kvm", "--exec"] {
-            let option = QemuOption::from_arg(&OsString::from(flag)).unwrap();
-            assert_eq!(option.expected_value(), None);
-        }
-    }
 }
