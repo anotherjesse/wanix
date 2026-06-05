@@ -1,15 +1,13 @@
 use std::fmt;
 
-use wanix_fs::{
-    DirEntry, File, FileSystem, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
-};
+use wanix_fs::{DirEntry, File, FileSystem, FsError, FsResult, NormalizedPath, OpenOptions};
 
 use crate::task_files::{
-    TASK_FD_FILE_MODE, TASK_FILE_READ_ONLY_MODE, directory_metadata, field_metadata, file_metadata,
-    task_entries,
+    TASK_FD_FILE_MODE, TASK_FILE_READ_ONLY_MODE, directory_metadata, file_metadata, task_entries,
 };
 use crate::{Task, TaskId, TaskTable};
 
+mod metadata;
 mod open;
 
 /// Filesystem view for the Wanix `#task` service.
@@ -52,37 +50,8 @@ impl FileSystem for TaskFs {
         self.open_path(path, options)
     }
 
-    fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
-        let parts = components(path);
-        match parts.as_slice() {
-            [] | ["new"] => Ok(directory_metadata()),
-            ["new", kind]
-                if self
-                    .table
-                    .driver_kinds()
-                    .iter()
-                    .any(|driver| driver == kind) =>
-            {
-                Ok(file_metadata(0, TASK_FILE_READ_ONLY_MODE))
-            }
-            [selector] => {
-                self.task_for_selector(selector)?;
-                Ok(directory_metadata())
-            }
-            [selector, "fd"] => {
-                self.task_for_selector(selector)?;
-                Ok(directory_metadata())
-            }
-            [selector, "fd", fd] => {
-                let task = self.task_for_selector(selector)?;
-                task.fd_metadata(parse_fd(fd)?)
-            }
-            [selector, field] => {
-                let task = self.task_for_selector(selector)?;
-                field_metadata(&task, field)
-            }
-            _ => Err(FsError::NotFound),
-        }
+    fn metadata(&self, path: &NormalizedPath) -> FsResult<wanix_fs::Metadata> {
+        self.metadata_path(path)
     }
 
     fn read_dir(&self, path: &NormalizedPath) -> FsResult<Vec<DirEntry>> {
