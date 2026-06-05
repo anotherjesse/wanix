@@ -202,13 +202,9 @@ where
     E: Write,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
-    process_io::run_with_stdin_fd(
-        args,
-        &mut process_stdin,
-        stdin_fd,
-        &mut process_stdout,
-        &mut process_stderr,
-    )
+    let mut io =
+        process_io::ProcessIo::new(&mut process_stdin, &mut process_stdout, &mut process_stderr);
+    process_io::run_with_stdin_fd(args, &mut io, stdin_fd)
 }
 
 /// Runs the native CLI command against supplied process IO streams and Unix
@@ -238,14 +234,9 @@ where
     E: Write,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
-    process_io::run_with_terminal_fds(
-        args,
-        &mut process_stdin,
-        stdin_fd,
-        terminal_size_fd,
-        &mut process_stdout,
-        &mut process_stderr,
-    )
+    let mut io =
+        process_io::ProcessIo::new(&mut process_stdin, &mut process_stdout, &mut process_stderr);
+    process_io::run_with_terminal_fds(args, &mut io, stdin_fd, terminal_size_fd)
 }
 
 #[cfg(all(unix, test))]
@@ -265,14 +256,9 @@ where
     E: Write,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
-    process_io::run_with_resize_queue(
-        args,
-        &mut process_stdin,
-        stdin_fd,
-        resize_queue,
-        &mut process_stdout,
-        &mut process_stderr,
-    )
+    let mut io =
+        process_io::ProcessIo::new(&mut process_stdin, &mut process_stdout, &mut process_stderr);
+    process_io::run_with_resize_queue(args, &mut io, stdin_fd, resize_queue)
 }
 
 fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {

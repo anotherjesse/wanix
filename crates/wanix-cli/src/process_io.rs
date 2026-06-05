@@ -11,49 +11,44 @@ use crate::{
 #[cfg(all(unix, test))]
 pub(super) fn run_with_resize_queue(
     args: Vec<OsString>,
-    process_stdin: &mut dyn Read,
+    io: &mut ProcessIo<'_>,
     stdin_fd: libc::c_int,
     resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
-    let mut io = ProcessIo::new(process_stdin, process_stdout, process_stderr);
-    fd::run_with_resize_queue(args, &mut io, stdin_fd, resize_queue)
+    fd::run_with_resize_queue(args, io, stdin_fd, resize_queue)
 }
 
 #[cfg(unix)]
 pub(super) fn run_with_stdin_fd(
     args: Vec<OsString>,
-    process_stdin: &mut dyn Read,
+    io: &mut ProcessIo<'_>,
     stdin_fd: libc::c_int,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
-    let mut io = ProcessIo::new(process_stdin, process_stdout, process_stderr);
-    fd::run_with_stdin_fd(args, &mut io, stdin_fd)
+    fd::run_with_stdin_fd(args, io, stdin_fd)
 }
 
 #[cfg(unix)]
 pub(super) fn run_with_terminal_fds(
     args: Vec<OsString>,
-    process_stdin: &mut dyn Read,
+    io: &mut ProcessIo<'_>,
     stdin_fd: libc::c_int,
     terminal_size_fd: libc::c_int,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
-    let mut io = ProcessIo::new(process_stdin, process_stdout, process_stderr);
-    fd::run_with_terminal_fds(args, &mut io, stdin_fd, terminal_size_fd)
+    fd::run_with_terminal_fds(args, io, stdin_fd, terminal_size_fd)
 }
 
-struct ProcessIo<'a> {
+pub(super) struct ProcessIo<'a> {
     stdin: &'a mut dyn Read,
     stdout: &'a mut dyn Write,
     stderr: &'a mut dyn Write,
 }
 
 impl<'a> ProcessIo<'a> {
-    fn new(stdin: &'a mut dyn Read, stdout: &'a mut dyn Write, stderr: &'a mut dyn Write) -> Self {
+    pub(super) fn new(
+        stdin: &'a mut dyn Read,
+        stdout: &'a mut dyn Write,
+        stderr: &'a mut dyn Write,
+    ) -> Self {
         Self {
             stdin,
             stdout,
