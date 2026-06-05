@@ -2,7 +2,10 @@ mod iovs;
 
 use self::iovs::{checked_fd_write_total, preflight_fd_write_iovs, read_valid_fd_iov};
 use super::guest_memory::{capture_guest_buffer, guest_len, guest_range, write_guest_buffer};
-use super::{ERRNO_BADF, ERRNO_SUCCESS, HostState, WasiStdioFd, caller_memory, wasi_stdio_fd};
+use super::{
+    ERRNO_BADF, ERRNO_SUCCESS, HostState, QuickJsWasiHost, WasiStdioFd, caller_memory,
+    wasi_stdio_fd,
+};
 use crate::guest::guest_offset;
 use wasmtime::{Caller, Linker, Memory};
 
@@ -62,19 +65,7 @@ fn fd_write_with_wasi_host(
     guest_range(&memory, &caller, guest_offset(nwritten_ptr), WASI_U32_SIZE)?;
     preflight_fd_write_iovs(&memory, &caller, iovs_ptr, iovs_len)?;
 
-    let mut iovs = Vec::new();
-    iovs.try_reserve_exact(iovs_len)
-        .map_err(|_| wasmtime::Error::msg("fd_write iov allocation failed"))?;
-    for index in 0..iovs_len {
-        let iov = read_valid_fd_iov(&memory, &caller, iovs_ptr, index)?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(iov.len)
-            .map_err(|_| wasmtime::Error::msg("fd_write buffer allocation failed"))?;
-        bytes.resize(iov.len, 0);
-        memory.read(&caller, iov.ptr, &mut bytes)?;
-        iovs.push(bytes);
-    }
+    let iovs = copy_fd_write_iovs(&memory, &caller, iovs_ptr, iovs_len)?;
 
     let Some(host) = caller.data().wasi_host() else {
         return Ok(ERRNO_BADF);
@@ -82,11 +73,51 @@ fn fd_write_with_wasi_host(
     let mut host = host
         .lock()
         .map_err(|_| wasmtime::Error::msg("QuickJS WASI host lock poisoned"))?;
+    let total_written = match write_iovs_to_wasi_host(&mut **host, fd, &iovs)? {
+        HostFdWriteResult::Written(total_written) => total_written,
+        HostFdWriteResult::Errno(errno) => return Ok(errno),
+    };
+
+    memory.write(
+        &mut caller,
+        guest_offset(nwritten_ptr),
+        &total_written.to_le_bytes(),
+    )?;
+    Ok(ERRNO_SUCCESS)
+}
+
+fn copy_fd_write_iovs(
+    memory: &Memory,
+    caller: &Caller<'_, HostState>,
+    iovs_ptr: i32,
+    iovs_len: usize,
+) -> wasmtime::Result<Vec<Vec<u8>>> {
+    let mut iovs = Vec::new();
+    iovs.try_reserve_exact(iovs_len)
+        .map_err(|_| wasmtime::Error::msg("fd_write iov allocation failed"))?;
+    for index in 0..iovs_len {
+        let iov = read_valid_fd_iov(memory, caller, iovs_ptr, index)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(iov.len)
+            .map_err(|_| wasmtime::Error::msg("fd_write buffer allocation failed"))?;
+        bytes.resize(iov.len, 0);
+        memory.read(caller, iov.ptr, &mut bytes)?;
+        iovs.push(bytes);
+    }
+    Ok(iovs)
+}
+
+fn write_iovs_to_wasi_host(
+    host: &mut dyn QuickJsWasiHost,
+    fd: u32,
+    iovs: &[Vec<u8>],
+) -> wasmtime::Result<HostFdWriteResult> {
     let mut total_written = 0u32;
-    for bytes in &iovs {
+    for bytes in iovs {
         let count = match host.fd_write(fd, bytes) {
             Ok(count) => count,
-            Err(errno) => return Ok(errno.preview1_result()),
+            Err(errno) => return Ok(HostFdWriteResult::Errno(errno.preview1_result())),
         };
         if count > bytes.len() {
             return Err(wasmtime::Error::msg(
@@ -102,13 +133,12 @@ fn fd_write_with_wasi_host(
             break;
         }
     }
+    Ok(HostFdWriteResult::Written(total_written))
+}
 
-    memory.write(
-        &mut caller,
-        guest_offset(nwritten_ptr),
-        &total_written.to_le_bytes(),
-    )?;
-    Ok(ERRNO_SUCCESS)
+enum HostFdWriteResult {
+    Written(u32),
+    Errno(i32),
 }
 
 fn write_fd_iov_buffers(
