@@ -9,30 +9,26 @@ use super::super::pump::{
     pump_terminal_resize_if_changed, task_exited,
 };
 use super::super::{CliError, QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS};
+use super::ProcessFeedContext;
 
 const PROCESS_STDIN_READ_CHUNK_BYTES: usize = 1024;
 
 pub(super) fn run_process_polled_feed_session_after_eval(
-    process_stdin: &mut dyn Read,
     input_fd: libc::c_int,
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
-    pump_state: &mut TerminalPumpState,
-    process_stdout: &mut dyn Write,
+    context: ProcessFeedContext<'_>,
 ) -> Result<(), CliError> {
     let _nonblocking = NonBlockingFd::enter(input_fd)?;
     let mut bytes = [0; PROCESS_STDIN_READ_CHUNK_BYTES];
     let poll_timeout = Duration::from_millis(QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS);
-    let policy = pump_state.policy;
+    let policy = context.pump_state.policy;
     let idle_budget = qjs_shell_idle_event_loop_budget(policy.event_loop_wait_budget);
     let mut session = PolledFeedSession {
-        process_stdin,
-        terminal,
-        terminal_id,
-        runtime,
-        pump_state,
-        process_stdout,
+        process_stdin: context.process_stdin,
+        terminal: context.terminal,
+        terminal_id: context.terminal_id,
+        runtime: context.runtime,
+        pump_state: context.pump_state,
+        process_stdout: context.process_stdout,
         policy,
         idle_budget,
     };

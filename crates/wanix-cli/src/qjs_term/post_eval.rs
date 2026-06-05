@@ -7,8 +7,8 @@ use wanix_term::TermDevice;
 use super::CliError;
 use super::command::PostEvalFeed;
 use super::process::{
-    run_process_line_feed_session_after_eval, run_process_raw_byte_feed_session_after_eval,
-    split_feed_lines,
+    ProcessFeedContext, run_process_line_feed_session_after_eval,
+    run_process_raw_byte_feed_session_after_eval, split_feed_lines,
 };
 use super::pump::{
     TermResize, TerminalPumpState, feed_terminal_batch_and_pump, feed_terminal_resize_and_pump,
@@ -40,14 +40,7 @@ struct PostEvalFeedRunner<'a> {
     current_batch: Vec<Vec<u8>>,
 }
 
-type ProcessFeedSession = fn(
-    &mut dyn Read,
-    &TermDevice,
-    &str,
-    &mut QuickJsTaskRuntime,
-    &mut TerminalPumpState,
-    &mut dyn Write,
-) -> Result<(), CliError>;
+type ProcessFeedSession = for<'a> fn(ProcessFeedContext<'a>) -> Result<(), CliError>;
 
 impl PostEvalFeedRunner<'_> {
     fn run(&mut self, feeds: Vec<PostEvalFeed>) -> Result<(), CliError> {
@@ -112,14 +105,14 @@ impl PostEvalFeedRunner<'_> {
         if self.flush_batch_and_task_exited()? {
             return Ok(true);
         }
-        session(
-            self.context.process_stdin,
-            self.context.terminal,
-            self.context.terminal_id,
-            self.context.runtime,
-            &mut self.context.pump_state,
-            self.context.process_stdout,
-        )?;
+        session(ProcessFeedContext {
+            process_stdin: &mut *self.context.process_stdin,
+            terminal: self.context.terminal,
+            terminal_id: self.context.terminal_id,
+            runtime: &mut *self.context.runtime,
+            pump_state: &mut self.context.pump_state,
+            process_stdout: &mut *self.context.process_stdout,
+        })?;
         Ok(false)
     }
 

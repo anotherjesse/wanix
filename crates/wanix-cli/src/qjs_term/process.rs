@@ -15,31 +15,27 @@ use super::pump::{
     TerminalPumpState, feed_terminal_batch_and_pump, feed_terminal_chunk_and_pump, task_exited,
 };
 
+pub(super) struct ProcessFeedContext<'a> {
+    pub(super) process_stdin: &'a mut dyn Read,
+    pub(super) terminal: &'a TermDevice,
+    pub(super) terminal_id: &'a str,
+    pub(super) runtime: &'a mut QuickJsTaskRuntime,
+    pub(super) pump_state: &'a mut TerminalPumpState,
+    pub(super) process_stdout: &'a mut dyn Write,
+}
+
 pub(super) fn run_process_raw_byte_feed_session_after_eval(
-    process_stdin: &mut dyn Read,
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
-    pump_state: &mut TerminalPumpState,
-    process_stdout: &mut dyn Write,
+    context: ProcessFeedContext<'_>,
 ) -> Result<(), CliError> {
-    let policy = pump_state.policy;
+    let policy = context.pump_state.policy;
     #[cfg(unix)]
     if let ProcessInputMode::PollFd(input_fd) = policy.input_mode {
-        return unix::run_process_polled_feed_session_after_eval(
-            process_stdin,
-            input_fd,
-            terminal,
-            terminal_id,
-            runtime,
-            pump_state,
-            process_stdout,
-        );
+        return unix::run_process_polled_feed_session_after_eval(input_fd, context);
     }
 
     let mut byte = [0; 1];
     loop {
-        let count = process_stdin.read(&mut byte).map_err(|error| {
+        let count = context.process_stdin.read(&mut byte).map_err(|error| {
             CliError::new(
                 format!("failed to read process stdin raw bytes after eval: {error}"),
                 1,
@@ -49,15 +45,15 @@ pub(super) fn run_process_raw_byte_feed_session_after_eval(
             return Ok(());
         }
         feed_terminal_chunk_and_pump(
-            terminal,
-            terminal_id,
-            runtime,
+            context.terminal,
+            context.terminal_id,
+            context.runtime,
             &byte[..count],
             policy.ready_io_turns,
             policy.event_loop_wait_budget,
-            process_stdout,
+            context.process_stdout,
         )?;
-        if task_exited(runtime)? {
+        if task_exited(context.runtime)? {
             break;
         }
     }
@@ -80,39 +76,26 @@ pub(super) fn split_feed_lines(bytes: Vec<u8>) -> Vec<Vec<u8>> {
 }
 
 pub(super) fn run_process_line_feed_session_after_eval(
-    process_stdin: &mut dyn Read,
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
-    pump_state: &mut TerminalPumpState,
-    process_stdout: &mut dyn Write,
+    context: ProcessFeedContext<'_>,
 ) -> Result<(), CliError> {
-    let policy = pump_state.policy;
+    let policy = context.pump_state.policy;
     #[cfg(unix)]
     if let ProcessInputMode::PollFd(input_fd) = policy.input_mode {
-        return unix::run_process_polled_feed_session_after_eval(
-            process_stdin,
-            input_fd,
-            terminal,
-            terminal_id,
-            runtime,
-            pump_state,
-            process_stdout,
-        );
+        return unix::run_process_polled_feed_session_after_eval(input_fd, context);
     }
 
     let mut line = Vec::new();
-    while read_process_line_after_eval(process_stdin, &mut line)? {
+    while read_process_line_after_eval(context.process_stdin, &mut line)? {
         feed_terminal_batch_and_pump(
-            terminal,
-            terminal_id,
-            runtime,
+            context.terminal,
+            context.terminal_id,
+            context.runtime,
             &[line.clone()],
             policy.ready_io_turns,
             policy.event_loop_wait_budget,
-            process_stdout,
+            context.process_stdout,
         )?;
-        if task_exited(runtime)? {
+        if task_exited(context.runtime)? {
             break;
         }
     }
