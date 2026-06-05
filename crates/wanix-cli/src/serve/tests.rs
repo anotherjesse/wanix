@@ -25,7 +25,7 @@ use super::roots::ServeRoots;
 use super::terminal_ws::{parse_terminal_resize_message, qjs_shell_cwd_from_target};
 use super::{
     DEFAULT_SERVE_ADDR, FS9P_BUNDLE, ServeCommand, WORKBENCH_FS9P_BUNDLE, parse_serve_command,
-    run_serve_with_listener, run_serve_with_listener_for_connections,
+    run_serve_streaming, run_serve_with_listener, run_serve_with_listener_for_connections,
 };
 
 const EBADF: u32 = 9;
@@ -79,6 +79,29 @@ fn parse_serve_reports_missing_option_values() {
             "{option} produced {error}"
         );
     }
+}
+
+#[test]
+fn run_serve_streaming_reports_bind_errors() {
+    let command = ServeCommand {
+        root_path: PathBuf::from("."),
+        addr: "127.0.0.1:notaport".to_owned(),
+        bundle: None,
+        wanix_services: false,
+        once: true,
+    };
+    let mut stderr = Vec::new();
+
+    let error = run_serve_streaming(command, &mut stderr).unwrap_err();
+
+    assert_eq!(error.exit_code(), 1);
+    assert!(
+        error
+            .to_string()
+            .contains("failed to bind serve address 127.0.0.1:notaport"),
+        "{error}"
+    );
+    assert!(stderr.is_empty());
 }
 
 #[test]
