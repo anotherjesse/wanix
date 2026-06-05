@@ -36,7 +36,8 @@ impl TerminalWebSocketSession {
             .get_mut()
             .set_read_timeout(Some(Duration::from_millis(
                 QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS,
-            )))?;
+            )))
+            .map_err(ServeConnectionError::Io)?;
         let (shell, initial_output) = QjsShellSession::start_in_cwd(root_path, cwd)
             .map_err(ServeConnectionError::Terminal)?;
         let mut session = Self { socket, shell };

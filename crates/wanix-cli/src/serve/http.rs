@@ -93,8 +93,10 @@ pub(super) fn write_static_response(
     mut stream: TcpStream,
     response: StaticResponse,
 ) -> Result<(), ServeConnectionError> {
-    stream.write_all(&response.encode())?;
-    stream.flush()?;
+    stream
+        .write_all(&response.encode())
+        .map_err(ServeConnectionError::Io)?;
+    stream.flush().map_err(ServeConnectionError::Io)?;
     Ok(())
 }
 
@@ -102,7 +104,7 @@ fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, ServeConnectionE
     let mut request = Vec::new();
     let mut buffer = [0; HTTP_READ_BUFFER_BYTES];
     while request.len() < MAX_HTTP_HEADER_BYTES {
-        let len = stream.read(&mut buffer)?;
+        let len = stream.read(&mut buffer).map_err(ServeConnectionError::Io)?;
         if len == 0 {
             break;
         }

@@ -44,7 +44,7 @@ pub(super) fn serve_connection(
     stream: TcpStream,
     peer_addr: SocketAddr,
 ) -> Result<(), ServeConnectionError> {
-    let request = peek_request_headers(&stream)?;
+    let request = peek_request_headers(&stream).map_err(ServeConnectionError::Io)?;
     if is_websocket_upgrade(&request) {
         return serve_websocket_request(roots, stream, peek_request_target(&request));
     }
@@ -114,11 +114,5 @@ impl Error for ServeConnectionError {
             Self::Terminal(error) => Some(error),
             Self::Http(_) => None,
         }
-    }
-}
-
-impl From<io::Error> for ServeConnectionError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
     }
 }
