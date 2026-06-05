@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use crate::CliError;
+use crate::{CliError, command_args::named_arg};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct P9WsCommand {
@@ -97,12 +97,7 @@ enum P9WsOption {
 
 impl P9WsOption {
     fn from_arg(arg: &OsString) -> Option<Self> {
-        match arg.to_str()? {
-            "--root" => Some(Self::Root),
-            "--addr" => Some(Self::Addr),
-            "--once" => Some(Self::Once),
-            _ => None,
-        }
+        named_arg(arg, P9_WS_OPTIONS)
     }
 
     fn label(self) -> &'static str {
@@ -121,6 +116,12 @@ impl P9WsOption {
         }
     }
 }
+
+const P9_WS_OPTIONS: &[(&str, P9WsOption)] = &[
+    ("--root", P9WsOption::Root),
+    ("--addr", P9WsOption::Addr),
+    ("--once", P9WsOption::Once),
+];
 
 fn set_single_path(
     target: &mut Option<PathBuf>,

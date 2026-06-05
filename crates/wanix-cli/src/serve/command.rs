@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use crate::CliError;
+use crate::{CliError, command_args::named_arg};
 
 pub(crate) const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
 
@@ -112,15 +112,9 @@ enum ServeArg {
 
 impl ServeArg {
     fn from_arg(arg: &OsString) -> Option<Self> {
-        let arg = arg.to_str()?;
-        SERVE_VALUE_OPTIONS
-            .iter()
-            .find_map(|(name, option)| (*name == arg).then_some(Self::Value(*option)))
-            .or_else(|| {
-                SERVE_FLAG_OPTIONS
-                    .iter()
-                    .find_map(|(name, option)| (*name == arg).then_some(Self::Flag(*option)))
-            })
+        named_arg(arg, SERVE_VALUE_OPTIONS)
+            .map(Self::Value)
+            .or_else(|| named_arg(arg, SERVE_FLAG_OPTIONS).map(Self::Flag))
     }
 }
 

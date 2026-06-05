@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use crate::CliError;
+use crate::{CliError, command_args::named_arg};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct P9ListenCommand {
@@ -120,15 +120,9 @@ enum P9ListenArg {
 
 impl P9ListenArg {
     fn from_arg(arg: &OsString) -> Option<Self> {
-        let arg = arg.to_str()?;
-        P9_LISTEN_VALUE_OPTIONS
-            .iter()
-            .find_map(|(name, option)| (*name == arg).then_some(Self::Value(*option)))
-            .or_else(|| {
-                P9_LISTEN_FLAG_OPTIONS
-                    .iter()
-                    .find_map(|(name, option)| (*name == arg).then_some(Self::Flag(*option)))
-            })
+        named_arg(arg, P9_LISTEN_VALUE_OPTIONS)
+            .map(Self::Value)
+            .or_else(|| named_arg(arg, P9_LISTEN_FLAG_OPTIONS).map(Self::Flag))
     }
 }
 
