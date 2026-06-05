@@ -62,18 +62,6 @@ impl<'a> ProcessIo<'a> {
     }
 }
 
-type StreamingHandler = fn(&[OsString], &mut ProcessIo<'_>) -> Result<i32, CliError>;
-
-const STREAMING_COMMANDS: &[(&str, StreamingHandler)] = &[
-    ("qjs-term", run_qjs_term_process_io),
-    ("qjs-shell", run_qjs_shell_process_io),
-    ("p9-stdio", run_p9_stdio_process_io),
-    ("p9-listen", run_p9_listen_process_io),
-    ("p9-ws", run_p9_ws_process_io),
-    ("qemu", run_qemu_process_io),
-    ("serve", run_serve_process_io),
-];
-
 pub(super) fn run_with_process_io(
     args: Vec<OsString>,
     process_stdin: &mut dyn Read,
@@ -98,52 +86,62 @@ fn run_streaming_command(
     let Some((command, rest)) = args.split_first() else {
         return Ok(None);
     };
-    let Some(handler) = streaming_handler(command) else {
-        return Ok(None);
-    };
-    Ok(Some(handler(rest, io)?))
+    match command.to_str() {
+        Some("qjs-term" | "qjs-shell") => run_qjs_streaming_command(command, rest, io),
+        Some("p9-stdio" | "p9-listen" | "p9-ws") => run_9p_streaming_command(command, rest, io),
+        Some("qemu") => Ok(Some(run_qemu_process_io(rest, io)?)),
+        Some("serve") => Ok(Some(serve::run_serve_streaming(
+            serve::parse_serve_command(rest)?,
+            io.stderr,
+        )?)),
+        _ => Ok(None),
+    }
 }
 
-fn streaming_handler(command: &OsString) -> Option<StreamingHandler> {
-    let command = command.to_str()?;
-    STREAMING_COMMANDS
-        .iter()
-        .find_map(|(name, handler)| (*name == command).then_some(*handler))
+fn run_qjs_streaming_command(
+    command: &OsString,
+    rest: &[OsString],
+    io: &mut ProcessIo<'_>,
+) -> Result<Option<i32>, CliError> {
+    match command.to_str() {
+        Some("qjs-term") => Ok(Some(qjs_term::run_qjs_term_streaming(
+            qjs_term::parse_qjs_term_command(rest)?,
+            io.stdin,
+            io.stdout,
+            io.stderr,
+        )?)),
+        Some("qjs-shell") => Ok(Some(qjs_term::run_qjs_shell_streaming(
+            qjs_term::parse_qjs_shell_command(rest)?,
+            io.stdin,
+            io.stdout,
+            io.stderr,
+        )?)),
+        _ => Ok(None),
+    }
 }
 
-fn run_qjs_term_process_io(rest: &[OsString], io: &mut ProcessIo<'_>) -> Result<i32, CliError> {
-    qjs_term::run_qjs_term_streaming(
-        qjs_term::parse_qjs_term_command(rest)?,
-        io.stdin,
-        io.stdout,
-        io.stderr,
-    )
-}
-
-fn run_qjs_shell_process_io(rest: &[OsString], io: &mut ProcessIo<'_>) -> Result<i32, CliError> {
-    qjs_term::run_qjs_shell_streaming(
-        qjs_term::parse_qjs_shell_command(rest)?,
-        io.stdin,
-        io.stdout,
-        io.stderr,
-    )
-}
-
-fn run_p9_stdio_process_io(rest: &[OsString], io: &mut ProcessIo<'_>) -> Result<i32, CliError> {
-    p9_stdio::run_p9_stdio_streaming(
-        p9_stdio::parse_p9_stdio_command(rest)?,
-        io.stdin,
-        io.stdout,
-        io.stderr,
-    )
-}
-
-fn run_p9_listen_process_io(rest: &[OsString], io: &mut ProcessIo<'_>) -> Result<i32, CliError> {
-    p9_listen::run_p9_listen_streaming(p9_listen::parse_p9_listen_command(rest)?, io.stderr)
-}
-
-fn run_p9_ws_process_io(rest: &[OsString], io: &mut ProcessIo<'_>) -> Result<i32, CliError> {
-    p9_ws::run_p9_ws_streaming(p9_ws::parse_p9_ws_command(rest)?, io.stderr)
+fn run_9p_streaming_command(
+    command: &OsString,
+    rest: &[OsString],
+    io: &mut ProcessIo<'_>,
+) -> Result<Option<i32>, CliError> {
+    match command.to_str() {
+        Some("p9-stdio") => Ok(Some(p9_stdio::run_p9_stdio_streaming(
+            p9_stdio::parse_p9_stdio_command(rest)?,
+            io.stdin,
+            io.stdout,
+            io.stderr,
+        )?)),
+        Some("p9-listen") => Ok(Some(p9_listen::run_p9_listen_streaming(
+            p9_listen::parse_p9_listen_command(rest)?,
+            io.stderr,
+        )?)),
+        Some("p9-ws") => Ok(Some(p9_ws::run_p9_ws_streaming(
+            p9_ws::parse_p9_ws_command(rest)?,
+            io.stderr,
+        )?)),
+        _ => Ok(None),
+    }
 }
 
 fn run_qemu_process_io(rest: &[OsString], io: &mut ProcessIo<'_>) -> Result<i32, CliError> {
@@ -170,10 +168,6 @@ fn run_qemu_print_process_io(
     write_process_output(process_stdout, "stdout", output.stdout())?;
     write_process_output(process_stderr, "stderr", output.stderr())?;
     Ok(output.exit_code())
-}
-
-fn run_serve_process_io(rest: &[OsString], io: &mut ProcessIo<'_>) -> Result<i32, CliError> {
-    serve::run_serve_streaming(serve::parse_serve_command(rest)?, io.stderr)
 }
 
 fn run_collected_with_process_output(
