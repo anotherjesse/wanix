@@ -1,15 +1,15 @@
-use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath};
 use wanix_vfs::{BindOptions, Namespace};
 
-use crate::FdTable;
 use crate::cmd::parse_cmd_argv;
 
 mod fd_ops;
+mod state;
 mod types;
 
+use state::TaskState;
 pub use types::{TaskId, TaskSpec};
 
 /// A task handle. Clones point at the same task state.
@@ -18,56 +18,11 @@ pub struct Task {
     state: Arc<Mutex<TaskState>>,
 }
 
-struct TaskState {
-    id: TaskId,
-    parent: Option<TaskId>,
-    kind: String,
-    spec: TaskSpec,
-    cmd: String,
-    cmd_argv: Option<Vec<String>>,
-    env: Vec<String>,
-    dir: NormalizedPath,
-    exit: String,
-    namespace: Namespace,
-    fds: FdTable,
-}
-
-impl fmt::Debug for Task {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.state.lock() {
-            Ok(state) => f
-                .debug_struct("Task")
-                .field("id", &state.id)
-                .field("parent", &state.parent)
-                .field("kind", &state.kind)
-                .field("cmd", &state.cmd)
-                .field("cmd_argv", &state.cmd_argv)
-                .field("dir", &state.dir)
-                .field("exit", &state.exit)
-                .field("fds", &state.fds)
-                .finish(),
-            Err(_) => f.debug_struct("Task").field("state", &"poisoned").finish(),
-        }
-    }
-}
-
 impl Task {
     /// Creates a task with manual kind and no parent.
     #[must_use]
     pub fn new(id: TaskId, spec: TaskSpec, namespace: Namespace) -> Self {
-        Self::with_state(TaskState {
-            id,
-            parent: None,
-            kind: "manual".to_owned(),
-            cmd: String::new(),
-            cmd_argv: None,
-            env: Vec::new(),
-            dir: spec.cwd.clone(),
-            exit: String::new(),
-            spec,
-            namespace,
-            fds: FdTable::new(),
-        })
+        Self::with_state(TaskState::manual(id, spec, namespace))
     }
 
     pub(crate) fn allocated(
@@ -76,19 +31,7 @@ impl Task {
         kind: impl Into<String>,
         namespace: Namespace,
     ) -> Self {
-        Self::with_state(TaskState {
-            id,
-            parent,
-            kind: kind.into(),
-            spec: TaskSpec::unset(),
-            cmd: String::new(),
-            cmd_argv: None,
-            env: Vec::new(),
-            dir: NormalizedPath::new(".").expect("root path is valid"),
-            exit: String::new(),
-            namespace,
-            fds: FdTable::new(),
-        })
+        Self::with_state(TaskState::allocated(id, parent, kind, namespace))
     }
 
     fn with_state(state: TaskState) -> Self {
