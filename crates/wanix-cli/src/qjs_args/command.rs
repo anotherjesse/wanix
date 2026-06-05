@@ -1,8 +1,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use super::common::{QjsOptionParse, QjsRunOptions, parse_common_qjs_option};
-use super::{QjsCommand, os_arg_to_string};
+use super::QjsCommand;
+use super::common::{QjsOptionParse, QjsRunOptions, parse_common_qjs_option, parse_script_args};
 use crate::CliError;
 
 pub(crate) fn parse_qjs_command(args: &[OsString]) -> Result<QjsCommand, CliError> {
@@ -28,14 +28,7 @@ pub(crate) fn parse_qjs_command_for(
     let script_path = PathBuf::from(script);
     i += 1;
 
-    if args.get(i).is_some_and(|arg| arg == "--") {
-        i += 1;
-    }
-
-    let js_args = args[i..]
-        .iter()
-        .map(|arg| os_arg_to_string(arg, &format!("{command} script arg")))
-        .collect::<Result<Vec<_>, CliError>>()?;
+    let js_args = parse_script_args(args, &mut i, command)?;
 
     Ok(options.into_command(script_path, js_args))
 }

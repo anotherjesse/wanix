@@ -161,6 +161,20 @@ pub(super) fn parse_common_qjs_option(
     Ok(QjsOptionParse::Consumed)
 }
 
+pub(super) fn parse_script_args(
+    args: &[OsString],
+    index: &mut usize,
+    command: &str,
+) -> Result<Vec<String>, CliError> {
+    if args.get(*index).is_some_and(|arg| arg == "--") {
+        *index += 1;
+    }
+    args[*index..]
+        .iter()
+        .map(|arg| os_arg_to_string(arg, &format!("{command} script arg")))
+        .collect()
+}
+
 fn apply_common_qjs_option(
     option: CommonQjsOption,
     value: &OsString,
