@@ -163,3 +163,90 @@ pub(crate) fn parse_qjs_restore_command(args: &[OsString]) -> Result<QjsRestoreC
 
     Ok(options.into_command(before_script_path, after_script_path))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::parse_qjs_restore_command;
+
+    #[test]
+    fn parse_qjs_restore_command_applies_options_and_scripts() {
+        let command = parse_qjs_restore_command(&os_args([
+            "--cwd",
+            "work/dir",
+            "--before-env",
+            "BEFORE=one",
+            "--after-env",
+            "AFTER=two",
+            "--before-arg",
+            "pre",
+            "--after-arg",
+            "post",
+            "--mount",
+            "/host/data=guest/data",
+            "before.js",
+            "after.js",
+        ]))
+        .unwrap();
+
+        assert_eq!(command.before_script_path, PathBuf::from("before.js"));
+        assert_eq!(command.after_script_path, PathBuf::from("after.js"));
+        assert_eq!(command.cwd.as_str(), "work/dir");
+        assert_eq!(command.before_env, vec!["BEFORE=one"]);
+        assert_eq!(command.after_env, vec!["AFTER=two"]);
+        assert_eq!(command.before_args, vec!["pre"]);
+        assert_eq!(command.after_args, vec!["post"]);
+        assert_eq!(command.mounts.len(), 1);
+        assert_eq!(command.mounts[0].host_path, PathBuf::from("/host/data"));
+        assert_eq!(command.mounts[0].guest_path.as_str(), "guest/data");
+    }
+
+    #[test]
+    fn parse_qjs_restore_command_separator_stops_option_parsing() {
+        let command = parse_qjs_restore_command(&os_args([
+            "--before-env",
+            "BEFORE=one",
+            "--",
+            "--after-env",
+            "after.js",
+        ]))
+        .unwrap();
+
+        assert_eq!(command.before_script_path, PathBuf::from("--after-env"));
+        assert_eq!(command.after_script_path, PathBuf::from("after.js"));
+        assert_eq!(command.before_env, vec!["BEFORE=one"]);
+        assert!(command.after_env.is_empty());
+    }
+
+    #[test]
+    fn parse_qjs_restore_command_reports_usage_boundaries() {
+        assert_usage_error(
+            parse_qjs_restore_command(&[]),
+            "qjs-restore expects before.js and after.js",
+        );
+        assert_usage_error(
+            parse_qjs_restore_command(&os_args(["--before-env"])),
+            "qjs-restore --before-env expects KEY=VALUE",
+        );
+        assert_usage_error(
+            parse_qjs_restore_command(&os_args(["before.js"])),
+            "qjs-restore expects before.js and after.js",
+        );
+        assert_usage_error(
+            parse_qjs_restore_command(&os_args(["before.js", "after.js", "extra.js"])),
+            "unexpected qjs-restore argument: extra.js",
+        );
+    }
+
+    fn assert_usage_error<T: std::fmt::Debug>(result: Result<T, crate::CliError>, expected: &str) {
+        let error = result.unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains(expected));
+    }
+
+    fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
+        args.into_iter().map(OsString::from).collect()
+    }
+}
