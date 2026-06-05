@@ -268,6 +268,82 @@ mod tests {
     }
 
     #[test]
+    fn qjs_run_option_setters_apply_state_directly() {
+        let mut options = QjsRunOptions::new().unwrap();
+
+        options.add_env(&"MODE=direct".into(), "qjs --env").unwrap();
+        options.set_cwd(&"direct/cwd".into(), "qjs --cwd").unwrap();
+        options
+            .set_stdin_bytes(&"payload".into(), "qjs", "qjs --stdin")
+            .unwrap();
+        options
+            .set_event_loop_ms(&"25".into(), "qjs --event-loop-ms")
+            .unwrap();
+        options
+            .set_ready_io_turns(&"4".into(), "qjs --ready-io-turns")
+            .unwrap();
+        options
+            .set_interrupt_after(&"80".into(), "qjs --interrupt-after")
+            .unwrap();
+        options
+            .set_memory_limit_bytes(&"8192".into(), "qjs --memory-limit-bytes")
+            .unwrap();
+        options
+            .add_mount(&"/host=guest".into(), "qjs --mount")
+            .unwrap();
+
+        let command = options.into_command(PathBuf::from("direct.js"), Vec::new());
+        assert_eq!(command.env, vec!["MODE=direct"]);
+        assert_eq!(command.cwd.as_str(), "direct/cwd");
+        assert_eq!(command.stdin, Some(QjsStdin::Bytes(b"payload".to_vec())));
+        assert_eq!(command.event_loop_wait_budget, Duration::from_millis(25));
+        assert_eq!(command.ready_io_turns, 4);
+        assert_eq!(command.interrupt_poll_budget, Some(80));
+        assert_eq!(command.memory_limit_bytes, Some(8192));
+        assert_eq!(command.mounts.len(), 1);
+        assert_eq!(command.mounts[0].host_path, PathBuf::from("/host"));
+        assert_eq!(command.mounts[0].guest_path.as_str(), "guest");
+    }
+
+    #[test]
+    fn qjs_run_option_setters_report_usage_errors() {
+        let mut options = QjsRunOptions::new().unwrap();
+
+        assert_usage_error(
+            options.add_env(&"MISSING_VALUE".into(), "qjs --env"),
+            "qjs --env expects KEY=VALUE",
+        );
+        assert_usage_error(
+            options.set_event_loop_ms(&"later".into(), "qjs --event-loop-ms"),
+            "qjs --event-loop-ms expects a non-negative integer",
+        );
+        assert_usage_error(
+            options.set_ready_io_turns(&"-1".into(), "qjs --ready-io-turns"),
+            "qjs --ready-io-turns expects a non-negative integer",
+        );
+        assert_usage_error(
+            options.set_interrupt_after(&"many".into(), "qjs --interrupt-after"),
+            "qjs --interrupt-after expects a non-negative integer",
+        );
+        assert_usage_error(
+            options.set_memory_limit_bytes(&"4294967296".into(), "qjs --memory-limit-bytes"),
+            "qjs --memory-limit-bytes expects a 32-bit non-negative integer",
+        );
+        assert_usage_error(
+            options.add_mount(&"missing-guest".into(), "qjs --mount"),
+            "qjs --mount expects HOST=GUEST",
+        );
+
+        options
+            .set_stdin_bytes(&"first".into(), "qjs", "qjs --stdin")
+            .unwrap();
+        assert_usage_error(
+            options.set_stdin_file(&"input.txt".into(), "qjs"),
+            "qjs accepts only one of --stdin or --stdin-file",
+        );
+    }
+
+    #[test]
     fn common_qjs_options_project_into_snapshot_command() {
         let options = parse_options(["--env", "MODE=test", "--cwd", "snapshot/cwd"]);
 
@@ -328,6 +404,12 @@ mod tests {
             ));
         }
         options
+    }
+
+    fn assert_usage_error<T: std::fmt::Debug>(result: Result<T, crate::CliError>, expected: &str) {
+        let error = result.unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains(expected));
     }
 
     fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
