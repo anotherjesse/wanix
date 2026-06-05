@@ -116,3 +116,53 @@ impl Error for ServeConnectionError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+    use std::io;
+
+    use super::*;
+
+    #[test]
+    fn serve_connection_errors_have_stable_display_text() {
+        assert_eq!(
+            ServeConnectionError::Io(io::Error::other("closed pipe")).to_string(),
+            "I/O failed: closed pipe"
+        );
+        assert_eq!(
+            ServeConnectionError::Http("request headers exceeded limit".to_owned()).to_string(),
+            "request headers exceeded limit"
+        );
+        assert_eq!(
+            ServeConnectionError::WebSocket(P9WsConnectionError::Handshake("bad key".to_owned()))
+                .to_string(),
+            "websocket 9P failed: websocket handshake failed: bad key"
+        );
+        assert_eq!(
+            ServeConnectionError::Terminal(CliError::new("shell failed", 1)).to_string(),
+            "websocket terminal failed: shell failed"
+        );
+    }
+
+    #[test]
+    fn serve_connection_errors_report_sources_for_wrapped_errors() {
+        let io_error = ServeConnectionError::Io(io::Error::other("closed pipe"));
+        assert!(io_error.source().unwrap().is::<io::Error>());
+
+        let websocket_error =
+            ServeConnectionError::WebSocket(P9WsConnectionError::Handshake("bad key".to_owned()));
+        assert!(
+            websocket_error
+                .source()
+                .unwrap()
+                .is::<P9WsConnectionError>()
+        );
+
+        let terminal_error = ServeConnectionError::Terminal(CliError::new("shell failed", 1));
+        assert!(terminal_error.source().unwrap().is::<CliError>());
+
+        let http_error = ServeConnectionError::Http("bad request".to_owned());
+        assert!(http_error.source().is_none());
+    }
+}
