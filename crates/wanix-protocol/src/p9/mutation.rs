@@ -7,6 +7,12 @@ use super::{
     P9Remove, P9Rename, P9RenameAt, P9UnlinkAt,
 };
 
+const P9_U8_FIELD_LEN: usize = 1;
+const P9_U32_FIELD_LEN: usize = 4;
+const P9_U64_FIELD_LEN: usize = 8;
+const P9_QID_FIELD_LEN: usize = P9_U8_FIELD_LEN + P9_U32_FIELD_LEN + P9_U64_FIELD_LEN;
+const P9_TREMOVE_PAYLOAD_LEN: usize = P9_U32_FIELD_LEN;
+
 /// Builds a `Tlink` frame.
 ///
 /// # Errors
@@ -68,7 +74,7 @@ pub fn p9_tmkdir(
 /// Builds an `Rmkdir` frame.
 #[must_use]
 pub fn p9_rmkdir(tag: u16, qid: P9Qid) -> P9Frame {
-    let mut payload = Vec::with_capacity(13);
+    let mut payload = Vec::with_capacity(P9_QID_FIELD_LEN);
     push_qid(&mut payload, qid);
     P9Frame::new(P9_RMKDIR, tag, payload)
 }
@@ -121,7 +127,7 @@ pub fn p9_runlinkat(tag: u16) -> P9Frame {
 /// Builds a legacy `Tremove` frame.
 #[must_use]
 pub fn p9_tremove(tag: u16, fid: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(4);
+    let mut payload = Vec::with_capacity(P9_TREMOVE_PAYLOAD_LEN);
     push_u32(&mut payload, fid);
     P9Frame::new(P9_TREMOVE, tag, payload)
 }
