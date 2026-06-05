@@ -1,77 +1,105 @@
 use std::ffi::OsString;
-use std::io::{Read, Write};
 
+use super::ProcessIo;
 use crate::{CliError, qjs_term};
 
 #[cfg(unix)]
 pub(crate) fn run_with_stdin_fd(
     args: Vec<OsString>,
-    process_stdin: &mut dyn Read,
+    io: &mut ProcessIo<'_>,
     stdin_fd: libc::c_int,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
-    let Some((command, rest)) = args.split_first() else {
-        return super::run_with_process_io(args, process_stdin, process_stdout, process_stderr);
-    };
-    if command == "qjs-shell" {
-        return qjs_term::run_qjs_shell_streaming_with_input_fd(
-            qjs_term::parse_qjs_shell_command(rest)?,
-            process_stdin,
-            stdin_fd,
-            process_stdout,
-            process_stderr,
-        );
-    }
-    super::run_with_process_io(args, process_stdin, process_stdout, process_stderr)
+    run_with_qjs_shell_input(args, io, QjsShellInput::StdinFd(stdin_fd))
 }
 
 #[cfg(unix)]
 pub(crate) fn run_with_terminal_fds(
     args: Vec<OsString>,
-    process_stdin: &mut dyn Read,
+    io: &mut ProcessIo<'_>,
     stdin_fd: libc::c_int,
     terminal_size_fd: libc::c_int,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
-    let Some((command, rest)) = args.split_first() else {
-        return super::run_with_process_io(args, process_stdin, process_stdout, process_stderr);
-    };
-    if command == "qjs-shell" {
-        return qjs_term::run_qjs_shell_streaming_with_terminal_fds(
-            qjs_term::parse_qjs_shell_command(rest)?,
-            process_stdin,
+    run_with_qjs_shell_input(
+        args,
+        io,
+        QjsShellInput::TerminalFds {
             stdin_fd,
             terminal_size_fd,
-            process_stdout,
-            process_stderr,
-        );
-    }
-    super::run_with_process_io(args, process_stdin, process_stdout, process_stderr)
+        },
+    )
 }
 
 #[cfg(all(unix, test))]
 pub(crate) fn run_with_resize_queue(
     args: Vec<OsString>,
-    process_stdin: &mut dyn Read,
+    io: &mut ProcessIo<'_>,
     stdin_fd: libc::c_int,
     resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
-    let Some((command, rest)) = args.split_first() else {
-        return super::run_with_process_io(args, process_stdin, process_stdout, process_stderr);
-    };
-    if command == "qjs-shell" {
-        return qjs_term::run_qjs_shell_streaming_with_resize_queue(
-            qjs_term::parse_qjs_shell_command(rest)?,
-            process_stdin,
+    run_with_qjs_shell_input(
+        args,
+        io,
+        QjsShellInput::ResizeQueue {
             stdin_fd,
             resize_queue,
-            process_stdout,
-            process_stderr,
-        );
+        },
+    )
+}
+
+#[cfg(unix)]
+enum QjsShellInput {
+    StdinFd(libc::c_int),
+    TerminalFds {
+        stdin_fd: libc::c_int,
+        terminal_size_fd: libc::c_int,
+    },
+    #[cfg(test)]
+    ResizeQueue {
+        stdin_fd: libc::c_int,
+        resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
+    },
+}
+
+#[cfg(unix)]
+fn run_with_qjs_shell_input(
+    args: Vec<OsString>,
+    io: &mut ProcessIo<'_>,
+    input: QjsShellInput,
+) -> Result<i32, CliError> {
+    let Some((command, rest)) = args.split_first() else {
+        return super::run_with_process_io_inner(args, io);
+    };
+    if command != "qjs-shell" {
+        return super::run_with_process_io_inner(args, io);
     }
-    super::run_with_process_io(args, process_stdin, process_stdout, process_stderr)
+
+    let command = qjs_term::parse_qjs_shell_command(rest)?;
+    match input {
+        QjsShellInput::StdinFd(stdin_fd) => qjs_term::run_qjs_shell_streaming_with_input_fd(
+            command, io.stdin, stdin_fd, io.stdout, io.stderr,
+        ),
+        QjsShellInput::TerminalFds {
+            stdin_fd,
+            terminal_size_fd,
+        } => qjs_term::run_qjs_shell_streaming_with_terminal_fds(
+            command,
+            io.stdin,
+            stdin_fd,
+            terminal_size_fd,
+            io.stdout,
+            io.stderr,
+        ),
+        #[cfg(test)]
+        QjsShellInput::ResizeQueue {
+            stdin_fd,
+            resize_queue,
+        } => qjs_term::run_qjs_shell_streaming_with_resize_queue(
+            command,
+            io.stdin,
+            stdin_fd,
+            resize_queue,
+            io.stdout,
+            io.stderr,
+        ),
+    }
 }
