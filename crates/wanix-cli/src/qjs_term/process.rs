@@ -25,8 +25,27 @@ pub(super) struct ProcessFeedContext<'a> {
     pub(super) process_stdout: &'a mut dyn Write,
 }
 
+#[derive(Clone, Copy)]
+enum ProcessFeedMode {
+    RawBytes,
+    Lines,
+}
+
 pub(super) fn run_process_raw_byte_feed_session_after_eval(
     context: ProcessFeedContext<'_>,
+) -> Result<(), CliError> {
+    run_process_feed_session_after_eval(context, ProcessFeedMode::RawBytes)
+}
+
+pub(super) fn run_process_line_feed_session_after_eval(
+    context: ProcessFeedContext<'_>,
+) -> Result<(), CliError> {
+    run_process_feed_session_after_eval(context, ProcessFeedMode::Lines)
+}
+
+fn run_process_feed_session_after_eval(
+    context: ProcessFeedContext<'_>,
+    mode: ProcessFeedMode,
 ) -> Result<(), CliError> {
     let policy = context.pump_state.policy;
     #[cfg(unix)]
@@ -34,15 +53,30 @@ pub(super) fn run_process_raw_byte_feed_session_after_eval(
         return unix::run_process_polled_feed_session_after_eval(input_fd, context);
     }
 
-    let mut pump_context = TerminalPumpContext {
-        terminal: context.terminal,
-        terminal_id: context.terminal_id,
-        runtime: context.runtime,
-        process_stdout: context.process_stdout,
-    };
+    let mut pump_context = terminal_pump_context(
+        context.terminal,
+        context.terminal_id,
+        context.runtime,
+        context.process_stdout,
+    );
+    match mode {
+        ProcessFeedMode::RawBytes => {
+            run_process_raw_byte_feed(context.process_stdin, &mut pump_context, policy)
+        }
+        ProcessFeedMode::Lines => {
+            run_process_line_feed(context.process_stdin, &mut pump_context, policy)
+        }
+    }
+}
+
+fn run_process_raw_byte_feed(
+    process_stdin: &mut dyn Read,
+    pump_context: &mut TerminalPumpContext<'_>,
+    policy: super::pump::TerminalPumpPolicy,
+) -> Result<(), CliError> {
     let mut byte = [0; 1];
     loop {
-        let count = context.process_stdin.read(&mut byte).map_err(|error| {
+        let count = process_stdin.read(&mut byte).map_err(|error| {
             CliError::new(
                 format!("failed to read process stdin raw bytes after eval: {error}"),
                 1,
@@ -51,7 +85,7 @@ pub(super) fn run_process_raw_byte_feed_session_after_eval(
         if count == 0 {
             return Ok(());
         }
-        feed_terminal_chunk_and_pump(&mut pump_context, &byte[..count], policy)?;
+        feed_terminal_chunk_and_pump(pump_context, &byte[..count], policy)?;
         if task_exited(pump_context.runtime)? {
             break;
         }
@@ -74,24 +108,14 @@ pub(super) fn split_feed_lines(bytes: Vec<u8>) -> Vec<Vec<u8>> {
     chunks
 }
 
-pub(super) fn run_process_line_feed_session_after_eval(
-    context: ProcessFeedContext<'_>,
+fn run_process_line_feed(
+    process_stdin: &mut dyn Read,
+    pump_context: &mut TerminalPumpContext<'_>,
+    policy: super::pump::TerminalPumpPolicy,
 ) -> Result<(), CliError> {
-    let policy = context.pump_state.policy;
-    #[cfg(unix)]
-    if let ProcessInputMode::PollFd(input_fd) = policy.input_mode {
-        return unix::run_process_polled_feed_session_after_eval(input_fd, context);
-    }
-
-    let mut pump_context = TerminalPumpContext {
-        terminal: context.terminal,
-        terminal_id: context.terminal_id,
-        runtime: context.runtime,
-        process_stdout: context.process_stdout,
-    };
     let mut line = Vec::new();
-    while read_process_line_after_eval(context.process_stdin, &mut line)? {
-        feed_terminal_batch_and_pump(&mut pump_context, &[line.clone()], policy)?;
+    while read_process_line_after_eval(process_stdin, &mut line)? {
+        feed_terminal_batch_and_pump(pump_context, &[line.clone()], policy)?;
         if task_exited(pump_context.runtime)? {
             break;
         }
@@ -119,5 +143,19 @@ fn read_process_line_after_eval(
         if byte[0] == b'\n' {
             return Ok(true);
         }
+    }
+}
+
+fn terminal_pump_context<'a>(
+    terminal: &'a TermDevice,
+    terminal_id: &'a str,
+    runtime: &'a mut QuickJsTaskRuntime,
+    process_stdout: &'a mut dyn Write,
+) -> TerminalPumpContext<'a> {
+    TerminalPumpContext {
+        terminal,
+        terminal_id,
+        runtime,
+        process_stdout,
     }
 }
