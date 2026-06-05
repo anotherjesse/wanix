@@ -1,4 +1,6 @@
-use super::super::{P9Attr, P9AttrBody, P9DirEntry, P9Error, P9FsStat, P9Lock, P9Qid, P9SetAttr};
+use super::super::{P9Attr, P9DirEntry, P9Error, P9FsStat, P9Lock, P9Qid, P9SetAttr};
+
+mod attr;
 
 pub(in crate::p9) struct PayloadCursor<'a> {
     bytes: &'a [u8],
@@ -113,47 +115,6 @@ impl<'a> PayloadCursor<'a> {
             btime_nanoseconds: body.btime_nanoseconds,
             generation: body.generation,
             data_version: body.data_version,
-        })
-    }
-
-    pub(in crate::p9) fn read_attr_body(&mut self) -> Result<P9AttrBody, P9Error> {
-        let mode = self.read_u32()?;
-        let uid = self.read_u32()?;
-        let gid = self.read_u32()?;
-        let nlink = self.read_u64()?;
-        let rdev = self.read_u64()?;
-        let size = self.read_u64()?;
-        let block_size = self.read_u64()?;
-        let blocks = self.read_u64()?;
-        let atime_seconds = self.read_u64()?;
-        let atime_nanoseconds = self.read_u64()?;
-        let mtime_seconds = self.read_u64()?;
-        let mtime_nanoseconds = self.read_u64()?;
-        let ctime_seconds = self.read_u64()?;
-        let ctime_nanoseconds = self.read_u64()?;
-        let btime_seconds = self.read_u64()?;
-        let btime_nanoseconds = self.read_u64()?;
-        let generation = self.read_u64()?;
-        let data_version = self.read_u64()?;
-        Ok(P9AttrBody {
-            mode,
-            uid,
-            gid,
-            nlink,
-            rdev,
-            size,
-            block_size,
-            blocks,
-            atime_seconds,
-            atime_nanoseconds,
-            mtime_seconds,
-            mtime_nanoseconds,
-            ctime_seconds,
-            ctime_nanoseconds,
-            btime_seconds,
-            btime_nanoseconds,
-            generation,
-            data_version,
         })
     }
 
