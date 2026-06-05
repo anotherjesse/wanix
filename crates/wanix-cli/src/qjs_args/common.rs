@@ -200,3 +200,137 @@ fn qjs_option_value<'a>(
     *index += 1;
     Ok(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use super::{QjsOptionParse, QjsRunOptions, parse_common_qjs_option};
+    use crate::qjs_args::QjsStdin;
+
+    #[test]
+    fn common_qjs_options_apply_state_and_advance_index() {
+        let args = os_args([
+            "--env",
+            "MODE=test",
+            "--cwd",
+            "work/dir",
+            "--event-loop-ms",
+            "50",
+            "--ready-io-turns",
+            "3",
+            "--interrupt-after",
+            "99",
+            "--memory-limit-bytes",
+            "4096",
+            "--mount",
+            "/host/data=guest/data",
+        ]);
+        let mut options = QjsRunOptions::new().unwrap();
+        let mut index = 0;
+
+        while index < args.len() {
+            assert!(matches!(
+                parse_common_qjs_option(&args, &mut index, "qjs", &mut options).unwrap(),
+                QjsOptionParse::Consumed
+            ));
+        }
+
+        let command = options.into_command(PathBuf::from("main.js"), vec!["arg".to_owned()]);
+        assert_eq!(command.script_path, PathBuf::from("main.js"));
+        assert_eq!(command.args, vec!["arg"]);
+        assert_eq!(command.env, vec!["MODE=test"]);
+        assert_eq!(command.cwd.as_str(), "work/dir");
+        assert_eq!(command.event_loop_wait_budget, Duration::from_millis(50));
+        assert_eq!(command.ready_io_turns, 3);
+        assert_eq!(command.interrupt_poll_budget, Some(99));
+        assert_eq!(command.memory_limit_bytes, Some(4096));
+        assert_eq!(command.mounts.len(), 1);
+        assert_eq!(command.mounts[0].host_path, PathBuf::from("/host/data"));
+        assert_eq!(command.mounts[0].guest_path.as_str(), "guest/data");
+    }
+
+    #[test]
+    fn common_qjs_stdin_options_select_source_variants() {
+        let bytes =
+            parse_single_option("--stdin", "hello").into_command(PathBuf::new(), Vec::new());
+        assert_eq!(bytes.stdin, Some(QjsStdin::Bytes(b"hello".to_vec())));
+
+        let file = parse_single_option("--stdin-file", "input.txt")
+            .into_command(PathBuf::new(), Vec::new());
+        assert_eq!(file.stdin, Some(QjsStdin::File(PathBuf::from("input.txt"))));
+
+        let process =
+            parse_single_option("--stdin-file", "-").into_command(PathBuf::new(), Vec::new());
+        assert_eq!(process.stdin, Some(QjsStdin::Process));
+    }
+
+    #[test]
+    fn common_qjs_options_project_into_snapshot_command() {
+        let options = parse_options(["--env", "MODE=test", "--cwd", "snapshot/cwd"]);
+
+        let command = options.into_snapshot_command(
+            PathBuf::from("before.js"),
+            PathBuf::from("state.bin"),
+            vec!["one".to_owned()],
+        );
+
+        assert_eq!(command.script_path, PathBuf::from("before.js"));
+        assert_eq!(command.snapshot_path, PathBuf::from("state.bin"));
+        assert_eq!(command.args, vec!["one"]);
+        assert_eq!(command.env, vec!["MODE=test"]);
+        assert_eq!(command.cwd.as_str(), "snapshot/cwd");
+    }
+
+    #[test]
+    fn common_qjs_option_parser_reports_separator_unknown_and_missing_value() {
+        let mut options = QjsRunOptions::new().unwrap();
+        let args = os_args(["--", "--env"]);
+        let mut index = 0;
+        assert!(matches!(
+            parse_common_qjs_option(&args, &mut index, "qjs", &mut options).unwrap(),
+            QjsOptionParse::Separator
+        ));
+        assert_eq!(index, 1);
+
+        let args = os_args(["--not-qjs", "value"]);
+        let mut index = 0;
+        assert!(matches!(
+            parse_common_qjs_option(&args, &mut index, "qjs", &mut options).unwrap(),
+            QjsOptionParse::Unknown
+        ));
+        assert_eq!(index, 0);
+
+        let args = os_args(["--mount"]);
+        let mut index = 0;
+        let error = match parse_common_qjs_option(&args, &mut index, "qjs", &mut options) {
+            Ok(_) => panic!("missing qjs option value should fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("qjs --mount expects HOST=GUEST"));
+    }
+
+    fn parse_single_option(option: &str, value: &str) -> QjsRunOptions {
+        parse_options([option, value])
+    }
+
+    fn parse_options<const N: usize>(args: [&str; N]) -> QjsRunOptions {
+        let args = os_args(args);
+        let mut options = QjsRunOptions::new().unwrap();
+        let mut index = 0;
+        while index < args.len() {
+            assert!(matches!(
+                parse_common_qjs_option(&args, &mut index, "qjs", &mut options).unwrap(),
+                QjsOptionParse::Consumed
+            ));
+        }
+        options
+    }
+
+    fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
+        args.into_iter().map(OsString::from).collect()
+    }
+}
