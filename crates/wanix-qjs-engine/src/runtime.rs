@@ -12,6 +12,7 @@ mod exception;
 mod guest_memory;
 mod host_callback;
 mod instantiate;
+mod jobs;
 mod limits;
 mod module_loader;
 mod promise_rejection;
