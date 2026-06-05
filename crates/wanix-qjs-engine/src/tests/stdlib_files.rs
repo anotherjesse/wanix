@@ -270,25 +270,9 @@ impl QuickJsWasiHost for LiveFileHost {
 
     fn fd_write(&mut self, fd: u32, buf: &[u8]) -> std::result::Result<usize, QuickJsWasiErrno> {
         self.record(format!("write:{fd}:{}", String::from_utf8_lossy(buf)));
-        let open = self.open.get_mut(&fd).ok_or(QuickJsWasiErrno::Badf)?;
-        if open.kind != OpenKind::File {
-            return Err(QuickJsWasiErrno::Isdir);
-        }
-        if open.rights_base & (1 << 6) == 0 {
-            return Err(QuickJsWasiErrno::Notcapable);
-        }
+        let open = writable_open_file(&mut self.open, fd)?;
         let mut files = self.files.lock().expect("test files lock");
-        let bytes = files.get_mut(&open.path).ok_or(QuickJsWasiErrno::Noent)?;
-        let end = open
-            .offset
-            .checked_add(buf.len())
-            .ok_or(QuickJsWasiErrno::Inval)?;
-        if end > bytes.len() {
-            bytes.resize(end, 0);
-        }
-        bytes[open.offset..end].copy_from_slice(buf);
-        open.offset = end;
-        Ok(buf.len())
+        write_open_file(&mut files, open, buf)
     }
 
     fn fd_seek(
@@ -330,24 +314,7 @@ impl QuickJsWasiHost for LiveFileHost {
             )),
             fd => {
                 let open = self.open.get(&fd).ok_or(QuickJsWasiErrno::Badf)?;
-                match open.kind {
-                    OpenKind::File => {
-                        let mut rights_base = open.rights_base & FILE_FDSTAT_RIGHTS;
-                        if open.rights_base & FD_WRITE_RIGHT != 0 {
-                            rights_base |= FD_FILESTAT_SET_SIZE_RIGHT;
-                        }
-                        Ok(QuickJsWasiFdStat::new(
-                            QuickJsWasiFileType::RegularFile,
-                            rights_base,
-                            0,
-                        ))
-                    }
-                    OpenKind::Directory => Ok(QuickJsWasiFdStat::new(
-                        QuickJsWasiFileType::Directory,
-                        DIRECTORY_RIGHTS_BASE,
-                        DIRECTORY_RIGHTS_INHERITING,
-                    )),
-                }
+                open_fdstat(open)
             }
         }
     }
@@ -371,20 +338,9 @@ impl QuickJsWasiHost for LiveFileHost {
         size: u64,
     ) -> std::result::Result<(), QuickJsWasiErrno> {
         self.record(format!("set_size:{fd}:{size}"));
-        let open = self.open.get(&fd).ok_or(QuickJsWasiErrno::Badf)?;
-        if open.kind != OpenKind::File {
-            return Err(QuickJsWasiErrno::Notcapable);
-        }
-        if open.rights_base & (FD_FILESTAT_SET_SIZE_RIGHT | FD_WRITE_RIGHT) == 0 {
-            return Err(QuickJsWasiErrno::Notcapable);
-        }
+        let open = resizable_open_file(&self.open, fd)?;
         let mut files = self.files.lock().expect("test files lock");
-        let bytes = files.get_mut(&open.path).ok_or(QuickJsWasiErrno::Noent)?;
-        bytes.resize(
-            usize::try_from(size).map_err(|_| QuickJsWasiErrno::Inval)?,
-            0,
-        );
-        Ok(())
+        resize_open_file(&mut files, open, size)
     }
 
     fn path_filestat_get(
@@ -436,17 +392,109 @@ impl QuickJsWasiHost for LiveFileHost {
 
         let files = self.files.lock().expect("test files lock");
         let mut symlinks = self.symlinks.lock().expect("test symlink lock");
-        if path_exists(&files, &symlinks, &path) {
-            return Err(QuickJsWasiErrno::Exist);
-        }
-        if let Some(parent) = parent_path(&path)
-            && !directory_exists(&files, &symlinks, parent)
-        {
-            return Err(QuickJsWasiErrno::Noent);
-        }
+        validate_new_symlink_path(&files, &symlinks, &path)?;
         symlinks.insert(path, target.to_vec());
         Ok(())
     }
+}
+
+fn writable_open_file(
+    open_files: &mut BTreeMap<u32, OpenFile>,
+    fd: u32,
+) -> std::result::Result<&mut OpenFile, QuickJsWasiErrno> {
+    let open = open_files.get_mut(&fd).ok_or(QuickJsWasiErrno::Badf)?;
+    if open.kind != OpenKind::File {
+        return Err(QuickJsWasiErrno::Isdir);
+    }
+    if open.rights_base & FD_WRITE_RIGHT == 0 {
+        return Err(QuickJsWasiErrno::Notcapable);
+    }
+    Ok(open)
+}
+
+fn write_open_file(
+    files: &mut BTreeMap<String, Vec<u8>>,
+    open: &mut OpenFile,
+    buf: &[u8],
+) -> std::result::Result<usize, QuickJsWasiErrno> {
+    let bytes = files.get_mut(&open.path).ok_or(QuickJsWasiErrno::Noent)?;
+    let end = open
+        .offset
+        .checked_add(buf.len())
+        .ok_or(QuickJsWasiErrno::Inval)?;
+    if end > bytes.len() {
+        bytes.resize(end, 0);
+    }
+    bytes[open.offset..end].copy_from_slice(buf);
+    open.offset = end;
+    Ok(buf.len())
+}
+
+fn open_fdstat(open: &OpenFile) -> std::result::Result<QuickJsWasiFdStat, QuickJsWasiErrno> {
+    match open.kind {
+        OpenKind::File => Ok(QuickJsWasiFdStat::new(
+            QuickJsWasiFileType::RegularFile,
+            fdstat_file_rights(open.rights_base),
+            0,
+        )),
+        OpenKind::Directory => Ok(QuickJsWasiFdStat::new(
+            QuickJsWasiFileType::Directory,
+            DIRECTORY_RIGHTS_BASE,
+            DIRECTORY_RIGHTS_INHERITING,
+        )),
+    }
+}
+
+const fn fdstat_file_rights(rights_base: u64) -> u64 {
+    let rights = rights_base & FILE_FDSTAT_RIGHTS;
+    if rights_base & FD_WRITE_RIGHT != 0 {
+        rights | FD_FILESTAT_SET_SIZE_RIGHT
+    } else {
+        rights
+    }
+}
+
+fn resizable_open_file(
+    open_files: &BTreeMap<u32, OpenFile>,
+    fd: u32,
+) -> std::result::Result<&OpenFile, QuickJsWasiErrno> {
+    let open = open_files.get(&fd).ok_or(QuickJsWasiErrno::Badf)?;
+    if open.kind != OpenKind::File {
+        return Err(QuickJsWasiErrno::Notcapable);
+    }
+    if open.rights_base & (FD_FILESTAT_SET_SIZE_RIGHT | FD_WRITE_RIGHT) == 0 {
+        return Err(QuickJsWasiErrno::Notcapable);
+    }
+    Ok(open)
+}
+
+fn resize_open_file(
+    files: &mut BTreeMap<String, Vec<u8>>,
+    open: &OpenFile,
+    size: u64,
+) -> std::result::Result<(), QuickJsWasiErrno> {
+    let bytes = files.get_mut(&open.path).ok_or(QuickJsWasiErrno::Noent)?;
+    bytes.resize(
+        usize::try_from(size).map_err(|_| QuickJsWasiErrno::Inval)?,
+        0,
+    );
+    Ok(())
+}
+
+fn validate_new_symlink_path(
+    files: &BTreeMap<String, Vec<u8>>,
+    symlinks: &BTreeMap<String, Vec<u8>>,
+    path: &str,
+) -> std::result::Result<(), QuickJsWasiErrno> {
+    if path_exists(files, symlinks, path) {
+        return Err(QuickJsWasiErrno::Exist);
+    }
+    if let Some(parent) = parent_path(path)
+        && !directory_exists(files, symlinks, parent)
+    {
+        return Err(QuickJsWasiErrno::Noent);
+    }
+    Ok(())
 }
 
 fn file_stat(bytes: &[u8]) -> std::result::Result<QuickJsWasiFileStat, QuickJsWasiErrno> {
@@ -561,14 +609,22 @@ fn open_path_kind(
     } else if directory_exists(files, symlinks, path) {
         Some(OpenKind::Directory)
     } else if let Some(target) = symlinks.get(path) {
-        let target = normalize_test_path(&String::from_utf8_lossy(target));
-        if files.contains_key(&target) {
-            Some(OpenKind::File)
-        } else if directory_exists(files, symlinks, &target) {
-            Some(OpenKind::Directory)
-        } else {
-            None
-        }
+        symlink_target_kind(files, symlinks, target)
+    } else {
+        None
+    }
+}
+
+fn symlink_target_kind(
+    files: &BTreeMap<String, Vec<u8>>,
+    symlinks: &BTreeMap<String, Vec<u8>>,
+    target: &[u8],
+) -> Option<OpenKind> {
+    let target = normalize_test_path(&String::from_utf8_lossy(target));
+    if files.contains_key(&target) {
+        Some(OpenKind::File)
+    } else if directory_exists(files, symlinks, &target) {
+        Some(OpenKind::Directory)
     } else {
         None
     }
