@@ -261,6 +261,30 @@ fn task_field_files_round_trip() {
 }
 
 #[test]
+fn task_field_files_accumulate_split_writes() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    let mut env = open_write(&taskfs, "self/env");
+    env.write(b"A=").unwrap();
+    env.write(b"1\nB=2\n").unwrap();
+
+    let mut dir = open_write(&taskfs, "self/dir");
+    dir.write(b"sr").unwrap();
+    dir.write(b"c\n").unwrap();
+
+    let mut exit = open_write(&taskfs, "self/exit");
+    exit.write(b"  ").unwrap();
+    exit.write(b"5\n").unwrap();
+
+    assert_eq!(read_file(&taskfs, "self/env"), "A=1\nB=2\n");
+    assert_eq!(read_file(&taskfs, "self/dir"), "src\n");
+    assert_eq!(read_file(&taskfs, "self/exit"), "5\n");
+}
+
+#[test]
 fn task_cmd_file_parses_shell_quoted_argv_without_replacing_raw_text() {
     let table = TaskTable::new();
     table.register_noop_driver("qjs").unwrap();
