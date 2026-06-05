@@ -7,10 +7,15 @@ use super::{
     P9FsStat, P9Fsync, P9GetLockRequest, P9Lerror, P9Lock, P9LockRequest, P9StatFs,
 };
 
+const P9_U16_FIELD_LEN: usize = 2;
+const P9_U32_FIELD_LEN: usize = 4;
+const P9_U64_FIELD_LEN: usize = 8;
+const P9_RSTATFS_PAYLOAD_LEN: usize = (3 * P9_U32_FIELD_LEN) + (6 * P9_U64_FIELD_LEN);
+
 /// Builds an `Rlerror` frame.
 #[must_use]
 pub fn p9_rlerror(tag: u16, ecode: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(4);
+    let mut payload = Vec::with_capacity(P9_U32_FIELD_LEN);
     push_u32(&mut payload, ecode);
     P9Frame::new(P9_RLERROR, tag, payload)
 }
@@ -18,7 +23,7 @@ pub fn p9_rlerror(tag: u16, ecode: u32) -> P9Frame {
 /// Builds a `Tstatfs` frame.
 #[must_use]
 pub fn p9_tstatfs(tag: u16, fid: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(4);
+    let mut payload = Vec::with_capacity(P9_U32_FIELD_LEN);
     push_u32(&mut payload, fid);
     P9Frame::new(P9_TSTATFS, tag, payload)
 }
@@ -26,7 +31,7 @@ pub fn p9_tstatfs(tag: u16, fid: u32) -> P9Frame {
 /// Builds an `Rstatfs` frame.
 #[must_use]
 pub fn p9_rstatfs(tag: u16, stat: P9FsStat) -> P9Frame {
-    let mut payload = Vec::with_capacity(60);
+    let mut payload = Vec::with_capacity(P9_RSTATFS_PAYLOAD_LEN);
     push_fs_stat(&mut payload, stat);
     P9Frame::new(P9_RSTATFS, tag, payload)
 }
@@ -34,7 +39,7 @@ pub fn p9_rstatfs(tag: u16, stat: P9FsStat) -> P9Frame {
 /// Builds a `Tfsync` frame.
 #[must_use]
 pub fn p9_tfsync(tag: u16, fid: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(4);
+    let mut payload = Vec::with_capacity(P9_U32_FIELD_LEN);
     push_u32(&mut payload, fid);
     P9Frame::new(P9_TFSYNC, tag, payload)
 }
@@ -93,7 +98,7 @@ pub fn p9_rgetlock(tag: u16, lock: &P9Lock) -> Result<P9Frame, P9Error> {
 /// Builds a `Tflush` frame.
 #[must_use]
 pub fn p9_tflush(tag: u16, oldtag: u16) -> P9Frame {
-    let mut payload = Vec::with_capacity(2);
+    let mut payload = Vec::with_capacity(P9_U16_FIELD_LEN);
     push_u16(&mut payload, oldtag);
     P9Frame::new(P9_TFLUSH, tag, payload)
 }
@@ -107,7 +112,7 @@ pub fn p9_rflush(tag: u16) -> P9Frame {
 /// Builds a `Tflushf` frame.
 #[must_use]
 pub fn p9_tflushf(tag: u16, fid: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(4);
+    let mut payload = Vec::with_capacity(P9_U32_FIELD_LEN);
     push_u32(&mut payload, fid);
     P9Frame::new(P9_TFLUSHF, tag, payload)
 }
