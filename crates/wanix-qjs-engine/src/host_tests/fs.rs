@@ -607,6 +607,33 @@ fn live_wasi_host_supplies_filestat_timestamps() -> Result<()> {
 }
 
 #[test]
+fn live_wasi_host_preflights_path_filestat_output_before_host_call() -> Result<()> {
+    let host = MetadataWasiHost::default();
+    let calls = Arc::clone(&host.calls);
+    let mut harness =
+        VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+    harness.write_bytes(PATH_PTR, b"stamp.txt")?;
+    let memory_len = harness.memory.data_size(&harness.store);
+
+    let err = harness
+        .path_filestat_get
+        .call(
+            &mut harness.store,
+            (
+                9,
+                0,
+                test_guest_i32(PATH_PTR, "path pointer")?,
+                9,
+                test_guest_i32(memory_len - 4, "stat pointer")?,
+            ),
+        )
+        .expect_err("path_filestat_get should preflight stat output before host call");
+    assert!(format!("{err:#}").contains("guest memory range"));
+    assert!(calls.lock().expect("test call lock").is_empty());
+    Ok(())
+}
+
+#[test]
 fn live_wasi_host_supplies_readdir_entries() -> Result<()> {
     let host = MetadataWasiHost::default();
     let calls = Arc::clone(&host.calls);
@@ -731,6 +758,40 @@ fn live_wasi_host_supplies_path_readlink_with_truncation() -> Result<()> {
             "readlink:9:link.txt".to_owned(),
         ]
     );
+    Ok(())
+}
+
+#[test]
+fn live_wasi_host_preflights_path_readlink_outputs_before_host_call() -> Result<()> {
+    for (bad_buf_ptr, buf_len, bad_bufused_ptr, field) in [
+        (true, 8, false, "readlink buffer"),
+        (false, 4, true, "readlink bufused pointer"),
+    ] {
+        let host = MetadataWasiHost::default();
+        let calls = Arc::clone(&host.calls);
+        let mut harness =
+            VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+        harness.write_bytes(PATH_PTR, b"link.txt")?;
+        let memory_len = harness.memory.data_size(&harness.store);
+        let bad_ptr = memory_len - 2;
+
+        let err = harness
+            .path_readlink
+            .call(
+                &mut harness.store,
+                (
+                    9,
+                    test_guest_i32(PATH_PTR, "path pointer")?,
+                    8,
+                    test_guest_i32(if bad_buf_ptr { bad_ptr } else { 256 }, field)?,
+                    buf_len,
+                    test_guest_i32(if bad_bufused_ptr { bad_ptr } else { 300 }, field)?,
+                ),
+            )
+            .expect_err("path_readlink should preflight outputs before host call");
+        assert!(format!("{err:#}").contains("guest memory range"));
+        assert!(calls.lock().expect("test call lock").is_empty());
+    }
     Ok(())
 }
 
