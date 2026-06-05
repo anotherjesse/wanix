@@ -1,23 +1,21 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use wanix_fs::{FileSystem, FileType, NormalizedPath, OpenOptions};
+use std::collections::BTreeMap;
+
+use wanix_fs::NormalizedPath;
 use wanix_vfs::Namespace;
 
-use crate::{
-    Errno, WasiConfig, WasiFd, WasiFdObserver, WasiFile, WasiFileAccess, WasiOpenOptions,
-    WasiPathOpen, WasiRights,
-};
+use crate::{Errno, WasiConfig, WasiFd, WasiFdObserver, WasiRights};
 
 mod fd_ops;
 mod handle;
+mod init;
 mod open;
 mod path;
 mod path_ops;
 mod seek;
 
 use handle::{Handle, OpenFileHandle};
-use open::FileOpenRequest;
 use path::{is_rooted_service_path, join_paths, wasi_path};
 pub use seek::WasiWhence;
 
@@ -40,44 +38,6 @@ impl WasiCtx {
     #[must_use]
     pub fn new(config: WasiConfig) -> Self {
         Self::try_new(config).expect("WASI config preopens must be valid")
-    }
-
-    /// Creates a WASI context and validates all configured preopens.
-    pub fn try_new(config: WasiConfig) -> Result<Self, Errno> {
-        let mut fds = BTreeMap::new();
-        for (fd, file) in config.stdio() {
-            fds.insert(*fd, Handle::Stdio { file: file.clone() });
-        }
-        for (index, preopen) in config.preopens().iter().enumerate() {
-            let source_path = preopen.source_path().clone();
-            let metadata = config
-                .namespace()
-                .metadata(&source_path)
-                .map_err(Errno::from)?;
-            if metadata.file_type() != FileType::Directory {
-                return Err(Errno::Notdir);
-            }
-            let fd =
-                WasiFd::new(FIRST_PREOPEN_FD + u32::try_from(index).map_err(|_| Errno::Inval)?);
-            fds.insert(
-                fd,
-                Handle::Preopen {
-                    source_path,
-                    guest_path: preopen.guest_path().clone(),
-                },
-            );
-        }
-        let next_fd =
-            FIRST_PREOPEN_FD + u32::try_from(config.preopens().len()).map_err(|_| Errno::Inval)?;
-        Ok(Self {
-            namespace: config.namespace().clone(),
-            fds,
-            next_fd,
-            args: config.args().to_vec(),
-            env: config.env().to_vec(),
-            clock_time_ns: config.clock_time_ns(),
-            fd_observer: config.fd_observer(),
-        })
     }
 
     /// Returns the namespace backing this WASI context.
@@ -110,141 +70,6 @@ impl WasiCtx {
             .keys()
             .filter(|fd| fd.get() >= dynamic_floor)
             .count()
-    }
-
-    /// Opens a namespace path relative to `dirfd`.
-    pub fn path_open(
-        &mut self,
-        dirfd: WasiFd,
-        path: impl AsRef<str>,
-        options: WasiOpenOptions,
-    ) -> Result<WasiFd, Errno> {
-        let (_, _, parent_rights_inheriting) = self.directory_handle(dirfd)?;
-        let resolved = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_OPEN)?;
-        self.open_resolved_path(resolved, options, None, parent_rights_inheriting)
-    }
-
-    /// Opens a namespace path using raw WASI Preview 1 `path_open` rights.
-    pub fn path_open_preview1(
-        &mut self,
-        dirfd: WasiFd,
-        path: impl AsRef<str>,
-        oflags: u16,
-        rights_base: WasiRights,
-        rights_inheriting: WasiRights,
-        fdflags: u16,
-    ) -> Result<WasiFd, Errno> {
-        let (_, parent_rights_base, parent_rights_inheriting) = self.directory_handle(dirfd)?;
-        if !parent_rights_base.contains(WasiRights::PATH_OPEN) {
-            return Err(Errno::Notcapable);
-        }
-        let request = WasiPathOpen::from_preview1(oflags, rights_base, rights_inheriting, fdflags)?;
-        let resolved = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_OPEN)?;
-        self.open_resolved_path(
-            resolved,
-            request.options(),
-            Some(request),
-            parent_rights_inheriting,
-        )
-    }
-
-    fn open_resolved_path(
-        &mut self,
-        resolved: NormalizedPath,
-        options: WasiOpenOptions,
-        request: Option<WasiPathOpen>,
-        parent_rights_inheriting: WasiRights,
-    ) -> Result<WasiFd, Errno> {
-        if let Ok(metadata) = self.namespace.metadata(&resolved)
-            && metadata.file_type() == FileType::Directory
-        {
-            return self.open_directory_path(resolved, options, request, parent_rights_inheriting);
-        }
-        if request.is_some_and(WasiPathOpen::directory) {
-            return Err(Errno::Notdir);
-        }
-
-        self.open_file_path(resolved, options, request, parent_rights_inheriting)
-    }
-
-    fn open_directory_path(
-        &mut self,
-        resolved: NormalizedPath,
-        options: WasiOpenOptions,
-        request: Option<WasiPathOpen>,
-        parent_rights_inheriting: WasiRights,
-    ) -> Result<WasiFd, Errno> {
-        if options.write || options.create || options.truncate {
-            return Err(Errno::Isdir);
-        }
-        if options.append {
-            return Err(Errno::Notcapable);
-        }
-        let (rights_base, rights_inheriting) = request.map_or_else(
-            || {
-                (
-                    WasiRights::DIRECTORY_BASE.intersection(parent_rights_inheriting),
-                    WasiRights::DIRECTORY_INHERITING.intersection(parent_rights_inheriting),
-                )
-            },
-            |request| (request.rights_base(), request.rights_inheriting()),
-        );
-        let supported_directory_rights = if request.is_some() {
-            WasiRights::DIRECTORY_INHERITING
-        } else {
-            WasiRights::DIRECTORY_BASE
-        };
-        if !supported_directory_rights.contains(rights_base) {
-            return Err(Errno::Notcapable);
-        }
-        if let Some(request) = request
-            && (!parent_rights_inheriting.contains(request.rights_base())
-                || !parent_rights_inheriting.contains(request.rights_inheriting()))
-        {
-            return Err(Errno::Notcapable);
-        }
-        Ok(self.insert_handle(Handle::Directory {
-            path: resolved,
-            rights_base,
-            rights_inheriting,
-        }))
-    }
-
-    fn open_file_path(
-        &mut self,
-        resolved: NormalizedPath,
-        options: WasiOpenOptions,
-        request: Option<WasiPathOpen>,
-        parent_rights_inheriting: WasiRights,
-    ) -> Result<WasiFd, Errno> {
-        let request = FileOpenRequest::new(options, request, parent_rights_inheriting)?;
-        let fd = self.next_file_fd()?;
-        let file = self
-            .namespace
-            .open(&resolved, OpenOptions::from(options))
-            .map_err(Errno::from)?;
-        let rights_base = request.rights_base_for_opened_file(file.is_seekable())?;
-        let file = WasiFile::new(
-            file,
-            resolved.as_str(),
-            WasiFileAccess::new(options.read, options.write).with_append(options.append),
-        );
-        let fdflags = if options.append {
-            WasiOpenOptions::FDFLAGS_APPEND
-        } else {
-            0
-        };
-        self.insert_file_handle(
-            fd,
-            OpenFileHandle {
-                file,
-                path: resolved,
-                read: options.read,
-                write: options.write,
-                rights_base,
-                fdflags,
-            },
-        )
     }
 
     fn insert_handle(&mut self, handle: Handle) -> WasiFd {
