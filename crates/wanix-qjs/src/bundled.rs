@@ -6,6 +6,27 @@
 //! chooses a *per-user, owner-private* default location rather than a shared,
 //! world-writable temp directory, so a local attacker cannot pre-seed a hostile
 //! artifact that the victim would deserialize.
+//!
+//! # Owner-private-ancestor assumption
+//!
+//! The cache layer verifies the *leaf* cache directory and the artifact file via
+//! file descriptors (`O_NOFOLLOW` + `fstat`), but does not walk and re-verify
+//! every ancestor directory on each read. This crate is responsible for keeping
+//! the chosen location's ancestors owner-private:
+//!
+//! - The default location lives under the platform per-user cache root
+//!   (`$XDG_CACHE_HOME` / `$HOME/.cache` / `%LOCALAPPDATA%`), whose ancestors are
+//!   owned and controlled by the current user by construction.
+//! - The last-resort fallback is a UID-scoped subdirectory of the system temp
+//!   dir; the system temp dir itself is typically sticky (`0o1777`), so a peer
+//!   user cannot rename or replace our UID-scoped subdirectory, and the leaf
+//!   fd-based check rejects any subdirectory that is not owner-private.
+//!
+//! `WANIX_QJS_CACHE_DIR` is an explicit operator opt-in: the operator asserts the
+//! supplied path's ancestors are owner-private. Even then, the fd-based leaf and
+//! artifact checks reject any directory or artifact that is not owner-private, so
+//! a misconfigured override forfeits the speedup rather than deserializing a
+//! hostile artifact.
 
 use std::path::PathBuf;
 
@@ -14,8 +35,10 @@ use std::path::PathBuf;
 /// Resolution order:
 ///
 /// 1. `WANIX_QJS_CACHE_DIR` if set — an explicit operator opt-in to a trusted
-///    path. The cache layer still verifies ownership/permissions before reading
-///    any artifact, so an unsafe override only forfeits the speedup.
+///    path. The cache layer still verifies leaf-directory ownership/permissions
+///    (and, on Unix, the artifact file's own ownership/permissions via an
+///    `O_NOFOLLOW` fd) before reading any artifact, so an unsafe override only
+///    forfeits the speedup.
 /// 2. A per-user cache directory derived from the platform's user cache home
 ///    (`XDG_CACHE_HOME` or `$HOME/.cache` on Unix, `%LOCALAPPDATA%` on Windows).
 /// 3. A UID-scoped subdirectory of the system temp dir as a last resort, so the

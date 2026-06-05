@@ -81,11 +81,24 @@ not just a test fixture optimization.
 - **Cache-dir trust boundary.** `deserialize` is `unsafe` and equivalent to
   loading native code, and the sha256 key does *not* authenticate the cached
   artifact bytes. The cache directory is therefore a trust boundary: the default
-  is a per-user, owner-private directory (`0o700`, ownership + non-group/other-
-  writable verified before any read), never a shared world-writable temp dir.
-  `WANIX_QJS_CACHE_DIR` is an explicit operator opt-in to a trusted path and is
-  still subject to the same ownership/permission check. An untrusted or hostile
-  cache directory is ignored (fresh compile), never deserialized.
+  is a per-user, owner-private directory (`0o700`), never a shared world-writable
+  temp dir. `WANIX_QJS_CACHE_DIR` is an explicit operator opt-in to a trusted
+  path and is still subject to the same verification. An untrusted or hostile
+  cache directory or artifact is ignored (fresh compile), never deserialized.
+- **Hardened fd-based verification (Unix).** Verification is done through file
+  descriptors so it cannot be raced or symlink-swapped past. The *leaf* cache
+  directory is opened `O_NOFOLLOW | O_DIRECTORY` and the resulting fd is
+  `fstat`ed (owner == effective UID, no `0o022` write bits); the artifact is then
+  `openat`-opened relative to that directory fd with `O_NOFOLLOW`, its fd is
+  `fstat`ed (regular file, owner == euid, no `0o022` bits), and the bytes are
+  read from that same fd — no path is re-resolved between check and read (no
+  TOCTOU window, no symlink follow). The temp artifact is created `0o600` as
+  defense-in-depth. This verifies the leaf directory and the artifact file; it
+  does **not** walk every ancestor, relying instead on the owner-private-ancestor
+  assumption documented in `wanix-qjs`'s `bundled` module (the default location
+  lives under an owner-controlled per-user cache root). On non-Unix platforms,
+  with no portable fd-ownership model, the check degrades to "is a directory" — a
+  weaker guarantee — and the per-user default location carries the trust.
 - **Non-goal.** This is the *bundled QuickJS* module cache only. A compiled-
   module cache for the standalone `.wasm` runner is deliberately out of scope
   here and belongs to the wasm-runner phase.
