@@ -2,6 +2,8 @@ use std::fmt;
 
 use super::P9_HEADER_LEN;
 
+const P9_SIZE_FIELD_LEN: usize = 4;
+
 /// 9P frame or payload decode/encode error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum P9Error {
@@ -189,11 +191,11 @@ impl P9Frame {
 ///
 /// Returns an error when the declared size is smaller than a 9P header.
 pub fn p9_declared_size(bytes: &[u8]) -> Result<Option<usize>, P9Error> {
-    if bytes.len() < 4 {
+    if bytes.len() < P9_SIZE_FIELD_LEN {
         return Ok(None);
     }
     let size = u32::from_le_bytes(
-        bytes[..4]
+        bytes[..P9_SIZE_FIELD_LEN]
             .try_into()
             .expect("slice length was checked before conversion"),
     ) as usize;
