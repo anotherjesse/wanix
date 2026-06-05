@@ -2,17 +2,14 @@ use rust_wasi_quickjs::{
     QuickJsWasiDirEntry, QuickJsWasiErrno, QuickJsWasiFdStat, QuickJsWasiFileStat, QuickJsWasiHost,
     QuickJsWasiPrestat, QuickJsWasiWhence,
 };
-use wanix_wasi::{Errno, WasiConfig, WasiCtx, WasiFd, WasiRights};
+use wanix_wasi::{Errno, WasiConfig, WasiCtx};
 
 mod convert;
-
-use convert::{
-    convert_errno, convert_fdstat, convert_filestat, convert_wanix_file_type, convert_whence,
-};
+mod fd;
+mod path;
+mod process;
 
 use crate::task_context::WanixExitState;
-
-const MAX_WASI_EXIT_STATUS: i32 = 255;
 
 pub(crate) struct WanixQuickJsWasiHost {
     ctx: WasiCtx,
@@ -40,40 +37,23 @@ impl WanixQuickJsWasiHost {
 
 impl QuickJsWasiHost for WanixQuickJsWasiHost {
     fn snapshot_blockers(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
-        let open_fds = self.ctx.open_dynamic_fd_count();
-        if open_fds == 0 {
-            Ok(Vec::new())
-        } else {
-            Ok(vec![format!("{open_fds} open dynamic WASI fd(s)")])
-        }
+        process::snapshot_blockers(self)
     }
 
     fn args(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
-        Ok(self.ctx.args().to_vec())
+        process::args(self)
     }
 
     fn env(&mut self) -> Result<Vec<String>, QuickJsWasiErrno> {
-        Ok(self.ctx.env().to_vec())
+        process::env(self)
     }
 
     fn proc_exit(&mut self, code: u32) -> Result<(), QuickJsWasiErrno> {
-        let code = i32::try_from(code).map_err(|_| QuickJsWasiErrno::Inval)?;
-        if !(0..=MAX_WASI_EXIT_STATUS).contains(&code) {
-            return Err(QuickJsWasiErrno::Inval);
-        }
-        let Some(exit_state) = &self.exit_state else {
-            return Err(QuickJsWasiErrno::Nosys);
-        };
-        exit_state
-            .request_exit(code)
-            .map_err(|_| QuickJsWasiErrno::Io)
+        process::proc_exit(self, code)
     }
 
     fn fd_prestat_get(&mut self, fd: u32) -> Result<QuickJsWasiPrestat, QuickJsWasiErrno> {
-        self.ctx
-            .fd_prestat_get(WasiFd::new(fd))
-            .map(|prestat| QuickJsWasiPrestat::new(prestat.dir_name().to_owned()))
-            .map_err(convert_errno)
+        fd::fd_prestat_get(self, fd)
     }
 
     fn path_open(
@@ -86,59 +66,35 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
         rights_inheriting: u64,
         fdflags: u16,
     ) -> Result<u32, QuickJsWasiErrno> {
-        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
-        self.ctx
-            .path_open_preview1(
-                WasiFd::new(dirfd),
-                path,
-                oflags,
-                WasiRights::from_preview1_bits(rights_base),
-                WasiRights::from_preview1_bits(rights_inheriting),
-                fdflags,
-            )
-            .map(WasiFd::get)
-            .map_err(convert_errno)
+        fd::path_open(
+            self,
+            dirfd,
+            path,
+            oflags,
+            rights_base,
+            rights_inheriting,
+            fdflags,
+        )
     }
 
     fn fd_read(&mut self, fd: u32, buf: &mut [u8]) -> Result<usize, QuickJsWasiErrno> {
-        self.ctx
-            .fd_read(WasiFd::new(fd), buf)
-            .map_err(convert_errno)
+        fd::fd_read(self, fd, buf)
     }
 
     fn fd_read_ready(&mut self, fd: u32) -> Result<bool, QuickJsWasiErrno> {
-        self.ctx
-            .fd_read_ready(WasiFd::new(fd))
-            .map_err(convert_errno)
+        fd::fd_read_ready(self, fd)
     }
 
     fn fd_readdir(&mut self, fd: u32) -> Result<Vec<QuickJsWasiDirEntry>, QuickJsWasiErrno> {
-        self.ctx
-            .fd_read_dir(WasiFd::new(fd))
-            .map(|entries| {
-                entries
-                    .into_iter()
-                    .map(|entry| {
-                        QuickJsWasiDirEntry::new(
-                            entry.name().to_owned(),
-                            convert_wanix_file_type(entry.metadata().file_type()),
-                        )
-                    })
-                    .collect()
-            })
-            .map_err(convert_errno)
+        fd::fd_readdir(self, fd)
     }
 
     fn fd_write(&mut self, fd: u32, buf: &[u8]) -> Result<usize, QuickJsWasiErrno> {
-        self.ctx
-            .fd_write(WasiFd::new(fd), buf)
-            .map_err(convert_errno)
+        fd::fd_write(self, fd, buf)
     }
 
     fn fd_write_ready(&mut self, fd: u32) -> Result<bool, QuickJsWasiErrno> {
-        self.ctx
-            .fd_write_ready(WasiFd::new(fd))
-            .map_err(convert_errno)
+        fd::fd_write_ready(self, fd)
     }
 
     fn fd_seek(
@@ -147,37 +103,27 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
         offset: i64,
         whence: QuickJsWasiWhence,
     ) -> Result<u64, QuickJsWasiErrno> {
-        self.ctx
-            .fd_seek(WasiFd::new(fd), offset, convert_whence(whence))
-            .map_err(convert_errno)
+        fd::fd_seek(self, fd, offset, whence)
     }
 
     fn fd_tell(&mut self, fd: u32) -> Result<u64, QuickJsWasiErrno> {
-        self.ctx.fd_tell(WasiFd::new(fd)).map_err(convert_errno)
+        fd::fd_tell(self, fd)
     }
 
     fn fd_close(&mut self, fd: u32) -> Result<(), QuickJsWasiErrno> {
-        self.ctx.fd_close(WasiFd::new(fd)).map_err(convert_errno)
+        fd::fd_close(self, fd)
     }
 
     fn fd_fdstat_get(&mut self, fd: u32) -> Result<QuickJsWasiFdStat, QuickJsWasiErrno> {
-        self.ctx
-            .fd_fdstat_get(WasiFd::new(fd))
-            .map(convert_fdstat)
-            .map_err(convert_errno)
+        fd::fd_fdstat_get(self, fd)
     }
 
     fn fd_fdstat_set_flags(&mut self, fd: u32, fdflags: u16) -> Result<(), QuickJsWasiErrno> {
-        self.ctx
-            .fd_fdstat_set_flags(WasiFd::new(fd), fdflags)
-            .map_err(convert_errno)
+        fd::fd_fdstat_set_flags(self, fd, fdflags)
     }
 
     fn fd_filestat_get(&mut self, fd: u32) -> Result<QuickJsWasiFileStat, QuickJsWasiErrno> {
-        self.ctx
-            .fd_filestat_get(WasiFd::new(fd))
-            .map(convert_filestat)
-            .map_err(convert_errno)
+        fd::fd_filestat_get(self, fd)
     }
 
     fn fd_filestat_set_times(
@@ -187,15 +133,11 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
         mtim: u64,
         fstflags: u16,
     ) -> Result<(), QuickJsWasiErrno> {
-        self.ctx
-            .fd_filestat_set_times(WasiFd::new(fd), atim, mtim, fstflags)
-            .map_err(convert_errno)
+        fd::fd_filestat_set_times(self, fd, atim, mtim, fstflags)
     }
 
     fn fd_filestat_set_size(&mut self, fd: u32, size: u64) -> Result<(), QuickJsWasiErrno> {
-        self.ctx
-            .fd_filestat_set_size(WasiFd::new(fd), size)
-            .map_err(convert_errno)
+        fd::fd_filestat_set_size(self, fd, size)
     }
 
     fn path_filestat_get(
@@ -204,11 +146,7 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
         flags: u32,
         path: &[u8],
     ) -> Result<QuickJsWasiFileStat, QuickJsWasiErrno> {
-        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
-        self.ctx
-            .path_filestat_get_with_flags(WasiFd::new(dirfd), flags, path)
-            .map(convert_filestat)
-            .map_err(convert_errno)
+        path::path_filestat_get(self, dirfd, flags, path)
     }
 
     fn path_filestat_set_times(
@@ -220,24 +158,15 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
         mtim: u64,
         fstflags: u16,
     ) -> Result<(), QuickJsWasiErrno> {
-        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
-        self.ctx
-            .path_filestat_set_times(WasiFd::new(dirfd), flags, path, atim, mtim, fstflags)
-            .map_err(convert_errno)
+        path::path_filestat_set_times(self, dirfd, flags, path, atim, mtim, fstflags)
     }
 
     fn path_create_directory(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
-        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
-        self.ctx
-            .path_create_directory(WasiFd::new(dirfd), path)
-            .map_err(convert_errno)
+        path::path_create_directory(self, dirfd, path)
     }
 
     fn path_readlink(&mut self, dirfd: u32, path: &[u8]) -> Result<Vec<u8>, QuickJsWasiErrno> {
-        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
-        self.ctx
-            .path_readlink(WasiFd::new(dirfd), path)
-            .map_err(convert_errno)
+        path::path_readlink(self, dirfd, path)
     }
 
     fn path_symlink(
@@ -246,17 +175,11 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
         dirfd: u32,
         path: &[u8],
     ) -> Result<(), QuickJsWasiErrno> {
-        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
-        self.ctx
-            .path_symlink(target, WasiFd::new(dirfd), path)
-            .map_err(convert_errno)
+        path::path_symlink(self, target, dirfd, path)
     }
 
     fn path_remove_directory(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
-        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
-        self.ctx
-            .path_remove_directory(WasiFd::new(dirfd), path)
-            .map_err(convert_errno)
+        path::path_remove_directory(self, dirfd, path)
     }
 
     fn path_rename(
@@ -266,18 +189,11 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
         new_fd: u32,
         new_path: &[u8],
     ) -> Result<(), QuickJsWasiErrno> {
-        let old_path = std::str::from_utf8(old_path).map_err(|_| QuickJsWasiErrno::Inval)?;
-        let new_path = std::str::from_utf8(new_path).map_err(|_| QuickJsWasiErrno::Inval)?;
-        self.ctx
-            .path_rename(WasiFd::new(old_fd), old_path, WasiFd::new(new_fd), new_path)
-            .map_err(convert_errno)
+        path::path_rename(self, old_fd, old_path, new_fd, new_path)
     }
 
     fn path_unlink_file(&mut self, dirfd: u32, path: &[u8]) -> Result<(), QuickJsWasiErrno> {
-        let path = std::str::from_utf8(path).map_err(|_| QuickJsWasiErrno::Inval)?;
-        self.ctx
-            .path_unlink_file(WasiFd::new(dirfd), path)
-            .map_err(convert_errno)
+        path::path_unlink_file(self, dirfd, path)
     }
 }
 
