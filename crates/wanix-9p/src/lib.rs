@@ -6,6 +6,7 @@
 
 mod attrs;
 mod dispatch;
+mod error;
 mod io;
 mod lookup;
 mod mutation;
@@ -15,18 +16,22 @@ mod setattr;
 mod transport;
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
 use std::sync::Arc;
 
 use wanix_fs::{File, FileSystem, FsError, Metadata, MetadataLookup, NormalizedPath, OpenOptions};
 use wanix_protocol::{
     P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_CTIME, P9_SETATTR_GID,
     P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
-    P9_SETATTR_UID, P9Error, P9Frame, P9Qid, P9SetAttr, p9_decode_tclunk, p9_rclunk, p9_rlerror,
+    P9_SETATTR_UID, P9Frame, P9Qid, P9SetAttr, p9_decode_tclunk, p9_rclunk, p9_rlerror,
 };
 
+pub use error::Wanix9pError;
 pub use transport::{P9TransportError, P9TransportStats};
+
+pub(crate) use error::{EBADF, EINVAL, EISDIR, ENOSYS, EOPNOTSUPP, errno_for_fs};
+
+#[cfg(test)]
+pub(crate) use error::{EACCES, ENOTDIR};
 
 #[cfg(test)]
 use attrs::{
@@ -45,16 +50,6 @@ pub const DEFAULT_MAX_MSIZE: u32 = 131_072;
 const RREAD_HEADER_LEN: u32 = 11;
 const RREADDIR_HEADER_LEN: u32 = 11;
 const RLOPEN_OVERHEAD: u32 = 24;
-
-const EBADF: u32 = 9;
-const EACCES: u32 = 13;
-const EEXIST: u32 = 17;
-const ENOTDIR: u32 = 20;
-const EISDIR: u32 = 21;
-const EINVAL: u32 = 22;
-const ENOSYS: u32 = 38;
-const ENOTEMPTY: u32 = 39;
-const EOPNOTSUPP: u32 = 95;
 
 const O_ACCMODE: u32 = 0o3;
 const O_WRONLY: u32 = 0o1;
@@ -79,32 +74,6 @@ const P9_SETATTR_UNSUPPORTED_MASK: u32 = P9_SETATTR_CTIME;
 
 const P9_LOCK_TYPE_UNLOCK: u8 = wanix_protocol::P9_LOCK_TYPE_UNLOCK;
 const P9_LOCK_STATUS_OK: u8 = wanix_protocol::P9_LOCK_STATUS_OK;
-
-/// Error returned when a request is too malformed to turn into a 9P reply.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Wanix9pError {
-    /// The request payload failed protocol decoding.
-    Protocol(P9Error),
-    /// A filesystem path cannot be represented as a normalized Wanix path.
-    InvalidPath(String),
-}
-
-impl fmt::Display for Wanix9pError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Protocol(error) => write!(f, "9P protocol error: {error}"),
-            Self::InvalidPath(path) => write!(f, "invalid 9P walk path: {path}"),
-        }
-    }
-}
-
-impl Error for Wanix9pError {}
-
-impl From<P9Error> for Wanix9pError {
-    fn from(error: P9Error) -> Self {
-        Self::Protocol(error)
-    }
-}
 
 /// Small in-process 9P2000.L server backed by one Wanix filesystem root.
 pub struct P9Server {
@@ -242,21 +211,6 @@ fn open_options_from_flags(flags: u32) -> OpenOptions {
         write: access == O_WRONLY || access == O_RDWR,
         create: flags & O_CREAT != 0,
         truncate: flags & O_TRUNC != 0,
-    }
-}
-
-fn errno_for_fs(error: &FsError) -> u32 {
-    match error {
-        FsError::InvalidPath(_) | FsError::InvalidOffset | FsError::InvalidTime => EINVAL,
-        FsError::NotFound => 2,
-        FsError::NotSupported => EOPNOTSUPP,
-        FsError::PermissionDenied => EACCES,
-        FsError::AlreadyExists => EEXIST,
-        FsError::NotDirectory => ENOTDIR,
-        FsError::IsDirectory => EISDIR,
-        FsError::InvalidFd => EBADF,
-        FsError::NotEmpty => ENOTEMPTY,
-        FsError::Other(_) => EINVAL,
     }
 }
 
