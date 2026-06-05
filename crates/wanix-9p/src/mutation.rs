@@ -1,4 +1,4 @@
-use wanix_fs::{FileType, NormalizedPath};
+use wanix_fs::FileType;
 use wanix_protocol::{
     P9Frame, p9_decode_tlcreate, p9_decode_tlink, p9_decode_tmkdir, p9_decode_tmknod,
     p9_decode_tremove, p9_decode_trename, p9_decode_trenameat, p9_decode_tsymlink,
@@ -12,6 +12,8 @@ use crate::{
     AT_REMOVEDIR, EBADF, EOPNOTSUPP, O_APPEND, P9Server, RLOPEN_OVERHEAD, Wanix9pError,
     errno_for_fs, open_options_from_flags,
 };
+
+mod target;
 
 impl P9Server {
     pub(super) fn handle_create(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -197,18 +199,5 @@ impl P9Server {
             }
             Err(error) => Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         }
-    }
-
-    fn child_path_or_reply(
-        &self,
-        tag: u16,
-        dir_fid: u32,
-        name: &str,
-    ) -> Result<Result<NormalizedPath, P9Frame>, Wanix9pError> {
-        let dir_path = match self.fid_path_or_reply(tag, dir_fid) {
-            Ok(path) => path,
-            Err(response) => return Ok(Err(response)),
-        };
-        Ok(Ok(join_walk_component(&dir_path, name)?))
     }
 }
