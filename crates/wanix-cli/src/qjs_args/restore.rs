@@ -43,6 +43,20 @@ impl QjsRestoreOptions {
             mounts: self.mounts,
         }
     }
+
+    fn push_arg(&mut self, phase: RestorePhase, value: String) {
+        match phase {
+            RestorePhase::Before => self.before_args.push(value),
+            RestorePhase::After => self.after_args.push(value),
+        }
+    }
+
+    fn push_env(&mut self, phase: RestorePhase, value: String) {
+        match phase {
+            RestorePhase::Before => self.before_env.push(value),
+            RestorePhase::After => self.after_env.push(value),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +66,21 @@ enum RestoreOption {
     AfterEnv,
     BeforeArg,
     AfterArg,
+    Mount,
+    Separator,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RestorePhase {
+    Before,
+    After,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RestoreOptionValue {
+    Cwd,
+    Env(RestorePhase),
+    Arg(RestorePhase),
     Mount,
     Separator,
 }
@@ -92,35 +121,54 @@ impl RestoreOption {
         }
     }
 
-    fn apply(self, value: &OsString, options: &mut QjsRestoreOptions) -> Result<(), CliError> {
+    fn value_kind(self) -> RestoreOptionValue {
         match self {
-            Self::Cwd => {
-                options.cwd = NormalizedPath::new(os_arg_to_string(value, self.label())?)?;
+            Self::Cwd => RestoreOptionValue::Cwd,
+            Self::BeforeEnv => RestoreOptionValue::Env(RestorePhase::Before),
+            Self::AfterEnv => RestoreOptionValue::Env(RestorePhase::After),
+            Self::BeforeArg => RestoreOptionValue::Arg(RestorePhase::Before),
+            Self::AfterArg => RestoreOptionValue::Arg(RestorePhase::After),
+            Self::Mount => RestoreOptionValue::Mount,
+            Self::Separator => RestoreOptionValue::Separator,
+        }
+    }
+
+    fn apply(self, value: &OsString, options: &mut QjsRestoreOptions) -> Result<(), CliError> {
+        match self.value_kind() {
+            RestoreOptionValue::Cwd => options.cwd = parse_restore_cwd(self, value)?,
+            RestoreOptionValue::Env(phase) => {
+                options.push_env(phase, parse_restore_env(self, value)?);
             }
-            Self::BeforeEnv => {
-                let value = os_arg_to_string(value, self.label())?;
-                validate_env_line(&value, self.label())?;
-                options.before_env.push(value);
+            RestoreOptionValue::Arg(phase) => {
+                options.push_arg(phase, os_arg_to_string(value, self.label())?);
             }
-            Self::AfterEnv => {
-                let value = os_arg_to_string(value, self.label())?;
-                validate_env_line(&value, self.label())?;
-                options.after_env.push(value);
+            RestoreOptionValue::Mount => {
+                options.mounts.push(parse_restore_mount(self, value)?);
             }
-            Self::BeforeArg => options
-                .before_args
-                .push(os_arg_to_string(value, self.label())?),
-            Self::AfterArg => options
-                .after_args
-                .push(os_arg_to_string(value, self.label())?),
-            Self::Mount => options.mounts.push(parse_host_mount(
-                &os_arg_to_string(value, self.label())?,
-                self.label(),
-            )?),
-            Self::Separator => {}
+            RestoreOptionValue::Separator => {}
         }
         Ok(())
     }
+}
+
+fn parse_restore_cwd(option: RestoreOption, value: &OsString) -> Result<NormalizedPath, CliError> {
+    Ok(NormalizedPath::new(os_arg_to_string(
+        value,
+        option.label(),
+    )?)?)
+}
+
+fn parse_restore_env(option: RestoreOption, value: &OsString) -> Result<String, CliError> {
+    let value = os_arg_to_string(value, option.label())?;
+    validate_env_line(&value, option.label())?;
+    Ok(value)
+}
+
+fn parse_restore_mount(
+    option: RestoreOption,
+    value: &OsString,
+) -> Result<super::HostMount, CliError> {
+    parse_host_mount(&os_arg_to_string(value, option.label())?, option.label())
 }
 
 pub(crate) fn parse_qjs_restore_command(args: &[OsString]) -> Result<QjsRestoreCommand, CliError> {
