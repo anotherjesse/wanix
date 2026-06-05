@@ -160,6 +160,13 @@ impl P9Server {
             .metadata_with_lookup(path, MetadataLookup::NoFollow)
     }
 
+    fn fid_path_or_reply(&self, tag: u16, fid: u32) -> Result<NormalizedPath, P9Frame> {
+        self.fids
+            .get(&fid)
+            .map(|entry| entry.path.clone())
+            .ok_or_else(|| p9_rlerror(tag, EBADF))
+    }
+
     fn owner_attrs(&self, path: &NormalizedPath) -> P9OwnerAttrs {
         self.owners.get(path).copied().unwrap_or_default()
     }

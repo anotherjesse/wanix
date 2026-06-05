@@ -100,21 +100,15 @@ impl P9Server {
         ))
     }
 
-    fn fid_path_or_reply(&self, tag: u16, fid: u32) -> Result<NormalizedPath, P9Frame> {
-        self.fids
-            .get(&fid)
-            .map(|entry| entry.path.clone())
-            .ok_or_else(|| p9_rlerror(tag, EBADF))
-    }
-
     fn resolve_walk(
         &self,
         tag: u16,
         fid: u32,
         names: &[String],
     ) -> Result<Result<WalkedPath, P9Frame>, Wanix9pError> {
-        let Some(source_path) = self.fids.get(&fid).map(|entry| entry.path.clone()) else {
-            return Ok(Err(p9_rlerror(tag, EBADF)));
+        let source_path = match self.fid_path_or_reply(tag, fid) {
+            Ok(path) => path,
+            Err(response) => return Ok(Err(response)),
         };
         let mut path = source_path;
         let mut qids = Vec::with_capacity(names.len());
@@ -130,8 +124,9 @@ impl P9Server {
 
     pub(super) fn handle_readlink(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let readlink = p9_decode_treadlink(frame)?;
-        let Some(path) = self.fids.get(&readlink.fid).map(|entry| entry.path.clone()) else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let path = match self.fid_path_or_reply(frame.tag(), readlink.fid) {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
         let target = match self.root.read_link(&path) {
             Ok(target) => target,
@@ -145,8 +140,9 @@ impl P9Server {
 
     pub(super) fn handle_getattr(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let getattr = p9_decode_tgetattr(frame)?;
-        let Some(path) = self.fids.get(&getattr.fid).map(|entry| entry.path.clone()) else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let path = match self.fid_path_or_reply(frame.tag(), getattr.fid) {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
         let metadata = match self.metadata_no_follow(&path) {
             Ok(metadata) => metadata,

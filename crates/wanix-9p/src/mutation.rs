@@ -1,4 +1,4 @@
-use wanix_fs::FileType;
+use wanix_fs::{FileType, NormalizedPath};
 use wanix_protocol::{
     P9Frame, p9_decode_tlcreate, p9_decode_tlink, p9_decode_tmkdir, p9_decode_tmknod,
     p9_decode_tremove, p9_decode_trename, p9_decode_trenameat, p9_decode_tsymlink,
@@ -16,10 +16,10 @@ use crate::{
 impl P9Server {
     pub(super) fn handle_create(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let create = p9_decode_tlcreate(frame)?;
-        let Some(dir_path) = self.fids.get(&create.fid).map(|entry| entry.path.clone()) else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let path = match self.child_path_or_reply(frame.tag(), create.fid, &create.name)? {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
-        let path = join_walk_component(&dir_path, &create.name)?;
         let existing_path = self.metadata_no_follow(&path).is_ok();
         let mut options = open_options_from_flags(create.flags);
         options.create = true;
@@ -50,14 +50,10 @@ impl P9Server {
 
     pub(super) fn handle_symlink(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let symlink = p9_decode_tsymlink(frame)?;
-        let Some(dir_path) = self
-            .fids
-            .get(&symlink.dir_fid)
-            .map(|entry| entry.path.clone())
-        else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let path = match self.child_path_or_reply(frame.tag(), symlink.dir_fid, &symlink.name)? {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
-        let path = join_walk_component(&dir_path, &symlink.name)?;
         if let Err(error) = self.root.symlink(symlink.target.as_bytes(), &path) {
             return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
         };
@@ -71,24 +67,22 @@ impl P9Server {
 
     pub(super) fn handle_mknod(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let mknod = p9_decode_tmknod(frame)?;
-        let Some(dir_path) = self
-            .fids
-            .get(&mknod.dir_fid)
-            .map(|entry| entry.path.clone())
-        else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let _path = match self.child_path_or_reply(frame.tag(), mknod.dir_fid, &mknod.name)? {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
-        let _path = join_walk_component(&dir_path, &mknod.name)?;
         Ok(p9_rlerror(frame.tag(), EOPNOTSUPP))
     }
 
     pub(super) fn handle_link(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let link = p9_decode_tlink(frame)?;
-        let Some(dir_path) = self.fids.get(&link.dir_fid).map(|entry| entry.path.clone()) else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let dir_path = match self.fid_path_or_reply(frame.tag(), link.dir_fid) {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
-        let Some(old_path) = self.fids.get(&link.fid).map(|entry| entry.path.clone()) else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let old_path = match self.fid_path_or_reply(frame.tag(), link.fid) {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
         let path = join_walk_component(&dir_path, &link.name)?;
         match self.root.hard_link(&old_path, &path) {
@@ -102,14 +96,10 @@ impl P9Server {
 
     pub(super) fn handle_mkdir(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let mkdir = p9_decode_tmkdir(frame)?;
-        let Some(dir_path) = self
-            .fids
-            .get(&mkdir.dir_fid)
-            .map(|entry| entry.path.clone())
-        else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let path = match self.child_path_or_reply(frame.tag(), mkdir.dir_fid, &mkdir.name)? {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
-        let path = join_walk_component(&dir_path, &mkdir.name)?;
         if let Err(error) = self.root.create_dir(&path) {
             return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error)));
         };
@@ -123,17 +113,14 @@ impl P9Server {
 
     pub(super) fn handle_rename(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let rename = p9_decode_trename(frame)?;
-        let Some(old_path) = self.fids.get(&rename.fid).map(|entry| entry.path.clone()) else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let old_path = match self.fid_path_or_reply(frame.tag(), rename.fid) {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
-        let Some(new_dir_path) = self
-            .fids
-            .get(&rename.dir_fid)
-            .map(|entry| entry.path.clone())
-        else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let new_path = match self.child_path_or_reply(frame.tag(), rename.dir_fid, &rename.name)? {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
-        let new_path = join_walk_component(&new_dir_path, &rename.name)?;
         match self.root.rename(&old_path, &new_path) {
             Ok(()) => {
                 self.move_owner_attrs(&old_path, &new_path);
@@ -147,19 +134,13 @@ impl P9Server {
 
     pub(super) fn handle_renameat(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let rename = p9_decode_trenameat(frame)?;
-        let Some(old_dir_path) = self
-            .fids
-            .get(&rename.old_dir_fid)
-            .map(|entry| entry.path.clone())
-        else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let old_dir_path = match self.fid_path_or_reply(frame.tag(), rename.old_dir_fid) {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
-        let Some(new_dir_path) = self
-            .fids
-            .get(&rename.new_dir_fid)
-            .map(|entry| entry.path.clone())
-        else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let new_dir_path = match self.fid_path_or_reply(frame.tag(), rename.new_dir_fid) {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
         let old_path = join_walk_component(&old_dir_path, &rename.old_name)?;
         let new_path = join_walk_component(&new_dir_path, &rename.new_name)?;
@@ -200,14 +181,10 @@ impl P9Server {
 
     pub(super) fn handle_unlinkat(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let unlink = p9_decode_tunlinkat(frame)?;
-        let Some(dir_path) = self
-            .fids
-            .get(&unlink.dir_fid)
-            .map(|entry| entry.path.clone())
-        else {
-            return Ok(p9_rlerror(frame.tag(), EBADF));
+        let path = match self.child_path_or_reply(frame.tag(), unlink.dir_fid, &unlink.name)? {
+            Ok(path) => path,
+            Err(response) => return Ok(response),
         };
-        let path = join_walk_component(&dir_path, &unlink.name)?;
         let result = if unlink.flags & AT_REMOVEDIR != 0 {
             self.root.remove_dir(&path)
         } else {
@@ -220,5 +197,18 @@ impl P9Server {
             }
             Err(error) => Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
         }
+    }
+
+    fn child_path_or_reply(
+        &self,
+        tag: u16,
+        dir_fid: u32,
+        name: &str,
+    ) -> Result<Result<NormalizedPath, P9Frame>, Wanix9pError> {
+        let dir_path = match self.fid_path_or_reply(tag, dir_fid) {
+            Ok(path) => path,
+            Err(response) => return Ok(Err(response)),
+        };
+        Ok(Ok(join_walk_component(&dir_path, name)?))
     }
 }
