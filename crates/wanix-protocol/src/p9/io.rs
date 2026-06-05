@@ -3,10 +3,17 @@ use super::codec::{
 };
 use super::{P9_RREAD, P9_RWRITE, P9_TREAD, P9_TWRITE, P9Error, P9Frame, P9Read, P9Write};
 
+const P9_U32_FIELD_LEN: usize = 4;
+const P9_U64_FIELD_LEN: usize = 8;
+const P9_COUNTED_DATA_PREFIX_LEN: usize = P9_U32_FIELD_LEN;
+const P9_TREAD_PAYLOAD_LEN: usize = P9_U32_FIELD_LEN + P9_U64_FIELD_LEN + P9_U32_FIELD_LEN;
+const P9_TWRITE_PAYLOAD_PREFIX_LEN: usize =
+    P9_U32_FIELD_LEN + P9_U64_FIELD_LEN + P9_COUNTED_DATA_PREFIX_LEN;
+
 /// Builds a `Tread` frame.
 #[must_use]
 pub fn p9_tread(tag: u16, fid: u32, offset: u64, count: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(16);
+    let mut payload = Vec::with_capacity(P9_TREAD_PAYLOAD_LEN);
     push_u32(&mut payload, fid);
     push_u64(&mut payload, offset);
     push_u32(&mut payload, count);
@@ -19,7 +26,7 @@ pub fn p9_tread(tag: u16, fid: u32, offset: u64, count: u32) -> P9Frame {
 ///
 /// Returns an error when the data cannot fit in a 9P u32 count field.
 pub fn p9_rread(tag: u16, data: &[u8]) -> Result<P9Frame, P9Error> {
-    let mut payload = Vec::with_capacity(4 + data.len());
+    let mut payload = Vec::with_capacity(P9_COUNTED_DATA_PREFIX_LEN + data.len());
     push_counted_data(&mut payload, data)?;
     Ok(P9Frame::new(P9_RREAD, tag, payload))
 }
@@ -30,7 +37,7 @@ pub fn p9_rread(tag: u16, data: &[u8]) -> Result<P9Frame, P9Error> {
 ///
 /// Returns an error when the data cannot fit in a 9P u32 count field.
 pub fn p9_twrite(tag: u16, fid: u32, offset: u64, data: &[u8]) -> Result<P9Frame, P9Error> {
-    let mut payload = Vec::with_capacity(16 + data.len());
+    let mut payload = Vec::with_capacity(P9_TWRITE_PAYLOAD_PREFIX_LEN + data.len());
     push_u32(&mut payload, fid);
     push_u64(&mut payload, offset);
     push_counted_data(&mut payload, data)?;
@@ -40,7 +47,7 @@ pub fn p9_twrite(tag: u16, fid: u32, offset: u64, data: &[u8]) -> Result<P9Frame
 /// Builds an `Rwrite` frame.
 #[must_use]
 pub fn p9_rwrite(tag: u16, count: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(4);
+    let mut payload = Vec::with_capacity(P9_U32_FIELD_LEN);
     push_u32(&mut payload, count);
     P9Frame::new(P9_RWRITE, tag, payload)
 }
