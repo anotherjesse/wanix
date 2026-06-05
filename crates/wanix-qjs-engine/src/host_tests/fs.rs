@@ -945,6 +945,73 @@ fn live_wasi_host_supplies_path_rename() -> Result<()> {
 }
 
 #[test]
+fn live_wasi_host_rejects_path_rename_too_long_paths_before_host_call() -> Result<()> {
+    for (old_path_len, new_path_len) in [
+        (MAX_VIRTUAL_FILE_PATH_BYTES + 1, 7),
+        (7, MAX_VIRTUAL_FILE_PATH_BYTES + 1),
+    ] {
+        let host = MetadataWasiHost::default();
+        let calls = Arc::clone(&host.calls);
+        let mut harness =
+            VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+        harness.write_bytes(PATH_PTR, b"old.txt")?;
+        harness.write_bytes(PATH_PTR + 16, b"new.txt")?;
+
+        assert_eq!(
+            harness.path_rename.call(
+                &mut harness.store,
+                (
+                    9,
+                    test_guest_i32(PATH_PTR, "old path pointer")?,
+                    test_guest_i32(old_path_len, "old path length")?,
+                    10,
+                    test_guest_i32(PATH_PTR + 16, "new path pointer")?,
+                    test_guest_i32(new_path_len, "new path length")?,
+                ),
+            )?,
+            ERRNO_NAMETOOLONG
+        );
+        assert!(calls.lock().expect("test call lock").is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn live_wasi_host_preflights_path_rename_paths_before_host_call() -> Result<()> {
+    for (bad_old_path, bad_new_path, field) in [
+        (true, false, "old path pointer"),
+        (false, true, "new path pointer"),
+    ] {
+        let host = MetadataWasiHost::default();
+        let calls = Arc::clone(&host.calls);
+        let mut harness =
+            VirtualFsHarness::new_with_wasi_host(QuickJsHostConfig::new(), Some(Box::new(host)))?;
+        harness.write_bytes(PATH_PTR, b"old.txt")?;
+        harness.write_bytes(PATH_PTR + 16, b"new.txt")?;
+        let memory_len = harness.memory.data_size(&harness.store);
+        let bad_ptr = memory_len - 2;
+
+        let err = harness
+            .path_rename
+            .call(
+                &mut harness.store,
+                (
+                    9,
+                    test_guest_i32(if bad_old_path { bad_ptr } else { PATH_PTR }, field)?,
+                    7,
+                    10,
+                    test_guest_i32(if bad_new_path { bad_ptr } else { PATH_PTR + 16 }, field)?,
+                    7,
+                ),
+            )
+            .expect_err("path_rename should preflight guest paths before host call");
+        assert!(format!("{err:#}").contains("guest memory range"));
+        assert!(calls.lock().expect("test call lock").is_empty());
+    }
+    Ok(())
+}
+
+#[test]
 fn live_wasi_host_supplies_prestat_fdstat_seek_tell_and_close() -> Result<()> {
     let host = MetadataWasiHost::default();
     let calls = Arc::clone(&host.calls);
