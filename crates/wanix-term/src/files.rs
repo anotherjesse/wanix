@@ -1,13 +1,14 @@
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use wanix_fs::{File, FsError, FsResult, Metadata, OpenOptions};
 
 use crate::state::{TermResource, TermSide};
-use crate::{TermDevice, file_metadata};
+use crate::{TermDevice, file_metadata, modes};
 
+mod queue;
 mod winch;
 
+pub(crate) use queue::read_from_queue;
 pub(crate) use winch::WinchFile;
 
 pub(crate) fn require_read_only(options: OpenOptions) -> FsResult<()> {
@@ -100,7 +101,7 @@ impl File for NewTermFile {
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o555))
+        Ok(file_metadata(0, modes::READ_ONLY_FILE))
     }
 }
 
@@ -122,7 +123,10 @@ impl File for BytesFile {
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(self.bytes.len() as u64, 0o555))
+        Ok(file_metadata(
+            self.bytes.len() as u64,
+            modes::READ_ONLY_FILE,
+        ))
     }
 }
 
@@ -169,7 +173,7 @@ impl File for ControlFile {
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o755))
+        Ok(file_metadata(0, modes::CONTROL_FILE))
     }
 }
 
@@ -232,7 +236,7 @@ impl File for TermFile {
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o666))
+        Ok(file_metadata(0, modes::STREAM_FILE))
     }
 
     fn read_ready(&self) -> FsResult<bool> {
@@ -260,14 +264,4 @@ fn program_output_bytes(buf: &[u8], prev_written: &mut Option<u8>) -> Vec<u8> {
         *prev_written = Some(byte);
     }
     out
-}
-
-pub(crate) fn read_from_queue(queue: &mut VecDeque<u8>, buf: &mut [u8]) -> FsResult<usize> {
-    let len = queue.len().min(buf.len());
-    for slot in buf.iter_mut().take(len) {
-        *slot = queue
-            .pop_front()
-            .expect("queue contains at least len bytes");
-    }
-    Ok(len)
 }

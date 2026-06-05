@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use wanix_fs::{File, FsError, FsResult, Metadata};
 
-use crate::file_metadata;
 use crate::files::read_from_queue;
 use crate::state::TermResource;
+use crate::{file_metadata, modes};
 
 #[derive(Debug)]
 pub(crate) struct WinchFile {
@@ -75,7 +75,7 @@ impl File for WinchFile {
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o666))
+        Ok(file_metadata(0, modes::STREAM_FILE))
     }
 
     fn read_ready(&self) -> FsResult<bool> {

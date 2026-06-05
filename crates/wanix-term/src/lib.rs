@@ -25,6 +25,13 @@ use state::{DeviceState, TermResource, TermSide};
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix terminal device filesystem";
 
+pub(crate) mod modes {
+    pub(crate) const READ_ONLY_FILE: u32 = 0o555;
+    pub(crate) const CONTROL_FILE: u32 = 0o755;
+    pub(crate) const STREAM_FILE: u32 = 0o666;
+    pub(crate) const DIRECTORY: u32 = READ_ONLY_FILE;
+}
+
 /// Filesystem implementing the Rust-native Wanix terminal service.
 #[derive(Clone)]
 pub struct TermDevice {
@@ -153,22 +160,25 @@ impl FileSystem for TermDevice {
     fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
         match parse_path(path)? {
             TermPath::Root => Ok(directory_metadata()),
-            TermPath::New => Ok(file_metadata(0, 0o555)),
+            TermPath::New => Ok(file_metadata(0, modes::READ_ONLY_FILE)),
             TermPath::Resource(id) => {
                 self.resource(id)?;
                 Ok(directory_metadata())
             }
             TermPath::Id(id) => {
                 let resource = self.resource(id)?;
-                Ok(file_metadata((resource.id.len() + 1) as u64, 0o555))
+                Ok(file_metadata(
+                    (resource.id.len() + 1) as u64,
+                    modes::READ_ONLY_FILE,
+                ))
             }
             TermPath::Ctl(id) => {
                 self.resource(id)?;
-                Ok(file_metadata(0, 0o755))
+                Ok(file_metadata(0, modes::CONTROL_FILE))
             }
             TermPath::Data(id) | TermPath::Program(id) | TermPath::Winch(id) => {
                 self.resource(id)?;
-                Ok(file_metadata(0, 0o666))
+                Ok(file_metadata(0, modes::STREAM_FILE))
             }
         }
     }
@@ -180,7 +190,10 @@ impl FileSystem for TermDevice {
                     .state
                     .lock()
                     .map_err(|_| FsError::Other("term device lock poisoned".to_owned()))?;
-                let mut entries = vec![DirEntry::new("new", file_metadata(0, 0o555))];
+                let mut entries = vec![DirEntry::new(
+                    "new",
+                    file_metadata(0, modes::READ_ONLY_FILE),
+                )];
                 entries.extend(
                     state
                         .resources
@@ -192,11 +205,14 @@ impl FileSystem for TermDevice {
             TermPath::Resource(id) => {
                 self.resource(id)?;
                 Ok(vec![
-                    DirEntry::new("ctl", file_metadata(0, 0o755)),
-                    DirEntry::new("data", file_metadata(0, 0o666)),
-                    DirEntry::new("id", file_metadata((id.len() + 1) as u64, 0o555)),
-                    DirEntry::new("program", file_metadata(0, 0o666)),
-                    DirEntry::new("winch", file_metadata(0, 0o666)),
+                    DirEntry::new("ctl", file_metadata(0, modes::CONTROL_FILE)),
+                    DirEntry::new("data", file_metadata(0, modes::STREAM_FILE)),
+                    DirEntry::new(
+                        "id",
+                        file_metadata((id.len() + 1) as u64, modes::READ_ONLY_FILE),
+                    ),
+                    DirEntry::new("program", file_metadata(0, modes::STREAM_FILE)),
+                    DirEntry::new("winch", file_metadata(0, modes::STREAM_FILE)),
                 ])
             }
             _ => Err(FsError::NotDirectory),
@@ -205,7 +221,7 @@ impl FileSystem for TermDevice {
 }
 
 fn directory_metadata() -> Metadata {
-    Metadata::new(FileType::Directory, 2, 0o555)
+    Metadata::new(FileType::Directory, 2, modes::DIRECTORY)
 }
 
 fn file_metadata(len: u64, mode: u32) -> Metadata {

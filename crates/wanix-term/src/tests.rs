@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{CRATE_PURPOSE, TermDevice};
+use super::{CRATE_PURPOSE, TermDevice, modes};
 use wanix_fs::{FileSystem, NormalizedPath, OpenOptions};
 use wanix_task::{Fd, Task, TaskSpec};
 use wanix_vfs::{BindOptions, Namespace};
@@ -35,6 +35,56 @@ fn new_allocates_incrementing_resources() {
         .map(|entry| entry.name().to_owned())
         .collect::<Vec<_>>();
     assert_eq!(resource_entries, ["ctl", "data", "id", "program", "winch"]);
+}
+
+#[test]
+fn service_metadata_modes_match_terminal_contract() {
+    let terms = TermDevice::new();
+    let id = terms.alloc().unwrap();
+
+    assert_eq!(metadata_mode(&terms, "."), modes::DIRECTORY);
+    assert_eq!(metadata_mode(&terms, "new"), modes::READ_ONLY_FILE);
+    assert_eq!(metadata_mode(&terms, &id), modes::DIRECTORY);
+    assert_eq!(
+        metadata_mode(&terms, &format!("{id}/id")),
+        modes::READ_ONLY_FILE
+    );
+    assert_eq!(
+        metadata_mode(&terms, &format!("{id}/ctl")),
+        modes::CONTROL_FILE
+    );
+    assert_eq!(
+        metadata_mode(&terms, &format!("{id}/data")),
+        modes::STREAM_FILE
+    );
+    assert_eq!(
+        metadata_mode(&terms, &format!("{id}/program")),
+        modes::STREAM_FILE
+    );
+    assert_eq!(
+        metadata_mode(&terms, &format!("{id}/winch")),
+        modes::STREAM_FILE
+    );
+
+    let root_entries = entries_with_modes(&terms, ".");
+    assert_eq!(
+        root_entries,
+        [
+            ("new".to_owned(), modes::READ_ONLY_FILE),
+            (id.clone(), modes::DIRECTORY),
+        ]
+    );
+    let resource_entries = entries_with_modes(&terms, &id);
+    assert_eq!(
+        resource_entries,
+        [
+            ("ctl".to_owned(), modes::CONTROL_FILE),
+            ("data".to_owned(), modes::STREAM_FILE),
+            ("id".to_owned(), modes::READ_ONLY_FILE),
+            ("program".to_owned(), modes::STREAM_FILE),
+            ("winch".to_owned(), modes::STREAM_FILE),
+        ]
+    );
 }
 
 #[test]
@@ -195,6 +245,20 @@ fn read_file(fs: &dyn FileSystem, path: &str) -> Vec<u8> {
         }
         out.extend_from_slice(&buf[..n]);
     }
+}
+
+fn metadata_mode(fs: &dyn FileSystem, path: &str) -> u32 {
+    fs.metadata(&NormalizedPath::new(path).unwrap())
+        .unwrap()
+        .mode()
+}
+
+fn entries_with_modes(fs: &dyn FileSystem, path: &str) -> Vec<(String, u32)> {
+    fs.read_dir(&NormalizedPath::new(path).unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|entry| (entry.name().to_owned(), entry.metadata().mode()))
+        .collect()
 }
 
 fn read_exact(file: &mut dyn wanix_fs::File, len: usize) -> Vec<u8> {
