@@ -43,6 +43,8 @@ use task_command::task_env_map;
 use task_context::WanixExitState;
 use wasi_host::WanixQuickJsWasiHost;
 
+const EVENT_LOOP_DRAIN_JOB_LIMIT: usize = 1024;
+
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "quickjs wasi task driver";
 
@@ -305,13 +307,13 @@ fn drain_timer_work(
 ) -> FsResult<()> {
     if event_loop_wait_budget.is_zero() {
         runtime
-            .execute_immediate_event_loop_with_limit(1024)
+            .execute_immediate_event_loop_with_limit(EVENT_LOOP_DRAIN_JOB_LIMIT)
             .map_err(qjs_error)?;
         return Ok(());
     }
 
     runtime
-        .execute_event_loop_with_wait_budget(1024, event_loop_wait_budget)
+        .execute_event_loop_with_wait_budget(EVENT_LOOP_DRAIN_JOB_LIMIT, event_loop_wait_budget)
         .map(|_status| ())
         .map_err(qjs_error)
 }

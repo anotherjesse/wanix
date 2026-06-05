@@ -11,6 +11,7 @@ const WANIX_TASK_GLOBALS_PRELUDE: &str = r#"
   globalThis.scriptArgs = Object.freeze(JSON.parse(__wanix_script_args_json()));
 })();
 "#;
+const NAMESPACE_READ_CHUNK_BYTES: usize = 1024;
 
 pub(crate) fn define_output_callback(
     runtime: &mut QuickJsRuntime,
@@ -87,7 +88,7 @@ pub(crate) fn read_namespace_file(
 ) -> FsResult<String> {
     let mut file = namespace.open(path, OpenOptions::read())?;
     let mut bytes = Vec::new();
-    let mut buf = [0; 1024];
+    let mut buf = [0; NAMESPACE_READ_CHUNK_BYTES];
     loop {
         let n = file.read(&mut buf)?;
         if n == 0 {

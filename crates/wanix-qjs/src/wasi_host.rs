@@ -12,6 +12,8 @@ use convert::{
 
 use crate::task_context::WanixExitState;
 
+const MAX_WASI_EXIT_STATUS: i32 = 255;
+
 pub(crate) struct WanixQuickJsWasiHost {
     ctx: WasiCtx,
     exit_state: Option<WanixExitState>,
@@ -56,7 +58,7 @@ impl QuickJsWasiHost for WanixQuickJsWasiHost {
 
     fn proc_exit(&mut self, code: u32) -> Result<(), QuickJsWasiErrno> {
         let code = i32::try_from(code).map_err(|_| QuickJsWasiErrno::Inval)?;
-        if !(0..=255).contains(&code) {
+        if !(0..=MAX_WASI_EXIT_STATUS).contains(&code) {
             return Err(QuickJsWasiErrno::Inval);
         }
         let Some(exit_state) = &self.exit_state else {
