@@ -1,9 +1,14 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use rust_wasi_quickjs::QuickJsRuntime;
 use wanix_fs::{FsError, FsResult};
 use wanix_task::{Fd, Task};
 
+use crate::host_api::take_buffer;
 use crate::task_context::WanixExitState;
+
+pub(super) type OutputBuffer = Arc<Mutex<Vec<u8>>>;
 
 /// Result of running QuickJS source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +40,31 @@ impl RunOutput {
     pub fn stderr(&self) -> &[u8] {
         &self.stderr
     }
+}
+
+pub(super) fn new_output_buffers() -> (OutputBuffer, OutputBuffer) {
+    (
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+}
+
+pub(super) fn collect_run_output(
+    runtime: &mut QuickJsRuntime,
+    stdout: OutputBuffer,
+    stderr: OutputBuffer,
+) -> Result<RunOutput, RunFailure> {
+    let mut stdout = take_buffer(stdout).map_err(|error| RunFailure {
+        error,
+        output: RunOutput::empty(),
+    })?;
+    stdout.extend_from_slice(&runtime.take_captured_stdout());
+    let mut stderr = take_buffer(stderr).map_err(|error| RunFailure {
+        error,
+        output: RunOutput::empty(),
+    })?;
+    stderr.extend_from_slice(&runtime.take_captured_stderr());
+    Ok(RunOutput::new(stdout, stderr))
 }
 
 #[derive(Debug)]

@@ -1,13 +1,11 @@
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rust_wasi_quickjs::{QuickJsCreateOptions, QuickJsRuntime};
 use wanix_fs::{FsError, FsResult};
-use wanix_task::{Fd, Task};
+use wanix_task::Task;
 
 use crate::host_api::{
     define_wanix_module_loader, define_wanix_task_globals, qjs_error, read_namespace_file,
-    take_buffer,
 };
 use crate::task_command::{task_command, task_wasi_argv};
 use crate::task_context::{WanixExitState, WanixTaskContext};
@@ -15,11 +13,12 @@ use crate::task_stdio::task_wasi_config;
 use crate::wasi_host::WanixQuickJsWasiHost;
 use crate::{
     CONSOLE_PRELUDE, QuickJsRunner, QuickJsWanixConfig, captured_stdio_options,
-    captured_stdio_options_with_wanix_wasi, define_task_output_callback, drain_runtime_work,
-    exit_requested_or_poisoned, uses_module_syntax,
+    captured_stdio_options_with_wanix_wasi, drain_runtime_work, uses_module_syntax,
 };
-use output::{RunControl, RunFailure, write_task_output};
+use control::configure_runtime_control;
+use output::{RunControl, RunFailure, collect_run_output, new_output_buffers, write_task_output};
 
+mod control;
 mod output;
 
 pub use output::RunOutput;
@@ -108,43 +107,9 @@ impl QuickJsRunner {
                 output: RunOutput::empty(),
             })?;
 
-        let stdout = Arc::new(Mutex::new(Vec::new()));
-        let stderr = Arc::new(Mutex::new(Vec::new()));
+        let (stdout, stderr) = new_output_buffers();
         let result = (|| -> FsResult<()> {
-            if let Some(bytes) = control.memory_limit_bytes {
-                runtime.set_memory_limit(bytes).map_err(qjs_error)?;
-            }
-            define_task_output_callback(
-                &mut runtime,
-                "__wanix_stdout",
-                Arc::clone(&stdout),
-                control.exit_state.clone(),
-                control.output_task.clone().map(|task| (task, Fd::STDOUT)),
-            )?;
-            define_task_output_callback(
-                &mut runtime,
-                "__wanix_stderr",
-                Arc::clone(&stderr),
-                control.exit_state.clone(),
-                control.output_task.clone().map(|task| (task, Fd::STDERR)),
-            )?;
-            if control.exit_state.is_some() || control.interrupt_poll_budget.is_some() {
-                let exit_state = control.exit_state.clone();
-                let interrupt_poll_budget = control.interrupt_poll_budget;
-                let mut interrupt_polls = 0usize;
-                runtime
-                    .set_interrupt_handler(move || {
-                        if exit_requested_or_poisoned(&exit_state) {
-                            return true;
-                        }
-                        let Some(budget) = interrupt_poll_budget else {
-                            return false;
-                        };
-                        interrupt_polls = interrupt_polls.saturating_add(1);
-                        interrupt_polls > budget
-                    })
-                    .map_err(qjs_error)?;
-            }
+            configure_runtime_control(&mut runtime, &control, &stdout, &stderr)?;
             setup(&mut runtime)?;
             runtime.eval_discard(CONSOLE_PRELUDE).map_err(qjs_error)?;
             eval(&mut runtime, source)?;
@@ -157,17 +122,7 @@ impl QuickJsRunner {
             Ok(())
         })();
 
-        let mut stdout = take_buffer(stdout).map_err(|error| RunFailure {
-            error,
-            output: RunOutput::empty(),
-        })?;
-        stdout.extend_from_slice(&runtime.take_captured_stdout());
-        let mut stderr = take_buffer(stderr).map_err(|error| RunFailure {
-            error,
-            output: RunOutput::empty(),
-        })?;
-        stderr.extend_from_slice(&runtime.take_captured_stderr());
-        let output = RunOutput::new(stdout, stderr);
+        let output = collect_run_output(&mut runtime, stdout, stderr)?;
         match result {
             Ok(()) => Ok(output),
             Err(error) => Err(RunFailure { error, output }),
