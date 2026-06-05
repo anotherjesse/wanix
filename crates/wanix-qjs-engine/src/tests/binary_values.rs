@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn typed_array_kind_abi_names_and_widths_are_pinned() {
+    let cases = [
+        (
+            QuickJsTypedArrayKind::Uint8Clamped,
+            0,
+            "Uint8ClampedArray",
+            1,
+        ),
+        (QuickJsTypedArrayKind::Int8, 1, "Int8Array", 1),
+        (QuickJsTypedArrayKind::Uint8, 2, "Uint8Array", 1),
+        (QuickJsTypedArrayKind::Int16, 3, "Int16Array", 2),
+        (QuickJsTypedArrayKind::Uint16, 4, "Uint16Array", 2),
+        (QuickJsTypedArrayKind::Int32, 5, "Int32Array", 4),
+        (QuickJsTypedArrayKind::Uint32, 6, "Uint32Array", 4),
+        (QuickJsTypedArrayKind::BigInt64, 7, "BigInt64Array", 8),
+        (QuickJsTypedArrayKind::BigUint64, 8, "BigUint64Array", 8),
+        (QuickJsTypedArrayKind::Float16, 9, "Float16Array", 2),
+        (QuickJsTypedArrayKind::Float32, 10, "Float32Array", 4),
+        (QuickJsTypedArrayKind::Float64, 11, "Float64Array", 8),
+    ];
+
+    for (kind, abi, js_name, bytes_per_element) in cases {
+        assert_eq!(QuickJsTypedArrayKind::from_abi(abi), Some(kind));
+        assert_eq!(kind.abi(), abi);
+        assert_eq!(kind.js_name(), js_name);
+        assert_eq!(kind.bytes_per_element(), bytes_per_element);
+    }
+    assert_eq!(QuickJsTypedArrayKind::from_abi(-1), None);
+    assert_eq!(QuickJsTypedArrayKind::from_abi(12), None);
+}
+
+#[test]
 fn eval_binary_value_returns_array_buffer_and_uint8_array_copies() -> Result<()> {
     let (engine, module) = quickjs_fixture()?;
     let mut vm = QuickJsRuntime::create(&engine, &module)?;
