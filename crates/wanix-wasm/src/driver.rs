@@ -45,7 +45,7 @@ impl TaskDriver for WasmTaskDriver {
 fn run_wasm_task(task: &Task) -> FsResult<i32> {
     let command = task_command(task)?;
     let bytes = read_namespace_bytes(&task.namespace(), &command.program)?;
-    let runner = WasiRunner::from_bytes(&bytes)
+    let runner = WasiRunner::from_bytes_cached(&bytes, &crate::module_cache_dir())
         .map_err(|err| FsError::Other(format!("failed to compile wasm task: {err:?}")))?;
     let config = task_wasi_config(task);
     runner

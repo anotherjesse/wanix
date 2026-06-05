@@ -18,7 +18,7 @@ use std::sync::Arc;
 use wanix_fs::{File, FileSystem, LocalFs, MemFs, NormalizedPath, OpenOptions};
 use wanix_vfs::{BindOptions, Namespace};
 use wanix_wasi::WasiConfig;
-use wanix_wasm::{CaptureFile, WasiRunner};
+use wanix_wasm::{CaptureFile, WasiRunner, module_cache_dir};
 
 use crate::qjs_args::{QjsStdin, read_qjs_stdin};
 use crate::wasm_args::WasmCommand;
@@ -30,7 +30,7 @@ pub(super) fn run_wasm(
 ) -> Result<CliOutput, CliError> {
     let bytes = read_wasm_module(&command)?;
     let captured = captured_wasm_config(command, process_stdin)?;
-    let runner = WasiRunner::from_bytes(&bytes)
+    let runner = WasiRunner::from_bytes_cached(&bytes, &module_cache_dir())
         .map_err(|error| CliError::new(format!("wasm: {error:#}"), 1))?;
     let CapturedWasmConfig {
         config,
