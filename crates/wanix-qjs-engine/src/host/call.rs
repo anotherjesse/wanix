@@ -1,20 +1,20 @@
-use super::guest_memory::{guest_len, guest_offset_at};
+use super::guest_memory::guest_len;
 use super::{HostCallbackMode, HostState, QuickJsCopiedValue, QuickJsValue, caller_memory};
 use crate::guest::{guest_i32_add, guest_offset, i64_from_guest_u32_halves};
 use wasmtime::{Caller, Extern, Linker, Memory, TypedFunc, WasmParams, WasmResults};
 
+mod args;
 mod binary;
 mod guest_read;
 mod output;
 mod scalar;
-use binary::quickjs_value_to_callback;
-use guest_read::{
-    quickjs_pending_exception_string, read_guest_i32, read_guest_u32, read_guest_utf8,
-};
+use args::read_host_callback_args;
+use guest_read::{quickjs_pending_exception_string, read_guest_u32, read_guest_utf8};
 use output::{host_error_to_js_exception, quickjs_callback_value_to_js};
-use scalar::quickjs_value_to_scalar;
 
 const JS_VALUE_PTR_LEN: usize = 4;
+const BIG_INT64_WORD_SIZE: u32 = 4;
+const BIG_INT64_OUTPUT_SIZE: i32 = 8;
 
 pub(super) fn define_import(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     linker.func_wrap(
@@ -66,41 +66,6 @@ fn dispatch_host_call(
     quickjs_callback_value_to_js(caller, value)
 }
 
-fn read_host_callback_args(
-    memory: &Memory,
-    caller: &mut Caller<'_, HostState>,
-    argc: i32,
-    argv: i32,
-    mode: HostCallbackMode,
-) -> wasmtime::Result<Vec<QuickJsCopiedValue>> {
-    let argc = guest_len(argc)?;
-    let mut args = Vec::new();
-    args.try_reserve_exact(argc).map_err(|err| {
-        wasmtime::Error::msg(format!("host callback args allocation failed: {err}"))
-    })?;
-    if argc == 0 {
-        return Ok(args);
-    }
-    if argv == 0 {
-        return Err(host_import_error(format!(
-            "host callback argv pointer is null for {argc} arguments"
-        )));
-    }
-    for index in 0..argc {
-        let ptr = read_guest_i32(
-            memory,
-            caller,
-            guest_offset_at(argv, index, JS_VALUE_PTR_LEN)?,
-        )?;
-        let arg = match mode {
-            HostCallbackMode::Scalar => quickjs_value_to_scalar(memory, caller, ptr)?.into(),
-            HostCallbackMode::BinaryCapable => quickjs_value_to_callback(memory, caller, ptr)?,
-        };
-        args.push(arg);
-    }
-    Ok(args)
-}
-
 fn write_guest_bytes(
     caller: &mut Caller<'_, HostState>,
     ptr: i32,
@@ -120,7 +85,7 @@ fn read_big_int64_value(
     value: i32,
 ) -> wasmtime::Result<i64> {
     let wasm_malloc = quickjs_export::<i32, i32>(caller, "wasm_malloc")?;
-    let out = wasm_malloc.call(&mut *caller, 8)?;
+    let out = wasm_malloc.call(&mut *caller, BIG_INT64_OUTPUT_SIZE)?;
     if out == 0 {
         return Err(host_import_error(
             "wasm_malloc returned null for QuickJS BigInt output words",
@@ -128,7 +93,7 @@ fn read_big_int64_value(
     }
 
     let result = (|| {
-        let hi_out = guest_i32_add(out, 4)
+        let hi_out = guest_i32_add(out, BIG_INT64_WORD_SIZE)
             .ok_or_else(|| host_import_error("BigInt output pointer overflowed"))?;
         let qjs_get_big_int64 =
             quickjs_export::<(i32, i32, i32), i32>(caller, "qjs_get_big_int64")?;
