@@ -232,3 +232,79 @@ fn first_existing(root: &Path, candidates: &'static [&'static str]) -> Option<&'
         .copied()
         .find(|route| root.join(route).is_file())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::{RootfsOutputFormat, parse_rootfs_command};
+
+    #[test]
+    fn parse_rootfs_command_accepts_required_paths_and_json_mode() {
+        let command = parse_rootfs_command(&os_args([
+            "--archive",
+            "fixtures/rootfs.tgz",
+            "--out",
+            "target/rootfs",
+            "--json",
+        ]))
+        .unwrap();
+
+        assert_eq!(command.archive_path, PathBuf::from("fixtures/rootfs.tgz"));
+        assert_eq!(command.out_path, PathBuf::from("target/rootfs"));
+        assert_eq!(command.output_format, RootfsOutputFormat::Json);
+    }
+
+    #[test]
+    fn parse_rootfs_command_defaults_to_text_output() {
+        let command = parse_rootfs_command(&os_args([
+            "--archive",
+            "fixtures/rootfs.tgz",
+            "--out",
+            "target/rootfs",
+        ]))
+        .unwrap();
+
+        assert_eq!(command.output_format, RootfsOutputFormat::Text);
+    }
+
+    #[test]
+    fn parse_rootfs_command_reports_missing_required_options() {
+        assert_usage_error(parse_rootfs_command(&[]), "rootfs requires --archive FILE");
+        assert_usage_error(
+            parse_rootfs_command(&os_args(["--archive", "rootfs.tgz"])),
+            "rootfs requires --out DIR",
+        );
+        assert_usage_error(
+            parse_rootfs_command(&os_args(["--out", "target/rootfs"])),
+            "rootfs requires --archive FILE",
+        );
+    }
+
+    #[test]
+    fn parse_rootfs_command_reports_option_boundary_errors() {
+        assert_usage_error(
+            parse_rootfs_command(&os_args(["--archive"])),
+            "rootfs --archive expects FILE",
+        );
+        assert_usage_error(
+            parse_rootfs_command(&os_args(["--out"])),
+            "rootfs --out expects DIR",
+        );
+        assert_usage_error(
+            parse_rootfs_command(&os_args(["--unknown"])),
+            "unknown rootfs option: --unknown",
+        );
+    }
+
+    fn assert_usage_error<T: std::fmt::Debug>(result: Result<T, crate::CliError>, expected: &str) {
+        let error = result.unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains(expected));
+    }
+
+    fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
+        args.into_iter().map(OsString::from).collect()
+    }
+}
