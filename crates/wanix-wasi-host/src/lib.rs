@@ -11,9 +11,12 @@
 use wanix_wasi::WasiCtx;
 use wasmtime::{Linker, Result};
 
+mod core;
 mod fd;
 mod mem;
 mod path;
+mod process;
+mod vectors;
 
 /// A Wasmtime store state that can back WASI Preview 1 imports.
 ///
@@ -35,9 +38,6 @@ pub(crate) const ERRNO_SUCCESS: i32 = 0;
 pub(crate) const ERRNO_INVAL: i32 = 28;
 pub(crate) const ERRNO_NOSYS: i32 = 52;
 
-use mem::{memory, write_bytes, write_u64, write_vec_buffer, write_vec_sizes};
-use wasmtime::{Caller, Error};
-
 /// Registers the supported `wasi_snapshot_preview1` imports on `linker`.
 ///
 /// # Errors
@@ -45,75 +45,9 @@ use wasmtime::{Caller, Error};
 /// Returns an error if a duplicate import name is registered (unless the linker
 /// allows shadowing).
 pub fn add_to_linker<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<()> {
-    let m = MODULE;
-
-    linker.func_wrap(m, "proc_exit", |mut caller: Caller<'_, S>, code: i32| {
-        caller.data_mut().on_proc_exit(code);
-        // Unwind the guest; the consumer recovers the code from its exit hook.
-        Err::<(), _>(Error::msg(format!("proc_exit({code})")))
-    })?;
-    linker.func_wrap(m, "sched_yield", |_: Caller<'_, S>| ERRNO_SUCCESS)?;
-    linker.func_wrap(
-        m,
-        "random_get",
-        |mut caller: Caller<'_, S>, buf: i32, len: i32| -> Result<i32> {
-            let mem = memory(&mut caller)?;
-            // Deterministic fill; this runner targets reproducible tasks.
-            let zeros = vec![7u8; len.max(0) as usize];
-            write_bytes(&mem, &mut caller, buf, &zeros)?;
-            Ok(ERRNO_SUCCESS)
-        },
-    )?;
-    linker.func_wrap(
-        m,
-        "clock_time_get",
-        |mut caller: Caller<'_, S>, _id: i32, _precision: i64, out: i32| -> Result<i32> {
-            let now = caller.data().clock_time_ns();
-            let mem = memory(&mut caller)?;
-            write_u64(&mem, &mut caller, out, now)?;
-            Ok(ERRNO_SUCCESS)
-        },
-    )?;
-    linker.func_wrap(
-        m,
-        "poll_oneoff",
-        |_: Caller<'_, S>, _i: i32, _o: i32, _n: i32, _ne: i32| ERRNO_NOSYS,
-    )?;
-
-    // argv / environ: identical two-call (sizes, then buffer) shape.
-    linker.func_wrap(
-        m,
-        "args_sizes_get",
-        |mut caller: Caller<'_, S>, count: i32, size: i32| -> Result<i32> {
-            let v = caller.data_mut().wasi().args().to_vec();
-            write_vec_sizes(&mut caller, &v, count, size)
-        },
-    )?;
-    linker.func_wrap(
-        m,
-        "args_get",
-        |mut caller: Caller<'_, S>, ptrs: i32, buf: i32| -> Result<i32> {
-            let v = caller.data_mut().wasi().args().to_vec();
-            write_vec_buffer(&mut caller, &v, ptrs, buf)
-        },
-    )?;
-    linker.func_wrap(
-        m,
-        "environ_sizes_get",
-        |mut caller: Caller<'_, S>, count: i32, size: i32| -> Result<i32> {
-            let v = caller.data_mut().wasi().env().to_vec();
-            write_vec_sizes(&mut caller, &v, count, size)
-        },
-    )?;
-    linker.func_wrap(
-        m,
-        "environ_get",
-        |mut caller: Caller<'_, S>, ptrs: i32, buf: i32| -> Result<i32> {
-            let v = caller.data_mut().wasi().env().to_vec();
-            write_vec_buffer(&mut caller, &v, ptrs, buf)
-        },
-    )?;
-
+    process::register(linker)?;
+    core::register(linker)?;
+    vectors::register(linker)?;
     fd::register(linker)?;
     path::register(linker)?;
     Ok(())
@@ -155,13 +89,35 @@ mod tests {
     }
 
     #[test]
-    fn add_to_linker_registers_path_imports() {
+    fn add_to_linker_registers_preview1_import_families() {
         let engine = Engine::default();
         let mut linker = Linker::<TestHost>::new(&engine);
         add_to_linker(&mut linker).expect("imports register");
 
         let mut store = Store::new(&engine, TestHost::new());
         for name in [
+            "proc_exit",
+            "sched_yield",
+            "random_get",
+            "clock_time_get",
+            "poll_oneoff",
+            "args_sizes_get",
+            "args_get",
+            "environ_sizes_get",
+            "environ_get",
+            "fd_read",
+            "fd_write",
+            "fd_close",
+            "fd_seek",
+            "fd_tell",
+            "fd_fdstat_get",
+            "fd_fdstat_set_flags",
+            "fd_prestat_get",
+            "fd_prestat_dir_name",
+            "fd_filestat_set_size",
+            "fd_filestat_set_times",
+            "fd_filestat_get",
+            "fd_readdir",
             "path_open",
             "path_filestat_get",
             "path_readlink",
@@ -174,7 +130,7 @@ mod tests {
         ] {
             assert!(
                 linker.get(&mut store, MODULE, name).is_ok(),
-                "missing WASI path import {name}"
+                "missing WASI Preview 1 import {name}"
             );
         }
     }
