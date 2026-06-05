@@ -248,9 +248,17 @@ backed WASI Preview 1 surface (argv/env, stdio, `fd_*`/`path_*` file IO includin
 readdir, rename, rmdir, truncate, symlink/readlink, tell) straight against
 `wanix-wasi`'s `WasiCtx`. A Rust task and a `qjs` task built from the same
 `Namespace` share one VFS, proven two-way by `crates/wanix-cli/tests/shared_vfs_differential.rs`.
-Still open: registering it as an auto-starting `TaskDriver` (`.wasm` next to
-`.js`), a compiled-module cache for the wasm runner (mirroring `from_bytes_cached`),
-and broader imports (sockets, real `poll_oneoff`, `path_filestat_set_times`).
+
+`.wasm` is now a **first-class Wanix task kind alongside `.js`**: `WasmTaskDriver`
+auto-starts a task whose program ends in `.wasm` (reads the module from the task
+namespace, wires fds 0/1/2 + env/argv/cwd, mirrors dynamically opened guest fds
+into the task fd table, and records exit via `Task::set_exit`), registered next to
+the qjs driver in the serve task table. The wasm runner also has its own
+compiled-module cache (`WasiRunner::from_bytes_cached`), sharing the same hardened
+`wanix-module-cache` implementation as qjs's bundled-module cache, so repeated
+`.wasm` task starts deserialize (~0.5 ms) instead of re-Cranelift-compiling. Still
+open: broader imports (sockets, real `poll_oneoff`), and a resident wasm task host
+that keeps compiled `Module`s in memory so repeat starts skip even the deserialize.
 
 ### Known limitation: thread-per-task, not a single-thread reactor
 
