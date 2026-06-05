@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use wanix_fs::NormalizedPath;
 use wanix_vfs::Namespace;
@@ -22,7 +20,6 @@ pub use seek::WasiWhence;
 const FIRST_PREOPEN_FD: u32 = 3;
 
 /// Host context for Wanix-backed WASI filesystem operations.
-#[derive(Debug)]
 pub struct WasiCtx {
     namespace: Namespace,
     fds: BTreeMap<WasiFd, Handle>,
@@ -31,6 +28,20 @@ pub struct WasiCtx {
     env: Vec<String>,
     clock_time_ns: u64,
     fd_observer: Option<Arc<dyn WasiFdObserver>>,
+}
+
+impl fmt::Debug for WasiCtx {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WasiCtx")
+            .field("namespace", &self.namespace)
+            .field("fds", &self.fds)
+            .field("next_fd", &self.next_fd)
+            .field("arg_count", &self.args.len())
+            .field("env_count", &self.env.len())
+            .field("clock_time_ns", &self.clock_time_ns)
+            .field("has_fd_observer", &self.fd_observer.is_some())
+            .finish()
+    }
 }
 
 impl WasiCtx {

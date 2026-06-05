@@ -114,6 +114,50 @@ fn config_and_ctx_expose_process_args_and_env() {
 }
 
 #[test]
+fn ctx_debug_summarizes_handle_kinds_without_dynamic_file_internals() {
+    let root = fixture(&[("input.txt", b"hello"), ("dir/nested.txt", b"nested")]);
+    let config = WasiConfig::new(namespace_with_root(root))
+        .with_stdin(
+            Box::new(ReadinessFile {
+                read_ready: true,
+                write_ready: false,
+            }),
+            "stdin-debug-label",
+        )
+        .with_args(["main.js", "--secret-arg"])
+        .with_env(["MODE=secret-env"])
+        .with_preopen("dir")
+        .unwrap();
+    let mut ctx = WasiCtx::new(config);
+
+    let dir_fd = ctx
+        .path_open(WasiFd::ROOT, "dir", WasiOpenOptions::read())
+        .unwrap();
+    let file_fd = ctx
+        .path_open(WasiFd::ROOT, "input.txt", WasiOpenOptions::read_write())
+        .unwrap();
+
+    assert!(dir_fd.get() > WasiFd::ROOT.get());
+    assert!(file_fd.get() > dir_fd.get());
+    let debug = format!("{ctx:?}");
+    assert!(debug.contains("Stdio"));
+    assert!(debug.contains("stdin-debug-label"));
+    assert!(debug.contains("Preopen"));
+    assert!(debug.contains("Directory"));
+    assert!(debug.contains("path: NormalizedPath(\"dir\")"));
+    assert!(debug.contains("File"));
+    assert!(debug.contains("path: NormalizedPath(\"input.txt\")"));
+    assert!(debug.contains("read: true"));
+    assert!(debug.contains("write: true"));
+    assert!(debug.contains("arg_count"));
+    assert!(debug.contains("env_count"));
+    assert!(!debug.contains("main.js"));
+    assert!(!debug.contains("--secret-arg"));
+    assert!(!debug.contains("MODE=secret-env"));
+    assert_eq!(debug.matches("file: WasiFile").count(), 1, "{debug}");
+}
+
+#[test]
 fn preopen_validates_guest_paths() {
     assert!(Preopen::new("root").is_ok());
     assert_eq!(
