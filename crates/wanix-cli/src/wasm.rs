@@ -12,6 +12,7 @@
 //! subset (no `poll_oneoff` readiness).
 
 use std::io::Read;
+use std::path::Path;
 use std::sync::Arc;
 
 use wanix_fs::{File, FileSystem, LocalFs, MemFs, NormalizedPath, OpenOptions};
@@ -19,7 +20,7 @@ use wanix_vfs::{BindOptions, Namespace};
 use wanix_wasi::WasiConfig;
 use wanix_wasm::{CaptureFile, WasiRunner};
 
-use crate::qjs_args::read_qjs_stdin;
+use crate::qjs_args::{QjsStdin, read_qjs_stdin};
 use crate::wasm_args::WasmCommand;
 use crate::{CliError, CliOutput};
 
@@ -27,40 +28,84 @@ pub(super) fn run_wasm(
     command: WasmCommand,
     process_stdin: &mut dyn Read,
 ) -> Result<CliOutput, CliError> {
-    let bytes = std::fs::read(&command.path).map_err(|error| {
-        CliError::new(
-            format!("wasm: cannot read {}: {error}", command.path.display()),
-            1,
-        )
-    })?;
-
-    let program = command
-        .path
-        .file_name()
-        .map_or_else(|| "guest".to_owned(), |s| s.to_string_lossy().into_owned());
-
-    let namespace = preopen_cwd(&command.cwd)?;
-
-    let out = CaptureFile::new();
-    let err = CaptureFile::new();
-    let mut argv = vec![program];
-    argv.extend(command.args);
-    let mut config = WasiConfig::new(namespace)
-        .with_args(argv)
-        .with_env(command.env)
-        .with_stdout(Box::new(out.clone()), "stdout")
-        .with_stderr(Box::new(err.clone()), "stderr");
-    if let Some(bytes) = read_qjs_stdin(command.stdin, process_stdin)? {
-        config = config.with_stdin(stdin_file(&bytes)?, "stdin");
-    }
-
+    let bytes = read_wasm_module(&command)?;
+    let captured = captured_wasm_config(command, process_stdin)?;
     let runner = WasiRunner::from_bytes(&bytes)
         .map_err(|error| CliError::new(format!("wasm: {error:#}"), 1))?;
+    let CapturedWasmConfig {
+        config,
+        stdout,
+        stderr,
+    } = captured;
     let exit = runner
         .run(config)
         .map_err(|error| CliError::new(format!("wasm: {error:#}"), 1))?;
 
-    Ok(CliOutput::new(out.bytes(), err.bytes(), exit))
+    Ok(CliOutput::new(stdout.bytes(), stderr.bytes(), exit))
+}
+
+fn read_wasm_module(command: &WasmCommand) -> Result<Vec<u8>, CliError> {
+    std::fs::read(&command.path).map_err(|error| {
+        CliError::new(
+            format!("wasm: cannot read {}: {error}", command.path.display()),
+            1,
+        )
+    })
+}
+
+struct CapturedWasmConfig {
+    config: WasiConfig,
+    stdout: CaptureFile,
+    stderr: CaptureFile,
+}
+
+fn captured_wasm_config(
+    command: WasmCommand,
+    process_stdin: &mut dyn Read,
+) -> Result<CapturedWasmConfig, CliError> {
+    let WasmCommand {
+        path,
+        args,
+        env,
+        cwd,
+        stdin,
+    } = command;
+    let namespace = preopen_cwd(&cwd)?;
+    let stdout = CaptureFile::new();
+    let stderr = CaptureFile::new();
+    let mut config = WasiConfig::new(namespace)
+        .with_args(wasm_argv(&path, args))
+        .with_env(env)
+        .with_stdout(Box::new(stdout.clone()), "stdout")
+        .with_stderr(Box::new(stderr.clone()), "stderr");
+    config = attach_wasm_stdin(config, stdin, process_stdin)?;
+    Ok(CapturedWasmConfig {
+        config,
+        stdout,
+        stderr,
+    })
+}
+
+fn wasm_argv(path: &Path, args: Vec<String>) -> Vec<String> {
+    let mut argv = vec![wasm_program_name(path)];
+    argv.extend(args);
+    argv
+}
+
+fn wasm_program_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(|| "guest".to_owned(), |s| s.to_string_lossy().into_owned())
+}
+
+fn attach_wasm_stdin(
+    config: WasiConfig,
+    stdin: Option<QjsStdin>,
+    process_stdin: &mut dyn Read,
+) -> Result<WasiConfig, CliError> {
+    let Some(bytes) = read_qjs_stdin(stdin, process_stdin)? else {
+        return Ok(config);
+    };
+    Ok(config.with_stdin(stdin_file(&bytes)?, "stdin"))
 }
 
 /// Preopens the working directory (`--cwd`, default `.`) as the namespace root,
@@ -83,4 +128,53 @@ fn stdin_file(bytes: &[u8]) -> Result<Box<dyn File>, CliError> {
     let fs = MemFs::new();
     fs.write_file("stdin", bytes)?;
     Ok(fs.open(&NormalizedPath::new("stdin")?, OpenOptions::read_write())?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{WasmCommand, run_wasm};
+    use wanix_fs::NormalizedPath;
+
+    const RUST_GUEST: &[u8] = include_bytes!("../../wanix-wasm/fixtures/rust-guest.wasm");
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = PathBuf::from(format!(
+            "target/wanix-cli-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn run_wasm_preopens_cwd_and_captures_stdio() {
+        let root = temp_dir("run-wasm");
+        std::fs::write(root.join("guest.wasm"), RUST_GUEST).unwrap();
+        std::fs::write(root.join("in.txt"), b"hello").unwrap();
+
+        let command = WasmCommand {
+            path: root.join("guest.wasm"),
+            args: vec!["/in.txt".to_owned(), "/out.txt".to_owned()],
+            env: Vec::new(),
+            cwd: NormalizedPath::new(root.to_str().unwrap()).unwrap(),
+            stdin: None,
+        };
+        let output = run_wasm(command, &mut std::io::empty()).unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert!(String::from_utf8_lossy(output.stdout()).contains("rust-wasm: read 5 bytes"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("out.txt")).unwrap(),
+            "rust-wasm saw: hello"
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
 }

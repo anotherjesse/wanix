@@ -74,7 +74,7 @@ impl WasmRunOptions {
         )
     }
 
-    fn set_stdin_file(&mut self, value: &OsString) -> Result<(), CliError> {
+    fn set_stdin_file(&mut self, value: &OsString, _label: &str) -> Result<(), CliError> {
         let source = if value == "-" {
             QjsStdin::Process
         } else {
@@ -91,88 +91,67 @@ impl WasmRunOptions {
 /// Returns a usage error if no module path is given or a flag is malformed.
 pub(crate) fn parse_wasm_command(args: &[OsString]) -> Result<WasmCommand, CliError> {
     let mut options = WasmRunOptions::new()?;
-    let mut i = 0;
-    while i < args.len() {
-        match parse_wasm_option(args, &mut i, &mut options)? {
-            WasmOptionParse::Consumed => {}
-            WasmOptionParse::Separator | WasmOptionParse::Unknown => break,
-        }
-    }
-
-    let path = args
-        .get(i)
-        .ok_or_else(|| CliError::usage("wasm expects a FILE.wasm path"))?;
-    let path = PathBuf::from(path);
-    i += 1;
-
-    if args.get(i).is_some_and(|arg| arg == "--") {
-        i += 1;
-    }
-    let wasm_args = args[i..]
-        .iter()
-        .map(|arg| os_arg_to_string(arg, "wasm guest arg"))
-        .collect::<Result<Vec<_>, _>>()?;
+    let i = parse_wasm_options(args, &mut options)?;
+    let (path, i) = wasm_module_path(args, i)?;
+    let wasm_args = wasm_guest_args(args, i)?;
 
     Ok(options.into_command(path, wasm_args))
 }
 
-enum WasmOptionParse {
-    Consumed,
-    Separator,
-    Unknown,
+type WasmOptionApplier = fn(&mut WasmRunOptions, &OsString, &str) -> Result<(), CliError>;
+
+struct WasmOptionSpec {
+    name: &'static str,
+    apply: WasmOptionApplier,
 }
 
-fn parse_wasm_option(
+const WASM_OPTIONS: &[WasmOptionSpec] = &[
+    WasmOptionSpec {
+        name: "--env",
+        apply: WasmRunOptions::add_env,
+    },
+    WasmOptionSpec {
+        name: "--cwd",
+        apply: WasmRunOptions::set_cwd,
+    },
+    WasmOptionSpec {
+        name: "--stdin",
+        apply: WasmRunOptions::set_stdin_bytes,
+    },
+    WasmOptionSpec {
+        name: "--stdin-file",
+        apply: WasmRunOptions::set_stdin_file,
+    },
+];
+
+fn parse_wasm_options(args: &[OsString], options: &mut WasmRunOptions) -> Result<usize, CliError> {
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--" {
+            return Ok(index + 1);
+        }
+        let Some(spec) = wasm_option_spec(&args[index]) else {
+            return Ok(index);
+        };
+        apply_wasm_option(args, &mut index, options, spec)?;
+    }
+    Ok(index)
+}
+
+fn wasm_option_spec(arg: &OsString) -> Option<&'static WasmOptionSpec> {
+    let arg = arg.to_str()?;
+    WASM_OPTIONS.iter().find(|spec| spec.name == arg)
+}
+
+fn apply_wasm_option(
     args: &[OsString],
     index: &mut usize,
     options: &mut WasmRunOptions,
-) -> Result<WasmOptionParse, CliError> {
-    let arg = &args[*index];
-    if arg == "--" {
-        *index += 1;
-        return Ok(WasmOptionParse::Separator);
-    }
-    let Some(option) = WasmOption::from_arg(arg) else {
-        return Ok(WasmOptionParse::Unknown);
-    };
-    let value = wasm_option_value(args, index, option.name())?;
-    let label = format!("wasm {}", option.name());
-    match option {
-        WasmOption::Env => options.add_env(value, &label)?,
-        WasmOption::Cwd => options.set_cwd(value, &label)?,
-        WasmOption::Stdin => options.set_stdin_bytes(value, &label)?,
-        WasmOption::StdinFile => options.set_stdin_file(value)?,
-    }
-    Ok(WasmOptionParse::Consumed)
-}
-
-#[derive(Clone, Copy)]
-enum WasmOption {
-    Env,
-    Cwd,
-    Stdin,
-    StdinFile,
-}
-
-impl WasmOption {
-    fn from_arg(arg: &OsString) -> Option<Self> {
-        match arg.to_str()? {
-            "--env" => Some(Self::Env),
-            "--cwd" => Some(Self::Cwd),
-            "--stdin" => Some(Self::Stdin),
-            "--stdin-file" => Some(Self::StdinFile),
-            _ => None,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Env => "--env",
-            Self::Cwd => "--cwd",
-            Self::Stdin => "--stdin",
-            Self::StdinFile => "--stdin-file",
-        }
-    }
+    spec: &WasmOptionSpec,
+) -> Result<(), CliError> {
+    let value = wasm_option_value(args, index, spec.name)?;
+    let label = format!("wasm {}", spec.name);
+    (spec.apply)(options, value, &label)
 }
 
 fn wasm_option_value<'a>(
@@ -186,6 +165,23 @@ fn wasm_option_value<'a>(
         .ok_or_else(|| CliError::usage(format!("wasm {option} expects a value")))?;
     *index += 1;
     Ok(value)
+}
+
+fn wasm_module_path(args: &[OsString], index: usize) -> Result<(PathBuf, usize), CliError> {
+    let path = args
+        .get(index)
+        .ok_or_else(|| CliError::usage("wasm expects a FILE.wasm path"))?;
+    Ok((PathBuf::from(path), index + 1))
+}
+
+fn wasm_guest_args(args: &[OsString], mut index: usize) -> Result<Vec<String>, CliError> {
+    if args.get(index).is_some_and(|arg| arg == "--") {
+        index += 1;
+    }
+    args[index..]
+        .iter()
+        .map(|arg| os_arg_to_string(arg, "wasm guest arg"))
+        .collect()
 }
 
 #[cfg(test)]
