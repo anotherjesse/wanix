@@ -7,10 +7,20 @@ use super::{
     P9SetAttrRequest, P9XattrCreate, P9XattrWalk,
 };
 
+const P9_U8_FIELD_LEN: usize = 1;
+const P9_U32_FIELD_LEN: usize = 4;
+const P9_U64_FIELD_LEN: usize = 8;
+const P9_QID_FIELD_LEN: usize = P9_U8_FIELD_LEN + P9_U32_FIELD_LEN + P9_U64_FIELD_LEN;
+const P9_ATTR_BODY_LEN: usize = (3 * P9_U32_FIELD_LEN) + (15 * P9_U64_FIELD_LEN);
+const P9_ATTR_LEN: usize = P9_U64_FIELD_LEN + P9_QID_FIELD_LEN + P9_ATTR_BODY_LEN;
+const P9_SET_ATTR_LEN: usize = (3 * P9_U32_FIELD_LEN) + (5 * P9_U64_FIELD_LEN);
+const P9_TGETATTR_PAYLOAD_LEN: usize = P9_U32_FIELD_LEN + P9_U64_FIELD_LEN;
+const P9_TSETATTR_PAYLOAD_LEN: usize = P9_U32_FIELD_LEN + P9_U32_FIELD_LEN + P9_SET_ATTR_LEN;
+
 /// Builds a `Tgetattr` frame.
 #[must_use]
 pub fn p9_tgetattr(tag: u16, fid: u32, request_mask: u64) -> P9Frame {
-    let mut payload = Vec::with_capacity(12);
+    let mut payload = Vec::with_capacity(P9_TGETATTR_PAYLOAD_LEN);
     push_u32(&mut payload, fid);
     push_u64(&mut payload, request_mask);
     P9Frame::new(P9_TGETATTR, tag, payload)
@@ -19,7 +29,7 @@ pub fn p9_tgetattr(tag: u16, fid: u32, request_mask: u64) -> P9Frame {
 /// Builds an `Rgetattr` frame.
 #[must_use]
 pub fn p9_rgetattr(tag: u16, attr: &P9Attr) -> P9Frame {
-    let mut payload = Vec::with_capacity(153);
+    let mut payload = Vec::with_capacity(P9_ATTR_LEN);
     push_attr(&mut payload, attr);
     P9Frame::new(P9_RGETATTR, tag, payload)
 }
@@ -27,7 +37,7 @@ pub fn p9_rgetattr(tag: u16, attr: &P9Attr) -> P9Frame {
 /// Builds a `Tsetattr` frame.
 #[must_use]
 pub fn p9_tsetattr(tag: u16, fid: u32, valid: u32, attr: &P9SetAttr) -> P9Frame {
-    let mut payload = Vec::with_capacity(60);
+    let mut payload = Vec::with_capacity(P9_TSETATTR_PAYLOAD_LEN);
     push_u32(&mut payload, fid);
     push_u32(&mut payload, valid);
     push_set_attr(&mut payload, attr);
@@ -56,7 +66,7 @@ pub fn p9_txattrwalk(tag: u16, fid: u32, newfid: u32, name: &str) -> Result<P9Fr
 /// Builds an `Rxattrwalk` frame.
 #[must_use]
 pub fn p9_rxattrwalk(tag: u16, size: u64) -> P9Frame {
-    let mut payload = Vec::with_capacity(8);
+    let mut payload = Vec::with_capacity(P9_U64_FIELD_LEN);
     push_u64(&mut payload, size);
     P9Frame::new(P9_RXATTRWALK, tag, payload)
 }
