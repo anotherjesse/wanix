@@ -28,8 +28,11 @@ impl NativeRawTerminalMode {
     ///
     /// Returns a CLI error when termios state cannot be read or changed.
     pub fn enter_stdin_if_tty() -> Result<Option<Self>, CliError> {
-        let fd = libc::STDIN_FILENO;
-        // SAFETY: `isatty` only observes the fixed stdin file descriptor.
+        Self::enter_if_tty(libc::STDIN_FILENO)
+    }
+
+    fn enter_if_tty(fd: libc::c_int) -> Result<Option<Self>, CliError> {
+        // SAFETY: `isatty` only observes the supplied file descriptor.
         if unsafe { libc::isatty(fd) } == 0 {
             return Ok(None);
         }
@@ -89,5 +92,46 @@ impl NativeRawTerminalMode {
             "qjs-shell --raw is currently supported only on Unix hosts",
             1,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    #[test]
+    fn raw_tty_request_is_command_specific() {
+        assert!(super::command_requests_raw_tty(&[
+            OsString::from("qjs-shell"),
+            OsString::from("--raw")
+        ]));
+        assert!(!super::command_requests_raw_tty(&[
+            OsString::from("qjs-term"),
+            OsString::from("--raw")
+        ]));
+        assert!(!super::command_requests_raw_tty(&[
+            OsString::from("qjs-shell"),
+            OsString::from("--cwd"),
+            OsString::from("app")
+        ]));
+        assert!(!super::command_requests_raw_tty(&[
+            OsString::from("qjs-shell"),
+            OsString::from("--raw-mode")
+        ]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn raw_mode_noops_for_non_tty_fd() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (reader, _writer) = UnixStream::pair().unwrap();
+
+        assert!(
+            super::NativeRawTerminalMode::enter_if_tty(reader.as_raw_fd())
+                .unwrap()
+                .is_none()
+        );
     }
 }

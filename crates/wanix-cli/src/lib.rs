@@ -1785,23 +1785,6 @@ mod tests {
     }
 
     #[test]
-    fn qjs_shell_raw_tty_request_is_command_specific() {
-        assert!(super::command_requests_raw_tty(&[
-            "qjs-shell".into(),
-            "--raw".into()
-        ]));
-        assert!(!super::command_requests_raw_tty(&[
-            "qjs-shell".into(),
-            "--cwd".into(),
-            "app".into()
-        ]));
-        assert!(!super::command_requests_raw_tty(&[
-            "qjs-term".into(),
-            "--raw".into()
-        ]));
-    }
-
-    #[test]
     fn qjs_command_runs_script_outside_chrome() {
         let script = write_temp_script(
             "demo script.js",
