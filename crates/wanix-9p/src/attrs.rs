@@ -15,14 +15,48 @@ pub(super) const P9_DEFAULT_BLOCK_SIZE: u64 = 65_536;
 pub(super) const P9_FS_MAGIC: u32 = 0x0102_1997;
 pub(super) const P9_DEFAULT_NAME_LENGTH: u32 = 255;
 
+const P9_QID_TYPE_DIR: u8 = 0x80;
+const P9_QID_TYPE_SYMLINK: u8 = 0x02;
+const P9_QID_TYPE_FILE: u8 = 0;
+
+const NANOS_PER_SECOND: u64 = 1_000_000_000;
+
+const FNV1A_64_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV1A_64_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+#[derive(Clone, Copy)]
+struct P9FileKind {
+    qid_type: u8,
+    dirent_type: u8,
+    mode_type: u32,
+}
+
+impl P9FileKind {
+    fn from_file_type(file_type: FileType) -> Self {
+        match file_type {
+            FileType::Directory => Self {
+                qid_type: P9_QID_TYPE_DIR,
+                dirent_type: DT_DIR,
+                mode_type: P9_MODE_DIR,
+            },
+            FileType::Symlink => Self {
+                qid_type: P9_QID_TYPE_SYMLINK,
+                dirent_type: DT_LNK,
+                mode_type: P9_MODE_LNK,
+            },
+            FileType::File => Self {
+                qid_type: P9_QID_TYPE_FILE,
+                dirent_type: DT_REG,
+                mode_type: P9_MODE_REG,
+            },
+        }
+    }
+}
+
 pub(super) fn qid_for_metadata(path: &NormalizedPath, metadata: Metadata) -> P9Qid {
-    let qid_type = match metadata.file_type() {
-        FileType::Directory => 0x80,
-        FileType::Symlink => 0x02,
-        FileType::File => 0,
-    };
+    let kind = P9FileKind::from_file_type(metadata.file_type());
     P9Qid {
-        qid_type,
+        qid_type: kind.qid_type,
         version: 0,
         path: fnv1a_64(path.as_str().as_bytes()),
     }
@@ -76,11 +110,7 @@ pub(super) fn fs_stat() -> P9FsStat {
 }
 
 pub(super) fn dirent_type_for_metadata(metadata: &Metadata) -> u8 {
-    match metadata.file_type() {
-        FileType::Directory => DT_DIR,
-        FileType::Symlink => DT_LNK,
-        FileType::File => DT_REG,
-    }
+    P9FileKind::from_file_type(metadata.file_type()).dirent_type
 }
 
 fn p9_mode_for_metadata(metadata: &Metadata) -> u32 {
@@ -88,22 +118,18 @@ fn p9_mode_for_metadata(metadata: &Metadata) -> u32 {
     if mode & P9_MODE_TYPE_MASK != 0 {
         return mode;
     }
-    mode | match metadata.file_type() {
-        FileType::Directory => P9_MODE_DIR,
-        FileType::Symlink => P9_MODE_LNK,
-        FileType::File => P9_MODE_REG,
-    }
+    mode | P9FileKind::from_file_type(metadata.file_type()).mode_type
 }
 
 fn split_unix_time_ns(value: u64) -> (u64, u64) {
-    (value / 1_000_000_000, value % 1_000_000_000)
+    (value / NANOS_PER_SECOND, value % NANOS_PER_SECOND)
 }
 
 fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut hash = FNV1A_64_OFFSET_BASIS;
     for byte in bytes {
         hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        hash = hash.wrapping_mul(FNV1A_64_PRIME);
     }
     hash
 }
