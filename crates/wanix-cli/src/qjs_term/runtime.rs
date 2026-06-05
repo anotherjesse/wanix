@@ -1,26 +1,21 @@
 use std::io::{Read, Write};
-use std::sync::Arc;
 
-use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
-use wanix_task::{Task, TaskTable};
+use wanix_qjs::{QuickJsRunner, QuickJsTaskRuntime};
+use wanix_task::Task;
 
 use super::PostEvalFeed;
 use super::post_eval::{PostEvalFeedContext, run_post_eval_feeds};
-use super::program_spec::{
-    PreparedQjsTermProgram, QjsTermProgram, prepare_qjs_term_namespace, read_qjs_term_program,
-    terminal_task_env,
-};
+use super::program_spec::{PreparedQjsTermProgram, QjsTermProgram};
 use super::pump::{
     ProcessEventSources, TerminalPumpPolicy, TerminalPumpState, drain_terminal_output,
 };
-use super::terminal::{AttachedTerminal, attach_task_terminal, finish_terminal_task_output};
-use crate::{
-    CliError, QjsCommand, apply_qjs_task_runtime_limits, configure_qjs_task, eval_qjs_source,
-    quickjs_runner, read_qjs_stdin,
-};
+use super::terminal::{AttachedTerminal, finish_terminal_task_output};
+use crate::{CliError, QjsCommand, apply_qjs_task_runtime_limits, eval_qjs_source, quickjs_runner};
 
+mod prepare;
 mod request;
 
+use prepare::{prepare_qjs_term_execution, read_qjs_term_input};
 pub(super) use request::{QjsTermProgramIo, QjsTermProgramRequest};
 
 pub(super) fn run_qjs_term_program_streaming(
@@ -53,80 +48,6 @@ pub(super) fn run_qjs_term_program_streaming(
         &execution.terminal,
         io.process_stdout,
         io.process_stderr,
-    )
-}
-
-struct QjsTermInput {
-    script: String,
-    stdin_bytes: Option<Vec<u8>>,
-}
-
-fn read_qjs_term_input(
-    qjs_command: &mut QjsCommand,
-    program: QjsTermProgram,
-    process_stdin: &mut dyn Read,
-) -> Result<QjsTermInput, CliError> {
-    Ok(QjsTermInput {
-        script: read_qjs_term_program(&qjs_command.script_path, program)?,
-        stdin_bytes: read_qjs_stdin(qjs_command.stdin.take(), process_stdin)?,
-    })
-}
-
-struct PreparedQjsTermExecution {
-    task: Task,
-    prepared: PreparedQjsTermProgram,
-    terminal: AttachedTerminal,
-}
-
-fn prepare_qjs_term_execution(
-    runner: &Arc<QuickJsRunner>,
-    qjs_command: &QjsCommand,
-    program: QjsTermProgram,
-    input: QjsTermInput,
-) -> Result<PreparedQjsTermExecution, CliError> {
-    let task = allocate_qjs_term_task(runner, qjs_command)?;
-    let prepared = prepare_qjs_term_namespace(&task, qjs_command, program, input.script)?;
-    let terminal = attach_task_terminal(&task, input.stdin_bytes)?;
-    configure_terminal_qjs_task(&task, qjs_command, program, &prepared, &terminal)?;
-    Ok(PreparedQjsTermExecution {
-        task,
-        prepared,
-        terminal,
-    })
-}
-
-fn allocate_qjs_term_task(
-    runner: &Arc<QuickJsRunner>,
-    qjs_command: &QjsCommand,
-) -> Result<Task, CliError> {
-    let table = TaskTable::new();
-    let mut driver = QuickJsTaskDriver::new(Arc::clone(runner))
-        .with_event_loop_wait_budget(qjs_command.event_loop_wait_budget)
-        .with_ready_io_turns(qjs_command.ready_io_turns);
-    if let Some(budget) = qjs_command.interrupt_poll_budget {
-        driver = driver.with_interrupt_poll_budget(budget);
-    }
-    if let Some(bytes) = qjs_command.memory_limit_bytes {
-        driver = driver.with_memory_limit_bytes(bytes);
-    }
-    table.register_driver("qjs", Arc::new(driver))?;
-    Ok(table.allocate_root("qjs")?)
-}
-
-fn configure_terminal_qjs_task(
-    task: &Task,
-    qjs_command: &QjsCommand,
-    program: QjsTermProgram,
-    prepared: &PreparedQjsTermProgram,
-    terminal: &AttachedTerminal,
-) -> Result<(), CliError> {
-    let task_env = terminal_task_env(qjs_command, program, terminal);
-    configure_qjs_task(
-        task,
-        prepared.program_path,
-        &qjs_command.args,
-        &task_env,
-        &prepared.runtime_cwd,
     )
 }
 
