@@ -29,7 +29,7 @@ impl P9Server {
 
     pub(super) fn handle_attach(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let attach = p9_decode_tattach(frame)?;
-        let path = NormalizedPath::new(".").expect("root path is valid");
+        let path = root_path()?;
         let qid = match self.qid_for_path(&path) {
             Ok(qid) => qid,
             Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
@@ -112,6 +112,10 @@ impl P9Server {
             },
         )?)
     }
+}
+
+fn root_path() -> Result<NormalizedPath, Wanix9pError> {
+    NormalizedPath::new(".").map_err(|_| Wanix9pError::InvalidPath(".".to_owned()))
 }
 
 fn negotiate_p9_version(requested: &str) -> (&'static str, u32) {
