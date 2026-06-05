@@ -159,3 +159,29 @@ fn terminal_pump_context<'a>(
         process_stdout,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_feed_lines_preserves_newline_terminated_chunks() {
+        assert_eq!(
+            split_feed_lines(b"first\nsecond\n".to_vec()),
+            [b"first\n".to_vec(), b"second\n".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_feed_lines_keeps_trailing_fragment_without_newline() {
+        assert_eq!(
+            split_feed_lines(b"first\nsecond".to_vec()),
+            [b"first\n".to_vec(), b"second".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_feed_lines_drops_empty_input_without_synthetic_line() {
+        assert!(split_feed_lines(Vec::new()).is_empty());
+    }
+}
