@@ -236,9 +236,10 @@ fn first_existing(root: &Path, candidates: &'static [&'static str]) -> Option<&'
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::fs;
     use std::path::PathBuf;
 
-    use super::{RootfsOutputFormat, parse_rootfs_command};
+    use super::{RootfsOutputFormat, ensure_output_dir_ready, parse_rootfs_command};
 
     #[test]
     fn parse_rootfs_command_accepts_required_paths_and_json_mode() {
@@ -298,13 +299,69 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ensure_output_dir_ready_creates_missing_directory() {
+        let out = temp_path("wanix-cli-rootfs-missing-output");
+        let _ = fs::remove_dir_all(&out);
+
+        ensure_output_dir_ready(&out).unwrap();
+
+        assert!(out.is_dir());
+        let _ = fs::remove_dir_all(out);
+    }
+
+    #[test]
+    fn ensure_output_dir_ready_accepts_existing_empty_directory() {
+        let out = temp_path("wanix-cli-rootfs-empty-output");
+        let _ = fs::remove_dir_all(&out);
+        fs::create_dir_all(&out).unwrap();
+
+        ensure_output_dir_ready(&out).unwrap();
+
+        let _ = fs::remove_dir_all(out);
+    }
+
+    #[test]
+    fn ensure_output_dir_ready_rejects_existing_file_or_non_empty_directory() {
+        let file_out = temp_path("wanix-cli-rootfs-file-output");
+        let _ = fs::remove_file(&file_out);
+        fs::write(&file_out, b"not a directory").unwrap();
+
+        let non_empty_out = temp_path("wanix-cli-rootfs-non-empty-output");
+        let _ = fs::remove_dir_all(&non_empty_out);
+        fs::create_dir_all(&non_empty_out).unwrap();
+        fs::write(non_empty_out.join("marker"), b"busy").unwrap();
+
+        assert_error(
+            ensure_output_dir_ready(&file_out),
+            1,
+            "exists but is not a directory",
+        );
+        assert_error(ensure_output_dir_ready(&non_empty_out), 1, "must be empty");
+
+        let _ = fs::remove_file(file_out);
+        let _ = fs::remove_dir_all(non_empty_out);
+    }
+
     fn assert_usage_error<T: std::fmt::Debug>(result: Result<T, crate::CliError>, expected: &str) {
+        assert_error(result, 2, expected);
+    }
+
+    fn assert_error<T: std::fmt::Debug>(
+        result: Result<T, crate::CliError>,
+        exit_code: i32,
+        expected: &str,
+    ) {
         let error = result.unwrap_err();
-        assert_eq!(error.exit_code(), 2);
+        assert_eq!(error.exit_code(), exit_code);
         assert!(error.to_string().contains(expected));
     }
 
     fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
         args.into_iter().map(OsString::from).collect()
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{name}-{}", std::process::id()))
     }
 }
