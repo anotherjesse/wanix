@@ -81,14 +81,23 @@ fn serve_p9_listener_loop(
 ) -> Result<i32, CliError> {
     loop {
         let exit_code = serve_one_connection(listener, Arc::clone(&root), process_stderr)?;
-        if exit_code != 0 {
-            write_process_output(
-                process_stderr,
-                "stderr",
-                b"wanix-rust p9-listen: continuing after connection error\n",
-            )?;
-        }
+        write_p9_listen_continue_after_error(exit_code, process_stderr)?;
     }
+}
+
+fn write_p9_listen_continue_after_error(
+    exit_code: i32,
+    process_stderr: &mut dyn Write,
+) -> Result<(), CliError> {
+    if exit_code == 0 {
+        return Ok(());
+    }
+
+    write_process_output(
+        process_stderr,
+        "stderr",
+        b"wanix-rust p9-listen: continuing after connection error\n",
+    )
 }
 
 fn serve_one_connection(
@@ -170,6 +179,20 @@ mod tests {
         assert_eq!(
             p9_listen_startup_message(addr),
             "wanix-rust p9-listen: listening on 127.0.0.1:4712\n"
+        );
+    }
+
+    #[test]
+    fn p9_listen_loop_continue_message_is_only_written_after_connection_errors() {
+        let mut stderr = Vec::new();
+
+        write_p9_listen_continue_after_error(0, &mut stderr).unwrap();
+        assert!(stderr.is_empty());
+
+        write_p9_listen_continue_after_error(1, &mut stderr).unwrap();
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "wanix-rust p9-listen: continuing after connection error\n"
         );
     }
 

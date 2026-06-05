@@ -81,9 +81,7 @@ impl P9WsRuntime {
         loop {
             let exit_code =
                 serve_one_websocket(&self.listener, Arc::clone(&self.root), process_stderr)?;
-            if exit_code != 0 {
-                write_continue_after_error(process_stderr)?;
-            }
+            write_continue_after_error(exit_code, process_stderr)?;
         }
     }
 }
@@ -120,7 +118,14 @@ fn report_connection_result(
     }
 }
 
-fn write_continue_after_error(process_stderr: &mut dyn Write) -> Result<(), CliError> {
+fn write_continue_after_error(
+    exit_code: i32,
+    process_stderr: &mut dyn Write,
+) -> Result<(), CliError> {
+    if exit_code == 0 {
+        return Ok(());
+    }
+
     write_process_output(
         process_stderr,
         "stderr",
@@ -130,4 +135,23 @@ fn write_continue_after_error(process_stderr: &mut dyn Write) -> Result<(), CliE
 
 pub(in crate::p9_ws) fn p9_ws_listening_message(local_addr: SocketAddr) -> String {
     format!("wanix-rust p9-ws: listening on ws://{local_addr}/\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn p9_ws_loop_continue_message_is_only_written_after_connection_errors() {
+        let mut stderr = Vec::new();
+
+        write_continue_after_error(0, &mut stderr).unwrap();
+        assert!(stderr.is_empty());
+
+        write_continue_after_error(1, &mut stderr).unwrap();
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "wanix-rust p9-ws: continuing after websocket error\n"
+        );
+    }
 }
