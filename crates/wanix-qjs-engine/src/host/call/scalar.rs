@@ -1,6 +1,7 @@
+use super::guest_read::quickjs_value_to_string;
 use super::{
     HostState, QuickJsValue, host_import_error, optional_quickjs_export, quickjs_export,
-    quickjs_value_to_string, read_big_int64_value,
+    read_big_int64_value,
 };
 use wasmtime::{Caller, Memory};
 
