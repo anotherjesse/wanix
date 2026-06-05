@@ -13,37 +13,61 @@ pub(super) fn run_collected_command(
     process_stdin: &mut dyn Read,
 ) -> Result<CliOutput, CliError> {
     match command.to_str() {
-        Some("qjs") => qjs::run_qjs(parse_qjs_command(rest)?, process_stdin),
+        Some(
+            command_name @ ("qjs" | "qjs-term" | "qjs-shell" | "qjs-snapshot" | "qjs-resume"
+            | "qjs-restore"),
+        ) => run_qjs_collected_command(command_name, rest, process_stdin),
+        Some(command_name @ ("p9-stdio" | "p9-listen" | "p9-ws")) => {
+            run_9p_collected_command(command_name, rest, process_stdin)
+        }
         Some("wasm") => wasm::run_wasm(parse_wasm_command(rest)?, process_stdin),
-        Some("qjs-term") => {
+        Some("rootfs") => rootfs::run_rootfs_command(rootfs::parse_rootfs_command(rest)?),
+        Some("qemu") => qemu::run_qemu_command(qemu::parse_qemu_command(rest)?),
+        Some("serve") => require_live_process_io(serve::parse_serve_command(rest), "serve"),
+        _ => unknown_collected_command(command),
+    }
+}
+
+fn run_qjs_collected_command(
+    command: &str,
+    rest: &[OsString],
+    process_stdin: &mut dyn Read,
+) -> Result<CliOutput, CliError> {
+    match command {
+        "qjs" => qjs::run_qjs(parse_qjs_command(rest)?, process_stdin),
+        "qjs-term" => {
             qjs_term::run_qjs_term(qjs_term::parse_qjs_term_command(rest)?, process_stdin)
         }
-        Some("qjs-shell") => {
+        "qjs-shell" => {
             qjs_term::run_qjs_shell(qjs_term::parse_qjs_shell_command(rest)?, process_stdin)
         }
-        Some("qjs-snapshot") => qjs::run_qjs_snapshot(
+        "qjs-snapshot" => qjs::run_qjs_snapshot(
             parse_qjs_snapshot_file_command(rest, "qjs-snapshot")?,
             process_stdin,
         ),
-        Some("qjs-resume") => qjs::run_qjs_resume(
+        "qjs-resume" => qjs::run_qjs_resume(
             parse_qjs_snapshot_file_command(rest, "qjs-resume")?,
             process_stdin,
         ),
-        Some("qjs-restore") => qjs_restore::parse_and_run_qjs_restore(rest),
-        Some("p9-stdio") => {
+        "qjs-restore" => qjs_restore::parse_and_run_qjs_restore(rest),
+        _ => unknown_collected_command_name(command),
+    }
+}
+
+fn run_9p_collected_command(
+    command: &str,
+    rest: &[OsString],
+    process_stdin: &mut dyn Read,
+) -> Result<CliOutput, CliError> {
+    match command {
+        "p9-stdio" => {
             p9_stdio::run_p9_stdio(p9_stdio::parse_p9_stdio_command(rest)?, process_stdin)
         }
-        Some("rootfs") => rootfs::run_rootfs_command(rootfs::parse_rootfs_command(rest)?),
-        Some("p9-listen") => {
+        "p9-listen" => {
             require_live_process_io(p9_listen::parse_p9_listen_command(rest), "p9-listen")
         }
-        Some("p9-ws") => require_live_process_io(p9_ws::parse_p9_ws_command(rest), "p9-ws"),
-        Some("qemu") => qemu::run_qemu_command(qemu::parse_qemu_command(rest)?),
-        Some("serve") => require_live_process_io(serve::parse_serve_command(rest), "serve"),
-        _ => Err(CliError::usage(format!(
-            "unknown wanix-rust command: {}",
-            command.to_string_lossy()
-        ))),
+        "p9-ws" => require_live_process_io(p9_ws::parse_p9_ws_command(rest), "p9-ws"),
+        _ => unknown_collected_command_name(command),
     }
 }
 
@@ -54,6 +78,16 @@ fn require_live_process_io<T>(
     let _ = parsed?;
     Err(CliError::usage(format!(
         "{command_name} requires live process IO; use the wanix-rust binary"
+    )))
+}
+
+fn unknown_collected_command(command: &OsString) -> Result<CliOutput, CliError> {
+    unknown_collected_command_name(&command.to_string_lossy())
+}
+
+fn unknown_collected_command_name(command: &str) -> Result<CliOutput, CliError> {
+    Err(CliError::usage(format!(
+        "unknown wanix-rust command: {command}"
     )))
 }
 
