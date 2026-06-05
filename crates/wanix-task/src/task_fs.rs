@@ -5,8 +5,8 @@ use wanix_fs::{
 };
 
 use crate::task_files::{
-    ControlFile, FdProxyFile, Field, FieldFile, FileAccess, NewTaskFile, directory_metadata,
-    field_metadata, file_metadata, task_entries,
+    ControlFile, FdProxyFile, Field, FieldFile, FileAccess, NewTaskFile, TASK_FD_FILE_MODE,
+    TASK_FILE_READ_ONLY_MODE, directory_metadata, field_metadata, file_metadata, task_entries,
 };
 use crate::{Task, TaskId, TaskTable};
 
@@ -93,7 +93,7 @@ impl FileSystem for TaskFs {
                     .iter()
                     .any(|driver| driver == kind) =>
             {
-                Ok(file_metadata(0, 0o555))
+                Ok(file_metadata(0, TASK_FILE_READ_ONLY_MODE))
             }
             [selector] => {
                 self.task_for_selector(selector)?;
@@ -123,7 +123,7 @@ impl FileSystem for TaskFs {
                 .table
                 .driver_kinds()
                 .into_iter()
-                .map(|kind| DirEntry::new(kind, file_metadata(0, 0o555)))
+                .map(|kind| DirEntry::new(kind, file_metadata(0, TASK_FILE_READ_ONLY_MODE)))
                 .collect()),
             [selector] => {
                 self.task_for_selector(selector)?;
@@ -134,7 +134,9 @@ impl FileSystem for TaskFs {
                 Ok(task
                     .fd_numbers()
                     .into_iter()
-                    .map(|fd| DirEntry::new(fd.get().to_string(), file_metadata(0, 0o666)))
+                    .map(|fd| {
+                        DirEntry::new(fd.get().to_string(), file_metadata(0, TASK_FD_FILE_MODE))
+                    })
                     .collect())
             }
             _ => Err(FsError::NotFound),

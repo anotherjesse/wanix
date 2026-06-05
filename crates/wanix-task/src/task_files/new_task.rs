@@ -1,6 +1,6 @@
 use wanix_fs::{File, FileSeekFrom, FsError, FsResult, Metadata};
 
-use super::{file_metadata, read_from_slice, seek_offset};
+use super::{TASK_FILE_READ_ONLY_MODE, file_metadata, read_from_slice, seek_offset};
 use crate::{TaskId, TaskTable};
 
 #[derive(Debug)]
@@ -45,7 +45,7 @@ impl File for NewTaskFile {
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o555))
+        Ok(file_metadata(0, TASK_FILE_READ_ONLY_MODE))
     }
 
     fn seek(&mut self, from: FileSeekFrom) -> FsResult<u64> {

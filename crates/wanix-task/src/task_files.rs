@@ -8,6 +8,11 @@ mod new_task;
 pub(crate) use control::ControlFile;
 pub(crate) use new_task::NewTaskFile;
 
+pub(crate) const TASK_FILE_READ_ONLY_MODE: u32 = 0o555;
+pub(crate) const TASK_FILE_READ_WRITE_MODE: u32 = 0o755;
+pub(crate) const TASK_FD_FILE_MODE: u32 = 0o666;
+pub(crate) const TASK_DIRECTORY_MODE: u32 = TASK_FILE_READ_WRITE_MODE;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FileAccess {
     read: bool,
@@ -205,7 +210,7 @@ pub(crate) fn field_text(task: &Task, field: Field) -> String {
 
 pub(crate) fn field_metadata(task: &Task, field: &str) -> FsResult<Metadata> {
     if field == "ctl" {
-        return Ok(file_metadata(0, 0o755));
+        return Ok(file_metadata(0, TASK_FILE_READ_WRITE_MODE));
     }
     let field = field_from_name(field)?;
     Ok(file_metadata(
@@ -216,14 +221,14 @@ pub(crate) fn field_metadata(task: &Task, field: &str) -> FsResult<Metadata> {
 
 pub(crate) fn task_entries() -> Vec<DirEntry> {
     [
-        ("cmd", file_metadata(0, 0o755)),
-        ("ctl", file_metadata(0, 0o755)),
-        ("dir", file_metadata(2, 0o755)),
-        ("env", file_metadata(1, 0o755)),
-        ("exit", file_metadata(1, 0o755)),
+        ("cmd", file_metadata(0, TASK_FILE_READ_WRITE_MODE)),
+        ("ctl", file_metadata(0, TASK_FILE_READ_WRITE_MODE)),
+        ("dir", file_metadata(2, TASK_FILE_READ_WRITE_MODE)),
+        ("env", file_metadata(1, TASK_FILE_READ_WRITE_MODE)),
+        ("exit", file_metadata(1, TASK_FILE_READ_WRITE_MODE)),
         ("fd", directory_metadata()),
-        ("id", file_metadata(2, 0o555)),
-        ("kind", file_metadata(0, 0o555)),
+        ("id", file_metadata(2, TASK_FILE_READ_ONLY_MODE)),
+        ("kind", file_metadata(0, TASK_FILE_READ_ONLY_MODE)),
     ]
     .into_iter()
     .map(|(name, metadata)| DirEntry::new(name, metadata))
@@ -231,7 +236,7 @@ pub(crate) fn task_entries() -> Vec<DirEntry> {
 }
 
 pub(crate) fn directory_metadata() -> Metadata {
-    Metadata::new(FileType::Directory, 2, 0o755)
+    Metadata::new(FileType::Directory, 2, TASK_DIRECTORY_MODE)
 }
 
 pub(crate) fn file_metadata(len: u64, mode: u32) -> Metadata {
@@ -240,8 +245,8 @@ pub(crate) fn file_metadata(len: u64, mode: u32) -> Metadata {
 
 fn field_mode(field: Field) -> u32 {
     match field {
-        Field::Id | Field::Kind => 0o555,
-        Field::Cmd | Field::Env | Field::Dir | Field::Exit => 0o755,
+        Field::Id | Field::Kind => TASK_FILE_READ_ONLY_MODE,
+        Field::Cmd | Field::Env | Field::Dir | Field::Exit => TASK_FILE_READ_WRITE_MODE,
     }
 }
 

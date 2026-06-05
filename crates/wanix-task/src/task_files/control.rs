@@ -1,6 +1,6 @@
 use wanix_fs::{File, FsError, FsResult, Metadata};
 
-use super::{FileAccess, file_metadata};
+use super::{FileAccess, TASK_FILE_READ_WRITE_MODE, file_metadata};
 use crate::cmd::parse_cmd_argv;
 use crate::{Fd, Task, TaskTable};
 
@@ -48,7 +48,7 @@ impl File for ControlFile {
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, 0o755))
+        Ok(file_metadata(0, TASK_FILE_READ_WRITE_MODE))
     }
 }
 
