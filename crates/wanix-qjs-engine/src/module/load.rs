@@ -79,7 +79,7 @@ impl QuickJsModule {
     ///
     /// The cache is advisory: a missing, stale, or untrusted artifact falls back
     /// to a fresh compile. The cache directory must be owner-private or it is
-    /// ignored (see [`cache`]).
+    /// ignored (see [`wanix_module_cache`]).
     ///
     /// # Errors
     ///
@@ -87,7 +87,7 @@ impl QuickJsModule {
     /// does not export the required QuickJS runtime ABI.
     pub fn from_bytes_cached(engine: &Engine, bytes: &[u8], cache_dir: &Path) -> Result<Self> {
         let wasm_sha256 = Sha256::digest(bytes).into();
-        let module = cache::load_or_compile(engine, bytes, &wasm_sha256, cache_dir)
+        let module = wanix_module_cache::load_or_compile(engine, bytes, &wasm_sha256, cache_dir)
             .map_err(|err| anyhow!("failed to compile QuickJS WASM module: {err:#}"))?;
         Self::finish_with_sha(module, wasm_sha256)
     }

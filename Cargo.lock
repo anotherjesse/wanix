@@ -1087,6 +1087,16 @@ name = "wanix-fs"
 version = "0.1.0"
 
 [[package]]
+name = "wanix-module-cache"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rustix",
+ "sha2",
+ "wasmtime",
+]
+
+[[package]]
 name = "wanix-protocol"
 version = "0.1.0"
 
@@ -1097,6 +1107,7 @@ dependencies = [
  "anyhow",
  "serde_json",
  "wanix-fs",
+ "wanix-module-cache",
  "wanix-qjs-engine",
  "wanix-task",
  "wanix-vfs",
@@ -1109,8 +1120,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "proptest",
- "rustix",
  "sha2",
+ "wanix-module-cache",
  "wasmtime",
 ]
 
@@ -1161,7 +1172,9 @@ name = "wanix-wasm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "sha2",
  "wanix-fs",
+ "wanix-module-cache",
  "wanix-task",
  "wanix-vfs",
  "wanix-wasi",

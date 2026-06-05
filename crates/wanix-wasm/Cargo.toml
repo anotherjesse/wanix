@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
+sha2 = "0.10"
 wanix-fs = { path = "../wanix-fs" }
+wanix-module-cache = { path = "../wanix-module-cache" }
 wanix-task = { path = "../wanix-task" }
 wanix-vfs = { path = "../wanix-vfs" }
 wanix-wasi = { path = "../wanix-wasi" }

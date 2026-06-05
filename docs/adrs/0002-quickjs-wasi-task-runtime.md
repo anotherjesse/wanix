@@ -64,13 +64,15 @@ limits are bounded host execution policy. CLI and serve surfaces may expose
 those knobs for deterministic demos and tests, but they are not a general
 scheduler, signal system, cancellation model, or task checkpoint format.
 
-### Bundled-module compiled-artifact cache
+### Compiled-artifact cache (qjs and wasm runtimes)
 
 Cranelift-compiling the ~1.7 MiB bundled QuickJS fixture dominates qjs cold
 start (~550 ms, ~100% of the cost). The bundled module is therefore cached on
 disk as a Wasmtime-serialized artifact and deserialized on warm starts (~0.5 ms,
 ~1000x faster; also ~5x lower peak RSS). This is an accepted runtime decision,
-not just a test fixture optimization.
+not just a test fixture optimization. The standalone `.wasm` task runner
+(`WasiRunner::from_bytes_cached`) uses the **same** cache for the same reason:
+recompiling a non-trivial guest on every task start is wasted Cranelift work.
 
 - **Cache key = `sha256(wasm-bytes)`.** It authenticates the *input wasm*, so a
   changed fixture lands under a new key.
@@ -95,13 +97,25 @@ not just a test fixture optimization.
   TOCTOU window, no symlink follow). The temp artifact is created `0o600` as
   defense-in-depth. This verifies the leaf directory and the artifact file; it
   does **not** walk every ancestor, relying instead on the owner-private-ancestor
-  assumption documented in `wanix-qjs`'s `bundled` module (the default location
-  lives under an owner-controlled per-user cache root). On non-Unix platforms,
-  with no portable fd-ownership model, the check degrades to "is a directory" — a
-  weaker guarantee — and the per-user default location carries the trust.
-- **Non-goal.** This is the *bundled QuickJS* module cache only. A compiled-
-  module cache for the standalone `.wasm` runner is deliberately out of scope
-  here and belongs to the wasm-runner phase.
+  assumption documented in each runtime's cache-policy module (the default
+  location lives under an owner-controlled per-user cache root). On non-Unix
+  platforms, with no portable fd-ownership model, the check degrades to "is a
+  directory" — a weaker guarantee — and the per-user default location carries the
+  trust.
+- **One shared implementation.** The cache primitive (`load_or_compile` plus the
+  fd-based verification, atomic write, and owner-private-dir resolver) lives in a
+  small standalone `wanix-module-cache` crate that depends only on Wasmtime,
+  `anyhow`, `sha2`, and (on Unix) `rustix`. Both `wanix-qjs-engine` and
+  `wanix-wasm` depend on it, so the trust boundary has a single audited
+  implementation rather than two divergent copies. The crate carries no QuickJS,
+  linker, or task coupling, so neither runtime crate is forced to depend on the
+  other or on the WASI linker just to share the cache.
+- **Per-runtime policy.** Each runtime pins its own default location: qjs uses
+  `WANIX_QJS_CACHE_DIR` and the `qjs-module-cache` subdir; the wasm runner uses
+  `WANIX_WASM_CACHE_DIR` and the `wasm-module-cache` subdir (both under the
+  per-user cache root, distinct so the two runtimes never collide). The env
+  override in each case is an explicit operator opt-in to a trusted path, still
+  subject to the same fd-based verification.
 
 ## Consequences
 

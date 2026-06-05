@@ -16,12 +16,14 @@
 //! fd/path I/O, args/env, clock, exit) with no poll readiness — it is not a
 //! general-purpose WASI host.
 
+mod cache;
 mod capture;
 mod driver;
 mod runner;
 mod state;
 mod task_stdio;
 
+pub use cache::module_cache_dir;
 pub use capture::{CaptureFile, host_stderr, host_stdout};
 pub use driver::WasmTaskDriver;
 pub use runner::WasiRunner;

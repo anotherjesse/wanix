@@ -30,6 +30,35 @@ impl WasiRunner {
         Ok(Self { engine, module })
     }
 
+    /// Compiles a `wasm32-wasi` module from bytes, loading a cached compiled
+    /// artifact from `cache_dir` when one is present and trusted.
+    ///
+    /// Cranelift-compiling a non-trivial guest costs tens to hundreds of
+    /// milliseconds; the cache stores the Wasmtime serialized module keyed by
+    /// `sha256(bytes)` and deserializes it in well under a millisecond on a warm
+    /// run. The cache is advisory: a missing, stale, or *untrusted* artifact
+    /// falls back to a fresh compile.
+    ///
+    /// `cache_dir` must be owner-private or it is ignored — the artifact is
+    /// loaded through `unsafe Module::deserialize`, so a hostile (e.g.
+    /// world-writable or symlinked) directory or artifact is never deserialized.
+    /// Use [`module_cache_dir`](crate::module_cache_dir) for the owner-private
+    /// per-user default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Wasmtime cannot compile the bytes on a cache miss.
+    pub fn from_bytes_cached(bytes: &[u8], cache_dir: &Path) -> Result<Self> {
+        use sha2::{Digest, Sha256};
+
+        let engine = Engine::default();
+        let wasm_sha256: [u8; 32] = Sha256::digest(bytes).into();
+        let module =
+            wanix_module_cache::load_or_compile(&engine, bytes, &wasm_sha256, cache_dir)
+                .map_err(|err| Error::msg(format!("failed to compile wasm module: {err:#}")))?;
+        Ok(Self { engine, module })
+    }
+
     /// Runs the module's `_start` entry with WASI backed by `config`'s namespace.
     ///
     /// Returns the process exit code: `0` for a normal return, or the code passed
@@ -119,6 +148,110 @@ mod tests {
             .with_stdout(Box::new(stdout.clone()), "stdout");
         let exit = runner.run(config).expect("rust wasm task ran");
         (exit, stdout.contents())
+    }
+
+    fn unique_cache_dir(label: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock is after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "wanix-wasm-cache-test-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn from_bytes_cached_warms_then_reuses_artifact() {
+        let dir = unique_cache_dir("warm");
+
+        // Cold run: compiles and writes the serialized artifact.
+        let runner = WasiRunner::from_bytes_cached(RUST_GUEST, &dir).expect("cold compile");
+        let exit = runner
+            .run(
+                WasiConfig::new(namespace_on(&Arc::new(MemFs::new())))
+                    .with_args(["guest", "--echo", "hi"]),
+            )
+            .expect("cold run");
+        assert_eq!(exit, 0);
+
+        // An artifact file must now exist in the cache directory.
+        let entries: Vec<_> = std::fs::read_dir(&dir)
+            .expect("cache dir exists")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "cwasm"))
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one cached artifact expected");
+
+        // Warm run: the same cache directory is reused and still runs correctly.
+        let warm = WasiRunner::from_bytes_cached(RUST_GUEST, &dir).expect("warm load");
+        let exit = warm
+            .run(
+                WasiConfig::new(namespace_on(&Arc::new(MemFs::new())))
+                    .with_args(["guest", "--echo", "hi"]),
+            )
+            .expect("warm run");
+        assert_eq!(exit, 0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_bytes_cached_ignores_world_writable_cache_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // A world-writable cache dir is a trust-boundary violation: a peer could
+        // pre-seed a hostile artifact. The cache layer must refuse to trust it,
+        // so the runner falls back to a fresh compile and still runs correctly.
+        let dir = unique_cache_dir("hostile");
+        std::fs::create_dir_all(&dir).expect("make hostile dir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).expect("chmod 0777");
+
+        let runner =
+            WasiRunner::from_bytes_cached(RUST_GUEST, &dir).expect("compile despite hostile dir");
+        let exit = runner
+            .run(
+                WasiConfig::new(namespace_on(&Arc::new(MemFs::new())))
+                    .with_args(["guest", "--echo", "hi"]),
+            )
+            .expect("runs from fresh compile");
+        assert_eq!(exit, 0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_bytes_cached_rejects_symlinked_artifact() {
+        // Warm a valid artifact, then replace it with a symlink to that artifact.
+        // `O_NOFOLLOW` on the final component must refuse it (cache miss), so the
+        // runner recompiles cleanly rather than deserializing through a symlink.
+        let dir = unique_cache_dir("symlink");
+        WasiRunner::from_bytes_cached(RUST_GUEST, &dir).expect("warm compile");
+
+        let artifact = std::fs::read_dir(&dir)
+            .expect("cache dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "cwasm"))
+            .expect("artifact written");
+        let real = dir.join("real.cwasm");
+        std::fs::rename(&artifact, &real).expect("move real artifact aside");
+        std::os::unix::fs::symlink(&real, &artifact).expect("symlink in place of artifact");
+
+        // Still compiles + runs; the symlinked artifact is never deserialized.
+        let runner =
+            WasiRunner::from_bytes_cached(RUST_GUEST, &dir).expect("recompile on rejection");
+        let exit = runner
+            .run(
+                WasiConfig::new(namespace_on(&Arc::new(MemFs::new())))
+                    .with_args(["guest", "--echo", "hi"]),
+            )
+            .expect("runs from fresh compile");
+        assert_eq!(exit, 0);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

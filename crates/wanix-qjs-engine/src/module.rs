@@ -6,7 +6,6 @@ use anyhow::{Result, bail};
 use wasmtime::{Engine, Module};
 
 mod abi;
-mod cache;
 mod load;
 
 pub(crate) use abi::QUICKJS_WASM_ABI_VERSION;

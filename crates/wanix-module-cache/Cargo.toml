@@ -1,6 +1,6 @@
 [package]
-name = "wanix-qjs-engine"
-description = "Wasmtime-hosted QuickJS/WASI engine mechanics for Rust-native Wanix."
+name = "wanix-module-cache"
+description = "Shared owner-private on-disk cache for Wasmtime-compiled modules (qjs + wasm runtimes)."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,18 +10,16 @@ version.workspace = true
 [dependencies]
 anyhow = "1"
 sha2 = "0.10"
-wanix-module-cache = { path = "../wanix-module-cache" }
 wasmtime = { version = "45.0.0", default-features = false, features = [
     "anyhow",
     "cranelift",
     "runtime",
     "std",
-    "wat",
 ] }
 
-[dev-dependencies]
-proptest = "1"
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [lib]
-name = "rust_wasi_quickjs"
+name = "wanix_module_cache"
 path = "src/lib.rs"
