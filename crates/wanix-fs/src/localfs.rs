@@ -1,16 +1,19 @@
-#[cfg(unix)]
-use std::ffi::OsStr;
 use std::fs::{self, File as StdFile, FileTimes};
-use std::io::{Read, Seek, SeekFrom, Write};
-#[cfg(unix)]
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
 
 use crate::{
-    DirEntry, File, FileSeekFrom, FileSystem, FileType, FsError, FsResult, Metadata,
-    MetadataLookup, NormalizedPath, OpenOptions,
+    DirEntry, File, FileSystem, FsError, FsResult, Metadata, MetadataLookup, NormalizedPath,
+    OpenOptions,
+};
+
+mod file;
+mod host;
+
+use file::LocalFile;
+use host::{
+    create_symlink, metadata_from_host, pathbuf_into_bytes, set_host_permissions,
+    system_time_from_ns,
 };
 
 /// Host-directory-backed filesystem rooted at a single local directory.
@@ -116,6 +119,40 @@ impl LocalFs {
             Err(FsError::PermissionDenied)
         }
     }
+
+    fn rename_source(&self, path: &NormalizedPath) -> FsResult<(PathBuf, fs::Metadata)> {
+        let host_path = self.raw_host_path(path);
+        let metadata = fs::symlink_metadata(&host_path).map_err(map_io_error)?;
+        let resolved = fs::canonicalize(&host_path).map_err(map_io_error)?;
+        if !resolved.starts_with(&*self.root) {
+            return Err(FsError::PermissionDenied);
+        }
+        Ok((host_path, metadata))
+    }
+
+    fn rename_destination(
+        &self,
+        path: &NormalizedPath,
+        old_metadata: &fs::Metadata,
+    ) -> FsResult<PathBuf> {
+        let host_path = self.raw_host_path(path);
+        let parent = host_path.parent().ok_or(FsError::PermissionDenied)?;
+        let parent = fs::canonicalize(parent).map_err(map_io_error)?;
+        if !parent.starts_with(&*self.root) {
+            return Err(FsError::PermissionDenied);
+        }
+        match fs::symlink_metadata(&host_path) {
+            Ok(new_metadata) => validate_rename_replacement(
+                self.root.as_ref().as_path(),
+                old_metadata,
+                &new_metadata,
+                &host_path,
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(map_io_error(error)),
+        }?;
+        Ok(host_path)
+    }
 }
 
 impl FileSystem for LocalFs {
@@ -139,12 +176,7 @@ impl FileSystem for LocalFs {
         if metadata.is_dir() {
             return Err(FsError::IsDirectory);
         }
-        Ok(Box::new(LocalFile {
-            file,
-            offset: 0,
-            readable: options.read,
-            writable: options.write,
-        }))
+        Ok(Box::new(LocalFile::new(file, options)))
     }
 
     fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
@@ -274,45 +306,8 @@ impl FileSystem for LocalFs {
             return Err(FsError::PermissionDenied);
         }
 
-        let old_host_path = self.raw_host_path(old_path);
-        let old_metadata = fs::symlink_metadata(&old_host_path).map_err(map_io_error)?;
-        let old_resolved = fs::canonicalize(&old_host_path).map_err(map_io_error)?;
-        if !old_resolved.starts_with(&*self.root) {
-            return Err(FsError::PermissionDenied);
-        }
-
-        let new_host_path = self.raw_host_path(new_path);
-        let new_parent = new_host_path.parent().ok_or(FsError::PermissionDenied)?;
-        let new_parent = fs::canonicalize(new_parent).map_err(map_io_error)?;
-        if !new_parent.starts_with(&*self.root) {
-            return Err(FsError::PermissionDenied);
-        }
-        match fs::symlink_metadata(&new_host_path) {
-            Ok(new_metadata) => {
-                let new_resolved = fs::canonicalize(&new_host_path).map_err(map_io_error)?;
-                if !new_resolved.starts_with(&*self.root) {
-                    return Err(FsError::PermissionDenied);
-                }
-                match (old_metadata.is_dir(), new_metadata.is_dir()) {
-                    (true, true) => {
-                        if fs::read_dir(&new_host_path)
-                            .map_err(map_io_error)?
-                            .next()
-                            .transpose()
-                            .map_err(map_io_error)?
-                            .is_some()
-                        {
-                            return Err(FsError::NotEmpty);
-                        }
-                    }
-                    (true, false) => return Err(FsError::NotDirectory),
-                    (false, true) => return Err(FsError::IsDirectory),
-                    (false, false) => {}
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(map_io_error(error)),
-        }
+        let (old_host_path, old_metadata) = self.rename_source(old_path)?;
+        let new_host_path = self.rename_destination(new_path, &old_metadata)?;
 
         fs::rename(old_host_path, new_host_path).map_err(map_io_error)
     }
@@ -337,228 +332,38 @@ impl FileSystem for LocalFs {
     }
 }
 
-#[derive(Debug)]
-struct LocalFile {
-    file: StdFile,
-    offset: u64,
-    readable: bool,
-    writable: bool,
-}
-
-impl File for LocalFile {
-    fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
-        if !self.readable {
-            return Err(FsError::PermissionDenied);
-        }
-        let count = self.file.read(buf).map_err(map_io_error)?;
-        self.offset = self
-            .offset
-            .checked_add(u64::try_from(count).map_err(|_| FsError::InvalidOffset)?)
-            .ok_or(FsError::InvalidOffset)?;
-        Ok(count)
+fn validate_rename_replacement(
+    root: &Path,
+    old_metadata: &fs::Metadata,
+    new_metadata: &fs::Metadata,
+    new_host_path: &Path,
+) -> FsResult<()> {
+    let new_resolved = fs::canonicalize(new_host_path).map_err(map_io_error)?;
+    if !new_resolved.starts_with(root) {
+        return Err(FsError::PermissionDenied);
     }
-
-    fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
-        if !self.writable {
-            return Err(FsError::PermissionDenied);
-        }
-        let count = self.file.write(buf).map_err(map_io_error)?;
-        self.offset = self
-            .offset
-            .checked_add(u64::try_from(count).map_err(|_| FsError::InvalidOffset)?)
-            .ok_or(FsError::InvalidOffset)?;
-        Ok(count)
-    }
-
-    fn seek(&mut self, from: FileSeekFrom) -> FsResult<u64> {
-        let offset = self.file.seek(host_seek_from(from)).map_err(map_io_error)?;
-        self.offset = offset;
-        Ok(offset)
-    }
-
-    fn tell(&self) -> FsResult<u64> {
-        Ok(self.offset)
-    }
-
-    fn is_seekable(&self) -> bool {
-        true
-    }
-
-    fn set_len(&mut self, len: u64) -> FsResult<()> {
-        if !self.writable {
-            return Err(FsError::PermissionDenied);
-        }
-        self.file.set_len(len).map_err(map_io_error)
-    }
-
-    fn metadata(&self) -> FsResult<Metadata> {
-        self.file
-            .metadata()
-            .map(|metadata| metadata_from_host(&metadata))
-            .map_err(map_io_error)
+    match (old_metadata.is_dir(), new_metadata.is_dir()) {
+        (true, true) => ensure_directory_empty(new_host_path),
+        (true, false) => Err(FsError::NotDirectory),
+        (false, true) => Err(FsError::IsDirectory),
+        (false, false) => Ok(()),
     }
 }
 
-fn host_seek_from(from: FileSeekFrom) -> SeekFrom {
-    match from {
-        FileSeekFrom::Start(offset) => SeekFrom::Start(offset),
-        FileSeekFrom::Current(offset) => SeekFrom::Current(offset),
-        FileSeekFrom::End(offset) => SeekFrom::End(offset),
+fn ensure_directory_empty(path: &Path) -> FsResult<()> {
+    if fs::read_dir(path)
+        .map_err(map_io_error)?
+        .next()
+        .transpose()
+        .map_err(map_io_error)?
+        .is_some()
+    {
+        return Err(FsError::NotEmpty);
     }
+    Ok(())
 }
 
-fn metadata_from_host(metadata: &fs::Metadata) -> Metadata {
-    let file_type = if metadata.is_dir() {
-        FileType::Directory
-    } else if metadata.is_file() {
-        FileType::File
-    } else if metadata.file_type().is_symlink() {
-        FileType::Symlink
-    } else {
-        FileType::File
-    };
-    Metadata::new_with_times_and_links(
-        file_type,
-        metadata.len(),
-        metadata_mode(metadata),
-        metadata_link_count(metadata),
-        metadata_accessed_time_ns(metadata),
-        metadata_modified_time_ns(metadata),
-        metadata_changed_time_ns(metadata),
-    )
-}
-
-#[cfg(unix)]
-fn metadata_mode(metadata: &fs::Metadata) -> u32 {
-    use std::os::unix::fs::PermissionsExt;
-
-    metadata.permissions().mode()
-}
-
-#[cfg(not(unix))]
-fn metadata_mode(metadata: &fs::Metadata) -> u32 {
-    if metadata.permissions().readonly() {
-        0o444
-    } else if metadata.is_dir() {
-        0o755
-    } else {
-        0o644
-    }
-}
-
-#[cfg(unix)]
-fn metadata_link_count(metadata: &fs::Metadata) -> u64 {
-    use std::os::unix::fs::MetadataExt;
-
-    metadata.nlink()
-}
-
-#[cfg(not(unix))]
-fn metadata_link_count(_metadata: &fs::Metadata) -> u64 {
-    1
-}
-
-#[cfg(unix)]
-fn set_host_permissions(path: &Path, permissions: u32) -> FsResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(permissions & 0o7777))
-        .map_err(map_io_error)
-}
-
-#[cfg(not(unix))]
-fn set_host_permissions(path: &Path, permissions: u32) -> FsResult<()> {
-    let mut current = fs::metadata(path).map_err(map_io_error)?.permissions();
-    current.set_readonly(permissions & 0o222 == 0);
-    fs::set_permissions(path, current).map_err(map_io_error)
-}
-
-#[cfg(unix)]
-fn metadata_accessed_time_ns(metadata: &fs::Metadata) -> u64 {
-    use std::os::unix::fs::MetadataExt;
-
-    unix_time_ns(metadata.atime(), metadata.atime_nsec())
-}
-
-#[cfg(unix)]
-fn metadata_modified_time_ns(metadata: &fs::Metadata) -> u64 {
-    use std::os::unix::fs::MetadataExt;
-
-    unix_time_ns(metadata.mtime(), metadata.mtime_nsec())
-}
-
-#[cfg(unix)]
-fn metadata_changed_time_ns(metadata: &fs::Metadata) -> u64 {
-    use std::os::unix::fs::MetadataExt;
-
-    unix_time_ns(metadata.ctime(), metadata.ctime_nsec())
-}
-
-#[cfg(unix)]
-fn unix_time_ns(secs: i64, nanos: i64) -> u64 {
-    let Ok(secs) = u64::try_from(secs) else {
-        return 0;
-    };
-    let Ok(nanos) = u64::try_from(nanos) else {
-        return 0;
-    };
-    secs.checked_mul(1_000_000_000)
-        .and_then(|base| base.checked_add(nanos))
-        .unwrap_or(0)
-}
-
-#[cfg(not(unix))]
-fn metadata_accessed_time_ns(metadata: &fs::Metadata) -> u64 {
-    system_time_ns(metadata.accessed().ok())
-}
-
-#[cfg(not(unix))]
-fn metadata_modified_time_ns(metadata: &fs::Metadata) -> u64 {
-    system_time_ns(metadata.modified().ok())
-}
-
-#[cfg(not(unix))]
-fn metadata_changed_time_ns(metadata: &fs::Metadata) -> u64 {
-    system_time_ns(metadata.created().ok())
-}
-
-#[cfg(not(unix))]
-fn system_time_ns(time: Option<std::time::SystemTime>) -> u64 {
-    time.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
-        .unwrap_or(0)
-}
-
-fn system_time_from_ns(timestamp_ns: u64) -> FsResult<std::time::SystemTime> {
-    UNIX_EPOCH
-        .checked_add(Duration::from_nanos(timestamp_ns))
-        .ok_or(FsError::InvalidTime)
-}
-
-#[cfg(unix)]
-fn pathbuf_into_bytes(path: PathBuf) -> FsResult<Vec<u8>> {
-    Ok(path.into_os_string().into_vec())
-}
-
-#[cfg(not(unix))]
-fn pathbuf_into_bytes(path: PathBuf) -> FsResult<Vec<u8>> {
-    path.into_os_string()
-        .into_string()
-        .map(|path| path.into_bytes())
-        .map_err(|_| FsError::InvalidPath("<non-utf8 host symlink target>".to_owned()))
-}
-
-#[cfg(unix)]
-fn create_symlink(target: &[u8], host_path: &Path) -> FsResult<()> {
-    std::os::unix::fs::symlink(OsStr::from_bytes(target), host_path).map_err(map_io_error)
-}
-
-#[cfg(not(unix))]
-fn create_symlink(_target: &[u8], _host_path: &Path) -> FsResult<()> {
-    Err(FsError::NotSupported)
-}
-
-fn map_io_error(error: std::io::Error) -> FsError {
+pub(super) fn map_io_error(error: std::io::Error) -> FsError {
     match error.kind() {
         std::io::ErrorKind::NotFound => FsError::NotFound,
         std::io::ErrorKind::PermissionDenied => FsError::PermissionDenied,
