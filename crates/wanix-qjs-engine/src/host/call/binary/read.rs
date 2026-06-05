@@ -11,33 +11,71 @@ use slice::read_guest_bytes;
 use view::{read_data_view_bytes, read_typed_array_bytes};
 use wasmtime::{Caller, Memory, TypedFunc};
 
+const QUICKJS_LEN_OUT_BYTES: i32 = 4;
+
 pub(in crate::host::call) fn quickjs_value_to_callback(
     memory: &Memory,
     caller: &mut Caller<'_, HostState>,
     value: i32,
 ) -> wasmtime::Result<QuickJsCopiedValue> {
-    if let Some(value) = maybe_quickjs_value_to_scalar(memory, caller, value)? {
+    if let Some(value) = read_scalar_callback_value(memory, caller, value)? {
+        return Ok(value);
+    }
+    if let Some(value) = read_array_buffer_callback_value(memory, caller, value)? {
+        return Ok(value.into());
+    }
+    if let Some(value) = read_uint8_array_callback_value(memory, caller, value)? {
+        return Ok(value.into());
+    }
+    if let Some(value) = read_typed_array_callback_value(memory, caller, value)? {
+        return Ok(value.into());
+    }
+    if let Some(value) = read_data_view_callback_value(memory, caller, value)? {
         return Ok(value.into());
     }
 
-    if let Some(qjs_is_array_buffer) =
-        optional_quickjs_export::<i32, i32>(caller, "qjs_is_array_buffer")?
-        && qjs_is_array_buffer.call(&mut *caller, value)? != 0
-    {
+    Err(host_import_error("unsupported host callback argument type"))
+}
+
+fn read_scalar_callback_value(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    value: i32,
+) -> wasmtime::Result<Option<QuickJsCopiedValue>> {
+    maybe_quickjs_value_to_scalar(memory, caller, value).map(|value| value.map(Into::into))
+}
+
+fn read_array_buffer_callback_value(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    value: i32,
+) -> wasmtime::Result<Option<QuickJsBinaryValue>> {
+    if quickjs_binary_probe(caller, value, "qjs_is_array_buffer")? {
         return read_array_buffer_bytes(memory, caller, value)
             .map(QuickJsBinaryValue::ArrayBuffer)
-            .map(Into::into);
+            .map(Some);
     }
+    Ok(None)
+}
 
-    if let Some(qjs_is_uint8_array) =
-        optional_quickjs_export::<i32, i32>(caller, "qjs_is_uint8_array")?
-        && qjs_is_uint8_array.call(&mut *caller, value)? != 0
-    {
+fn read_uint8_array_callback_value(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    value: i32,
+) -> wasmtime::Result<Option<QuickJsBinaryValue>> {
+    if quickjs_binary_probe(caller, value, "qjs_is_uint8_array")? {
         return read_uint8_array_bytes(memory, caller, value)
             .map(QuickJsBinaryValue::Uint8Array)
-            .map(Into::into);
+            .map(Some);
     }
+    Ok(None)
+}
 
+fn read_typed_array_callback_value(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    value: i32,
+) -> wasmtime::Result<Option<QuickJsBinaryValue>> {
     if let Some(qjs_get_typed_array_type) =
         optional_quickjs_export::<i32, i32>(caller, "qjs_get_typed_array_type")?
     {
@@ -45,20 +83,35 @@ pub(in crate::host::call) fn quickjs_value_to_callback(
         if let Some(kind) = QuickJsTypedArrayKind::from_abi(kind_abi) {
             let bytes = read_typed_array_bytes(memory, caller, value, kind)?;
             return QuickJsBinaryValue::typed_array_from_bytes(kind, bytes)
-                .map(Into::into)
+                .map(Some)
                 .map_err(|err| host_import_error(format!("{err:#}")));
         }
     }
+    Ok(None)
+}
 
-    if let Some(qjs_is_data_view) = optional_quickjs_export::<i32, i32>(caller, "qjs_is_data_view")?
-        && qjs_is_data_view.call(&mut *caller, value)? != 0
-    {
+fn read_data_view_callback_value(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    value: i32,
+) -> wasmtime::Result<Option<QuickJsBinaryValue>> {
+    if quickjs_binary_probe(caller, value, "qjs_is_data_view")? {
         return read_data_view_bytes(memory, caller, value)
             .map(QuickJsBinaryValue::DataView)
-            .map(Into::into);
+            .map(Some);
     }
+    Ok(None)
+}
 
-    Err(host_import_error("unsupported host callback argument type"))
+fn quickjs_binary_probe(
+    caller: &mut Caller<'_, HostState>,
+    value: i32,
+    export_name: &'static str,
+) -> wasmtime::Result<bool> {
+    Ok(optional_quickjs_export::<i32, i32>(caller, export_name)?
+        .map(|probe| probe.call(&mut *caller, value).map(|matches| matches != 0))
+        .transpose()?
+        .unwrap_or(false))
 }
 
 fn read_array_buffer_bytes(
@@ -102,7 +155,7 @@ fn read_binary_bytes_with_len_out(
     label: &'static str,
 ) -> wasmtime::Result<Vec<u8>> {
     let wasm_malloc = quickjs_export::<i32, i32>(caller, "wasm_malloc")?;
-    let len_out = wasm_malloc.call(&mut *caller, 4)?;
+    let len_out = wasm_malloc.call(&mut *caller, QUICKJS_LEN_OUT_BYTES)?;
     if len_out == 0 {
         return Err(host_import_error(format!(
             "wasm_malloc returned null for {label} length"
