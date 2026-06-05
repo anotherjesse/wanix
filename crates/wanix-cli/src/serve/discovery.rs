@@ -11,8 +11,12 @@ use super::direct_v86::{
     DIRECT_V86_OFFSCREEN_PATH, DIRECT_V86_VGA_BIOS_PATH, DIRECT_V86_VGA_MEMORY_SIZE,
     DIRECT_V86_WASM_PATH, direct_v86_boot_json, rootfs_handoff_readiness,
 };
-use super::http::{HttpStatus, StaticResponse, header_end};
+use super::http::{HttpStatus, StaticResponse};
 use super::terminal_ws::QJS_SHELL_WEBSOCKET_PATH;
+
+mod host;
+pub(super) use host::display_host;
+use host::{is_loopback_peer, request_host};
 
 pub(super) fn serve_discovery_response(
     roots: &ServeRoots,
@@ -140,10 +144,6 @@ fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr)
     format!("{{{}}}", fields.join(","))
 }
 
-fn is_loopback_peer(peer_addr: SocketAddr) -> bool {
-    peer_addr.ip().is_loopback()
-}
-
 fn serve_services_json(roots: &ServeRoots) -> String {
     if roots.wanix_services {
         "{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\",\"qjs\"]}".to_owned()
@@ -167,50 +167,4 @@ fn serve_qjs_shell_route_json(roots: &ServeRoots, websocket_url: &str) -> String
     } else {
         "{\"status\":\"disabled\"}".to_owned()
     }
-}
-
-fn request_host(request: &[u8]) -> Option<String> {
-    let header_end = header_end(request)?;
-    let header = std::str::from_utf8(&request[..header_end]).ok()?;
-    for line in header.lines().skip(1) {
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        if name.trim().eq_ignore_ascii_case("host") {
-            let host = value.trim();
-            if is_safe_host(host) {
-                return Some(host.to_owned());
-            }
-        }
-    }
-    None
-}
-
-fn is_safe_host(host: &str) -> bool {
-    !host.is_empty()
-        && host.bytes().all(|byte| {
-            matches!(
-                byte,
-                b'a'..=b'z'
-                    | b'A'..=b'Z'
-                    | b'0'..=b'9'
-                    | b'.'
-                    | b'-'
-                    | b'_'
-                    | b':'
-                    | b'['
-                    | b']'
-            )
-        })
-}
-
-pub(super) fn display_host(local_addr: SocketAddr) -> String {
-    let host = if local_addr.ip().is_unspecified() {
-        "localhost".to_owned()
-    } else if local_addr.ip().is_ipv6() {
-        format!("[{}]", local_addr.ip())
-    } else {
-        local_addr.ip().to_string()
-    };
-    format!("{host}:{}", local_addr.port())
 }
