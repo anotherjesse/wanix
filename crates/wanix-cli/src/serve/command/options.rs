@@ -1,0 +1,71 @@
+use std::ffi::OsString;
+
+use crate::command_args::named_arg;
+
+pub(super) const SERVE_VALUE_OPTIONS: &[(&str, ServeValueOption)] = &[
+    ("--root", ServeValueOption::Root),
+    ("--addr", ServeValueOption::Addr),
+    ("--listen", ServeValueOption::Listen),
+    ("--bundle", ServeValueOption::Bundle),
+];
+
+pub(super) const SERVE_FLAG_OPTIONS: &[(&str, ServeFlagOption)] = &[
+    ("--once", ServeFlagOption::Once),
+    ("--wanix-services", ServeFlagOption::WanixServices),
+];
+
+#[derive(Clone, Copy)]
+pub(super) enum ServeArg {
+    Value(ServeValueOption),
+    Flag(ServeFlagOption),
+    PositionalRoot,
+}
+
+impl ServeArg {
+    pub(super) fn from_arg(arg: &OsString) -> Option<Self> {
+        named_arg(arg, SERVE_VALUE_OPTIONS)
+            .map(Self::Value)
+            .or_else(|| named_arg(arg, SERVE_FLAG_OPTIONS).map(Self::Flag))
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ServeValueOption {
+    Root,
+    Addr,
+    Listen,
+    Bundle,
+}
+
+impl ServeValueOption {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Root => "serve --root",
+            Self::Addr => "serve --addr",
+            Self::Listen => "serve --listen",
+            Self::Bundle => "serve --bundle",
+        }
+    }
+
+    pub(super) fn value_name(self) -> &'static str {
+        match self {
+            Self::Root => "DIR",
+            Self::Addr | Self::Listen => "HOST:PORT",
+            Self::Bundle => "NAME",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ServeFlagOption {
+    Once,
+    WanixServices,
+}
+
+pub(super) fn normalize_listen_addr(addr: &str) -> String {
+    if let Some(port) = addr.strip_prefix(':') {
+        format!("0.0.0.0:{port}")
+    } else {
+        addr.to_owned()
+    }
+}

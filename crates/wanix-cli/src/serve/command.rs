@@ -1,9 +1,12 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use crate::{CliError, command_args::named_arg};
+use crate::CliError;
 
 pub(crate) const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
+
+mod options;
+use options::{ServeArg, ServeFlagOption, ServeValueOption, normalize_listen_addr};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ServeCommand {
@@ -103,66 +106,6 @@ impl<'a> ServeCommandParser<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum ServeArg {
-    Value(ServeValueOption),
-    Flag(ServeFlagOption),
-    PositionalRoot,
-}
-
-impl ServeArg {
-    fn from_arg(arg: &OsString) -> Option<Self> {
-        named_arg(arg, SERVE_VALUE_OPTIONS)
-            .map(Self::Value)
-            .or_else(|| named_arg(arg, SERVE_FLAG_OPTIONS).map(Self::Flag))
-    }
-}
-
-const SERVE_VALUE_OPTIONS: &[(&str, ServeValueOption)] = &[
-    ("--root", ServeValueOption::Root),
-    ("--addr", ServeValueOption::Addr),
-    ("--listen", ServeValueOption::Listen),
-    ("--bundle", ServeValueOption::Bundle),
-];
-
-const SERVE_FLAG_OPTIONS: &[(&str, ServeFlagOption)] = &[
-    ("--once", ServeFlagOption::Once),
-    ("--wanix-services", ServeFlagOption::WanixServices),
-];
-
-#[derive(Clone, Copy)]
-enum ServeValueOption {
-    Root,
-    Addr,
-    Listen,
-    Bundle,
-}
-
-impl ServeValueOption {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Root => "serve --root",
-            Self::Addr => "serve --addr",
-            Self::Listen => "serve --listen",
-            Self::Bundle => "serve --bundle",
-        }
-    }
-
-    fn value_name(self) -> &'static str {
-        match self {
-            Self::Root => "DIR",
-            Self::Addr | Self::Listen => "HOST:PORT",
-            Self::Bundle => "NAME",
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum ServeFlagOption {
-    Once,
-    WanixServices,
-}
-
 #[derive(Default)]
 struct ServeCommandParts {
     root_path: Option<PathBuf>,
@@ -222,13 +165,5 @@ impl ServeCommandParts {
             wanix_services: self.wanix_services,
             once: self.once,
         }
-    }
-}
-
-fn normalize_listen_addr(addr: &str) -> String {
-    if let Some(port) = addr.strip_prefix(':') {
-        format!("0.0.0.0:{port}")
-    } else {
-        addr.to_owned()
     }
 }
