@@ -5,6 +5,10 @@ use crate::CliError;
 
 use super::QemuCommand;
 
+mod argv;
+
+use argv::qemu_virtio9p_argv;
+
 pub(crate) const DEFAULT_P9_MSIZE: u32 = 131_072;
 
 const DEFAULT_KERNEL_CANDIDATES: &[&str] = &["boot/bzImage", "bzImage"];
@@ -27,7 +31,34 @@ pub(super) struct QemuHandoff {
     pub(super) argv: Vec<String>,
 }
 
+struct QemuHandoffPaths {
+    root_path: PathBuf,
+    kernel_path: PathBuf,
+    initrd_path: Option<PathBuf>,
+}
+
 pub(super) fn qemu_virtio9p_handoff(command: &QemuCommand) -> Result<QemuHandoff, CliError> {
+    validate_qemu_handoff_sizes(command)?;
+    let paths = resolve_qemu_handoff_paths(command)?;
+    let cmdline = qemu_cmdline(command);
+    let argv = qemu_virtio9p_argv(command, &paths, &cmdline);
+
+    Ok(QemuHandoff {
+        root_path: paths.root_path,
+        kernel_path: paths.kernel_path,
+        initrd_path: paths.initrd_path,
+        qemu_bin: command.qemu_bin.clone(),
+        memory_mb: command.memory_mb,
+        kvm: command.kvm,
+        mount_tag: command.mount_tag.clone(),
+        security_model: command.security_model.clone(),
+        p9_msize: command.p9_msize,
+        cmdline,
+        argv,
+    })
+}
+
+fn validate_qemu_handoff_sizes(command: &QemuCommand) -> Result<(), CliError> {
     if command.memory_mb == 0 {
         return Err(CliError::usage(
             "qemu --memory-mb expects a positive integer",
@@ -38,67 +69,21 @@ pub(super) fn qemu_virtio9p_handoff(command: &QemuCommand) -> Result<QemuHandoff
             "qemu --p9-msize expects a positive integer",
         ));
     }
+    Ok(())
+}
+
+fn resolve_qemu_handoff_paths(command: &QemuCommand) -> Result<QemuHandoffPaths, CliError> {
     let root_path = canonical_existing_dir(&command.root_path, "qemu --root")?;
     let kernel_path = resolve_kernel_path(command, &root_path)?;
     let initrd_path = resolve_initrd_path(command, &root_path)?;
     let root = root_path.to_string_lossy();
     validate_qemu_option_fragment(&root, "qemu --root path")?;
     validate_default_init_path(command, &root_path)?;
-    let cmdline = qemu_cmdline(command);
 
-    let mut argv = Vec::new();
-    argv.push(command.qemu_bin.clone());
-    if command.kvm {
-        argv.extend([
-            "-enable-kvm".to_owned(),
-            "-cpu".to_owned(),
-            "host".to_owned(),
-        ]);
-    }
-    argv.extend([
-        "-m".to_owned(),
-        command.memory_mb.to_string(),
-        "-smp".to_owned(),
-        "1".to_owned(),
-        "-kernel".to_owned(),
-        kernel_path.to_string_lossy().into_owned(),
-    ]);
-    if let Some(initrd_path) = &initrd_path {
-        argv.extend([
-            "-initrd".to_owned(),
-            initrd_path.to_string_lossy().into_owned(),
-        ]);
-    }
-    argv.extend([
-        "-append".to_owned(),
-        cmdline.clone(),
-        "-fsdev".to_owned(),
-        format!(
-            "local,id=host9p,path={root},security_model={}",
-            command.security_model
-        ),
-        "-device".to_owned(),
-        format!("virtio-9p-pci,fsdev=host9p,mount_tag={}", command.mount_tag),
-        "-device".to_owned(),
-        "virtio-serial-pci".to_owned(),
-        "-device".to_owned(),
-        "virtconsole,chardev=con".to_owned(),
-        "-chardev".to_owned(),
-        "stdio,id=con".to_owned(),
-        "-nographic".to_owned(),
-    ]);
-    Ok(QemuHandoff {
+    Ok(QemuHandoffPaths {
         root_path,
         kernel_path,
         initrd_path,
-        qemu_bin: command.qemu_bin.clone(),
-        memory_mb: command.memory_mb,
-        kvm: command.kvm,
-        mount_tag: command.mount_tag.clone(),
-        security_model: command.security_model.clone(),
-        p9_msize: command.p9_msize,
-        cmdline,
-        argv,
     })
 }
 
