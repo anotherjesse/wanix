@@ -59,39 +59,66 @@ enum ControlCommand {
 }
 
 fn parse_control_command(task: &Task, command: &str) -> FsResult<ControlCommand> {
-    if command.is_empty() {
-        return Ok(ControlCommand::Pending);
-    }
-    if "start".starts_with(command) {
-        return Ok(if command == "start" {
-            ControlCommand::Start
-        } else {
-            ControlCommand::Pending
-        });
+    if let Some(command) = parse_start_command(command) {
+        return Ok(command);
     }
 
+    let Some(parts) = parse_control_parts(command)? else {
+        return Ok(ControlCommand::Pending);
+    };
+    parse_complete_control_command(task, &parts)
+}
+
+fn parse_start_command(command: &str) -> Option<ControlCommand> {
+    if command.is_empty() {
+        return Some(ControlCommand::Pending);
+    }
+    if !"start".starts_with(command) {
+        return None;
+    }
+    Some(if command == "start" {
+        ControlCommand::Start
+    } else {
+        ControlCommand::Pending
+    })
+}
+
+fn parse_control_parts(command: &str) -> FsResult<Option<Vec<String>>> {
     let parts = match parse_cmd_argv(command) {
         Ok(Some(parts)) => parts,
-        Ok(None) => return Ok(ControlCommand::Pending),
+        Ok(None) => return Ok(None),
         Err(FsError::Other(message))
             if message.starts_with("unterminated ") && command_may_be_bind(command) =>
         {
-            return Ok(ControlCommand::Pending);
+            return Ok(None);
         }
         Err(err) => return Err(err),
     };
-    if parts.is_empty() || ("bind".starts_with(parts[0].as_str()) && parts.len() < 3) {
+    Ok(Some(parts))
+}
+
+fn parse_complete_control_command(task: &Task, parts: &[String]) -> FsResult<ControlCommand> {
+    if control_parts_are_pending(parts) {
         return Ok(ControlCommand::Pending);
     }
-    if let [command, source, destination] = parts.as_slice()
-        && command == "bind"
-    {
+    if let Some((source, destination)) = bind_command_parts(parts) {
         return Ok(ControlCommand::Bind {
-            source: source.clone(),
+            source: source.to_owned(),
             fd: control_fd_destination(task, destination)?,
         });
     }
     Err(FsError::NotSupported)
+}
+
+fn control_parts_are_pending(parts: &[String]) -> bool {
+    parts.is_empty() || ("bind".starts_with(parts[0].as_str()) && parts.len() < 3)
+}
+
+fn bind_command_parts(parts: &[String]) -> Option<(&str, &str)> {
+    match parts {
+        [command, source, destination] if command == "bind" => Some((source, destination)),
+        _ => None,
+    }
 }
 
 fn command_may_be_bind(command: &str) -> bool {
