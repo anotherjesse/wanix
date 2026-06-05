@@ -1,0 +1,17 @@
+[package]
+name = "wanix-wasi-host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wanix-fs = { path = "../wanix-fs" }
+wanix-wasi = { path = "../wanix-wasi" }
+wasmtime = { version = "45.0.0", default-features = false, features = [
+    "anyhow",
+    "runtime",
+    "std",
+] }
+
+[lib]
+name = "wanix_wasi_host"
+path = "src/lib.rs"

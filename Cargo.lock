@@ -1145,6 +1145,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wanix-wasi-host"
+version = "0.1.0"
+dependencies = [
+ "wanix-fs",
+ "wanix-wasi",
+ "wasmtime",
+]
+
+[[package]]
 name = "wasip2"
 version = "1.0.3+wasi-0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
