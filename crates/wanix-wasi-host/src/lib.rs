@@ -118,3 +118,64 @@ pub fn add_to_linker<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<()
     path::register(linker)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use wanix_wasi::{WasiConfig, WasiCtx};
+    use wasmtime::{Engine, Linker, Store};
+
+    use super::{MODULE, WasiHost, add_to_linker};
+
+    struct TestHost {
+        wasi: WasiCtx,
+        exit_code: Option<i32>,
+    }
+
+    impl TestHost {
+        fn new() -> Self {
+            Self {
+                wasi: WasiCtx::new(WasiConfig::new(Default::default())),
+                exit_code: None,
+            }
+        }
+    }
+
+    impl WasiHost for TestHost {
+        fn wasi(&mut self) -> &mut WasiCtx {
+            &mut self.wasi
+        }
+
+        fn clock_time_ns(&self) -> u64 {
+            0
+        }
+
+        fn on_proc_exit(&mut self, code: i32) {
+            self.exit_code = Some(code);
+        }
+    }
+
+    #[test]
+    fn add_to_linker_registers_path_imports() {
+        let engine = Engine::default();
+        let mut linker = Linker::<TestHost>::new(&engine);
+        add_to_linker(&mut linker).expect("imports register");
+
+        let mut store = Store::new(&engine, TestHost::new());
+        for name in [
+            "path_open",
+            "path_filestat_get",
+            "path_readlink",
+            "path_filestat_set_times",
+            "path_create_directory",
+            "path_remove_directory",
+            "path_unlink_file",
+            "path_rename",
+            "path_symlink",
+        ] {
+            assert!(
+                linker.get(&mut store, MODULE, name).is_ok(),
+                "missing WASI path import {name}"
+            );
+        }
+    }
+}
