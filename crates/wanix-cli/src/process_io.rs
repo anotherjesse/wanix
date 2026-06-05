@@ -212,7 +212,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        ProcessIo, run_qemu_exec_process_io, run_qemu_print_process_io, run_qemu_process_io,
+        ProcessIo, run_9p_streaming_command, run_qemu_exec_process_io, run_qemu_print_process_io,
+        run_qemu_process_io,
     };
 
     fn args(values: &[&str]) -> Vec<OsString> {
@@ -220,14 +221,18 @@ mod tests {
     }
 
     fn prepared_qemu_root(name: &str) -> PathBuf {
+        let root = temp_dir_path(name);
+        fs::create_dir_all(root.join("boot")).unwrap();
+        fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
+        root
+    }
+
+    fn temp_dir_path(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()));
-        fs::create_dir_all(root.join("boot")).unwrap();
-        fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
-        root
+        std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()))
     }
 
     fn parse_qemu_command(root: &Path, extra: &[&str]) -> crate::qemu::QemuCommand {
@@ -235,6 +240,117 @@ mod tests {
         let mut values = vec!["--root", &root_arg, "--cmdline", "init=/bin/sh"];
         values.extend_from_slice(extra);
         crate::qemu::parse_qemu_command(&args(&values)).unwrap()
+    }
+
+    fn empty_process_io<'a>(
+        stdin: &'a mut &'static [u8],
+        stdout: &'a mut Vec<u8>,
+        stderr: &'a mut Vec<u8>,
+    ) -> ProcessIo<'a> {
+        ProcessIo::new(stdin, stdout, stderr)
+    }
+
+    #[test]
+    fn p9_streaming_command_reports_stdio_parse_errors() {
+        let mut stdin = &b""[..];
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut io = empty_process_io(&mut stdin, &mut stdout, &mut stderr);
+
+        let error =
+            run_9p_streaming_command(&OsString::from("p9-stdio"), &[], &mut io).unwrap_err();
+
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("p9-stdio requires --root DIR"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn p9_streaming_command_reports_listener_parse_errors() {
+        let mut stdin = &b""[..];
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut io = empty_process_io(&mut stdin, &mut stdout, &mut stderr);
+
+        let error =
+            run_9p_streaming_command(&OsString::from("p9-listen"), &[], &mut io).unwrap_err();
+
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("p9-listen requires --root DIR"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn p9_streaming_command_reports_websocket_parse_errors() {
+        let mut stdin = &b""[..];
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut io = empty_process_io(&mut stdin, &mut stdout, &mut stderr);
+
+        let error = run_9p_streaming_command(&OsString::from("p9-ws"), &[], &mut io).unwrap_err();
+
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("p9-ws requires --root DIR"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn p9_streaming_command_routes_stdio_runtime_errors() {
+        let missing_root = temp_dir_path("wanix-cli-process-io-p9-stdio-missing");
+        let root_arg = missing_root.display().to_string();
+        let rest = args(&["--root", &root_arg]);
+        let mut stdin = &b""[..];
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut io = empty_process_io(&mut stdin, &mut stdout, &mut stderr);
+
+        let error =
+            run_9p_streaming_command(&OsString::from("p9-stdio"), &rest, &mut io).unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("failed to open p9-stdio root"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn p9_streaming_command_routes_listener_runtime_errors() {
+        let rest = args(&["--root", ".", "--addr", "127.0.0.1:bad-port"]);
+        let mut stdin = &b""[..];
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut io = empty_process_io(&mut stdin, &mut stdout, &mut stderr);
+
+        let error =
+            run_9p_streaming_command(&OsString::from("p9-listen"), &rest, &mut io).unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(
+            error
+                .to_string()
+                .contains("failed to bind p9-listen address")
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn p9_streaming_command_routes_websocket_runtime_errors() {
+        let rest = args(&["--root", ".", "--addr", "127.0.0.1:bad-port"]);
+        let mut stdin = &b""[..];
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut io = empty_process_io(&mut stdin, &mut stdout, &mut stderr);
+
+        let error = run_9p_streaming_command(&OsString::from("p9-ws"), &rest, &mut io).unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("failed to bind p9-ws address"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
     }
 
     #[test]
