@@ -18,6 +18,7 @@ pub(super) use request::{
 pub(super) use response::{HttpStatus, StaticResponse};
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
+const HTTP_READ_BUFFER_BYTES: usize = 1024;
 
 pub(super) fn peek_request_headers(stream: &TcpStream) -> io::Result<Vec<u8>> {
     let mut buffer = [0; MAX_HTTP_HEADER_BYTES];
@@ -99,7 +100,7 @@ pub(super) fn write_static_response(
 
 fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, ServeConnectionError> {
     let mut request = Vec::new();
-    let mut buffer = [0; 1024];
+    let mut buffer = [0; HTTP_READ_BUFFER_BYTES];
     while request.len() < MAX_HTTP_HEADER_BYTES {
         let len = stream.read(&mut buffer)?;
         if len == 0 {

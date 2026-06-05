@@ -2,6 +2,10 @@ use std::path::PathBuf;
 
 use super::{HttpStatus, StaticResponse};
 
+const PERCENT_ESCAPE_BYTES: usize = 3;
+const HEX_HIGH_NIBBLE_SHIFT: u8 = 4;
+const HEX_ALPHA_OFFSET: u8 = 10;
+
 pub(in crate::serve) fn header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|window| window == b"\r\n\r\n")
 }
@@ -128,15 +132,15 @@ fn push_percent_escape(
 ) -> Result<usize, HttpStatus> {
     let high = *bytes.get(index + 1).ok_or(HttpStatus::BadRequest)?;
     let low = *bytes.get(index + 2).ok_or(HttpStatus::BadRequest)?;
-    decoded.push((hex_value(high)? << 4) | hex_value(low)?);
-    Ok(index + 3)
+    decoded.push((hex_value(high)? << HEX_HIGH_NIBBLE_SHIFT) | hex_value(low)?);
+    Ok(index + PERCENT_ESCAPE_BYTES)
 }
 
 fn hex_value(byte: u8) -> Result<u8, HttpStatus> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
-        b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        b'a'..=b'f' => Ok(byte - b'a' + HEX_ALPHA_OFFSET),
+        b'A'..=b'F' => Ok(byte - b'A' + HEX_ALPHA_OFFSET),
         _ => Err(HttpStatus::BadRequest),
     }
 }
