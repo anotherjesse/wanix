@@ -258,6 +258,7 @@ const EXECUTE_JOB_RETURN_FAILURE: &str = r#"  (func (export "qjs_execute_pending
     i32.const -1)"#;
 
 #[derive(Clone, Copy)]
+#[repr(usize)]
 pub(super) enum CleanupFault {
     EvalValueFreeTrap,
     CStringFreeTrap,
@@ -297,63 +298,51 @@ pub(super) enum CleanupFault {
 }
 
 impl CleanupFault {
+    const REPLACEMENTS: [(&'static str, &'static str); 35] = [
+        (EVAL_VALUE_FREE_RETURN, EVAL_VALUE_FREE_TRAP),
+        (C_STRING_FREE_RETURN, C_STRING_FREE_TRAP),
+        (C_STRING_DATA_VALID, C_STRING_DATA_INVALID_UTF8),
+        (FUNCTION_VALUE_FREE_RETURN, FUNCTION_VALUE_FREE_TRAP),
+        (QJS_EVAL_RETURN, QJS_EVAL_TRAP),
+        (QJS_EVAL_RETURN, QJS_EVAL_RETURN_NULL),
+        (QJS_COMPILE_RETURN, QJS_COMPILE_TRAP),
+        (QJS_COMPILE_RETURN, QJS_COMPILE_RETURN_NULL),
+        (QJS_COMPILE_RETURN, QJS_COMPILE_RETURN_OVERSIZED_BUFFER),
+        (QJS_FREE_BYTECODE_RETURN, QJS_FREE_BYTECODE_TRAP),
+        (QJS_CALL_RETURN, QJS_CALL_TRAP),
+        (QJS_IS_EXCEPTION_RETURN_NONE, QJS_IS_EXCEPTION_TRAP),
+        (QJS_IS_NUMBER_RETURN_FALSE, QJS_IS_NUMBER_TRAP),
+        (QJS_IS_NUMBER_RETURN_FALSE, QJS_IS_NUMBER_RETURN_TRUE),
+        (QJS_IS_STRING_RETURN_TRUE, QJS_IS_STRING_TRAP),
+        (QJS_IS_STRING_RETURN_TRUE, QJS_IS_STRING_RETURN_FALSE),
+        (QJS_GET_FLOAT64_RETURN, QJS_GET_FLOAT64_TRAP),
+        (
+            QJS_COMPUTE_MEMORY_USAGE_RETURN,
+            QJS_COMPUTE_MEMORY_USAGE_TRAP,
+        ),
+        (QJS_GET_EXCEPTION_RETURN, QJS_GET_EXCEPTION_TRAP),
+        (QJS_GET_STRING_RETURN, QJS_GET_STRING_TRAP),
+        (QJS_GET_STRING_RETURN, QJS_GET_STRING_RETURN_NULL),
+        (QJS_IS_BIG_INT_RETURN_FALSE, QJS_IS_BIG_INT_RETURN_TRUE),
+        (QJS_NEW_BIG_INT64_RETURN, QJS_NEW_BIG_INT64_TRAP),
+        (QJS_GET_BIG_INT64_RETURN, QJS_GET_BIG_INT64_TRAP),
+        (QJS_GET_BIG_INT64_RETURN, QJS_GET_BIG_INT64_RETURN_FAILURE),
+        (QJS_NEW_ARRAY_BUFFER_RETURN, QJS_NEW_ARRAY_BUFFER_TRAP),
+        (QJS_NEW_TYPED_ARRAY_RETURN, QJS_NEW_TYPED_ARRAY_TRAP),
+        (QJS_NEW_DATA_VIEW_RETURN, QJS_NEW_DATA_VIEW_TRAP),
+        (QJS_GET_ARRAY_BUFFER_RETURN, QJS_GET_ARRAY_BUFFER_TRAP),
+        (
+            QJS_GET_ARRAY_BUFFER_RETURN,
+            QJS_GET_ARRAY_BUFFER_RETURN_NULL,
+        ),
+        (QJS_IS_EXCEPTION_RETURN_NONE, QJS_IS_EXCEPTION_FOR_EVAL),
+        (QJS_IS_EXCEPTION_RETURN_NONE, QJS_IS_EXCEPTION_FOR_CALL),
+        (JOB_PENDING_RETURN_EMPTY, JOB_PENDING_RETURN_ONE),
+        (EXECUTE_JOB_RETURN_OK, EXECUTE_JOB_LOG_AND_RETURN_OK),
+        (EXECUTE_JOB_RETURN_OK, EXECUTE_JOB_RETURN_FAILURE),
+    ];
+
     pub(super) fn replacement(self) -> (&'static str, &'static str) {
-        match self {
-            Self::EvalValueFreeTrap => (EVAL_VALUE_FREE_RETURN, EVAL_VALUE_FREE_TRAP),
-            Self::CStringFreeTrap => (C_STRING_FREE_RETURN, C_STRING_FREE_TRAP),
-            Self::CStringDataInvalidUtf8 => (C_STRING_DATA_VALID, C_STRING_DATA_INVALID_UTF8),
-            Self::FunctionValueFreeTrap => (FUNCTION_VALUE_FREE_RETURN, FUNCTION_VALUE_FREE_TRAP),
-            Self::QjsEvalTrap => (QJS_EVAL_RETURN, QJS_EVAL_TRAP),
-            Self::QjsEvalReturnsNull => (QJS_EVAL_RETURN, QJS_EVAL_RETURN_NULL),
-            Self::QjsCompileTrap => (QJS_COMPILE_RETURN, QJS_COMPILE_TRAP),
-            Self::QjsCompileReturnsNull => (QJS_COMPILE_RETURN, QJS_COMPILE_RETURN_NULL),
-            Self::QjsCompileReturnsOversizedBuffer => {
-                (QJS_COMPILE_RETURN, QJS_COMPILE_RETURN_OVERSIZED_BUFFER)
-            }
-            Self::QjsFreeBytecodeTrap => (QJS_FREE_BYTECODE_RETURN, QJS_FREE_BYTECODE_TRAP),
-            Self::QjsCallTrap => (QJS_CALL_RETURN, QJS_CALL_TRAP),
-            Self::QjsIsExceptionTrap => (QJS_IS_EXCEPTION_RETURN_NONE, QJS_IS_EXCEPTION_TRAP),
-            Self::QjsIsNumberTrap => (QJS_IS_NUMBER_RETURN_FALSE, QJS_IS_NUMBER_TRAP),
-            Self::QjsIsNumberReturnsTrue => (QJS_IS_NUMBER_RETURN_FALSE, QJS_IS_NUMBER_RETURN_TRUE),
-            Self::QjsIsStringTrap => (QJS_IS_STRING_RETURN_TRUE, QJS_IS_STRING_TRAP),
-            Self::QjsIsStringReturnsFalse => {
-                (QJS_IS_STRING_RETURN_TRUE, QJS_IS_STRING_RETURN_FALSE)
-            }
-            Self::QjsGetFloat64Trap => (QJS_GET_FLOAT64_RETURN, QJS_GET_FLOAT64_TRAP),
-            Self::QjsComputeMemoryUsageTrap => (
-                QJS_COMPUTE_MEMORY_USAGE_RETURN,
-                QJS_COMPUTE_MEMORY_USAGE_TRAP,
-            ),
-            Self::QjsGetExceptionTrap => (QJS_GET_EXCEPTION_RETURN, QJS_GET_EXCEPTION_TRAP),
-            Self::QjsGetStringTrap => (QJS_GET_STRING_RETURN, QJS_GET_STRING_TRAP),
-            Self::QjsGetStringReturnsNull => (QJS_GET_STRING_RETURN, QJS_GET_STRING_RETURN_NULL),
-            Self::QjsIsBigIntReturnsTrue => {
-                (QJS_IS_BIG_INT_RETURN_FALSE, QJS_IS_BIG_INT_RETURN_TRUE)
-            }
-            Self::QjsNewBigInt64Trap => (QJS_NEW_BIG_INT64_RETURN, QJS_NEW_BIG_INT64_TRAP),
-            Self::QjsGetBigInt64Trap => (QJS_GET_BIG_INT64_RETURN, QJS_GET_BIG_INT64_TRAP),
-            Self::QjsGetBigInt64ReturnsFailure => {
-                (QJS_GET_BIG_INT64_RETURN, QJS_GET_BIG_INT64_RETURN_FAILURE)
-            }
-            Self::QjsNewArrayBufferTrap => (QJS_NEW_ARRAY_BUFFER_RETURN, QJS_NEW_ARRAY_BUFFER_TRAP),
-            Self::QjsNewTypedArrayTrap => (QJS_NEW_TYPED_ARRAY_RETURN, QJS_NEW_TYPED_ARRAY_TRAP),
-            Self::QjsNewDataViewTrap => (QJS_NEW_DATA_VIEW_RETURN, QJS_NEW_DATA_VIEW_TRAP),
-            Self::QjsGetArrayBufferTrap => (QJS_GET_ARRAY_BUFFER_RETURN, QJS_GET_ARRAY_BUFFER_TRAP),
-            Self::QjsGetArrayBufferReturnsNull => (
-                QJS_GET_ARRAY_BUFFER_RETURN,
-                QJS_GET_ARRAY_BUFFER_RETURN_NULL,
-            ),
-            Self::QjsEvalReturnsException => {
-                (QJS_IS_EXCEPTION_RETURN_NONE, QJS_IS_EXCEPTION_FOR_EVAL)
-            }
-            Self::QjsCallReturnsException => {
-                (QJS_IS_EXCEPTION_RETURN_NONE, QJS_IS_EXCEPTION_FOR_CALL)
-            }
-            Self::JobQueueAlwaysPending => (JOB_PENDING_RETURN_EMPTY, JOB_PENDING_RETURN_ONE),
-            Self::PendingJobLogsAndSucceeds => {
-                (EXECUTE_JOB_RETURN_OK, EXECUTE_JOB_LOG_AND_RETURN_OK)
-            }
-            Self::PendingJobFails => (EXECUTE_JOB_RETURN_OK, EXECUTE_JOB_RETURN_FAILURE),
-        }
+        Self::REPLACEMENTS[self as usize]
     }
 }
