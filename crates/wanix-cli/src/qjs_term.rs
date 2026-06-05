@@ -31,6 +31,12 @@ use pump::ProcessEventSources;
 use runtime::{run_qjs_term_program_streaming, run_qjs_term_program_streaming_with_input_mode};
 pub(crate) use session::QjsShellSession;
 
+pub(super) struct QjsShellStreamingIo<'a> {
+    pub(super) process_stdin: &'a mut dyn Read,
+    pub(super) process_stdout: &'a mut dyn Write,
+    pub(super) process_stderr: &'a mut dyn Write,
+}
+
 pub(super) fn run_qjs_term(
     command: QjsTermCommand,
     process_stdin: &mut dyn Read,
@@ -90,10 +96,8 @@ pub(super) fn run_qjs_shell_streaming(
 #[cfg(unix)]
 pub(super) fn run_qjs_shell_streaming_with_input_fd(
     command: QjsShellCommand,
-    process_stdin: &mut dyn Read,
     input_fd: libc::c_int,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
+    io: QjsShellStreamingIo<'_>,
 ) -> Result<i32, CliError> {
     run_qjs_term_program_streaming_with_input_mode(
         qjs_shell_command(command.qjs, command.raw),
@@ -104,20 +108,18 @@ pub(super) fn run_qjs_shell_streaming_with_input_fd(
         }],
         QjsTermProgram::BundledShell,
         ProcessEventSources::input_fd(input_fd),
-        process_stdin,
-        process_stdout,
-        process_stderr,
+        io.process_stdin,
+        io.process_stdout,
+        io.process_stderr,
     )
 }
 
 #[cfg(unix)]
 pub(super) fn run_qjs_shell_streaming_with_terminal_fds(
     command: QjsShellCommand,
-    process_stdin: &mut dyn Read,
     input_fd: libc::c_int,
     terminal_size_fd: libc::c_int,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
+    io: QjsShellStreamingIo<'_>,
 ) -> Result<i32, CliError> {
     run_qjs_term_program_streaming_with_input_mode(
         qjs_shell_command(command.qjs, command.raw),
@@ -128,20 +130,18 @@ pub(super) fn run_qjs_shell_streaming_with_terminal_fds(
         }],
         QjsTermProgram::BundledShell,
         ProcessEventSources::terminal_fds(input_fd, terminal_size_fd),
-        process_stdin,
-        process_stdout,
-        process_stderr,
+        io.process_stdin,
+        io.process_stdout,
+        io.process_stderr,
     )
 }
 
 #[cfg(all(test, unix))]
 pub(super) fn run_qjs_shell_streaming_with_resize_queue(
     command: QjsShellCommand,
-    process_stdin: &mut dyn Read,
     input_fd: libc::c_int,
     resize_queue: Arc<Mutex<VecDeque<(u16, u16)>>>,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
+    io: QjsShellStreamingIo<'_>,
 ) -> Result<i32, CliError> {
     run_qjs_term_program_streaming_with_input_mode(
         qjs_shell_command(command.qjs, command.raw),
@@ -152,9 +152,9 @@ pub(super) fn run_qjs_shell_streaming_with_resize_queue(
         }],
         QjsTermProgram::BundledShell,
         ProcessEventSources::resize_queue(input_fd, resize_queue),
-        process_stdin,
-        process_stdout,
-        process_stderr,
+        io.process_stdin,
+        io.process_stdout,
+        io.process_stderr,
     )
 }
 

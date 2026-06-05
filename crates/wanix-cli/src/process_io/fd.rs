@@ -1,7 +1,10 @@
 use std::ffi::OsString;
 
 use super::ProcessIo;
-use crate::{CliError, qjs_term};
+use crate::{
+    CliError,
+    qjs_term::{self, QjsShellStreamingIo},
+};
 
 #[cfg(unix)]
 pub(crate) fn run_with_stdin_fd(
@@ -76,18 +79,18 @@ fn run_with_qjs_shell_input(
     let command = qjs_term::parse_qjs_shell_command(rest)?;
     match input {
         QjsShellInput::StdinFd(stdin_fd) => qjs_term::run_qjs_shell_streaming_with_input_fd(
-            command, io.stdin, stdin_fd, io.stdout, io.stderr,
+            command,
+            stdin_fd,
+            qjs_shell_streaming_io(io),
         ),
         QjsShellInput::TerminalFds {
             stdin_fd,
             terminal_size_fd,
         } => qjs_term::run_qjs_shell_streaming_with_terminal_fds(
             command,
-            io.stdin,
             stdin_fd,
             terminal_size_fd,
-            io.stdout,
-            io.stderr,
+            qjs_shell_streaming_io(io),
         ),
         #[cfg(test)]
         QjsShellInput::ResizeQueue {
@@ -95,11 +98,18 @@ fn run_with_qjs_shell_input(
             resize_queue,
         } => qjs_term::run_qjs_shell_streaming_with_resize_queue(
             command,
-            io.stdin,
             stdin_fd,
             resize_queue,
-            io.stdout,
-            io.stderr,
+            qjs_shell_streaming_io(io),
         ),
+    }
+}
+
+#[cfg(unix)]
+fn qjs_shell_streaming_io<'a>(io: &'a mut ProcessIo<'_>) -> QjsShellStreamingIo<'a> {
+    QjsShellStreamingIo {
+        process_stdin: io.stdin,
+        process_stdout: io.stdout,
+        process_stderr: io.stderr,
     }
 }
