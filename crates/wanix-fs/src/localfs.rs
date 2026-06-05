@@ -10,6 +10,7 @@ use crate::{
 mod file;
 mod host;
 mod paths;
+mod readdir;
 
 use file::LocalFile;
 use host::{
@@ -87,36 +88,7 @@ impl FileSystem for LocalFs {
     }
 
     fn read_dir(&self, path: &NormalizedPath) -> FsResult<Vec<DirEntry>> {
-        let host_path = self.existing_host_path(path)?;
-        let metadata = fs::metadata(&host_path).map_err(map_io_error)?;
-        if !metadata.is_dir() {
-            return Err(FsError::NotDirectory);
-        }
-
-        let mut entries = Vec::new();
-        for entry in fs::read_dir(host_path).map_err(map_io_error)? {
-            let entry = entry.map_err(map_io_error)?;
-            let name = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| FsError::InvalidPath("<non-utf8 host path>".to_owned()))?;
-            if NormalizedPath::new(&name).is_err() {
-                continue;
-            }
-            let child_path = if path.as_str() == "." {
-                NormalizedPath::new(&name)?
-            } else {
-                NormalizedPath::new(format!("{path}/{name}"))?
-            };
-            let metadata = match self.metadata(&child_path) {
-                Ok(metadata) => metadata,
-                Err(FsError::NotFound | FsError::PermissionDenied) => continue,
-                Err(err) => return Err(err),
-            };
-            entries.push(DirEntry::new(name, metadata));
-        }
-        entries.sort_by(|left, right| left.name().cmp(right.name()));
-        Ok(entries)
+        self.read_host_dir(path)
     }
 
     fn read_link(&self, path: &NormalizedPath) -> FsResult<Vec<u8>> {
