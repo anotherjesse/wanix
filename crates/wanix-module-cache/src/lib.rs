@@ -55,7 +55,7 @@
 mod dir;
 mod trust;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 use wasmtime::{Engine, Module};
@@ -78,7 +78,8 @@ fn artifact_name(wasm_sha256: &[u8; 32]) -> String {
 }
 
 /// Full on-disk path of an artifact under a cache directory.
-fn artifact_path(cache_dir: &Path, wasm_sha256: &[u8; 32]) -> PathBuf {
+#[cfg(test)]
+fn artifact_path(cache_dir: &Path, wasm_sha256: &[u8; 32]) -> std::path::PathBuf {
     cache_dir.join(artifact_name(wasm_sha256))
 }
 
@@ -121,9 +122,8 @@ pub fn load_or_compile(
 
     // Best-effort write; ignore failures (read-only dir, races, full disk).
     if let Ok(artifact) = module.serialize() {
-        let path = artifact_path(cache_dir, wasm_sha256);
         let key_prefix = format!("{:02x}{:02x}", wasm_sha256[0], wasm_sha256[1]);
-        let _ = trust::write_atomic(&path, &artifact, &key_prefix);
+        let _ = trust::write_atomic(cache_dir, &name, &artifact, &key_prefix);
     }
 
     Ok(module)
@@ -131,6 +131,8 @@ pub fn load_or_compile(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use wasmtime::Engine;
 
@@ -289,6 +291,32 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_refuses_symlinked_leaf_directory() {
+        // A writable-ancestor attacker who swaps the leaf cache dir for a symlink
+        // to a directory they control must not get the victim to write its
+        // artifact through that symlink: the O_NOFOLLOW directory open rejects it,
+        // so no artifact lands in the attacker's target and the compile still
+        // succeeds (write is advisory).
+        let target = unique_dir("write-symlink-target");
+        std::fs::create_dir_all(&target).unwrap();
+        let link = unique_dir("write-symlink-leaf");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let engine = Engine::default();
+        let key = sha(EMPTY_WASM);
+        load_or_compile(&engine, EMPTY_WASM, &key, &link).unwrap();
+
+        assert!(
+            !artifact_path(&target, &key).exists(),
+            "no artifact may be written through a symlinked leaf directory"
+        );
+
+        std::fs::remove_file(&link).ok();
+        std::fs::remove_dir_all(&target).ok();
     }
 
     #[cfg(unix)]

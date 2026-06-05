@@ -110,14 +110,18 @@ recompiling a non-trivial guest on every task start is wasted Cranelift work.
   `openat`-opened relative to that directory fd with `O_NOFOLLOW`, its fd is
   `fstat`ed (regular file, owner == euid, no `0o022` bits), and the bytes are
   read from that same fd — no path is re-resolved between check and read (no
-  TOCTOU window, no symlink follow). The temp artifact is created `0o600` as
-  defense-in-depth. This verifies the leaf directory and the artifact file; it
-  does **not** walk every ancestor, relying instead on the owner-private-ancestor
-  assumption documented in each runtime's cache-policy module (the default
-  location lives under an owner-controlled per-user cache root). On non-Unix
-  platforms, with no portable fd-ownership model, the check degrades to "is a
-  directory" — a weaker guarantee — and the per-user default location carries the
-  trust.
+  TOCTOU window, no symlink follow). The **write** path is hardened the same way:
+  the directory is opened+`fstat`-verified through an `O_NOFOLLOW` fd, the temp
+  artifact is created `O_CREAT | O_EXCL | O_NOFOLLOW` at `0o600` via `openat`
+  relative to that fd, and the publish is a `renameat` relative to the same fd —
+  so a swapped/symlinked leaf cannot redirect where the artifact is written. This
+  verifies the leaf directory and the artifact file; it does **not** walk every
+  ancestor, relying instead on the owner-private-ancestor assumption documented in
+  each runtime's cache-policy module (the default location lives under an
+  owner-controlled per-user cache root). On non-Unix platforms, with no portable
+  fd-ownership model, both paths degrade to "is a directory" — a weaker guarantee,
+  so a non-Unix host that cannot place the cache under an owner-private location is
+  out of the threat model — and the per-user default location carries the trust.
 - **One shared implementation.** The cache primitive (`load_or_compile` plus the
   fd-based verification, atomic write, and owner-private-dir resolver) lives in a
   small standalone `wanix-module-cache` crate that depends only on Wasmtime,
