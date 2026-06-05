@@ -31,7 +31,7 @@ pub(super) struct QjsCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum QjsStdin {
+pub(crate) enum QjsStdin {
     Bytes(Vec<u8>),
     File(PathBuf),
     Process,
@@ -70,7 +70,7 @@ pub(super) struct QjsSnapshotFileCommand {
     pub(super) mounts: Vec<HostMount>,
 }
 
-pub(super) fn read_qjs_stdin(
+pub(crate) fn read_qjs_stdin(
     source: Option<QjsStdin>,
     process_stdin: &mut dyn Read,
 ) -> Result<Option<Vec<u8>>, CliError> {
@@ -93,7 +93,7 @@ pub(super) fn read_qjs_stdin(
     }
 }
 
-fn set_qjs_stdin(
+pub(crate) fn set_qjs_stdin(
     stdin: &mut Option<QjsStdin>,
     source: QjsStdin,
     command: &str,
@@ -126,7 +126,7 @@ fn parse_host_mount(value: &str, label: &str) -> Result<HostMount, CliError> {
     })
 }
 
-pub(super) fn os_arg_to_string(arg: &OsString, label: &str) -> Result<String, CliError> {
+pub(crate) fn os_arg_to_string(arg: &OsString, label: &str) -> Result<String, CliError> {
     arg.clone()
         .into_string()
         .map_err(|_| CliError::usage(format!("{label} must be valid UTF-8")))
@@ -154,7 +154,7 @@ fn parse_u32(arg: &OsString, label: &str) -> Result<u32, CliError> {
         .map_err(|_| CliError::usage(format!("{label} expects a 32-bit non-negative integer")))
 }
 
-fn validate_env_line(line: &str, label: &str) -> Result<(), CliError> {
+pub(crate) fn validate_env_line(line: &str, label: &str) -> Result<(), CliError> {
     let Some((key, _value)) = line.split_once('=') else {
         return Err(CliError::usage(format!("{label} expects KEY=VALUE")));
     };

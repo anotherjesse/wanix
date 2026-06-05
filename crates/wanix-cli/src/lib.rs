@@ -18,6 +18,8 @@ mod qjs_term;
 mod rootfs;
 mod serve;
 mod terminal_mode;
+mod wasm;
+mod wasm_args;
 
 use std::ffi::OsString;
 use std::io::{self, Read, Write};

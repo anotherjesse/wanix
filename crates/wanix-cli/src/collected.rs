@@ -1,9 +1,10 @@
 use std::ffi::OsString;
 use std::io::Read;
 
+use crate::wasm_args::parse_wasm_command;
 use crate::{
     CliError, CliOutput, p9_listen, p9_stdio, p9_ws, parse_qjs_command,
-    parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term, rootfs, serve,
+    parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term, rootfs, serve, wasm,
 };
 
 pub(super) fn run_collected_command(
@@ -13,6 +14,7 @@ pub(super) fn run_collected_command(
 ) -> Result<CliOutput, CliError> {
     match command.to_str() {
         Some("qjs") => qjs::run_qjs(parse_qjs_command(rest)?, process_stdin),
+        Some("wasm") => wasm::run_wasm(parse_wasm_command(rest)?, process_stdin),
         Some("qjs-term") => {
             qjs_term::run_qjs_term(qjs_term::parse_qjs_term_command(rest)?, process_stdin)
         }

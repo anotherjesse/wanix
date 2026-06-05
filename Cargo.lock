@@ -1078,6 +1078,7 @@ dependencies = [
  "wanix-term",
  "wanix-vfs",
  "wanix-wasi",
+ "wanix-wasm",
 ]
 
 [[package]]
