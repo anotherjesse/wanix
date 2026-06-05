@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use wasmtime::{Engine, Linker, Memory, Module, Store, TypedFunc};
 
 mod clock_time_get;
+mod ctx_overrides;
 mod env;
 mod fd_fdstat_get;
 mod fd_write;
@@ -132,6 +133,39 @@ fn host_import_harness(config: QuickJsHostConfig) -> Result<HostImportHarness> {
     host_import_harness_with_wasi_host(config, None)
 }
 
+/// Builds the harness over the LIVE Ctx path: the shared `add_to_linker` base
+/// with the engine's `define_ctx_wasi_overrides` shadowing it (the exact wiring
+/// production uses for a `WasiBacking::Ctx` runtime). Lets tests confirm the
+/// engine's clock/random overrides win over the shared linker on the real path.
+fn ctx_import_harness(config: QuickJsHostConfig) -> Result<HostImportHarness> {
+    use crate::host::{WasiBacking, define_ctx_wasi_overrides};
+
+    let engine = Engine::default();
+    let module = Module::new(&engine, HOST_IMPORT_WAT)?;
+    let mut linker = Linker::<HostState>::new(&engine);
+    linker.allow_shadowing(true);
+    wanix_wasi_host::add_to_linker(&mut linker)?;
+    define_ctx_wasi_overrides(&mut linker)?;
+    let ctx = wanix_wasi::WasiCtx::new(wanix_wasi::WasiConfig::new(wanix_vfs::Namespace::new()));
+    let mut store = Store::new(
+        &engine,
+        HostState::new_with_backing(config, WasiBacking::Ctx(Box::new(ctx)), None),
+    );
+    let instance = linker.instantiate(&mut store, &module)?;
+    let memory = instance
+        .get_memory(&mut store, "memory")
+        .context("test module should export memory")?;
+    store.data_mut().set_memory(memory);
+    Ok(HostImportHarness {
+        random_get: instance.get_typed_func(&mut store, "random_get")?,
+        clock_time_get: instance.get_typed_func(&mut store, "clock_time_get")?,
+        fd_fdstat_get: instance.get_typed_func(&mut store, "fd_fdstat_get")?,
+        fd_write: instance.get_typed_func(&mut store, "fd_write")?,
+        store,
+        memory,
+    })
+}
+
 fn host_import_harness_with_wasi_host(
     config: QuickJsHostConfig,
     wasi_host: Option<Box<dyn QuickJsWasiHost>>,
@@ -196,6 +230,16 @@ fn read_u64(harness: &HostImportHarness, offset: usize) -> Result<u64> {
     let mut bytes = [0; 8];
     harness.memory.read(&harness.store, offset, &mut bytes)?;
     Ok(u64::from_le_bytes(bytes))
+}
+
+fn write_byte(harness: &mut HostImportHarness, offset: usize, value: u8) -> Result<()> {
+    Ok(harness.memory.write(&mut harness.store, offset, &[value])?)
+}
+
+fn read_byte(harness: &HostImportHarness, offset: usize) -> Result<u8> {
+    let mut bytes = [0; 1];
+    harness.memory.read(&harness.store, offset, &mut bytes)?;
+    Ok(bytes[0])
 }
 
 fn test_guest_i32(value: usize, field: &str) -> Result<i32> {

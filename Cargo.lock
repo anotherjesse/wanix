@@ -1109,6 +1109,7 @@ dependencies = [
  "anyhow",
  "proptest",
  "sha2",
+ "wanix-vfs",
  "wanix-wasi",
  "wanix-wasi-host",
  "wasmtime",
