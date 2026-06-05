@@ -7,13 +7,14 @@ use wanix_task::Task;
 use crate::host_api::{
     define_wanix_module_loader, define_wanix_task_globals, qjs_error, read_namespace_file,
 };
+use crate::runtime_control::drain_runtime_work;
 use crate::task_command::{task_command, task_wasi_argv};
 use crate::task_context::{WanixExitState, WanixTaskContext};
 use crate::task_stdio::task_wasi_config;
 use crate::wasi_host::WanixQuickJsWasiHost;
 use crate::{
     CONSOLE_PRELUDE, QuickJsRunner, QuickJsWanixConfig, captured_stdio_options,
-    captured_stdio_options_with_wanix_wasi, drain_runtime_work, uses_module_syntax,
+    captured_stdio_options_with_wanix_wasi, uses_module_syntax,
 };
 use control::configure_runtime_control;
 use output::{RunControl, RunFailure, collect_run_output, new_output_buffers, write_task_output};

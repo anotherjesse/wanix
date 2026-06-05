@@ -4,7 +4,7 @@ use wanix_task::Fd;
 
 use super::output::{OutputBuffer, RunControl};
 use crate::host_api::qjs_error;
-use crate::{define_task_output_callback, exit_requested_or_poisoned};
+use crate::runtime_control::{define_task_output_callback, exit_requested_or_poisoned};
 
 pub(super) fn configure_runtime_control(
     runtime: &mut QuickJsRuntime,
