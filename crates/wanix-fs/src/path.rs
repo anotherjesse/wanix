@@ -7,6 +7,12 @@ use crate::{FsError, FsResult};
 pub struct NormalizedPath(String);
 
 impl NormalizedPath {
+    /// Returns the normalized filesystem root path.
+    #[must_use]
+    pub fn root() -> Self {
+        Self(".".to_owned())
+    }
+
     /// Creates a normalized path after validating relative path components.
     ///
     /// `.` is the filesystem root. Other paths must be slash-separated,
@@ -97,6 +103,14 @@ mod tests {
                 Err(FsError::InvalidPath(_))
             ));
         }
+    }
+
+    #[test]
+    fn root_path_is_available_without_validation() {
+        let root = NormalizedPath::root();
+
+        assert_eq!(root.as_str(), ".");
+        assert!(root.parent().is_none());
     }
 
     #[test]
