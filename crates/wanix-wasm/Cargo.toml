@@ -1,0 +1,21 @@
+[package]
+name = "wanix-wasm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+wanix-fs = { path = "../wanix-fs" }
+wanix-vfs = { path = "../wanix-vfs" }
+wanix-wasi = { path = "../wanix-wasi" }
+wanix-wasi-host = { path = "../wanix-wasi-host" }
+wasmtime = { version = "45.0.0", default-features = false, features = [
+    "anyhow",
+    "cranelift",
+    "runtime",
+    "std",
+] }
+
+[lib]
+name = "wanix_wasm"
+path = "src/lib.rs"

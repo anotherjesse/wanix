@@ -1,0 +1,18 @@
+# Standalone guest compiled to wasm32-wasip1; its own workspace so the parent
+# Wanix workspace does not try to build it for the host target.
+# Build: cargo build --release --target wasm32-wasip1
+# then copy target/wasm32-wasip1/release/guest.wasm to ../rust-guest.wasm
+[package]
+name = "guest"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "guest"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "s"
+strip = true
+
+[workspace]

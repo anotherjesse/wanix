@@ -11,6 +11,7 @@ members = [
     "crates/wanix-vfs",
     "crates/wanix-wasi",
     "crates/wanix-wasi-host",
+    "crates/wanix-wasm",
 ]
 resolver = "3"
 
