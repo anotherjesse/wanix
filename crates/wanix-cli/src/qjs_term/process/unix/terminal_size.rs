@@ -1,28 +1,18 @@
-use std::io;
-
 use super::super::super::CliError;
 use super::super::super::pump::TermResize;
+use crate::unix_fd::with_borrowed_fd;
+use rustix::termios::{isatty, tcgetwinsize};
 
 pub(in crate::qjs_term) fn terminal_size_for_fd(
     fd: libc::c_int,
 ) -> Result<Option<TermResize>, CliError> {
-    // SAFETY: `isatty` only observes the supplied file descriptor.
-    if unsafe { libc::isatty(fd) } == 0 {
+    if !with_borrowed_fd(fd, |fd| isatty(fd)) {
         return Ok(None);
     }
-    let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
-    // SAFETY: `size` points to valid writable memory for TIOCGWINSZ.
-    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, size.as_mut_ptr()) } != 0 {
-        return Err(CliError::new(
-            format!(
-                "failed to read native terminal size: {}",
-                io::Error::last_os_error()
-            ),
-            1,
-        ));
-    }
-    // SAFETY: ioctl succeeded and initialized the winsize value.
-    let size = unsafe { size.assume_init() };
+
+    let size = with_borrowed_fd(fd, |fd| tcgetwinsize(fd)).map_err(|error| {
+        CliError::new(format!("failed to read native terminal size: {error}"), 1)
+    })?;
     if size.ws_col == 0 || size.ws_row == 0 {
         return Ok(None);
     }

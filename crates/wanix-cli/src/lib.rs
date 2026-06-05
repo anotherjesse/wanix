@@ -18,6 +18,8 @@ mod qjs_term;
 mod rootfs;
 mod serve;
 mod terminal_mode;
+#[cfg(unix)]
+mod unix_fd;
 mod wasm;
 mod wasm_args;
 

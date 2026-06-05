@@ -1,7 +1,9 @@
-use std::io;
 use std::time::Duration;
 
 use super::super::super::CliError;
+use crate::unix_fd::with_borrowed_fd;
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::io::Errno;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProcessStdinPoll {
@@ -9,42 +11,50 @@ pub(super) enum ProcessStdinPoll {
     Idle,
 }
 
+const MILLIS_PER_SECOND: i64 = 1_000;
+const NANOS_PER_MILLI: i64 = 1_000_000;
+
 pub(super) fn poll_process_stdin(
     input_fd: libc::c_int,
     timeout: Duration,
 ) -> Result<ProcessStdinPoll, CliError> {
-    let mut poll_fd = libc::pollfd {
-        fd: input_fd,
-        events: libc::POLLIN,
-        revents: 0,
-    };
     loop {
-        // SAFETY: `poll_fd` points to one valid pollfd entry for the duration of the call.
-        let result = unsafe { libc::poll(&mut poll_fd, 1, poll_timeout_millis(timeout)) };
-        if result == 0 {
+        let polled = with_borrowed_fd(input_fd, |fd| {
+            let mut poll_fd = PollFd::from_borrowed_fd(fd, PollFlags::IN);
+            let ready = poll(
+                std::slice::from_mut(&mut poll_fd),
+                Some(&poll_timeout(timeout)),
+            )?;
+            Ok::<_, Errno>((ready, poll_fd.revents()))
+        });
+        let (ready, revents) = match polled {
+            Ok(polled) => polled,
+            Err(error) if error == Errno::INTR => continue,
+            Err(error) => {
+                return Err(CliError::new(
+                    format!("failed to poll process stdin: {error}"),
+                    1,
+                ));
+            }
+        };
+        if ready == 0 {
             return Ok(ProcessStdinPoll::Idle);
         }
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(CliError::new(
-                format!("failed to poll process stdin: {error}"),
-                1,
-            ));
-        }
-        if poll_fd.revents & libc::POLLNVAL != 0 {
+        if revents.contains(PollFlags::NVAL) {
             return Err(CliError::new("failed to poll process stdin: invalid fd", 1));
         }
-        if poll_fd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+        if revents.intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR) {
             return Ok(ProcessStdinPoll::Ready);
         }
         return Ok(ProcessStdinPoll::Idle);
     }
 }
 
-fn poll_timeout_millis(timeout: Duration) -> libc::c_int {
+fn poll_timeout(timeout: Duration) -> Timespec {
     let millis = timeout.as_millis();
-    millis.min(libc::c_int::MAX as u128) as libc::c_int
+    let millis = millis.min(libc::c_int::MAX as u128) as i64;
+    Timespec {
+        tv_sec: millis / MILLIS_PER_SECOND,
+        tv_nsec: (millis % MILLIS_PER_SECOND) * NANOS_PER_MILLI,
+    }
 }
