@@ -7,10 +7,17 @@ use super::{
     P9ReadLink, P9Symlink,
 };
 
+const P9_U8_FIELD_LEN: usize = 1;
+const P9_U32_FIELD_LEN: usize = 4;
+const P9_U64_FIELD_LEN: usize = 8;
+const P9_QID_FIELD_LEN: usize = P9_U8_FIELD_LEN + P9_U32_FIELD_LEN + P9_U64_FIELD_LEN;
+const P9_TLOPEN_PAYLOAD_LEN: usize = P9_U32_FIELD_LEN + P9_U32_FIELD_LEN;
+const P9_OPEN_RESPONSE_PAYLOAD_LEN: usize = P9_QID_FIELD_LEN + P9_U32_FIELD_LEN;
+
 /// Builds a `Tlopen` frame.
 #[must_use]
 pub fn p9_tlopen(tag: u16, fid: u32, flags: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(8);
+    let mut payload = Vec::with_capacity(P9_TLOPEN_PAYLOAD_LEN);
     push_u32(&mut payload, fid);
     push_u32(&mut payload, flags);
     P9Frame::new(P9_TLOPEN, tag, payload)
@@ -19,7 +26,7 @@ pub fn p9_tlopen(tag: u16, fid: u32, flags: u32) -> P9Frame {
 /// Builds an `Rlopen` frame.
 #[must_use]
 pub fn p9_rlopen(tag: u16, qid: P9Qid, iounit: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(17);
+    let mut payload = Vec::with_capacity(P9_OPEN_RESPONSE_PAYLOAD_LEN);
     push_qid(&mut payload, qid);
     push_u32(&mut payload, iounit);
     P9Frame::new(P9_RLOPEN, tag, payload)
@@ -50,7 +57,7 @@ pub fn p9_tlcreate(
 /// Builds an `Rlcreate` frame.
 #[must_use]
 pub fn p9_rlcreate(tag: u16, qid: P9Qid, iounit: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(17);
+    let mut payload = Vec::with_capacity(P9_OPEN_RESPONSE_PAYLOAD_LEN);
     push_qid(&mut payload, qid);
     push_u32(&mut payload, iounit);
     P9Frame::new(P9_RLCREATE, tag, payload)
@@ -79,7 +86,7 @@ pub fn p9_tsymlink(
 /// Builds an `Rsymlink` frame.
 #[must_use]
 pub fn p9_rsymlink(tag: u16, qid: P9Qid) -> P9Frame {
-    let mut payload = Vec::with_capacity(13);
+    let mut payload = Vec::with_capacity(P9_QID_FIELD_LEN);
     push_qid(&mut payload, qid);
     P9Frame::new(P9_RSYMLINK, tag, payload)
 }
@@ -111,7 +118,7 @@ pub fn p9_tmknod(
 /// Builds an `Rmknod` frame.
 #[must_use]
 pub fn p9_rmknod(tag: u16, qid: P9Qid) -> P9Frame {
-    let mut payload = Vec::with_capacity(13);
+    let mut payload = Vec::with_capacity(P9_QID_FIELD_LEN);
     push_qid(&mut payload, qid);
     P9Frame::new(P9_RMKNOD, tag, payload)
 }
@@ -119,7 +126,7 @@ pub fn p9_rmknod(tag: u16, qid: P9Qid) -> P9Frame {
 /// Builds a `Treadlink` frame.
 #[must_use]
 pub fn p9_treadlink(tag: u16, fid: u32) -> P9Frame {
-    let mut payload = Vec::with_capacity(4);
+    let mut payload = Vec::with_capacity(P9_U32_FIELD_LEN);
     push_u32(&mut payload, fid);
     P9Frame::new(P9_TREADLINK, tag, payload)
 }
