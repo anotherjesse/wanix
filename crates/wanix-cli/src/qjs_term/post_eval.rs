@@ -40,6 +40,15 @@ struct PostEvalFeedRunner<'a> {
     current_batch: Vec<Vec<u8>>,
 }
 
+type ProcessFeedSession = fn(
+    &mut dyn Read,
+    &TermDevice,
+    &str,
+    &mut QuickJsTaskRuntime,
+    &mut TerminalPumpState,
+    &mut dyn Write,
+) -> Result<(), CliError>;
+
 impl PostEvalFeedRunner<'_> {
     fn run(&mut self, feeds: Vec<PostEvalFeed>) -> Result<(), CliError> {
         for feed in feeds {
@@ -92,25 +101,18 @@ impl PostEvalFeedRunner<'_> {
     }
 
     fn run_lines_process(&mut self) -> Result<bool, CliError> {
-        if self.flush_batch_and_task_exited()? {
-            return Ok(true);
-        }
-        run_process_line_feed_session_after_eval(
-            self.context.process_stdin,
-            self.context.terminal,
-            self.context.terminal_id,
-            self.context.runtime,
-            &mut self.context.pump_state,
-            self.context.process_stdout,
-        )?;
-        Ok(false)
+        self.run_process_feed(run_process_line_feed_session_after_eval)
     }
 
     fn run_raw_bytes_process(&mut self) -> Result<bool, CliError> {
+        self.run_process_feed(run_process_raw_byte_feed_session_after_eval)
+    }
+
+    fn run_process_feed(&mut self, session: ProcessFeedSession) -> Result<bool, CliError> {
         if self.flush_batch_and_task_exited()? {
             return Ok(true);
         }
-        run_process_raw_byte_feed_session_after_eval(
+        session(
             self.context.process_stdin,
             self.context.terminal,
             self.context.terminal_id,
