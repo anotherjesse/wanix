@@ -239,7 +239,9 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use super::{RootfsOutputFormat, ensure_output_dir_ready, parse_rootfs_command};
+    use super::{
+        RootfsOutputFormat, ensure_output_dir_ready, parse_rootfs_command, run_rootfs_command,
+    };
 
     #[test]
     fn parse_rootfs_command_accepts_required_paths_and_json_mode() {
@@ -297,6 +299,24 @@ mod tests {
             parse_rootfs_command(&os_args(["--unknown"])),
             "unknown rootfs option: --unknown",
         );
+    }
+
+    #[test]
+    fn run_rootfs_command_reports_missing_archive() {
+        let archive = temp_path("wanix-cli-rootfs-missing-archive.tgz");
+        let out = temp_path("wanix-cli-rootfs-missing-archive-out");
+        let _ = fs::remove_file(&archive);
+        let _ = fs::remove_dir_all(&out);
+        let command = parse_rootfs_command(&os_args([
+            "--archive",
+            archive.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ]))
+        .unwrap();
+
+        assert_error(run_rootfs_command(command), 1, "rootfs --archive");
+        assert!(!out.exists());
     }
 
     #[test]
