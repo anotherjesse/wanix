@@ -255,3 +255,17 @@ fn parse_positive_u16(value: &str, label: &str) -> Result<u16, CliError> {
     }
     Ok(number)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qjs_term_value_names_match_option_contracts() {
+        assert_eq!(value_name("qjs-term --feed-after-eval"), "text");
+        assert_eq!(value_name("qjs-term --feed-after-eval-file"), "PATH or -");
+        assert_eq!(value_name("qjs-term --feed-after-eval-lines"), "PATH or -");
+        assert_eq!(value_name("qjs-term --resize-after-eval"), "COLSxROWS");
+        assert_eq!(value_name("qjs-term --unknown"), "value");
+    }
+}
