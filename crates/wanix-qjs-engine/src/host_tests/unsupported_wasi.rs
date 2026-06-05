@@ -409,6 +409,39 @@ fn poll_oneoff_single_clock_subscription_reports_clock_event() -> Result<()> {
 }
 
 #[test]
+fn poll_oneoff_single_relative_clock_wait_reports_clock_event() -> Result<()> {
+    let mut harness = unsupported_wasi_harness(QuickJsHostConfig::new())?;
+    write_clock_subscription(
+        &harness.memory,
+        &mut harness.store,
+        64,
+        0xaabb_ccdd_eeff_0011,
+        1,
+    )?;
+    harness
+        .memory
+        .write(&mut harness.store, 192, &u32::MAX.to_le_bytes())?;
+
+    assert_eq!(
+        harness
+            .poll_oneoff
+            .call(&mut harness.store, (64, 128, 1, 192))?,
+        ERRNO_SUCCESS
+    );
+
+    let mut event = [0; EVENT_SIZE];
+    harness.memory.read(&harness.store, 128, &mut event)?;
+    assert_eq!(read_nevents(&harness)?, 1);
+    assert_eq!(
+        read_u64(&event, EVENT_USERDATA_OFFSET),
+        0xaabb_ccdd_eeff_0011
+    );
+    assert_eq!(read_u16(&event, EVENT_ERROR_OFFSET), 0);
+    assert_eq!(event[EVENT_TYPE_OFFSET], EVENTTYPE_CLOCK);
+    Ok(())
+}
+
+#[test]
 fn poll_oneoff_absolute_clock_subscription_reports_due_event() -> Result<()> {
     let mut harness = unsupported_wasi_harness(QuickJsHostConfig::new().with_clock_time_ns(100))?;
     write_clock_subscription_with(
