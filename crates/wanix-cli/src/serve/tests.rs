@@ -1652,15 +1652,17 @@ fn serve_once_exports_9p_over_binary_websocket() {
     });
 
     let mut socket = connect(format!("ws://{addr}/")).unwrap().0;
-    let requests = request_stream([
-        p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
-        p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
-        p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
-        p9_tgetattr(4, 2, u64::MAX),
-        p9_tlopen(5, 2, 0),
-        p9_tread(6, 2, 0, 11),
-    ]);
-    socket.send(Message::binary(requests)).unwrap();
+    send_p9_requests(
+        &mut socket,
+        [
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
+            p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
+            p9_tgetattr(4, 2, u64::MAX),
+            p9_tlopen(5, 2, 0),
+            p9_tread(6, 2, 0, 11),
+        ],
+    );
 
     let frames = read_binary_frames(&mut socket, 6);
     socket.close(None).unwrap();
@@ -1705,17 +1707,11 @@ fn serve_concurrent_loop_serves_http_while_9p_websocket_stays_open() {
         (exit_code, stderr)
     });
 
-    let mut socket = connect(format!("ws://{addr}/.well-known/export9p"))
-        .unwrap()
-        .0;
-    socket
-        .send(Message::binary(request_stream([p9_tversion(
-            1,
-            8192,
-            P9_VERSION_9P2000_L,
-        )
-        .unwrap()])))
-        .unwrap();
+    let mut socket = connect_export9p_websocket(addr);
+    send_p9_requests(
+        &mut socket,
+        [p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap()],
+    );
     let frames = read_binary_frames(&mut socket, 1);
     assert_eq!(frame_types(&frames), [P9_RVERSION]);
 
@@ -1757,23 +1753,19 @@ fn serve_concurrent_loop_serves_two_9p_websockets() {
         (exit_code, stderr)
     });
 
-    let mut first = connect(format!("ws://{addr}/.well-known/export9p"))
-        .unwrap()
-        .0;
-    let mut second = connect(format!("ws://{addr}/.well-known/export9p"))
-        .unwrap()
-        .0;
+    let mut first = connect_export9p_websocket(addr);
+    let mut second = connect_export9p_websocket(addr);
     let requests = || {
-        request_stream([
+        [
             p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
             p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
             p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
             p9_tlopen(4, 2, 0),
             p9_tread(5, 2, 0, 16),
-        ])
+        ]
     };
-    first.send(Message::binary(requests())).unwrap();
-    second.send(Message::binary(requests())).unwrap();
+    send_p9_requests(&mut first, requests());
+    send_p9_requests(&mut second, requests());
 
     let first_frames = read_binary_frames(&mut first, 5);
     let second_frames = read_binary_frames(&mut second, 5);
@@ -1812,28 +1804,28 @@ fn serve_once_exports_9p_on_well_known_export_path() {
         (exit_code, stderr)
     });
 
-    let mut socket = connect(format!("ws://{addr}/.well-known/export9p"))
-        .unwrap()
-        .0;
-    let requests = request_stream([
-        p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
-        p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
-        p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
-        p9_tsetattr(
-            4,
-            2,
-            P9_SETATTR_UID | P9_SETATTR_GID,
-            &P9SetAttr {
-                uid: 1000,
-                gid: 1001,
-                ..P9SetAttr::default()
-            },
-        ),
-        p9_tgetattr(5, 2, u64::MAX),
-        p9_tlopen(6, 2, 0),
-        p9_tread(7, 2, 0, 12),
-    ]);
-    socket.send(Message::binary(requests)).unwrap();
+    let mut socket = connect_export9p_websocket(addr);
+    send_p9_requests(
+        &mut socket,
+        [
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
+            p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
+            p9_tsetattr(
+                4,
+                2,
+                P9_SETATTR_UID | P9_SETATTR_GID,
+                &P9SetAttr {
+                    uid: 1000,
+                    gid: 1001,
+                    ..P9SetAttr::default()
+                },
+            ),
+            p9_tgetattr(5, 2, u64::MAX),
+            p9_tlopen(6, 2, 0),
+            p9_tread(7, 2, 0, 12),
+        ],
+    );
 
     let frames = read_binary_frames(&mut socket, 7);
     socket.close(None).unwrap();
@@ -1880,19 +1872,19 @@ fn serve_once_exports_symlink_readlink_over_direct_9p() {
         (exit_code, stderr)
     });
 
-    let mut socket = connect(format!("ws://{addr}/.well-known/export9p"))
-        .unwrap()
-        .0;
-    let requests = request_stream([
-        p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
-        p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
-        p9_tsymlink(3, 1, "link.txt", "target.txt", 0).unwrap(),
-        p9_twalk(4, 1, 2, &["link.txt"]).unwrap(),
-        p9_treadlink(5, 2),
-        p9_tlopen(6, 2, 0),
-        p9_tread(7, 2, 0, 11),
-    ]);
-    socket.send(Message::binary(requests)).unwrap();
+    let mut socket = connect_export9p_websocket(addr);
+    send_p9_requests(
+        &mut socket,
+        [
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
+            p9_tsymlink(3, 1, "link.txt", "target.txt", 0).unwrap(),
+            p9_twalk(4, 1, 2, &["link.txt"]).unwrap(),
+            p9_treadlink(5, 2),
+            p9_tlopen(6, 2, 0),
+            p9_tread(7, 2, 0, 11),
+        ],
+    );
 
     let frames = read_binary_frames(&mut socket, 7);
     socket.close(None).unwrap();
@@ -2141,17 +2133,17 @@ fn serve_once_exports_google_2_walkgetattr_on_well_known_path() {
         (exit_code, stderr)
     });
 
-    let mut socket = connect(format!("ws://{addr}/.well-known/export9p"))
-        .unwrap()
-        .0;
-    let requests = request_stream([
-        p9_tversion(1, 8192, P9_VERSION_9P2000_L_GOOGLE_2).unwrap(),
-        p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
-        p9_twalkgetattr(3, 1, 2, &["hello.txt"]).unwrap(),
-        p9_tlopen(4, 2, 0),
-        p9_tread(5, 2, 0, 13),
-    ]);
-    socket.send(Message::binary(requests)).unwrap();
+    let mut socket = connect_export9p_websocket(addr);
+    send_p9_requests(
+        &mut socket,
+        [
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L_GOOGLE_2).unwrap(),
+            p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
+            p9_twalkgetattr(3, 1, 2, &["hello.txt"]).unwrap(),
+            p9_tlopen(4, 2, 0),
+            p9_tread(5, 2, 0, 13),
+        ],
+    );
 
     let frames = read_binary_frames(&mut socket, 5);
     socket.close(None).unwrap();
@@ -2196,24 +2188,24 @@ fn serve_once_exports_9p_compatibility_probes_on_well_known_path() {
         (exit_code, stderr)
     });
 
-    let mut socket = connect(format!("ws://{addr}/.well-known/export9p"))
-        .unwrap()
-        .0;
-    let requests = request_stream([
-        p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
-        p9_tauth(2, 9, "root", "", 0).unwrap(),
-        p9_tattach(3, 1, 0xffff_ffff, "root", "", 0).unwrap(),
-        p9_twalk(4, 1, 2, &["target.txt"]).unwrap(),
-        p9_tmknod(5, 1, "tty0", 0o020620, 4, 0, 0).unwrap(),
-        p9_tlink(6, 1, 2, "hard.txt").unwrap(),
-        p9_txattrwalk(7, 2, 3, "user.foo").unwrap(),
-        p9_txattrcreate(8, 2, "user.foo", 12, 0).unwrap(),
-        p9_trename(9, 2, 1, "renamed.txt").unwrap(),
-        p9_tgetattr(10, 2, u64::MAX),
-        p9_tremove(11, 2),
-        p9_tgetattr(12, 2, u64::MAX),
-    ]);
-    socket.send(Message::binary(requests)).unwrap();
+    let mut socket = connect_export9p_websocket(addr);
+    send_p9_requests(
+        &mut socket,
+        [
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tauth(2, 9, "root", "", 0).unwrap(),
+            p9_tattach(3, 1, 0xffff_ffff, "root", "", 0).unwrap(),
+            p9_twalk(4, 1, 2, &["target.txt"]).unwrap(),
+            p9_tmknod(5, 1, "tty0", 0o020620, 4, 0, 0).unwrap(),
+            p9_tlink(6, 1, 2, "hard.txt").unwrap(),
+            p9_txattrwalk(7, 2, 3, "user.foo").unwrap(),
+            p9_txattrcreate(8, 2, "user.foo", 12, 0).unwrap(),
+            p9_trename(9, 2, 1, "renamed.txt").unwrap(),
+            p9_tgetattr(10, 2, u64::MAX),
+            p9_tremove(11, 2),
+            p9_tgetattr(12, 2, u64::MAX),
+        ],
+    );
 
     let frames = read_binary_frames(&mut socket, 12);
     socket.close(None).unwrap();
@@ -2439,6 +2431,23 @@ fn read_binary_frames<S: Read + Write>(
         }
     }
     frames
+}
+
+fn connect_export9p_websocket(
+    addr: std::net::SocketAddr,
+) -> tungstenite::WebSocket<MaybeTlsStream<TcpStream>> {
+    connect(format!("ws://{addr}/.well-known/export9p"))
+        .unwrap()
+        .0
+}
+
+fn send_p9_requests<S: Read + Write, const N: usize>(
+    socket: &mut tungstenite::WebSocket<S>,
+    frames: [P9Frame; N],
+) {
+    socket
+        .send(Message::binary(request_stream(frames)))
+        .unwrap();
 }
 
 fn request_stream<const N: usize>(frames: [P9Frame; N]) -> Vec<u8> {
