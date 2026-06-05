@@ -248,3 +248,39 @@ fn set_single_path(
     *target = Some(PathBuf::from(value));
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::QemuOption;
+
+    #[test]
+    fn qemu_options_report_expected_value_names() {
+        let value_options = [
+            ("--root", Some("DIR")),
+            ("--kernel", Some("PATH")),
+            ("--initrd", Some("PATH")),
+            ("--cmdline", Some("TEXT")),
+            ("--append", Some("TEXT")),
+            ("--qemu-bin", Some("PATH")),
+            ("--memory-mb", Some("N")),
+            ("--p9-msize", Some("N")),
+            ("--mount-tag", Some("TAG")),
+            ("--security-model", Some("MODEL")),
+        ];
+
+        for (flag, expected) in value_options {
+            let option = QemuOption::from_arg(&OsString::from(flag)).unwrap();
+            assert_eq!(option.expected_value(), expected);
+        }
+    }
+
+    #[test]
+    fn qemu_flags_do_not_expect_values() {
+        for flag in ["--json", "--no-kvm", "--exec"] {
+            let option = QemuOption::from_arg(&OsString::from(flag)).unwrap();
+            assert_eq!(option.expected_value(), None);
+        }
+    }
+}
