@@ -72,6 +72,16 @@ tests.
 - `wanix-rust qjs main.js`: JavaScript runs outside Chrome as a Wanix `qjs`
   task with live Wanix-backed WASI, namespace access, stdio/fds, env/cwd/cmd,
   observable exit status, and `#task` service files.
+- `wanix-rust wasm FILE.wasm [args]`: the Tier-1 compiled-`wasm32-wasi`
+  DEMO/bench runner (the `wanix-wasm` `WasiRunner` path), proving the
+  compiled-vs-interpreted tier on the same substrate. It shares one
+  `Namespace`/VFS with `qjs` — the `shared_vfs_differential` test and the
+  `compute_bench`/`shared_vfs` examples run a Rust wasm task and a qjs task
+  against one `MemFs` and observe identical filesystem state. It is a
+  command-style WASI subset (no `poll_oneoff` readiness), and is explicitly
+  **not yet** a `#task/new/wasm` task driver: no task fds, no `#task` service
+  files, no observable task-level exit. Promoting it to a first-class Wanix
+  task runtime is Phase B of the rs-speed port.
 - `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
   shell modes and served shell sessions use the same `#term` device contract,
