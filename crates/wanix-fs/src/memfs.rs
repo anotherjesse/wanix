@@ -10,7 +10,7 @@ mod rename;
 mod tree;
 
 use file::MemFile;
-use node::{DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, Node, PERMISSION_MODE_MASK};
+use node::{DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, DEFAULT_SYMLINK_MODE, Node, PERMISSION_MODE_MASK};
 use open::prepare_open;
 use rename::rename_node_tree;
 use tree::direct_children;
@@ -220,6 +220,42 @@ impl FileSystem for MemFs {
             return Err(FsError::NotEmpty);
         }
         nodes.remove(path);
+        Ok(())
+    }
+
+    fn read_link(&self, path: &NormalizedPath) -> FsResult<Vec<u8>> {
+        let nodes = self
+            .nodes
+            .read()
+            .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
+        let node = nodes.get(path).ok_or(FsError::NotFound)?;
+        if !node.is_symlink() {
+            return Err(FsError::InvalidPath(format!("{path} is not a symlink")));
+        }
+        Ok(node.data.clone())
+    }
+
+    fn symlink(&self, target: &[u8], path: &NormalizedPath) -> FsResult<()> {
+        if path.as_str() == "." {
+            return Err(FsError::AlreadyExists);
+        }
+        let mut nodes = self
+            .nodes
+            .write()
+            .map_err(|_| FsError::Other("memfs lock poisoned".to_owned()))?;
+        if nodes.contains_key(path) {
+            return Err(FsError::AlreadyExists);
+        }
+        let parent = path.parent().ok_or(FsError::AlreadyExists)?;
+        match nodes.get(&parent) {
+            Some(node) if node.is_directory() => {}
+            Some(_) => return Err(FsError::NotDirectory),
+            None => return Err(FsError::NotFound),
+        }
+        nodes.insert(
+            path.clone(),
+            Node::symlink(target.to_vec(), DEFAULT_SYMLINK_MODE),
+        );
         Ok(())
     }
 

@@ -194,6 +194,67 @@ fn rename_rejects_missing_root_descendant_and_type_mismatches() {
 }
 
 #[test]
+fn symlink_create_and_read_link_round_trip() {
+    let fs = MemFs::new();
+    fs.create_dir_all("dir").unwrap();
+
+    fs.symlink(b"dir/target.txt", &path("dir/link")).unwrap();
+    assert_eq!(fs.read_link(&path("dir/link")).unwrap(), b"dir/target.txt");
+}
+
+#[test]
+fn symlink_metadata_reports_symlink_type_and_target_length() {
+    let fs = MemFs::new();
+    fs.symlink(b"some/target", &path("link")).unwrap();
+
+    let metadata = fs.metadata(&path("link")).unwrap();
+    assert_eq!(metadata.file_type(), FileType::Symlink);
+    assert_eq!(metadata.len(), b"some/target".len() as u64);
+    assert_eq!(metadata.mode(), 0o777);
+}
+
+#[test]
+fn read_link_rejects_non_symlinks() {
+    let fs = MemFs::new();
+    fs.write_file("file.txt", b"hello").unwrap();
+    fs.create_dir_all("dir").unwrap();
+
+    assert!(matches!(
+        fs.read_link(&path("file.txt")),
+        Err(FsError::InvalidPath(_))
+    ));
+    assert!(matches!(
+        fs.read_link(&path("dir")),
+        Err(FsError::InvalidPath(_))
+    ));
+    assert_eq!(fs.read_link(&path("missing")), Err(FsError::NotFound));
+}
+
+#[test]
+fn symlink_rejects_existing_paths_and_bad_parents() {
+    let fs = MemFs::new();
+    fs.write_file("file.txt", b"hello").unwrap();
+    fs.create_dir_all("dir").unwrap();
+
+    assert_eq!(
+        fs.symlink(b"target", &path("file.txt")),
+        Err(FsError::AlreadyExists)
+    );
+    assert_eq!(
+        fs.symlink(b"target", &path(".")),
+        Err(FsError::AlreadyExists)
+    );
+    assert_eq!(
+        fs.symlink(b"target", &path("missing/link")),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(
+        fs.symlink(b"target", &path("file.txt/link")),
+        Err(FsError::NotDirectory)
+    );
+}
+
+#[test]
 fn open_read_and_write_round_trip() {
     let fs = MemFs::new();
     fs.write_file("file.txt", b"hello").unwrap();

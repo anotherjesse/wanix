@@ -2,6 +2,7 @@ use crate::{FileType, Metadata, MetadataTimes};
 
 pub(super) const DEFAULT_DIR_MODE: u32 = 0o755;
 pub(super) const DEFAULT_FILE_MODE: u32 = 0o644;
+pub(super) const DEFAULT_SYMLINK_MODE: u32 = 0o777;
 pub(super) const PERMISSION_MODE_MASK: u32 = 0o7777;
 
 #[derive(Debug, Clone)]
@@ -37,6 +38,17 @@ impl Node {
         }
     }
 
+    pub(super) fn symlink(target: Vec<u8>, mode: u32) -> Self {
+        Self {
+            kind: FileType::Symlink,
+            mode,
+            data: target,
+            accessed_time_ns: 0,
+            modified_time_ns: 0,
+            changed_time_ns: 0,
+        }
+    }
+
     pub(super) fn metadata(&self, len: u64) -> Metadata {
         let times = MetadataTimes::new(
             self.accessed_time_ns,
@@ -48,6 +60,10 @@ impl Node {
 
     pub(super) fn is_directory(&self) -> bool {
         self.kind == FileType::Directory
+    }
+
+    pub(super) fn is_symlink(&self) -> bool {
+        self.kind == FileType::Symlink
     }
 
     pub(super) fn set_times(&mut self, accessed_time_ns: u64, modified_time_ns: u64) {
