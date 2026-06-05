@@ -1,10 +1,10 @@
 use super::{
     ERRNO_BADF, ERRNO_INVAL, ERRNO_NOSYS, ERRNO_SUCCESS, HostState, PREOPEN_ROOT_PATH,
-    WASI_U32_SIZE, caller_memory, guest_len, guest_range, preview1_fd, with_wasi_host,
-    with_wasi_host_u32, write_prestat, write_wasi_direntries,
+    QuickJsWasiDirEntry, WASI_U32_SIZE, caller_memory, guest_len, guest_range, preview1_fd,
+    with_wasi_host, with_wasi_host_u32, write_prestat, write_wasi_direntries,
 };
 use crate::guest::guest_offset;
-use wasmtime::Caller;
+use wasmtime::{Caller, Memory};
 
 mod position;
 mod stat;
@@ -73,7 +73,7 @@ pub(super) fn fd_prestat_dir_name(
 }
 
 pub(super) fn fd_readdir(
-    mut caller: Caller<'_, HostState>,
+    caller: Caller<'_, HostState>,
     fd: i32,
     buf_ptr: i32,
     buf_len: i32,
@@ -81,34 +81,16 @@ pub(super) fn fd_readdir(
     bufused_ptr: i32,
 ) -> wasmtime::Result<i32> {
     if caller.data().wasi_host().is_some() {
-        let fd = match preview1_fd(fd) {
-            Ok(fd) => fd,
-            Err(errno) => return Ok(errno),
-        };
-        let buf_len = guest_len(buf_len)?;
-        let memory = caller_memory(&caller)?;
-        let buf_range = guest_range(&memory, &caller, guest_offset(buf_ptr), buf_len)?;
-        guest_range(&memory, &caller, guest_offset(bufused_ptr), WASI_U32_SIZE)?;
-
-        let Some(result) = with_wasi_host_u32(&caller, |host| host.fd_readdir(fd))? else {
-            return Ok(ERRNO_BADF);
-        };
-        let entries = match result {
-            Ok(entries) => entries,
-            Err(errno) => return Ok(errno.preview1_result()),
-        };
-        let used = write_wasi_direntries(
-            &memory,
-            &mut caller,
-            buf_range.start,
-            buf_len,
-            cookie.cast_unsigned(),
-            &entries,
-        )?;
-        let used = u32::try_from(used)
-            .map_err(|_| wasmtime::Error::msg("fd_readdir byte count exceeds u32"))?;
-        memory.write(&mut caller, guest_offset(bufused_ptr), &used.to_le_bytes())?;
-        return Ok(ERRNO_SUCCESS);
+        return fd_readdir_with_wasi_host(
+            caller,
+            ReaddirRequest {
+                fd,
+                buf_ptr,
+                buf_len,
+                cookie,
+                bufused_ptr,
+            },
+        );
     }
 
     if caller.data().is_virtual_preopen_fd(fd) {
@@ -116,4 +98,91 @@ pub(super) fn fd_readdir(
     } else {
         Ok(ERRNO_BADF)
     }
+}
+
+struct ReaddirRequest {
+    fd: i32,
+    buf_ptr: i32,
+    buf_len: i32,
+    cookie: i64,
+    bufused_ptr: i32,
+}
+
+fn fd_readdir_with_wasi_host(
+    mut caller: Caller<'_, HostState>,
+    request: ReaddirRequest,
+) -> wasmtime::Result<i32> {
+    let fd = match preview1_fd(request.fd) {
+        Ok(fd) => fd,
+        Err(errno) => return Ok(errno),
+    };
+    let memory = caller_memory(&caller)?;
+    let buffer = prepare_readdir_guest_buffer(
+        &memory,
+        &caller,
+        request.buf_ptr,
+        request.buf_len,
+        request.bufused_ptr,
+    )?;
+
+    let entries = match read_wasi_direntries(&caller, fd)? {
+        Ok(entries) => entries,
+        Err(errno) => return Ok(errno),
+    };
+    write_readdir_entries(&memory, &mut caller, buffer, request.cookie, &entries)?;
+    Ok(ERRNO_SUCCESS)
+}
+
+struct ReaddirGuestBuffer {
+    start: usize,
+    len: usize,
+    used_ptr: i32,
+}
+
+fn prepare_readdir_guest_buffer(
+    memory: &Memory,
+    caller: &Caller<'_, HostState>,
+    buf_ptr: i32,
+    buf_len: i32,
+    bufused_ptr: i32,
+) -> wasmtime::Result<ReaddirGuestBuffer> {
+    let len = guest_len(buf_len)?;
+    let range = guest_range(memory, caller, guest_offset(buf_ptr), len)?;
+    guest_range(memory, caller, guest_offset(bufused_ptr), WASI_U32_SIZE)?;
+    Ok(ReaddirGuestBuffer {
+        start: range.start,
+        len,
+        used_ptr: bufused_ptr,
+    })
+}
+
+fn read_wasi_direntries(
+    caller: &Caller<'_, HostState>,
+    fd: u32,
+) -> wasmtime::Result<Result<Vec<QuickJsWasiDirEntry>, i32>> {
+    let Some(result) = with_wasi_host_u32(caller, |host| host.fd_readdir(fd))? else {
+        return Ok(Err(ERRNO_BADF));
+    };
+    Ok(result.map_err(|errno| errno.preview1_result()))
+}
+
+fn write_readdir_entries(
+    memory: &Memory,
+    caller: &mut Caller<'_, HostState>,
+    buffer: ReaddirGuestBuffer,
+    cookie: i64,
+    entries: &[QuickJsWasiDirEntry],
+) -> wasmtime::Result<()> {
+    let used = write_wasi_direntries(
+        memory,
+        caller,
+        buffer.start,
+        buffer.len,
+        cookie.cast_unsigned(),
+        entries,
+    )?;
+    let used = u32::try_from(used)
+        .map_err(|_| wasmtime::Error::msg("fd_readdir byte count exceeds u32"))?;
+    memory.write(caller, guest_offset(buffer.used_ptr), &used.to_le_bytes())?;
+    Ok(())
 }
