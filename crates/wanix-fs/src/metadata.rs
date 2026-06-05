@@ -21,53 +21,56 @@ pub struct Metadata {
     changed_time_ns: u64,
 }
 
+/// Nanosecond timestamps associated with file metadata.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MetadataTimes {
+    accessed_time_ns: u64,
+    modified_time_ns: u64,
+    changed_time_ns: u64,
+}
+
+impl MetadataTimes {
+    /// Creates metadata timestamps from nanoseconds since the Unix epoch.
+    #[must_use]
+    pub fn new(accessed_time_ns: u64, modified_time_ns: u64, changed_time_ns: u64) -> Self {
+        Self {
+            accessed_time_ns,
+            modified_time_ns,
+            changed_time_ns,
+        }
+    }
+}
+
 impl Metadata {
     /// Creates metadata from a file type, byte length, and Unix-style mode.
     #[must_use]
     pub fn new(file_type: FileType, len: u64, mode: u32) -> Self {
-        Self::new_with_times(file_type, len, mode, 0, 0, 0)
+        Self::new_with_times(file_type, len, mode, MetadataTimes::default())
     }
 
     /// Creates metadata with explicit nanosecond timestamps since the Unix epoch.
     #[must_use]
-    pub fn new_with_times(
-        file_type: FileType,
-        len: u64,
-        mode: u32,
-        accessed_time_ns: u64,
-        modified_time_ns: u64,
-        changed_time_ns: u64,
-    ) -> Self {
-        Self::new_with_times_and_links(
-            file_type,
-            len,
-            mode,
-            1,
-            accessed_time_ns,
-            modified_time_ns,
-            changed_time_ns,
-        )
+    pub fn new_with_times(file_type: FileType, len: u64, mode: u32, times: MetadataTimes) -> Self {
+        Self::new_with_links(file_type, len, mode, 1, times)
     }
 
     /// Creates metadata with explicit timestamps and link count.
     #[must_use]
-    pub fn new_with_times_and_links(
+    pub fn new_with_links(
         file_type: FileType,
         len: u64,
         mode: u32,
         link_count: u64,
-        accessed_time_ns: u64,
-        modified_time_ns: u64,
-        changed_time_ns: u64,
+        times: MetadataTimes,
     ) -> Self {
         Self {
             file_type,
             len,
             mode,
             link_count,
-            accessed_time_ns,
-            modified_time_ns,
-            changed_time_ns,
+            accessed_time_ns: times.accessed_time_ns,
+            modified_time_ns: times.modified_time_ns,
+            changed_time_ns: times.changed_time_ns,
         }
     }
 
@@ -152,7 +155,7 @@ impl DirEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::{DirEntry, FileType, Metadata};
+    use super::{DirEntry, FileType, Metadata, MetadataTimes};
 
     #[test]
     fn metadata_and_entries_expose_contract_fields() {
@@ -170,13 +173,14 @@ mod tests {
         assert_eq!(metadata.changed_time_ns(), 0);
         assert!(!metadata.is_empty());
 
-        let timed = Metadata::new_with_times(FileType::File, 4, 0o644, 1, 2, 3);
+        let times = MetadataTimes::new(1, 2, 3);
+        let timed = Metadata::new_with_times(FileType::File, 4, 0o644, times);
         assert_eq!(timed.link_count(), 1);
         assert_eq!(timed.accessed_time_ns(), 1);
         assert_eq!(timed.modified_time_ns(), 2);
         assert_eq!(timed.changed_time_ns(), 3);
 
-        let linked = Metadata::new_with_times_and_links(FileType::File, 4, 0o644, 2, 1, 2, 3);
+        let linked = Metadata::new_with_links(FileType::File, 4, 0o644, 2, times);
         assert_eq!(linked.link_count(), 2);
     }
 }

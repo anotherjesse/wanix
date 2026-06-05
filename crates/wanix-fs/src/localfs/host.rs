@@ -6,7 +6,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
-use crate::{FileType, FsError, FsResult, Metadata};
+use crate::{FileType, FsError, FsResult, Metadata, MetadataTimes};
 
 use super::map_io_error;
 
@@ -31,14 +31,17 @@ pub(super) fn metadata_from_host(metadata: &fs::Metadata) -> Metadata {
     } else {
         FileType::File
     };
-    Metadata::new_with_times_and_links(
+    let times = MetadataTimes::new(
+        metadata_accessed_time_ns(metadata),
+        metadata_modified_time_ns(metadata),
+        metadata_changed_time_ns(metadata),
+    );
+    Metadata::new_with_links(
         file_type,
         metadata.len(),
         metadata_mode(metadata),
         metadata_link_count(metadata),
-        metadata_accessed_time_ns(metadata),
-        metadata_modified_time_ns(metadata),
-        metadata_changed_time_ns(metadata),
+        times,
     )
 }
 

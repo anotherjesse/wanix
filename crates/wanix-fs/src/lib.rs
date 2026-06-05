@@ -13,7 +13,7 @@ mod traits;
 pub use error::{FsError, FsResult};
 pub use localfs::LocalFs;
 pub use memfs::MemFs;
-pub use metadata::{DirEntry, FileType, Metadata};
+pub use metadata::{DirEntry, FileType, Metadata, MetadataTimes};
 pub use path::NormalizedPath;
 pub use traits::{File, FileSeekFrom, FileSystem, MetadataLookup, OpenOptions};
 

@@ -1,4 +1,4 @@
-use crate::{FileType, Metadata};
+use crate::{FileType, Metadata, MetadataTimes};
 
 pub(super) const DEFAULT_DIR_MODE: u32 = 0o755;
 pub(super) const DEFAULT_FILE_MODE: u32 = 0o644;
@@ -38,14 +38,12 @@ impl Node {
     }
 
     pub(super) fn metadata(&self, len: u64) -> Metadata {
-        Metadata::new_with_times(
-            self.kind,
-            len,
-            self.mode,
+        let times = MetadataTimes::new(
             self.accessed_time_ns,
             self.modified_time_ns,
             self.changed_time_ns,
-        )
+        );
+        Metadata::new_with_times(self.kind, len, self.mode, times)
     }
 
     pub(super) fn is_directory(&self) -> bool {
