@@ -6,8 +6,7 @@ use crate::task_files::{ControlFile, FdProxyFile, Field, FieldFile, FileAccess, 
 #[derive(Debug, Clone, Copy)]
 enum OpenTaskField {
     Control,
-    ReadOnly(Field),
-    ReadWrite(Field),
+    Field(Field),
     FdDirectory,
 }
 
@@ -15,14 +14,8 @@ impl OpenTaskField {
     fn from_name(field: &str) -> FsResult<Self> {
         match field {
             "ctl" => Ok(Self::Control),
-            "id" => Ok(Self::ReadOnly(Field::Id)),
-            "kind" => Ok(Self::ReadOnly(Field::Kind)),
-            "cmd" => Ok(Self::ReadWrite(Field::Cmd)),
-            "env" => Ok(Self::ReadWrite(Field::Env)),
-            "dir" => Ok(Self::ReadWrite(Field::Dir)),
-            "exit" => Ok(Self::ReadWrite(Field::Exit)),
             "fd" => Ok(Self::FdDirectory),
-            _ => Err(FsError::NotFound),
+            name => Field::from_name(name).map(Self::Field),
         }
     }
 }
@@ -82,7 +75,7 @@ impl TaskFs {
                 task,
                 access(options)?,
             ))),
-            OpenTaskField::ReadOnly(field) => {
+            OpenTaskField::Field(field) if field.is_read_only() => {
                 require_read_only(options)?;
                 Ok(Box::new(FieldFile::new(
                     task,
@@ -90,7 +83,7 @@ impl TaskFs {
                     FileAccess::read_only(),
                 )))
             }
-            OpenTaskField::ReadWrite(field) => {
+            OpenTaskField::Field(field) => {
                 Ok(Box::new(FieldFile::new(task, field, access(options)?)))
             }
             OpenTaskField::FdDirectory => Err(FsError::IsDirectory),

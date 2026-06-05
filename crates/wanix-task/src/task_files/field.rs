@@ -17,6 +17,17 @@ pub(crate) enum Field {
 }
 
 impl Field {
+    pub(crate) fn from_name(name: &str) -> FsResult<Self> {
+        TASK_FIELDS
+            .iter()
+            .find_map(|(field_name, field)| (*field_name == name).then_some(*field))
+            .ok_or(FsError::NotFound)
+    }
+
+    pub(crate) fn is_read_only(self) -> bool {
+        matches!(self, Self::Id | Self::Kind)
+    }
+
     fn text(self, task: &Task) -> String {
         let value = match self {
             Self::Id => task.id().get().to_string(),
@@ -125,13 +136,6 @@ pub(crate) fn field_metadata(task: &Task, field: &str) -> FsResult<Metadata> {
     if field == "ctl" {
         return Ok(file_metadata(0, TASK_FILE_READ_WRITE_MODE));
     }
-    let field = field_from_name(field)?;
+    let field = Field::from_name(field)?;
     Ok(file_metadata(field.text(task).len() as u64, field.mode()))
-}
-
-fn field_from_name(name: &str) -> FsResult<Field> {
-    TASK_FIELDS
-        .iter()
-        .find_map(|(field_name, field)| (*field_name == name).then_some(*field))
-        .ok_or(FsError::NotFound)
 }
