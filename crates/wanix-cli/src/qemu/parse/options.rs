@@ -164,6 +164,23 @@ impl QemuOption {
         options: &mut QemuOptions,
     ) -> Result<(), CliError> {
         match self.kind {
+            QemuOptionKind::Root | QemuOptionKind::Kernel | QemuOptionKind::Initrd => {
+                self.apply_path_value(value, options)?
+            }
+            QemuOptionKind::Cmdline | QemuOptionKind::Append | QemuOptionKind::QemuBin => {
+                self.apply_text_value(value, options)?
+            }
+            QemuOptionKind::MemoryMb
+            | QemuOptionKind::P9Msize
+            | QemuOptionKind::MountTag
+            | QemuOptionKind::SecurityModel => self.apply_parsed_value(value, options)?,
+            QemuOptionKind::Json | QemuOptionKind::NoKvm | QemuOptionKind::Exec => {}
+        }
+        Ok(())
+    }
+
+    fn apply_path_value(self, value: &OsString, options: &mut QemuOptions) -> Result<(), CliError> {
+        match self.kind {
             QemuOptionKind::Root => options.root_path = Some(PathBuf::from(value)),
             QemuOptionKind::Kernel => set_single_path(
                 &mut options.kernel_path,
@@ -175,6 +192,13 @@ impl QemuOption {
                 value,
                 "qemu accepts only one --initrd",
             )?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn apply_text_value(self, value: &OsString, options: &mut QemuOptions) -> Result<(), CliError> {
+        match self.kind {
             QemuOptionKind::Cmdline => {
                 if options.cmdline.is_some() {
                     return Err(CliError::usage("qemu accepts only one --cmdline"));
@@ -183,11 +207,22 @@ impl QemuOption {
             }
             QemuOptionKind::Append => options.append.push(os_arg_to_string(value, self.label())?),
             QemuOptionKind::QemuBin => options.qemu_bin = os_arg_to_string(value, self.label())?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn apply_parsed_value(
+        self,
+        value: &OsString,
+        options: &mut QemuOptions,
+    ) -> Result<(), CliError> {
+        match self.kind {
             QemuOptionKind::MemoryMb => options.memory_mb = parse_memory_mb(value)?,
             QemuOptionKind::P9Msize => options.p9_msize = parse_p9_msize(value)?,
             QemuOptionKind::MountTag => options.mount_tag = parse_mount_tag(value)?,
             QemuOptionKind::SecurityModel => options.security_model = parse_security_model(value)?,
-            QemuOptionKind::Json | QemuOptionKind::NoKvm | QemuOptionKind::Exec => {}
+            _ => {}
         }
         Ok(())
     }
