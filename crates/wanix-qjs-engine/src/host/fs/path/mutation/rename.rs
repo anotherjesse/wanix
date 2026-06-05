@@ -42,29 +42,53 @@ fn live_path_rename(
     caller: &Caller<'_, HostState>,
     input: PathRenameInput,
 ) -> wasmtime::Result<i32> {
+    let input = match read_live_rename_input(caller, input)? {
+        Ok(input) => input,
+        Err(errno) => return Ok(errno),
+    };
+
+    let result = with_wasi_host_u32(caller, |host| {
+        host.path_rename(input.old_fd, &input.old_path, input.new_fd, &input.new_path)
+    })?;
+    Ok(live_unit_result(result))
+}
+
+struct LiveRenameInput {
+    old_fd: u32,
+    old_path: Vec<u8>,
+    new_fd: u32,
+    new_path: Vec<u8>,
+}
+
+fn read_live_rename_input(
+    caller: &Caller<'_, HostState>,
+    input: PathRenameInput,
+) -> wasmtime::Result<Result<LiveRenameInput, i32>> {
     let old_fd = match preview1_fd(input.old_fd) {
         Ok(fd) => fd,
-        Err(errno) => return Ok(errno),
+        Err(errno) => return Ok(Err(errno)),
     };
     let new_fd = match preview1_fd(input.new_fd) {
         Ok(fd) => fd,
-        Err(errno) => return Ok(errno),
+        Err(errno) => return Ok(Err(errno)),
     };
     let old_path_len = match checked_wasi_path_len(input.old_path_len)? {
         Ok(path_len) => path_len,
-        Err(errno) => return Ok(errno),
+        Err(errno) => return Ok(Err(errno)),
     };
     let new_path_len = match checked_wasi_path_len(input.new_path_len)? {
         Ok(path_len) => path_len,
-        Err(errno) => return Ok(errno),
+        Err(errno) => return Ok(Err(errno)),
     };
     let memory = caller_memory(caller)?;
     let old_path = read_guest_path(&memory, caller, input.old_path_ptr, old_path_len)?;
     let new_path = read_guest_path(&memory, caller, input.new_path_ptr, new_path_len)?;
-    let result = with_wasi_host_u32(caller, |host| {
-        host.path_rename(old_fd, &old_path, new_fd, &new_path)
-    })?;
-    Ok(live_unit_result(result))
+    Ok(Ok(LiveRenameInput {
+        old_fd,
+        old_path,
+        new_fd,
+        new_path,
+    }))
 }
 
 fn virtual_path_rename(
