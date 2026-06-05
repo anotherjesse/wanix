@@ -21,8 +21,12 @@ use wanix_protocol::{
 use super::direct_v86::{DIRECT_V86_BUNDLE, direct_v86_asset_response};
 use super::discovery::{rootfs_handoff_response, serve_discovery_json};
 use super::http::HttpStatus;
+use super::roots::ServeRoots;
 use super::terminal_ws::{parse_terminal_resize_message, qjs_shell_cwd_from_target};
-use super::*;
+use super::{
+    DEFAULT_SERVE_ADDR, FS9P_BUNDLE, ServeCommand, WORKBENCH_FS9P_BUNDLE, parse_serve_command,
+    run_serve_with_listener, run_serve_with_listener_for_connections,
+};
 
 const EBADF: u32 = 9;
 const ENOSYS: u32 = 38;
