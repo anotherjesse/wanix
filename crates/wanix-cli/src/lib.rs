@@ -315,6 +315,7 @@ fn write_process_output(output: &mut dyn Write, label: &str, bytes: &[u8]) -> Re
 mod tests {
     #[cfg(unix)]
     use std::collections::VecDeque;
+    use std::ffi::OsString;
     use std::fs;
     use std::io::{self, Read, Write};
     #[cfg(unix)]
@@ -430,6 +431,54 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    fn qjs_term_line_feed_args(script: impl Into<OsString>) -> Vec<OsString> {
+        vec![
+            OsString::from("qjs-term"),
+            OsString::from("--ready-io-turns"),
+            OsString::from("1"),
+            OsString::from("--feed-after-eval-lines"),
+            OsString::from("-"),
+            script.into(),
+        ]
+    }
+
+    fn qjs_term_line_feed_args_with_mount(
+        host: &Path,
+        guest: &str,
+        script: impl Into<OsString>,
+    ) -> Vec<OsString> {
+        let mut args = vec![
+            OsString::from("qjs-term"),
+            OsString::from("--mount"),
+            OsString::from(format!("{}={guest}", host.display())),
+        ];
+        args.extend(qjs_term_line_feed_args(script).into_iter().skip(1));
+        args
+    }
+
+    fn qjs_host_mount_args(host: &Path, script: impl Into<OsString>) -> Vec<OsString> {
+        vec![
+            OsString::from("qjs"),
+            OsString::from("--mount"),
+            OsString::from(format!("{}=host", host.display())),
+            script.into(),
+        ]
+    }
+
+    fn qjs_restore_host_mount_args(
+        host: &Path,
+        before_script: impl Into<OsString>,
+        after_script: impl Into<OsString>,
+    ) -> Vec<OsString> {
+        vec![
+            OsString::from("qjs-restore"),
+            OsString::from("--mount"),
+            OsString::from(format!("{}=host", host.display())),
+            before_script.into(),
+            after_script.into(),
+        ]
     }
 
     #[cfg(unix)]
@@ -2064,14 +2113,7 @@ std.out.flush();
         );
 
         let output = run_with_process_stdin(
-            [
-                "qjs-term".into(),
-                "--ready-io-turns".into(),
-                "1".into(),
-                "--feed-after-eval-lines".into(),
-                "-".into(),
-                script.into_os_string(),
-            ],
+            qjs_term_line_feed_args(script.into_os_string()),
             b"first\nsecond\nexit\n".as_slice(),
         )
         .unwrap();
@@ -2114,16 +2156,7 @@ std.out.flush();
         );
 
         let output = run_with_process_stdin(
-            [
-                "qjs-term".into(),
-                "--mount".into(),
-                format!("{}=host", host.display()).into(),
-                "--ready-io-turns".into(),
-                "1".into(),
-                "--feed-after-eval-lines".into(),
-                "-".into(),
-                script.into_os_string(),
-            ],
+            qjs_term_line_feed_args_with_mount(&host, "host", script.into_os_string()),
             MarkerCheckedStdin::new(marker.clone(), b"streamed line\n"),
         )
         .unwrap();
@@ -2143,14 +2176,7 @@ std.out.flush();
         let mut stderr = Vec::new();
 
         let exit_code = run_with_process_io(
-            [
-                "qjs-term".into(),
-                "--ready-io-turns".into(),
-                "1".into(),
-                "--feed-after-eval-lines".into(),
-                "-".into(),
-                example_script("qjs-term-shell-demo.js").into_os_string(),
-            ],
+            qjs_term_line_feed_args(example_script("qjs-term-shell-demo.js").into_os_string()),
             MarkerCheckedStdin::new(marker.clone(), b"exit\n"),
             &mut stdout,
             &mut stderr,
@@ -2170,14 +2196,7 @@ std.out.flush();
         let mut stderr = Vec::new();
 
         let exit_code = run_with_process_io(
-            [
-                "qjs-term".into(),
-                "--ready-io-turns".into(),
-                "1".into(),
-                "--feed-after-eval-lines".into(),
-                "-".into(),
-                example_script("qjs-term-shell-demo.js").into_os_string(),
-            ],
+            qjs_term_line_feed_args(example_script("qjs-term-shell-demo.js").into_os_string()),
             EofForbiddenStdin::new(b"exit\n"),
             &mut stdout,
             &mut stderr,
@@ -2544,13 +2563,7 @@ std.out.flush();
 "#,
         );
 
-        let output = run([
-            "qjs".into(),
-            "--mount".into(),
-            format!("{}=host", host.display()).into(),
-            script.into_os_string(),
-        ])
-        .unwrap();
+        let output = run(qjs_host_mount_args(&host, script.into_os_string())).unwrap();
 
         assert_eq!(output.exit_code(), 0);
         assert_eq!(output.stdout(), b"from host\nfrom qjs std\n");
@@ -2564,12 +2577,10 @@ std.out.flush();
         let host = temp_dir("wanix-cli-mount-example");
         fs::write(host.join("input.txt"), "native mount").unwrap();
 
-        let output = run([
-            "qjs".into(),
-            "--mount".into(),
-            format!("{}=host", host.display()).into(),
+        let output = run(qjs_host_mount_args(
+            &host,
             example_script("qjs-host-mount.js").into_os_string(),
-        ])
+        ))
         .unwrap();
 
         assert_eq!(output.exit_code(), 0);
@@ -2882,12 +2893,10 @@ std.exit(7);
     fn qjs_host_mount_example_starts_child_task_from_mounted_script() {
         let host = temp_dir("wanix-cli-host-spawn");
 
-        let output = run([
-            "qjs".into(),
-            "--mount".into(),
-            format!("{}=host", host.display()).into(),
+        let output = run(qjs_host_mount_args(
+            &host,
             example_script("qjs-host-spawn.js").into_os_string(),
-        ])
+        ))
         .unwrap();
 
         let child_output =
@@ -3134,13 +3143,11 @@ std.exit(6);
 "##,
         );
 
-        let output = run([
-            "qjs-restore".into(),
-            "--mount".into(),
-            format!("{}=host", host.display()).into(),
+        let output = run(qjs_restore_host_mount_args(
+            &host,
             before_script.into_os_string(),
             after_script.into_os_string(),
-        ])
+        ))
         .unwrap();
 
         assert_eq!(output.exit_code(), 6);
@@ -3164,13 +3171,11 @@ std.exit(6);
     fn qjs_restore_host_mount_example_writes_host_visible_file() {
         let host = temp_dir("wanix-cli-restore-mount-example");
 
-        let output = run([
-            "qjs-restore".into(),
-            "--mount".into(),
-            format!("{}=host", host.display()).into(),
+        let output = run(qjs_restore_host_mount_args(
+            &host,
             example_script("qjs-snapshot-before.js").into_os_string(),
             example_script("qjs-snapshot-host-after.js").into_os_string(),
-        ])
+        ))
         .unwrap();
 
         assert_eq!(output.exit_code(), 8);
@@ -4149,12 +4154,10 @@ std.out.flush();
     #[test]
     fn qjs_example_symlink_demo_uses_live_wasi_host_mount() {
         let host = temp_dir("wanix-cli-symlink-demo");
-        let output = run([
-            "qjs".into(),
-            "--mount".into(),
-            format!("{}=host", host.display()).into(),
+        let output = run(qjs_host_mount_args(
+            &host,
             example_script("qjs-symlink-demo.js").into_os_string(),
-        ])
+        ))
         .unwrap();
 
         assert_eq!(output.exit_code(), 0);
