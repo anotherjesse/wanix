@@ -11,10 +11,8 @@ use super::{
 };
 use crate::CliError;
 
-mod handlers;
 mod options;
 
-use handlers::COMMON_QJS_OPTION_HANDLERS;
 use options::CommonQjsOption;
 
 pub(super) struct QjsRunOptions {
@@ -169,21 +167,22 @@ fn apply_common_qjs_option(
     command: &str,
     options: &mut QjsRunOptions,
 ) -> Result<(), CliError> {
-    let Some(handler) = COMMON_QJS_OPTION_HANDLERS
-        .iter()
-        .find_map(|(candidate, handler)| (*candidate == option).then_some(handler))
-    else {
-        return Err(CliError::new(
-            format!("internal qjs parser missing handler for {}", option.name()),
+    let label = format!("{command} {}", option.name());
+    match option {
+        CommonQjsOption::Env => options.add_env(value, &label),
+        CommonQjsOption::Cwd => options.set_cwd(value, &label),
+        CommonQjsOption::Stdin => options.set_stdin_bytes(value, command, &label),
+        CommonQjsOption::StdinFile => options.set_stdin_file(value, command),
+        CommonQjsOption::EventLoopMs => options.set_event_loop_ms(value, &label),
+        CommonQjsOption::ReadyIoTurns => options.set_ready_io_turns(value, &label),
+        CommonQjsOption::InterruptAfter => options.set_interrupt_after(value, &label),
+        CommonQjsOption::MemoryLimitBytes => options.set_memory_limit_bytes(value, &label),
+        CommonQjsOption::Mount => options.add_mount(value, &label),
+        CommonQjsOption::Separator => Err(CliError::new(
+            "internal qjs parser tried to apply option separator",
             1,
-        ));
-    };
-    handler(
-        value,
-        command,
-        &format!("{command} {}", option.name()),
-        options,
-    )
+        )),
+    }
 }
 
 fn qjs_option_value<'a>(
