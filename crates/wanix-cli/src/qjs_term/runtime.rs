@@ -19,57 +19,40 @@ use crate::{
     quickjs_runner, read_qjs_stdin,
 };
 
-pub(super) fn run_qjs_term_program_streaming(
-    qjs_command: QjsCommand,
-    feed_after_eval: Vec<PostEvalFeed>,
-    program: QjsTermProgram,
-    process_stdin: &mut dyn Read,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
-) -> Result<i32, CliError> {
-    run_qjs_term_program_streaming_with_input_mode(
-        qjs_command,
-        feed_after_eval,
-        program,
-        ProcessEventSources::blocking(),
-        process_stdin,
-        process_stdout,
-        process_stderr,
-    )
-}
+mod request;
 
-pub(super) fn run_qjs_term_program_streaming_with_input_mode(
-    mut qjs_command: QjsCommand,
-    feed_after_eval: Vec<PostEvalFeed>,
-    program: QjsTermProgram,
-    event_sources: ProcessEventSources,
-    process_stdin: &mut dyn Read,
-    process_stdout: &mut dyn Write,
-    process_stderr: &mut dyn Write,
+pub(super) use request::{QjsTermProgramIo, QjsTermProgramRequest};
+
+pub(super) fn run_qjs_term_program_streaming(
+    mut request: QjsTermProgramRequest,
+    io: QjsTermProgramIo<'_>,
 ) -> Result<i32, CliError> {
-    let input = read_qjs_term_input(&mut qjs_command, program, process_stdin)?;
+    let input = read_qjs_term_input(&mut request.qjs_command, request.program, io.process_stdin)?;
     let runner = quickjs_runner()?;
-    let execution = prepare_qjs_term_execution(&runner, &qjs_command, program, input)?;
+    let execution =
+        prepare_qjs_term_execution(&runner, &request.qjs_command, request.program, input)?;
     let start_result = run_prepared_terminal_program(
-        &runner,
-        &execution.task,
-        &qjs_command,
-        program,
-        execution.prepared,
+        PreparedTerminalRun {
+            runner: &runner,
+            task: &execution.task,
+            qjs_command: &request.qjs_command,
+            program: request.program,
+            prepared: execution.prepared,
+        },
         TerminalRunStreams {
-            feed_after_eval,
-            event_sources,
+            feed_after_eval: request.feed_after_eval,
+            event_sources: request.event_sources,
             terminal: &execution.terminal,
-            process_stdin,
-            process_stdout,
+            process_stdin: io.process_stdin,
+            process_stdout: io.process_stdout,
         },
     );
     finish_terminal_task_output(
         start_result,
         &execution.task,
         &execution.terminal,
-        process_stdout,
-        process_stderr,
+        io.process_stdout,
+        io.process_stderr,
     )
 }
 
@@ -155,16 +138,27 @@ struct TerminalRunStreams<'a> {
     process_stdout: &'a mut dyn Write,
 }
 
-fn run_prepared_terminal_program(
-    runner: &QuickJsRunner,
-    task: &Task,
-    qjs_command: &QjsCommand,
+struct PreparedTerminalRun<'a> {
+    runner: &'a QuickJsRunner,
+    task: &'a Task,
+    qjs_command: &'a QjsCommand,
     program: QjsTermProgram,
     prepared: PreparedQjsTermProgram,
+}
+
+fn run_prepared_terminal_program(
+    run: PreparedTerminalRun<'_>,
     mut streams: TerminalRunStreams<'_>,
 ) -> Result<(), CliError> {
-    let mut runtime = create_limited_task_runtime(runner, task, qjs_command, program)?;
-    eval_prepared_terminal_program(&mut runtime, qjs_command, program, &prepared, &mut streams)?;
+    let mut runtime =
+        create_limited_task_runtime(run.runner, run.task, run.qjs_command, run.program)?;
+    eval_prepared_terminal_program(
+        &mut runtime,
+        run.qjs_command,
+        run.program,
+        &run.prepared,
+        &mut streams,
+    )?;
     let finish_result = runtime.finish();
     drain_terminal_output(
         &streams.terminal.device,

@@ -28,7 +28,7 @@ pub(super) use command::{
 };
 use program_spec::QjsTermProgram;
 use pump::ProcessEventSources;
-use runtime::{run_qjs_term_program_streaming, run_qjs_term_program_streaming_with_input_mode};
+use runtime::{QjsTermProgramIo, QjsTermProgramRequest, run_qjs_term_program_streaming};
 pub(crate) use session::QjsShellSession;
 
 pub(super) struct QjsShellStreamingIo<'a> {
@@ -54,13 +54,49 @@ pub(super) fn run_qjs_term_streaming(
     process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
     run_qjs_term_program_streaming(
-        command.qjs,
-        command.feed_after_eval,
-        QjsTermProgram::HostScript,
+        QjsTermProgramRequest::blocking(
+            command.qjs,
+            command.feed_after_eval,
+            QjsTermProgram::HostScript,
+        ),
+        QjsTermProgramIo {
+            process_stdin,
+            process_stdout,
+            process_stderr,
+        },
+    )
+}
+
+fn qjs_shell_feed_after_eval(raw: bool) -> Vec<PostEvalFeed> {
+    vec![if raw {
+        PostEvalFeed::RawBytesProcess
+    } else {
+        PostEvalFeed::LinesProcess
+    }]
+}
+
+fn qjs_shell_program_request(
+    command: QjsShellCommand,
+    event_sources: ProcessEventSources,
+) -> QjsTermProgramRequest {
+    QjsTermProgramRequest {
+        qjs_command: qjs_shell_command(command.qjs, command.raw),
+        feed_after_eval: qjs_shell_feed_after_eval(command.raw),
+        program: QjsTermProgram::BundledShell,
+        event_sources,
+    }
+}
+
+fn qjs_term_program_io<'a>(
+    process_stdin: &'a mut dyn Read,
+    process_stdout: &'a mut dyn Write,
+    process_stderr: &'a mut dyn Write,
+) -> QjsTermProgramIo<'a> {
+    QjsTermProgramIo {
         process_stdin,
         process_stdout,
         process_stderr,
-    )
+    }
 }
 
 pub(super) fn run_qjs_shell(
@@ -80,16 +116,8 @@ pub(super) fn run_qjs_shell_streaming(
     process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
     run_qjs_term_program_streaming(
-        qjs_shell_command(command.qjs, command.raw),
-        vec![if command.raw {
-            PostEvalFeed::RawBytesProcess
-        } else {
-            PostEvalFeed::LinesProcess
-        }],
-        QjsTermProgram::BundledShell,
-        process_stdin,
-        process_stdout,
-        process_stderr,
+        qjs_shell_program_request(command, ProcessEventSources::blocking()),
+        qjs_term_program_io(process_stdin, process_stdout, process_stderr),
     )
 }
 
@@ -99,18 +127,13 @@ pub(super) fn run_qjs_shell_streaming_with_input_fd(
     input_fd: libc::c_int,
     io: QjsShellStreamingIo<'_>,
 ) -> Result<i32, CliError> {
-    run_qjs_term_program_streaming_with_input_mode(
-        qjs_shell_command(command.qjs, command.raw),
-        vec![if command.raw {
-            PostEvalFeed::RawBytesProcess
-        } else {
-            PostEvalFeed::LinesProcess
-        }],
-        QjsTermProgram::BundledShell,
-        ProcessEventSources::input_fd(input_fd),
-        io.process_stdin,
-        io.process_stdout,
-        io.process_stderr,
+    run_qjs_term_program_streaming(
+        qjs_shell_program_request(command, ProcessEventSources::input_fd(input_fd)),
+        QjsTermProgramIo {
+            process_stdin: io.process_stdin,
+            process_stdout: io.process_stdout,
+            process_stderr: io.process_stderr,
+        },
     )
 }
 
@@ -121,18 +144,16 @@ pub(super) fn run_qjs_shell_streaming_with_terminal_fds(
     terminal_size_fd: libc::c_int,
     io: QjsShellStreamingIo<'_>,
 ) -> Result<i32, CliError> {
-    run_qjs_term_program_streaming_with_input_mode(
-        qjs_shell_command(command.qjs, command.raw),
-        vec![if command.raw {
-            PostEvalFeed::RawBytesProcess
-        } else {
-            PostEvalFeed::LinesProcess
-        }],
-        QjsTermProgram::BundledShell,
-        ProcessEventSources::terminal_fds(input_fd, terminal_size_fd),
-        io.process_stdin,
-        io.process_stdout,
-        io.process_stderr,
+    run_qjs_term_program_streaming(
+        qjs_shell_program_request(
+            command,
+            ProcessEventSources::terminal_fds(input_fd, terminal_size_fd),
+        ),
+        QjsTermProgramIo {
+            process_stdin: io.process_stdin,
+            process_stdout: io.process_stdout,
+            process_stderr: io.process_stderr,
+        },
     )
 }
 
@@ -143,18 +164,16 @@ pub(super) fn run_qjs_shell_streaming_with_resize_queue(
     resize_queue: Arc<Mutex<VecDeque<(u16, u16)>>>,
     io: QjsShellStreamingIo<'_>,
 ) -> Result<i32, CliError> {
-    run_qjs_term_program_streaming_with_input_mode(
-        qjs_shell_command(command.qjs, command.raw),
-        vec![if command.raw {
-            PostEvalFeed::RawBytesProcess
-        } else {
-            PostEvalFeed::LinesProcess
-        }],
-        QjsTermProgram::BundledShell,
-        ProcessEventSources::resize_queue(input_fd, resize_queue),
-        io.process_stdin,
-        io.process_stdout,
-        io.process_stderr,
+    run_qjs_term_program_streaming(
+        qjs_shell_program_request(
+            command,
+            ProcessEventSources::resize_queue(input_fd, resize_queue),
+        ),
+        QjsTermProgramIo {
+            process_stdin: io.process_stdin,
+            process_stdout: io.process_stdout,
+            process_stderr: io.process_stderr,
+        },
     )
 }
 
