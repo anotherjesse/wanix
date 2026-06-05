@@ -5,10 +5,12 @@ use wanix_fs::{
 };
 
 use crate::task_files::{
-    ControlFile, FdProxyFile, Field, FieldFile, FileAccess, NewTaskFile, TASK_FD_FILE_MODE,
-    TASK_FILE_READ_ONLY_MODE, directory_metadata, field_metadata, file_metadata, task_entries,
+    TASK_FD_FILE_MODE, TASK_FILE_READ_ONLY_MODE, directory_metadata, field_metadata, file_metadata,
+    task_entries,
 };
 use crate::{Task, TaskId, TaskTable};
+
+mod open;
 
 /// Filesystem view for the Wanix `#task` service.
 #[derive(Clone)]
@@ -47,39 +49,7 @@ impl TaskFs {
 
 impl FileSystem for TaskFs {
     fn open(&self, path: &NormalizedPath, options: OpenOptions) -> FsResult<Box<dyn File>> {
-        let parts = components(path);
-        match parts.as_slice() {
-            [] | ["new"] => Err(FsError::IsDirectory),
-            [selector] => match self.task_for_selector(selector) {
-                Ok(_) => Err(FsError::IsDirectory),
-                Err(err) => Err(err),
-            },
-            ["new", kind] => {
-                require_read_only(options)?;
-                if self
-                    .table
-                    .driver_kinds()
-                    .iter()
-                    .any(|driver| driver == kind)
-                {
-                    Ok(Box::new(NewTaskFile::new(
-                        self.table.clone(),
-                        self.current,
-                        *kind,
-                    )))
-                } else {
-                    Err(FsError::NotFound)
-                }
-            }
-            [selector, field] => self.open_task_field(selector, field, options),
-            [selector, "fd", fd] => {
-                let task = self.task_for_selector(selector)?;
-                let fd = parse_fd(fd)?;
-                let file = task.fd_file(fd)?;
-                Ok(Box::new(FdProxyFile::new(file, access(options)?)))
-            }
-            _ => Err(FsError::NotFound),
-        }
+        self.open_path(path, options)
     }
 
     fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
@@ -145,48 +115,6 @@ impl FileSystem for TaskFs {
 }
 
 impl TaskFs {
-    fn open_task_field(
-        &self,
-        selector: &str,
-        field: &str,
-        options: OpenOptions,
-    ) -> FsResult<Box<dyn File>> {
-        let task = self.task_for_selector(selector)?;
-        match field {
-            "ctl" => Ok(Box::new(ControlFile::new(
-                self.table.clone(),
-                task,
-                access(options)?,
-            ))),
-            "id" => {
-                require_read_only(options)?;
-                Ok(Box::new(FieldFile::new(
-                    task,
-                    Field::Id,
-                    FileAccess::read_only(),
-                )))
-            }
-            "kind" => {
-                require_read_only(options)?;
-                Ok(Box::new(FieldFile::new(
-                    task,
-                    Field::Kind,
-                    FileAccess::read_only(),
-                )))
-            }
-            "cmd" => Ok(Box::new(FieldFile::new(task, Field::Cmd, access(options)?))),
-            "env" => Ok(Box::new(FieldFile::new(task, Field::Env, access(options)?))),
-            "dir" => Ok(Box::new(FieldFile::new(task, Field::Dir, access(options)?))),
-            "exit" => Ok(Box::new(FieldFile::new(
-                task,
-                Field::Exit,
-                access(options)?,
-            ))),
-            "fd" => Err(FsError::IsDirectory),
-            _ => Err(FsError::NotFound),
-        }
-    }
-
     fn root_entries(&self) -> Vec<DirEntry> {
         let mut entries = vec![DirEntry::new("new", directory_metadata())];
         entries.extend(
@@ -230,23 +158,4 @@ fn parse_task_id(task_id: &str) -> FsResult<TaskId> {
         return Err(FsError::NotFound);
     }
     Ok(TaskId::new(task_id))
-}
-
-fn access(options: OpenOptions) -> FsResult<FileAccess> {
-    if options.create {
-        return Err(FsError::AlreadyExists);
-    }
-    if options.truncate && !options.write {
-        return Err(FsError::PermissionDenied);
-    }
-    Ok(FileAccess::new(options.read, options.write))
-}
-
-fn require_read_only(options: OpenOptions) -> FsResult<()> {
-    let access = access(options)?;
-    access.can_read()?;
-    if options.write || options.truncate {
-        return Err(FsError::PermissionDenied);
-    }
-    Ok(())
 }
