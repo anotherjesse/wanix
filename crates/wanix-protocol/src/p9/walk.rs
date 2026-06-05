@@ -7,6 +7,16 @@ use super::{
     P9Walk, P9WalkGetAttrResponse,
 };
 
+const P9_U8_FIELD_LEN: usize = 1;
+const P9_U16_FIELD_LEN: usize = 2;
+const P9_U32_FIELD_LEN: usize = 4;
+const P9_U64_FIELD_LEN: usize = 8;
+const P9_QID_FIELD_LEN: usize = P9_U8_FIELD_LEN + P9_U32_FIELD_LEN + P9_U64_FIELD_LEN;
+const P9_ATTR_BODY_LEN: usize = 3 * P9_U32_FIELD_LEN + 15 * P9_U64_FIELD_LEN;
+const P9_QID_LIST_PREFIX_LEN: usize = P9_U16_FIELD_LEN;
+const P9_RWALKGETATTR_FIXED_LEN: usize =
+    P9_U64_FIELD_LEN + P9_ATTR_BODY_LEN + P9_QID_LIST_PREFIX_LEN;
+
 /// Builds a `Twalk` frame.
 ///
 /// # Errors
@@ -59,7 +69,7 @@ fn build_walk_frame(
 pub fn p9_rwalk(tag: u16, qids: &[P9Qid]) -> Result<P9Frame, P9Error> {
     let qid_count =
         u16::try_from(qids.len()).map_err(|_| P9Error::TooManyWalkNames { count: qids.len() })?;
-    let mut payload = Vec::with_capacity(2 + qids.len() * 13);
+    let mut payload = Vec::with_capacity(P9_QID_LIST_PREFIX_LEN + qids.len() * P9_QID_FIELD_LEN);
     push_u16(&mut payload, qid_count);
     for qid in qids {
         push_qid(&mut payload, *qid);
@@ -80,7 +90,7 @@ pub fn p9_rwalkgetattr(
 ) -> Result<P9Frame, P9Error> {
     let qid_count =
         u16::try_from(qids.len()).map_err(|_| P9Error::TooManyWalkNames { count: qids.len() })?;
-    let mut payload = Vec::with_capacity(142 + qids.len() * 13);
+    let mut payload = Vec::with_capacity(P9_RWALKGETATTR_FIXED_LEN + qids.len() * P9_QID_FIELD_LEN);
     push_u64(&mut payload, valid);
     push_attr_body(&mut payload, attr);
     push_u16(&mut payload, qid_count);
