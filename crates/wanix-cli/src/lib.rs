@@ -247,51 +247,6 @@ where
     )
 }
 
-#[cfg(all(unix, test))]
-struct TestResizeInput {
-    stdin_fd: libc::c_int,
-    resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
-}
-
-#[cfg(all(unix, test))]
-impl TestResizeInput {
-    fn new(
-        stdin_fd: libc::c_int,
-        resize_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(u16, u16)>>>,
-    ) -> Self {
-        Self {
-            stdin_fd,
-            resize_queue,
-        }
-    }
-}
-
-#[cfg(all(unix, test))]
-fn run_with_process_io_and_resize_queue<I, S, R, W, E>(
-    args: I,
-    mut process_stdin: R,
-    resize_input: TestResizeInput,
-    mut process_stdout: W,
-    mut process_stderr: E,
-) -> Result<i32, CliError>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<OsString>,
-    R: Read,
-    W: Write,
-    E: Write,
-{
-    let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
-    let mut io =
-        process_io::ProcessIo::new(&mut process_stdin, &mut process_stdout, &mut process_stderr);
-    process_io::run_with_resize_queue(
-        args,
-        &mut io,
-        resize_input.stdin_fd,
-        resize_input.resize_queue,
-    )
-}
-
 fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<CliOutput, CliError> {
     let Some((command, rest)) = args.split_first() else {
         return Ok(help::help_output());
@@ -332,13 +287,11 @@ mod tests {
     use std::time::Duration;
 
     #[cfg(unix)]
-    use super::run_with_process_io_and_resize_queue;
+    use super::UnixTerminalFds;
     #[cfg(unix)]
     use super::run_with_process_io_and_stdin_fd;
     #[cfg(unix)]
     use super::run_with_process_io_and_terminal_fds;
-    #[cfg(unix)]
-    use super::{TestResizeInput, UnixTerminalFds};
     use super::{quickjs_runner, run, run_with_process_io, run_with_process_stdin};
     use wanix_protocol::{
         P9_LOCK_STATUS_OK, P9_LOCK_TYPE_READ, P9_LOCK_TYPE_UNLOCK, P9_LOCK_TYPE_WRITE, P9_NOFID,
@@ -479,6 +432,51 @@ mod tests {
             before_script.into(),
             after_script.into(),
         ]
+    }
+
+    #[cfg(unix)]
+    struct TestResizeInput {
+        stdin_fd: libc::c_int,
+        resize_queue: Arc<Mutex<VecDeque<(u16, u16)>>>,
+    }
+
+    #[cfg(unix)]
+    impl TestResizeInput {
+        fn new(stdin_fd: libc::c_int, resize_queue: Arc<Mutex<VecDeque<(u16, u16)>>>) -> Self {
+            Self {
+                stdin_fd,
+                resize_queue,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn run_with_process_io_and_resize_queue<I, S, R, W, E>(
+        args: I,
+        mut process_stdin: R,
+        resize_input: TestResizeInput,
+        mut process_stdout: W,
+        mut process_stderr: E,
+    ) -> Result<i32, super::CliError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+        R: Read,
+        W: Write,
+        E: Write,
+    {
+        let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+        let mut io = super::process_io::ProcessIo::new(
+            &mut process_stdin,
+            &mut process_stdout,
+            &mut process_stderr,
+        );
+        super::process_io::run_with_resize_queue(
+            args,
+            &mut io,
+            resize_input.stdin_fd,
+            resize_input.resize_queue,
+        )
     }
 
     #[cfg(unix)]
