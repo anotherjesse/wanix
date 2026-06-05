@@ -228,3 +228,109 @@ fn run_collected_with_process_output(
     write_process_output(process_stderr, "stderr", output.stderr())?;
     Ok(output.exit_code())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{run_qemu_exec_process_io, run_qemu_print_process_io, run_qemu_process_io};
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    fn prepared_qemu_root(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(root.join("boot")).unwrap();
+        fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
+        root
+    }
+
+    fn parse_qemu_command(root: &Path, extra: &[&str]) -> crate::qemu::QemuCommand {
+        let root_arg = root.display().to_string();
+        let mut values = vec!["--root", &root_arg, "--cmdline", "init=/bin/sh"];
+        values.extend_from_slice(extra);
+        crate::qemu::parse_qemu_command(&args(&values)).unwrap()
+    }
+
+    #[test]
+    fn qemu_process_io_routes_print_mode_to_stdout() {
+        let root = prepared_qemu_root("wanix-cli-process-io-qemu-print");
+        let root_arg = root.display().to_string();
+        let stdin_bytes = Vec::new();
+        let mut stdin = stdin_bytes.as_slice();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code = run_qemu_process_io(
+            &args(&["--root", &root_arg, "--cmdline", "init=/bin/sh"]),
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert!(
+            String::from_utf8(stdout)
+                .unwrap()
+                .contains("qemu-system-i386")
+        );
+        assert!(stderr.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn qemu_print_process_io_writes_captured_stdout() {
+        let root = prepared_qemu_root("wanix-cli-process-io-qemu-print-helper");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code =
+            run_qemu_print_process_io(parse_qemu_command(&root, &[]), &mut stdout, &mut stderr)
+                .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert!(
+            String::from_utf8(stdout)
+                .unwrap()
+                .contains("qemu-system-i386")
+        );
+        assert!(stderr.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn qemu_exec_process_io_uses_live_stderr_and_reports_spawn_failure() {
+        let root = prepared_qemu_root("wanix-cli-process-io-qemu-exec");
+        let missing_qemu = root.join("missing-qemu");
+        let qemu_arg = missing_qemu.display().to_string();
+        let mut stderr = Vec::new();
+
+        let error = run_qemu_exec_process_io(
+            parse_qemu_command(&root, &["--exec", "--qemu-bin", &qemu_arg]),
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(
+            String::from_utf8(stderr)
+                .unwrap()
+                .contains("wanix-rust qemu exec:")
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("failed to start qemu executable")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
