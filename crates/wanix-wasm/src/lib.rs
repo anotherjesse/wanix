@@ -9,15 +9,20 @@
 //! Two tasks (a `qjs` task and a `wanix-wasm` task) that are built from the same
 //! `Namespace` share one filesystem — writes by one are visible to the other.
 //!
-//! This is a Tier-1 demo/bench runner: a standalone WASI command host, not yet a
-//! Wanix task driver. The shared linker registers `poll_oneoff` as `ERRNO_NOSYS`,
-//! so the runner supports command-style guests (`_start`, fd/path I/O, args/env,
-//! clock, exit) with no poll readiness — it is not a general-purpose WASI host.
+//! [`WasmTaskDriver`] promotes the runner into a first-class Wanix task driver:
+//! a `.wasm` task runs against the task's namespace, cwd, env, argv, and stdio
+//! fds, with an observable task exit. The shared linker registers `poll_oneoff`
+//! as `ERRNO_NOSYS`, so the runner supports command-style guests (`_start`,
+//! fd/path I/O, args/env, clock, exit) with no poll readiness — it is not a
+//! general-purpose WASI host.
 
 mod capture;
+mod driver;
 mod runner;
 mod state;
+mod task_stdio;
 
 pub use capture::{CaptureFile, host_stderr, host_stdout};
+pub use driver::WasmTaskDriver;
 pub use runner::WasiRunner;
 pub use state::WasiState;

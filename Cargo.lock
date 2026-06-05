@@ -1162,6 +1162,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "wanix-fs",
+ "wanix-task",
  "wanix-vfs",
  "wanix-wasi",
  "wanix-wasi-host",

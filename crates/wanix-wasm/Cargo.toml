@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1"
 wanix-fs = { path = "../wanix-fs" }
+wanix-task = { path = "../wanix-task" }
 wanix-vfs = { path = "../wanix-vfs" }
 wanix-wasi = { path = "../wanix-wasi" }
 wanix-wasi-host = { path = "../wanix-wasi-host" }
