@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use wanix_fs::{FsError, FsResult, NormalizedPath};
 
-use super::{Namespace, ResolvedTarget};
+use super::Namespace;
+use crate::path::ResolvedTarget;
 
 impl Namespace {
     pub(super) fn try_resolved_path<T>(

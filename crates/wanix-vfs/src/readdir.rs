@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use wanix_fs::{DirEntry, FileType, FsError, FsResult, Metadata, NormalizedPath};
 
-use super::{BindTarget, Namespace, directory_metadata, immediate_child_name, is_direct_child};
-use crate::path::ResolvedTarget;
+use super::{BindTarget, Namespace};
+use crate::path::{ResolvedTarget, immediate_child_name, is_direct_child};
 
 impl Namespace {
     pub(super) fn read_namespace_dir(&self, path: &NormalizedPath) -> FsResult<Vec<DirEntry>> {
@@ -100,4 +100,8 @@ impl DirectoryView {
 
 fn is_hidden(name: &str) -> bool {
     name.starts_with('#')
+}
+
+pub(super) fn directory_metadata() -> Metadata {
+    Metadata::new(FileType::Directory, 2, 0o755)
 }

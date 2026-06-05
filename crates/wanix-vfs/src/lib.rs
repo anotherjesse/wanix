@@ -4,29 +4,25 @@
 //! per-task namespace cloning, and synthesized directory views for unioned
 //! bindings.
 
-use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
 
 use wanix_fs::{
-    DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, MetadataLookup,
-    NormalizedPath, OpenOptions,
+    DirEntry, File, FileSystem, FsError, FsResult, Metadata, MetadataLookup, NormalizedPath,
+    OpenOptions,
 };
 
 mod binding;
 mod mutation;
 mod path;
 mod readdir;
+mod resolution;
 
 #[cfg(test)]
 mod tests;
 
 use binding::BindTarget;
 pub use binding::{BindOptions, BindPosition, Binding};
-use path::{
-    ResolvedTarget, immediate_child_name, is_direct_child, join_paths, relative_to_destination,
-};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix namespace binding";
@@ -50,46 +46,6 @@ impl Namespace {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    fn resolve_candidates(&self, path: &NormalizedPath) -> FsResult<Vec<ResolvedTarget>> {
-        let mut candidates = Vec::new();
-        for (destination, targets) in &self.bindings {
-            let Some(relative) = relative_to_destination(path, destination) else {
-                continue;
-            };
-            for target in targets {
-                candidates.push(ResolvedTarget {
-                    filesystem: Arc::clone(&target.filesystem),
-                    path: join_paths(&target.source, relative)?,
-                    destination_len: destination.as_str().len(),
-                });
-            }
-        }
-        candidates.sort_by_key(|candidate| Reverse(candidate.destination_len));
-        Ok(candidates)
-    }
-
-    fn has_synthetic_children(&self, path: &NormalizedPath) -> bool {
-        self.bindings
-            .keys()
-            .any(|destination| immediate_child_name(destination, path).is_some())
-    }
-
-    fn synthetic_child_metadata(targets: &[BindTarget]) -> Option<Metadata> {
-        Self::synthetic_child_metadata_with_lookup(targets, MetadataLookup::FollowSymlink)
-    }
-
-    fn synthetic_child_metadata_with_lookup(
-        targets: &[BindTarget],
-        lookup: MetadataLookup,
-    ) -> Option<Metadata> {
-        targets.iter().find_map(|target| {
-            target
-                .filesystem
-                .metadata_with_lookup(&target.source, lookup)
-                .ok()
-        })
     }
 }
 
@@ -127,10 +83,10 @@ impl FileSystem for Namespace {
             }
         }
         if path.as_str() == "." {
-            return Ok(directory_metadata());
+            return Ok(readdir::directory_metadata());
         }
         if self.has_synthetic_children(path) {
-            return Ok(directory_metadata());
+            return Ok(readdir::directory_metadata());
         }
         Err(FsError::NotFound)
     }
@@ -273,8 +229,4 @@ impl FileSystem for Namespace {
         }
         Err(FsError::NotFound)
     }
-}
-
-fn directory_metadata() -> Metadata {
-    Metadata::new(FileType::Directory, 2, 0o755)
 }
