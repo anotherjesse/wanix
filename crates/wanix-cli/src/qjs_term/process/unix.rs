@@ -1,12 +1,9 @@
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::time::Duration;
 
-use wanix_qjs::QuickJsTaskRuntime;
-use wanix_term::TermDevice;
-
 use super::super::pump::{
-    TermResize, TerminalPumpState, feed_terminal_chunk_and_pump, pump_terminal_idle,
-    pump_terminal_resize_if_changed, task_exited,
+    TermResize, TerminalPumpContext, TerminalPumpState, feed_terminal_chunk_and_pump,
+    pump_terminal_idle, pump_terminal_resize_if_changed, task_exited,
 };
 use super::super::{CliError, QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS};
 use super::ProcessFeedContext;
@@ -24,11 +21,13 @@ pub(super) fn run_process_polled_feed_session_after_eval(
     let idle_budget = qjs_shell_idle_event_loop_budget(policy.event_loop_wait_budget);
     let mut session = PolledFeedSession {
         process_stdin: context.process_stdin,
-        terminal: context.terminal,
-        terminal_id: context.terminal_id,
-        runtime: context.runtime,
+        pump_context: TerminalPumpContext {
+            terminal: context.terminal,
+            terminal_id: context.terminal_id,
+            runtime: context.runtime,
+            process_stdout: context.process_stdout,
+        },
         pump_state: context.pump_state,
-        process_stdout: context.process_stdout,
         policy,
         idle_budget,
     };
@@ -42,7 +41,7 @@ pub(super) fn run_process_polled_feed_session_after_eval(
             }
             ProcessStdinPoll::Idle => session.pump_idle()?,
         }
-        if task_exited(session.runtime)? {
+        if task_exited(session.pump_context.runtime)? {
             return Ok(());
         }
     }
@@ -50,11 +49,8 @@ pub(super) fn run_process_polled_feed_session_after_eval(
 
 struct PolledFeedSession<'a> {
     process_stdin: &'a mut dyn Read,
-    terminal: &'a TermDevice,
-    terminal_id: &'a str,
-    runtime: &'a mut QuickJsTaskRuntime,
+    pump_context: TerminalPumpContext<'a>,
     pump_state: &'a mut TerminalPumpState,
-    process_stdout: &'a mut dyn Write,
     policy: super::super::pump::TerminalPumpPolicy,
     idle_budget: Duration,
 }
@@ -64,15 +60,7 @@ impl PolledFeedSession<'_> {
         self.pump_resize()?;
         match read_process_stdin_after_poll(self.process_stdin, bytes)? {
             ProcessStdinRead::Bytes(count) => {
-                feed_terminal_chunk_and_pump(
-                    self.terminal,
-                    self.terminal_id,
-                    self.runtime,
-                    &bytes[..count],
-                    self.policy.ready_io_turns,
-                    self.policy.event_loop_wait_budget,
-                    self.process_stdout,
-                )?;
+                feed_terminal_chunk_and_pump(&mut self.pump_context, &bytes[..count], self.policy)?;
                 Ok(false)
             }
             ProcessStdinRead::Eof => Ok(true),
@@ -86,24 +74,15 @@ impl PolledFeedSession<'_> {
 
     fn pump_idle(&mut self) -> Result<(), CliError> {
         self.pump_resize()?;
-        pump_terminal_idle(
-            self.terminal,
-            self.terminal_id,
-            self.runtime,
-            self.policy.ready_io_turns,
-            self.idle_budget,
-            self.process_stdout,
-        )
+        let policy = super::super::pump::TerminalPumpPolicy {
+            event_loop_wait_budget: self.idle_budget,
+            ..self.policy
+        };
+        pump_terminal_idle(&mut self.pump_context, policy)
     }
 
     fn pump_resize(&mut self) -> Result<(), CliError> {
-        pump_terminal_resize_if_changed(
-            self.terminal,
-            self.terminal_id,
-            self.runtime,
-            self.pump_state,
-            self.process_stdout,
-        )
+        pump_terminal_resize_if_changed(&mut self.pump_context, self.pump_state)
     }
 }
 

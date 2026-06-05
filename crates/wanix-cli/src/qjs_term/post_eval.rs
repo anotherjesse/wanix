@@ -11,8 +11,8 @@ use super::process::{
     run_process_raw_byte_feed_session_after_eval, split_feed_lines,
 };
 use super::pump::{
-    TermResize, TerminalPumpState, feed_terminal_batch_and_pump, feed_terminal_resize_and_pump,
-    flush_terminal_feed_batch, task_exited,
+    TermResize, TerminalPumpContext, TerminalPumpState, feed_terminal_batch_and_pump,
+    feed_terminal_resize_and_pump, flush_terminal_feed_batch, task_exited,
 };
 
 pub(super) fn run_post_eval_feeds(
@@ -121,15 +121,8 @@ impl PostEvalFeedRunner<'_> {
             return Ok(true);
         }
         let policy = self.context.pump_state.policy;
-        feed_terminal_resize_and_pump(
-            self.context.terminal,
-            self.context.terminal_id,
-            self.context.runtime,
-            &resize,
-            policy.ready_io_turns,
-            policy.event_loop_wait_budget,
-            self.context.process_stdout,
-        )?;
+        let mut pump_context = self.pump_context();
+        feed_terminal_resize_and_pump(&mut pump_context, &resize, policy)?;
         self.task_exited()
     }
 
@@ -154,32 +147,32 @@ impl PostEvalFeedRunner<'_> {
 
     fn flush_batch(&mut self) -> Result<(), CliError> {
         let policy = self.context.pump_state.policy;
-        flush_terminal_feed_batch(
-            self.context.terminal,
-            self.context.terminal_id,
-            self.context.runtime,
-            &mut self.current_batch,
-            policy.ready_io_turns,
-            policy.event_loop_wait_budget,
-            self.context.process_stdout,
-        )
+        let mut pump_context = TerminalPumpContext {
+            terminal: self.context.terminal,
+            terminal_id: self.context.terminal_id,
+            runtime: &mut *self.context.runtime,
+            process_stdout: &mut *self.context.process_stdout,
+        };
+        flush_terminal_feed_batch(&mut pump_context, &mut self.current_batch, policy)
     }
 
     fn feed_batch(&mut self, batch: &[Vec<u8>]) -> Result<(), CliError> {
         let policy = self.context.pump_state.policy;
-        feed_terminal_batch_and_pump(
-            self.context.terminal,
-            self.context.terminal_id,
-            self.context.runtime,
-            batch,
-            policy.ready_io_turns,
-            policy.event_loop_wait_budget,
-            self.context.process_stdout,
-        )
+        let mut pump_context = self.pump_context();
+        feed_terminal_batch_and_pump(&mut pump_context, batch, policy)
     }
 
     fn task_exited(&self) -> Result<bool, CliError> {
         task_exited(self.context.runtime)
+    }
+
+    fn pump_context(&mut self) -> TerminalPumpContext<'_> {
+        TerminalPumpContext {
+            terminal: self.context.terminal,
+            terminal_id: self.context.terminal_id,
+            runtime: &mut *self.context.runtime,
+            process_stdout: &mut *self.context.process_stdout,
+        }
     }
 }
 

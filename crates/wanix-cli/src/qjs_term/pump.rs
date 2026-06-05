@@ -1,5 +1,4 @@
 use std::io::Write;
-use std::time::Duration;
 
 use wanix_fs::{FileSystem, NormalizedPath, OpenOptions};
 use wanix_qjs::QuickJsTaskRuntime;
@@ -17,119 +16,101 @@ pub(super) use events::{
     ProcessEventSources, ProcessInputMode, TermResize, TerminalPumpPolicy, TerminalPumpState,
 };
 
+pub(super) struct TerminalPumpContext<'a> {
+    pub(super) terminal: &'a TermDevice,
+    pub(super) terminal_id: &'a str,
+    pub(super) runtime: &'a mut QuickJsTaskRuntime,
+    pub(super) process_stdout: &'a mut dyn Write,
+}
+
 pub(super) fn flush_terminal_feed_batch(
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
+    context: &mut TerminalPumpContext<'_>,
     batch: &mut Vec<Vec<u8>>,
-    ready_io_turns: usize,
-    event_loop_wait_budget: Duration,
-    process_stdout: &mut dyn Write,
+    policy: TerminalPumpPolicy,
 ) -> Result<(), CliError> {
     if batch.is_empty() {
         return Ok(());
     }
     let flushed = std::mem::take(batch);
-    feed_terminal_batch_and_pump(
-        terminal,
-        terminal_id,
-        runtime,
-        &flushed,
-        ready_io_turns,
-        event_loop_wait_budget,
-        process_stdout,
-    )
+    feed_terminal_batch_and_pump(context, &flushed, policy)
 }
 
 pub(super) fn feed_terminal_batch_and_pump(
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
+    context: &mut TerminalPumpContext<'_>,
     batch: &[Vec<u8>],
-    ready_io_turns: usize,
-    event_loop_wait_budget: Duration,
-    process_stdout: &mut dyn Write,
+    policy: TerminalPumpPolicy,
 ) -> Result<(), CliError> {
-    let result = (|| -> Result<(), CliError> {
+    run_and_drain_terminal_output(context, |context| {
         for chunk in batch {
-            feed_terminal_after_eval(terminal, terminal_id, chunk)?;
+            feed_terminal_after_eval(context.terminal, context.terminal_id, chunk)?;
         }
-        runtime.run_event_loop_turns(event_loop_wait_budget, ready_io_turns)?;
+        context
+            .runtime
+            .run_event_loop_turns(policy.event_loop_wait_budget, policy.ready_io_turns)?;
         Ok(())
-    })();
-    drain_terminal_output(terminal, terminal_id, process_stdout)?;
-    result
+    })
 }
 
 pub(super) fn feed_terminal_chunk_and_pump(
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
+    context: &mut TerminalPumpContext<'_>,
     chunk: &[u8],
-    ready_io_turns: usize,
-    event_loop_wait_budget: Duration,
-    process_stdout: &mut dyn Write,
+    policy: TerminalPumpPolicy,
 ) -> Result<(), CliError> {
-    let result = (|| -> Result<(), CliError> {
-        feed_terminal_after_eval(terminal, terminal_id, chunk)?;
-        runtime.run_event_loop_turns(event_loop_wait_budget, ready_io_turns)?;
+    run_and_drain_terminal_output(context, |context| {
+        feed_terminal_after_eval(context.terminal, context.terminal_id, chunk)?;
+        context
+            .runtime
+            .run_event_loop_turns(policy.event_loop_wait_budget, policy.ready_io_turns)?;
         Ok(())
-    })();
-    drain_terminal_output(terminal, terminal_id, process_stdout)?;
-    result
+    })
 }
 
 pub(super) fn pump_terminal_idle(
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
-    ready_io_turns: usize,
-    event_loop_wait_budget: Duration,
-    process_stdout: &mut dyn Write,
+    context: &mut TerminalPumpContext<'_>,
+    policy: TerminalPumpPolicy,
 ) -> Result<(), CliError> {
-    let result = runtime
-        .run_event_loop_turns(event_loop_wait_budget, ready_io_turns)
-        .map_err(CliError::from);
-    drain_terminal_output(terminal, terminal_id, process_stdout)?;
-    result
+    run_and_drain_terminal_output(context, |context| {
+        context
+            .runtime
+            .run_event_loop_turns(policy.event_loop_wait_budget, policy.ready_io_turns)
+            .map_err(CliError::from)
+    })
 }
 
 pub(super) fn pump_terminal_resize_if_changed(
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
+    context: &mut TerminalPumpContext<'_>,
     pump_state: &mut TerminalPumpState,
-    process_stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     let Some(resize) = pump_state.resize_source.next_resize()? else {
         return Ok(());
     };
-    feed_terminal_resize_and_pump(
-        terminal,
-        terminal_id,
-        runtime,
-        &resize,
-        pump_state.policy.ready_io_turns,
-        pump_state.policy.event_loop_wait_budget,
-        process_stdout,
-    )
+    feed_terminal_resize_and_pump(context, &resize, pump_state.policy)
 }
 
 pub(super) fn feed_terminal_resize_and_pump(
-    terminal: &TermDevice,
-    terminal_id: &str,
-    runtime: &mut QuickJsTaskRuntime,
+    context: &mut TerminalPumpContext<'_>,
     resize: &TermResize,
-    ready_io_turns: usize,
-    event_loop_wait_budget: Duration,
-    process_stdout: &mut dyn Write,
+    policy: TerminalPumpPolicy,
 ) -> Result<(), CliError> {
-    let result = (|| -> Result<(), CliError> {
-        feed_terminal_resize_after_eval(terminal, terminal_id, resize)?;
-        runtime.run_event_loop_turns(event_loop_wait_budget, ready_io_turns)?;
+    run_and_drain_terminal_output(context, |context| {
+        feed_terminal_resize_after_eval(context.terminal, context.terminal_id, resize)?;
+        context
+            .runtime
+            .run_event_loop_turns(policy.event_loop_wait_budget, policy.ready_io_turns)?;
         Ok(())
-    })();
-    drain_terminal_output(terminal, terminal_id, process_stdout)?;
+    })
+}
+
+fn run_and_drain_terminal_output(
+    context: &mut TerminalPumpContext<'_>,
+    run: impl FnOnce(&mut TerminalPumpContext<'_>) -> Result<(), CliError>,
+) -> Result<(), CliError> {
+    let result = run(context);
+    drain_terminal_output(
+        context.terminal,
+        context.terminal_id,
+        context.process_stdout,
+    )?;
     result
 }
 

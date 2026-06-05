@@ -12,7 +12,8 @@ use super::CliError;
 #[cfg(unix)]
 use super::pump::ProcessInputMode;
 use super::pump::{
-    TerminalPumpState, feed_terminal_batch_and_pump, feed_terminal_chunk_and_pump, task_exited,
+    TerminalPumpContext, TerminalPumpState, feed_terminal_batch_and_pump,
+    feed_terminal_chunk_and_pump, task_exited,
 };
 
 pub(super) struct ProcessFeedContext<'a> {
@@ -33,6 +34,12 @@ pub(super) fn run_process_raw_byte_feed_session_after_eval(
         return unix::run_process_polled_feed_session_after_eval(input_fd, context);
     }
 
+    let mut pump_context = TerminalPumpContext {
+        terminal: context.terminal,
+        terminal_id: context.terminal_id,
+        runtime: context.runtime,
+        process_stdout: context.process_stdout,
+    };
     let mut byte = [0; 1];
     loop {
         let count = context.process_stdin.read(&mut byte).map_err(|error| {
@@ -44,16 +51,8 @@ pub(super) fn run_process_raw_byte_feed_session_after_eval(
         if count == 0 {
             return Ok(());
         }
-        feed_terminal_chunk_and_pump(
-            context.terminal,
-            context.terminal_id,
-            context.runtime,
-            &byte[..count],
-            policy.ready_io_turns,
-            policy.event_loop_wait_budget,
-            context.process_stdout,
-        )?;
-        if task_exited(context.runtime)? {
+        feed_terminal_chunk_and_pump(&mut pump_context, &byte[..count], policy)?;
+        if task_exited(pump_context.runtime)? {
             break;
         }
     }
@@ -84,18 +83,16 @@ pub(super) fn run_process_line_feed_session_after_eval(
         return unix::run_process_polled_feed_session_after_eval(input_fd, context);
     }
 
+    let mut pump_context = TerminalPumpContext {
+        terminal: context.terminal,
+        terminal_id: context.terminal_id,
+        runtime: context.runtime,
+        process_stdout: context.process_stdout,
+    };
     let mut line = Vec::new();
     while read_process_line_after_eval(context.process_stdin, &mut line)? {
-        feed_terminal_batch_and_pump(
-            context.terminal,
-            context.terminal_id,
-            context.runtime,
-            &[line.clone()],
-            policy.ready_io_turns,
-            policy.event_loop_wait_budget,
-            context.process_stdout,
-        )?;
-        if task_exited(context.runtime)? {
+        feed_terminal_batch_and_pump(&mut pump_context, &[line.clone()], policy)?;
+        if task_exited(pump_context.runtime)? {
             break;
         }
     }
