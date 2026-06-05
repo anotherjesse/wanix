@@ -10,6 +10,7 @@ use crate::{CliError, CliOutput};
 
 const KERNEL_CANDIDATES: &[&str] = &["boot/bzImage", "bzImage"];
 const INIT_PATH: &str = "bin/init";
+const INIT_EXECUTE_PERMISSION_BITS: u32 = 0o111;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RootfsCommand {
@@ -149,7 +150,7 @@ fn validate_init_executable(
 ) -> Result<(), CliError> {
     use std::os::unix::fs::PermissionsExt;
 
-    if metadata.permissions().mode() & 0o111 != 0 {
+    if metadata.permissions().mode() & INIT_EXECUTE_PERMISSION_BITS != 0 {
         return Ok(());
     }
     Err(CliError::new(

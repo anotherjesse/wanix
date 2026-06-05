@@ -11,6 +11,7 @@ const DEFAULT_KERNEL_CANDIDATES: &[&str] = &["boot/bzImage", "bzImage"];
 const DEFAULT_INITRD_CANDIDATES: &[&str] =
     &["boot/initrd", "boot/initrd.img", "initrd", "initrd.img"];
 const DEFAULT_INIT_PATH: &str = "bin/init";
+const DEFAULT_INIT_EXECUTE_PERMISSION_BITS: u32 = 0o111;
 
 pub(super) struct QemuHandoff {
     pub(super) root_path: PathBuf,
@@ -174,7 +175,7 @@ fn validate_default_init_executable(
 ) -> Result<(), CliError> {
     use std::os::unix::fs::PermissionsExt;
 
-    if metadata.permissions().mode() & 0o111 != 0 {
+    if metadata.permissions().mode() & DEFAULT_INIT_EXECUTE_PERMISSION_BITS != 0 {
         return Ok(());
     }
     Err(CliError::new(
