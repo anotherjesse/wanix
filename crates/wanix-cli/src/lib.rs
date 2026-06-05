@@ -317,6 +317,8 @@ mod tests {
     use super::run_with_process_io_and_resize_queue;
     #[cfg(unix)]
     use super::run_with_process_io_and_stdin_fd;
+    #[cfg(unix)]
+    use super::run_with_process_io_and_terminal_fds;
     use super::{quickjs_runner, run, run_with_process_io, run_with_process_stdin};
     use wanix_protocol::{
         P9_LOCK_STATUS_OK, P9_LOCK_TYPE_READ, P9_LOCK_TYPE_UNLOCK, P9_LOCK_TYPE_WRITE, P9_NOFID,
@@ -2357,6 +2359,48 @@ std.out.flush();
         assert_eq!(
             stdout.bytes(),
             b"shell task: 1\r\n$ size 100 40\r\n$ bye\r\n"
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qjs_shell_terminal_fd_path_pumps_output_with_non_tty_size_fd() {
+        warm_qjs_runner_for_timeout_sensitive_terminal_test();
+        let (input_reader, mut input_writer) = UnixStream::pair().unwrap();
+        let input_fd = input_reader.as_raw_fd();
+        let terminal_size_fd = input_fd;
+        let (prompt_sender, prompt_receiver) = mpsc::channel();
+        let (later_sender, later_receiver) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            prompt_receiver
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap();
+            input_writer.write_all(b"later tick\n").unwrap();
+            later_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            input_writer.write_all(b"exit\n").unwrap();
+        });
+        let mut stdout = SignalingStdout::new_many(vec![
+            (b"$ ".to_vec(), prompt_sender),
+            (b"later: tick".to_vec(), later_sender),
+        ]);
+        let mut stderr = Vec::new();
+
+        let exit_code = run_with_process_io_and_terminal_fds(
+            ["qjs-shell"],
+            input_reader,
+            input_fd,
+            terminal_size_fd,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        writer.join().unwrap();
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            stdout.bytes(),
+            b"shell task: 1\r\n$ scheduled\r\nlater: tick\r\n$ bye\r\n"
         );
         assert!(stderr.is_empty());
     }
