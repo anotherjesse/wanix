@@ -10,9 +10,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rust_wasi_quickjs::{
-    QuickJsCreateOptions, QuickJsHostConfig, QuickJsModule, QuickJsRestoreOptions, QuickJsRuntime,
-};
+use rust_wasi_quickjs::{QuickJsCreateOptions, QuickJsHostConfig, QuickJsModule, QuickJsRuntime};
 use wanix_fs::{FsError, FsResult};
 use wanix_task::{Fd, Task};
 use wanix_wasi::WasiConfig;
@@ -26,6 +24,7 @@ mod task_command;
 mod task_context;
 mod task_runtime;
 mod task_stdio;
+mod wanix_runtime;
 mod wasi_host;
 
 pub use bundled::bundled_module_cache_dir;
@@ -34,10 +33,7 @@ pub use runner::RunOutput;
 pub use task_runtime::QuickJsTaskRuntime;
 
 use fd_api::define_fd_output_callback;
-use host_api::{
-    define_output_callback, define_output_callback_with_exit_state, define_wanix_module_loader,
-    qjs_error,
-};
+use host_api::{define_output_callback, define_output_callback_with_exit_state, qjs_error};
 #[cfg(test)]
 use task_command::task_env_map;
 use task_context::WanixExitState;
@@ -126,64 +122,6 @@ impl QuickJsRunner {
         .map_err(|err| FsError::Other(format!("failed to load QuickJS wasm: {err:#}")))?;
         Ok(Self { module })
     }
-
-    /// Creates a QuickJS runtime with live Wanix-backed WASI imports.
-    ///
-    /// The returned runtime can be snapshotted through the engine API. Use
-    /// [`Self::restore_runtime_from_bytes_with_wanix_config`] to resume that VM
-    /// image with fresh Wanix host resources. This lifecycle helper intentionally
-    /// installs only the live WASI provider and namespace module loader; it does
-    /// not install convenience `print`/`console` callback shims, because those
-    /// are host callback objects that require separate restore-time reattachment.
-    /// Guest `qjs:std` stdout and stderr writes go through the `WasiConfig` fd
-    /// attachments supplied by `config`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a filesystem error when the Wanix WASI host cannot be created, the
-    /// QuickJS runtime cannot be instantiated, or the namespace module loader
-    /// cannot be attached.
-    pub fn create_runtime_with_wanix_config(
-        &self,
-        config: QuickJsWanixConfig,
-    ) -> FsResult<QuickJsRuntime> {
-        let namespace = config.wasi().namespace().clone();
-        let create_options = create_options_with_wanix_wasi(config)?;
-        let mut runtime = self
-            .module
-            .create_runtime_with_options(create_options)
-            .map_err(qjs_error)?;
-        define_wanix_module_loader(&mut runtime, namespace)?;
-        Ok(runtime)
-    }
-
-    /// Restores a QuickJS VM image with live Wanix-backed WASI imports.
-    ///
-    /// Snapshot bytes remain a QuickJS VM image. The supplied Wanix config
-    /// reattaches namespace, preopen, fd, argv/env, and stdio host resources for
-    /// the restored runtime. Guest `qjs:std` stdout and stderr writes go through
-    /// the `WasiConfig` fd attachments supplied by `config`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a filesystem error when the snapshot bytes are invalid or
-    /// incompatible with this runner's QuickJS module, the Wanix WASI host cannot
-    /// be created, the runtime cannot be restored, or the namespace module loader
-    /// cannot be attached.
-    pub fn restore_runtime_from_bytes_with_wanix_config(
-        &self,
-        bytes: &[u8],
-        config: QuickJsWanixConfig,
-    ) -> FsResult<QuickJsRuntime> {
-        let namespace = config.wasi().namespace().clone();
-        let restore_options = restore_options_with_wanix_wasi(config)?;
-        let mut runtime = self
-            .module
-            .restore_runtime_from_bytes_with_options(bytes, restore_options)
-            .map_err(qjs_error)?;
-        define_wanix_module_loader(&mut runtime, namespace)?;
-        Ok(runtime)
-    }
 }
 
 /// Returns the WASI crate purpose, proving the intended dependency edge.
@@ -223,18 +161,6 @@ fn captured_stdio_options_with_wanix_wasi(
 ) -> FsResult<QuickJsCreateOptions> {
     let host_config = captured_stdio_config_for_wasi(config.wasi());
     Ok(create_options_with_config(host_config).with_wasi_host(wanix_wasi_host(config)?))
-}
-
-fn create_options_with_wanix_wasi(config: QuickJsWanixConfig) -> FsResult<QuickJsCreateOptions> {
-    let host_config = QuickJsHostConfig::new().with_clock_time_ns(config.wasi().clock_time_ns());
-    Ok(create_options_with_config(host_config).with_wasi_host(wanix_wasi_host(config)?))
-}
-
-fn restore_options_with_wanix_wasi(config: QuickJsWanixConfig) -> FsResult<QuickJsRestoreOptions> {
-    let host_config = QuickJsHostConfig::new().with_clock_time_ns(config.wasi().clock_time_ns());
-    Ok(QuickJsRestoreOptions::new()
-        .with_host_config(host_config)
-        .with_wasi_host(wanix_wasi_host(config)?))
 }
 
 fn wanix_wasi_host(config: QuickJsWanixConfig) -> FsResult<WanixQuickJsWasiHost> {
