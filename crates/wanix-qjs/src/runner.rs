@@ -18,63 +18,11 @@ use crate::{
     captured_stdio_options_with_wanix_wasi, define_task_output_callback, drain_runtime_work,
     exit_requested_or_poisoned, uses_module_syntax,
 };
+use output::{RunControl, RunFailure, write_task_output};
 
-/// Result of running QuickJS source.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunOutput {
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
+mod output;
 
-impl RunOutput {
-    fn empty() -> Self {
-        Self {
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-        }
-    }
-
-    /// Returns captured stdout bytes.
-    #[must_use]
-    pub fn stdout(&self) -> &[u8] {
-        &self.stdout
-    }
-
-    /// Returns captured stderr bytes.
-    #[must_use]
-    pub fn stderr(&self) -> &[u8] {
-        &self.stderr
-    }
-}
-
-#[derive(Debug)]
-struct RunFailure {
-    error: FsError,
-    output: RunOutput,
-}
-
-#[derive(Debug, Clone)]
-struct RunControl {
-    exit_state: Option<WanixExitState>,
-    output_task: Option<Task>,
-    event_loop_wait_budget: Duration,
-    ready_io_turns: usize,
-    interrupt_poll_budget: Option<usize>,
-    memory_limit_bytes: Option<u32>,
-}
-
-impl Default for RunControl {
-    fn default() -> Self {
-        Self {
-            exit_state: None,
-            output_task: None,
-            event_loop_wait_budget: Duration::ZERO,
-            ready_io_turns: 1,
-            interrupt_poll_budget: None,
-            memory_limit_bytes: None,
-        }
-    }
-}
+pub use output::RunOutput;
 
 impl QuickJsRunner {
     /// Runs JavaScript source outside Chrome and captures `print`/`console` output.
@@ -219,7 +167,7 @@ impl QuickJsRunner {
             output: RunOutput::empty(),
         })?;
         stderr.extend_from_slice(&runtime.take_captured_stderr());
-        let output = RunOutput { stdout, stderr };
+        let output = RunOutput::new(stdout, stderr);
         match result {
             Ok(()) => Ok(output),
             Err(error) => Err(RunFailure { error, output }),
@@ -356,14 +304,4 @@ impl QuickJsRunner {
             }
         }
     }
-}
-
-fn write_task_output(task: &Task, output: &RunOutput) -> FsResult<()> {
-    if !output.stdout.is_empty() {
-        task.write_fd(Fd::STDOUT, &output.stdout)?;
-    }
-    if !output.stderr.is_empty() {
-        task.write_fd(Fd::STDERR, &output.stderr)?;
-    }
-    Ok(())
 }
