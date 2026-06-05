@@ -38,6 +38,14 @@ integration.
   one Wanix ADR per engine helper.
 - `wanix-qjs`: QuickJS/WASI task driver that adapts the engine crate to Wanix
   task semantics.
+- `wanix-wasi-host`: standalone Wasmtime WASI Preview 1 linker for the compiled
+  wasm runner, generic over a `WasiHost` backing and carrying no engine or task
+  coupling (command-style subset; `poll_oneoff` is `NOSYS`).
+- `wanix-module-cache`: shared, audited compiled-artifact cache (fd-based
+  trust-boundary verification, atomic write, owner-private dir resolver) used by
+  both `wanix-qjs-engine` and `wanix-wasm`.
+- `wanix-wasm`: compiled-`wasm32-wasi` task driver (`WasmTaskDriver`) and
+  free-standing `WasiRunner`, the second WASI task runtime alongside `wanix-qjs`.
 - `wanix-cli`: native CLI and demo runner.
 - Future protocol work beyond the current 9P stack: CBOR/RPC, HTTPFS, and R2FS
   protocol pieces when those integrations need them.
@@ -55,13 +63,18 @@ wanix-protocol
 wanix-9p -> wanix-fs + wanix-protocol
 wanix-term -> wanix-fs
 wanix-wasi -> wanix-fs + wanix-vfs
-wanix-qjs-engine -> Wasmtime + QuickJS WASM fixture
+wanix-wasi-host -> wanix-fs + wanix-wasi + Wasmtime
+wanix-module-cache -> Wasmtime
+wanix-qjs-engine -> Wasmtime + QuickJS WASM fixture + wanix-module-cache
 wanix-qjs  -> wanix-task + wanix-wasi + wanix-qjs-engine
+wanix-wasm -> wanix-task + wanix-wasi + wanix-wasi-host + wanix-module-cache
 wanix-cli  -> runtime crates for orchestration
 ```
 
-No upward dependencies: `wanix-task` must not depend on `wanix-wasi` or
-`wanix-qjs`. Keep core filesystem and namespace crates free of Wasmtime.
+`wanix-wasm` now depends on `wanix-task` (it is a task driver, not just a bare
+runner). No upward dependencies: `wanix-task` must not depend on `wanix-wasi`,
+`wanix-qjs`, or `wanix-wasm`. Keep core filesystem and namespace crates free of
+Wasmtime.
 
 ## Current Capability Map
 
@@ -72,16 +85,20 @@ tests.
 - `wanix-rust qjs main.js`: JavaScript runs outside Chrome as a Wanix `qjs`
   task with live Wanix-backed WASI, namespace access, stdio/fds, env/cwd/cmd,
   observable exit status, and `#task` service files.
-- `wanix-rust wasm FILE.wasm [args]`: the Tier-1 compiled-`wasm32-wasi`
-  DEMO/bench runner (the `wanix-wasm` `WasiRunner` path), proving the
-  compiled-vs-interpreted tier on the same substrate. It shares one
-  `Namespace`/VFS with `qjs` — the `shared_vfs_differential` test and the
-  `compute_bench`/`shared_vfs` examples run a Rust wasm task and a qjs task
-  against one `MemFs` and observe identical filesystem state. It is a
-  command-style WASI subset (no `poll_oneoff` readiness), and is explicitly
-  **not yet** a `#task/new/wasm` task driver: no task fds, no `#task` service
-  files, no observable task-level exit. Promoting it to a first-class Wanix
-  task runtime is Phase B of the rs-speed port.
+- `wanix-rust wasm FILE.wasm [args]`: the compiled-`wasm32-wasi` task runtime
+  (the `wanix-wasm` `WasiRunner` path) and second WASI task driver alongside
+  `qjs`. `.wasm` is a first-class Wanix task kind: a `.wasm` cmd auto-starts via
+  `#task/new` through `WasmTaskDriver` (`check` matches `.wasm`, `start` reads
+  the module from the task's namespace, builds a live WASI config from the
+  task's namespace/cwd/env/argv and fds 0/1/2, runs `_start`, and records the
+  guest exit through `Task::set_exit`), exposes `#task` service files, and has
+  observable task-level exit. It shares one `Namespace`/VFS with `qjs` and
+  follows the same fd-mirroring contract (ADR 0002) through the shared
+  `wanix-wasi` task config path. The CLI `wasm` subcommand and the
+  `shared_vfs_differential` test plus the `compute_bench`/`shared_vfs` examples
+  run a Rust wasm task and a qjs task against one `MemFs` and observe identical
+  filesystem state, proving the compiled-vs-interpreted tier on one substrate.
+  It is a command-style WASI subset (no `poll_oneoff` readiness).
 - `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
   shell modes and served shell sessions use the same `#term` device contract,
@@ -164,10 +181,11 @@ current-state docs, and commit messages instead of active ADRs.
   host/microkernel runtime, Wasmtime is the execution substrate, Go is a
   migration oracle, and workspace crates stay layered around Wanix-owned
   contracts.
-- [ADR 0002](docs/adrs/0002-quickjs-wasi-task-runtime.md): QuickJS runs as a
-  Wanix `qjs` task; Wanix owns task identity, live WASI semantics, fd/service
-  state, snapshots reattachment, fixture boundaries, and bounded guest
-  execution policy.
+- [ADR 0002](docs/adrs/0002-quickjs-wasi-task-runtime.md): the WASI task runtime
+  boundary (QuickJS `.js` and compiled `.wasm`); Wanix owns task identity, live
+  WASI semantics, fd/service state, snapshots reattachment, fixture boundaries,
+  and bounded guest execution policy for any WASI runtime, while the runtime
+  crate owns engine mechanics.
 - [ADR 0003](docs/adrs/0003-terminal-device-and-shell-lifecycle.md):
   `wanix-term` and terminal-backed native, served, editor, and VM sessions
   share one terminal device and shell lifecycle contract.

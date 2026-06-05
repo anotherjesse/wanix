@@ -1,34 +1,48 @@
-# ADR 0002: QuickJS/WASI Task Runtime Boundary
+# ADR 0002: WASI Task Runtime Boundary (QuickJS and compiled wasm)
 
 ## Status
 
 Accepted
 
+> Scope note: this ADR began as the QuickJS/WASI task boundary, but the boundary
+> it records is runtime-agnostic and now also governs the compiled-`wasm32-wasi`
+> task driver. The file name is kept for ADR index stability; the contract below
+> covers any WASI task runtime. `.wasm` is a first-class task kind alongside
+> `.js`, with the same fd-mirroring contract.
+
 ## Context
 
-QuickJS is the first serious Wanix task runtime outside Chrome. It runs in
-Wasmtime as a WASI guest, but it must not become a second process model and it
-must not inherit host WASI filesystem or fd semantics.
+QuickJS was the first serious Wanix task runtime outside Chrome, and the
+compiled-`wasm32-wasi` runner is now the second. Both run in Wasmtime as WASI
+guests, but neither may become a second process model and neither may inherit
+host WASI filesystem or fd semantics.
 
-The durable boundary is the split between Wanix-owned process state and
-QuickJS/Wasmtime engine mechanics. Wanix owns task identity, namespace, cwd,
+The durable boundary is the split between Wanix-owned process state and the
+runtime crate's engine mechanics. Wanix owns task identity, namespace, cwd,
 argv/env, stdio, fd tables, service files, terminal attachments, exit state,
-WASI syscall semantics, and host execution policy. The engine crate owns
-runtime instantiation, guest memory decoding, fixture loading, snapshots, and
-provider plumbing.
+WASI syscall semantics, and host execution policy, for *any* WASI task runtime.
+The runtime crate owns engine mechanics: runtime instantiation, guest memory
+decoding, fixture/module loading, snapshots, and provider plumbing. QuickJS
+(`wanix-qjs`/`wanix-qjs-engine`) and compiled wasm (`wanix-wasm`) are two
+runtime crates on the same Wanix-owned side of this boundary.
 
 ## Decision
 
-Treat `qjs` as a real Wanix task driver:
+Treat each WASI runtime as a real Wanix task driver. `qjs` (`.js`) and `wasm`
+(`.wasm`) are first-class task kinds; a `.wasm` cmd auto-starts through its
+driver's `check`/`start` exactly as a `.js` cmd does, sharing one
+`Namespace`/VFS:
 
-- `#task/new/qjs` allocates task identity and service files.
-- `cmd`, `env`, and `dir` are Wanix task metadata and flow into QuickJS through
-  argv/env/cwd, not through JavaScript globals.
+- `#task/new/<kind>` allocates task identity and service files; a `.wasm` task
+  is selected by the wasm driver's `check` (program ends with `.wasm`) the same
+  way a `.js` task is selected by qjs.
+- `cmd`, `env`, and `dir` are Wanix task metadata and flow into the guest
+  through argv/env/cwd, not through runtime-specific globals.
 - fd 0/1/2 and later fds are Wanix task fds that may be backed by memory files,
   namespace files, host mounts, terminal devices, or service-file handoffs.
 - fd binds capture shared open-file handles so service-file handoffs remain
   usable after the source task closes its fd.
-- exit status is observable through Wanix task state.
+- exit status is observable through Wanix task state (`Task::set_exit`).
 
 `wanix-wasi` owns the Preview 1 syscall semantics used by Rust Wanix tasks. It
 is backed by Wanix namespaces, task fds, explicit preopens, and Wanix filesystem
@@ -37,10 +51,12 @@ and cwd mapping, service paths such as `#task` and `#term`, fd operations,
 rights projection, path and metadata operations, readiness, clocks/timers, and
 deliberate unsupported errors for behavior that has no Wanix contract.
 
-When a QuickJS task exposes a guest fd as Wanix-observable state, the adapter
-must mirror that fd through the Wanix task fd table and release it when the
-guest closes it. Directory fds may stay WASI-internal until a Wanix task fd
-contract needs them.
+When a WASI task (QuickJS or wasm) exposes a guest fd as Wanix-observable state,
+the adapter must mirror that fd through the Wanix task fd table and release it
+when the guest closes it. Directory fds may stay WASI-internal until a Wanix
+task fd contract needs them. This fd-mirroring contract is shared across both
+runtimes (the wasm driver builds its live config through the same
+`wanix-wasi` task config path as qjs), not reimplemented per runtime.
 
 The checked-in QuickJS WASI fixture is a compatibility boundary for guest
 modules and imports. Guest code should use `qjs:std`, `qjs:os`, `scriptArgs`,
