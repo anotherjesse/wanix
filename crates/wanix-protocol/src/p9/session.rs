@@ -7,6 +7,11 @@ use super::{
     P9Error, P9Frame, P9Qid, P9Version,
 };
 
+const P9_U8_FIELD_LEN: usize = 1;
+const P9_U32_FIELD_LEN: usize = 4;
+const P9_U64_FIELD_LEN: usize = 8;
+const P9_QID_FIELD_LEN: usize = P9_U8_FIELD_LEN + P9_U32_FIELD_LEN + P9_U64_FIELD_LEN;
+
 /// Builds a `Tversion` frame.
 ///
 /// # Errors
@@ -76,7 +81,7 @@ pub fn p9_tauth(
 /// Builds an `Rauth` frame.
 #[must_use]
 pub fn p9_rauth(tag: u16, qid: P9Qid) -> P9Frame {
-    let mut payload = Vec::with_capacity(13);
+    let mut payload = Vec::with_capacity(P9_QID_FIELD_LEN);
     push_qid(&mut payload, qid);
     P9Frame::new(P9_RAUTH, tag, payload)
 }
@@ -106,7 +111,7 @@ pub fn p9_tattach(
 /// Builds an `Rattach` frame.
 #[must_use]
 pub fn p9_rattach(tag: u16, qid: P9Qid) -> P9Frame {
-    let mut payload = Vec::with_capacity(13);
+    let mut payload = Vec::with_capacity(P9_QID_FIELD_LEN);
     push_qid(&mut payload, qid);
     P9Frame::new(P9_RATTACH, tag, payload)
 }
