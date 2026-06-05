@@ -1,9 +1,11 @@
 use super::QuickJsRuntime;
 use super::cleanup::{CleanupScope, finish_with_cleanup};
-use crate::allocation::try_reserve_bytes;
-use crate::guest::{guest_offset, guest_u32, host_count_i32, host_len_i32};
+use crate::guest::host_len_i32;
 use anyhow::{Error, Result, anyhow, bail};
 use wasmtime::error::Context as _;
+
+mod call;
+mod global;
 
 #[derive(Debug, PartialEq, Eq)]
 #[must_use]
@@ -55,29 +57,6 @@ impl QuickJsRuntime {
         self.finish_raw_value(result, "qjs_new_string", cleanup)
     }
 
-    pub(super) fn global_prop_raw(&mut self, name: &str) -> Result<RawJsValue> {
-        validate_global_property_name(name)?;
-        let global_ptr = self
-            .qjs_get_global
-            .call(&mut self.store, ())
-            .context("failed to get global object")?;
-        let global = RawJsValue::from_non_null(global_ptr, "qjs_get_global")?;
-        let name = match self.write_c_string(name) {
-            Ok(name) => name,
-            Err(err) => {
-                return self.finish_with_raw_value_cleanup(Err(err), global);
-            }
-        };
-        let value = self
-            .qjs_get_prop_string
-            .call(&mut self.store, (global.ptr(), name.ptr))
-            .context("failed to get global property");
-        let mut cleanup = CleanupScope::new();
-        cleanup.record(self.guest_free(name.ptr));
-        cleanup.record(self.free_value(global));
-        self.finish_raw_value(value, "qjs_get_prop_string", cleanup)
-    }
-
     pub(super) fn undefined_raw(&mut self) -> Result<RawJsValue> {
         let ptr = self
             .qjs_get_undefined
@@ -124,56 +103,6 @@ impl QuickJsRuntime {
             .call(&mut self.store, value)
             .context("failed to create number handle")?;
         RawJsValue::from_non_null(ptr, "qjs_new_number")
-    }
-
-    pub(super) fn call_function_raw(
-        &mut self,
-        function: &RawJsValue,
-        this_value: &RawJsValue,
-        args: &[&RawJsValue],
-    ) -> Result<RawJsValue> {
-        let argc =
-            host_count_i32(args.len()).ok_or_else(|| anyhow!("too many QuickJS call arguments"))?;
-        let argv_ptr = if args.is_empty() {
-            0
-        } else {
-            let argv_len_usize = args
-                .len()
-                .checked_mul(4)
-                .ok_or_else(|| anyhow!("too many QuickJS call arguments"))?;
-            let argv_len = u32::try_from(argv_len_usize)
-                .map_err(|_| anyhow!("too many QuickJS call arguments"))?;
-            host_len_i32(argv_len).ok_or_else(|| anyhow!("too many QuickJS call arguments"))?;
-            let mut bytes = try_reserve_bytes(argv_len_usize, "QuickJS argv buffer")?;
-            let ptr = self.guest_malloc(argv_len)?;
-            for arg in args {
-                bytes.extend_from_slice(&guest_u32(arg.ptr()).to_le_bytes());
-            }
-            let write = self
-                .memory
-                .write(&mut self.store, guest_offset(ptr), &bytes)
-                .context("failed to write argv into guest memory");
-            if let Err(err) = write {
-                let cleanup = self.guest_free(ptr);
-                return finish_with_cleanup(Err(err), cleanup.err());
-            }
-            ptr
-        };
-
-        let result = self
-            .qjs_call
-            .call(
-                &mut self.store,
-                (function.ptr(), this_value.ptr(), argc, argv_ptr),
-            )
-            .context("failed to call QuickJS function");
-
-        let mut cleanup = CleanupScope::new();
-        if argv_ptr != 0 {
-            cleanup.record(self.guest_free(argv_ptr));
-        }
-
-        self.finish_raw_value(result, "qjs_call", cleanup)
     }
 
     pub(super) fn free_value(&mut self, value: RawJsValue) -> Result<()> {
