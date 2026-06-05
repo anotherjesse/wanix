@@ -399,6 +399,20 @@ mod tests {
         ]
     }
 
+    fn qjs_term_line_file_feed_args(
+        lines_path: &Path,
+        script: impl Into<OsString>,
+    ) -> Vec<OsString> {
+        vec![
+            OsString::from("qjs-term"),
+            OsString::from("--ready-io-turns"),
+            OsString::from("1"),
+            OsString::from("--feed-after-eval-lines"),
+            lines_path.as_os_str().to_owned(),
+            script.into(),
+        ]
+    }
+
     fn qjs_term_line_feed_args_with_mount(
         host: &Path,
         guest: &str,
@@ -2124,6 +2138,63 @@ std.out.flush();
             b"session task: 1\r\nevent 1: first\\n\r\nevent 2: second\\n\r\nevent 3: exit\\n\r\n"
         );
         assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn qjs_term_line_file_feed_splits_file_as_terminal_events() {
+        let host = temp_dir("wanix-cli-term-line-file");
+        let lines = host.join("lines.txt");
+        fs::write(&lines, b"first\nsecond\nexit\n").unwrap();
+        let script = write_temp_script(
+            "term-line-file-session.js",
+            r##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+function stringFromBytes(bytes, count) {
+  return Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+}
+
+function escaped(text) {
+  return text.replace(/\n/g, "\\n");
+}
+
+let events = 0;
+const bytes = new Uint8Array(64);
+
+std.out.puts("session task: " + std.loadFile("#task/self/id").trim() + "\n");
+
+os.setReadHandler(0, () => {
+  const count = os.read(0, bytes.buffer, 0, bytes.length);
+  if (count < 0) {
+    throw new Error("line file terminal read failed: " + count);
+  }
+  events += 1;
+  const text = stringFromBytes(bytes, count);
+  std.out.puts("event " + events + ": " + escaped(text) + "\n");
+  if (text === "exit\n") {
+    os.setReadHandler(0, null);
+  }
+  std.out.flush();
+});
+
+std.out.flush();
+"##,
+        );
+
+        let output = run(qjs_term_line_file_feed_args(
+            &lines,
+            script.into_os_string(),
+        ))
+        .unwrap();
+
+        assert_eq!(output.exit_code(), 0);
+        assert_eq!(
+            output.stdout(),
+            b"session task: 1\r\nevent 1: first\\n\r\nevent 2: second\\n\r\nevent 3: exit\\n\r\n"
+        );
+        assert!(output.stderr().is_empty());
+        fs::remove_dir_all(host).unwrap();
     }
 
     #[test]
