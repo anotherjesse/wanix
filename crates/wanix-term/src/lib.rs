@@ -12,15 +12,13 @@ use wanix_fs::{
 };
 
 mod files;
+mod open;
 mod path;
 mod state;
 
-use files::{
-    BytesFile, ControlFile, NewTermFile, TermFile, WinchFile, access, require_file_open,
-    require_read_only,
-};
+use open::open_term_path;
 use path::{TermPath, parse_path};
-use state::{DeviceState, TermResource, TermSide};
+use state::{DeviceState, TermResource};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix terminal device filesystem";
@@ -117,44 +115,7 @@ impl TermDevice {
 
 impl FileSystem for TermDevice {
     fn open(&self, path: &NormalizedPath, options: OpenOptions) -> FsResult<Box<dyn File>> {
-        match parse_path(path)? {
-            TermPath::Root | TermPath::Resource(_) => Err(FsError::IsDirectory),
-            TermPath::New => {
-                require_read_only(options)?;
-                Ok(Box::new(NewTermFile::new(self.clone())))
-            }
-            TermPath::Id(id) => {
-                require_read_only(options)?;
-                let resource = self.resource(id)?;
-                Ok(Box::new(BytesFile::new(
-                    format!("{}\n", resource.id).into_bytes(),
-                )))
-            }
-            TermPath::Ctl(id) => Ok(Box::new(ControlFile::new(
-                self.clone(),
-                id.to_owned(),
-                access(options)?,
-            ))),
-            TermPath::Data(id) => {
-                require_file_open(options)?;
-                Ok(Box::new(TermFile::new(self.resource(id)?, TermSide::Data)))
-            }
-            TermPath::Program(id) => {
-                require_file_open(options)?;
-                Ok(Box::new(TermFile::new(
-                    self.resource(id)?,
-                    TermSide::Program,
-                )))
-            }
-            TermPath::Winch(id) => {
-                require_file_open(options)?;
-                Ok(Box::new(WinchFile::new(
-                    self.resource(id)?,
-                    options.read,
-                    options.write,
-                )?))
-            }
-        }
+        open_term_path(self, parse_path(path)?, options)
     }
 
     fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
