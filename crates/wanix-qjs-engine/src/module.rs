@@ -9,6 +9,7 @@ use wasmtime::error::Context as _;
 use wasmtime::{Engine, Module};
 
 mod abi;
+mod cache;
 
 pub(crate) use abi::QUICKJS_WASM_ABI_VERSION;
 use abi::{QuickJsModuleAbi, validate_quickjs_module_abi};
@@ -89,8 +90,52 @@ impl QuickJsModule {
     /// does not export the required QuickJS runtime ABI.
     pub fn from_bytes(engine: &Engine, bytes: &[u8]) -> Result<Self> {
         let module = Module::new(engine, bytes).context("failed to compile QuickJS WASM module")?;
-        let abi = validate_quickjs_module_abi(&module)?;
+        Self::finish(module, bytes)
+    }
+
+    /// Compiles and ABI-preflights a QuickJS WebAssembly module from bytes,
+    /// loading a cached compiled artifact from `cache_dir` when one is present
+    /// and trusted.
+    ///
+    /// The cache is advisory: a missing, stale, or untrusted artifact falls back
+    /// to a fresh compile. The cache directory must be owner-private or it is
+    /// ignored (see [`cache`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Wasmtime rejects the module bytes, or if the module
+    /// does not export the required QuickJS runtime ABI.
+    pub fn from_bytes_cached(engine: &Engine, bytes: &[u8], cache_dir: &Path) -> Result<Self> {
         let wasm_sha256 = Sha256::digest(bytes).into();
+        let module = cache::load_or_compile(engine, bytes, &wasm_sha256, cache_dir)
+            .map_err(|err| anyhow!("failed to compile QuickJS WASM module: {err:#}"))?;
+        Self::finish_with_sha(module, wasm_sha256)
+    }
+
+    /// Compiles and ABI-preflights a QuickJS WebAssembly module from bytes using
+    /// a default Wasmtime engine, loading a cached compiled artifact from
+    /// `cache_dir` when one is present and trusted.
+    ///
+    /// Use this when callers do not need to share a custom Wasmtime engine but
+    /// want the compiled-module disk cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Wasmtime rejects the module bytes, or if the module
+    /// does not export the required QuickJS runtime ABI.
+    pub fn from_bytes_with_default_engine_cached(bytes: &[u8], cache_dir: &Path) -> Result<Self> {
+        let engine = Engine::default();
+        Self::from_bytes_cached(&engine, bytes, cache_dir)
+    }
+
+    /// ABI-preflights an already-compiled module and binds it to the SHA-256 of
+    /// the wasm bytes that produced it.
+    fn finish(module: Module, bytes: &[u8]) -> Result<Self> {
+        Self::finish_with_sha(module, Sha256::digest(bytes).into())
+    }
+
+    fn finish_with_sha(module: Module, wasm_sha256: [u8; 32]) -> Result<Self> {
+        let abi = validate_quickjs_module_abi(&module)?;
         Ok(Self {
             module,
             wasm_sha256,

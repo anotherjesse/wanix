@@ -217,9 +217,6 @@ more feature work.
 
 ## Queued Follow-ups
 
-- Current `wanix-qjs` and `wanix-cli` tests cache the bundled QuickJS runner per
-  test process; keep production runner caching out of scope unless it becomes an
-  intentional runtime decision.
 - Use `just module-lines` during cleanup passes. Highest-leverage split targets
   are `wanix-cli/src/serve.rs`, `wanix-cli/src/qjs_term.rs`,
   `wanix-cli/src/lib.rs`, `wanix-qjs-engine/src/host/fs.rs`,

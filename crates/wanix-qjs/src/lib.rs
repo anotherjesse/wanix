@@ -17,6 +17,7 @@ use wanix_fs::{FsError, FsResult};
 use wanix_task::{Fd, Task};
 use wanix_wasi::WasiConfig;
 
+mod bundled;
 mod driver;
 mod fd_api;
 mod host_api;
@@ -27,6 +28,7 @@ mod task_runtime;
 mod task_stdio;
 mod wasi_host;
 
+pub use bundled::bundled_module_cache_dir;
 pub use driver::QuickJsTaskDriver;
 pub use runner::RunOutput;
 pub use task_runtime::QuickJsTaskRuntime;
@@ -104,11 +106,23 @@ impl QuickJsRunner {
 
     /// Loads the workspace-local QuickJS WASM fixture bundled by the engine crate.
     ///
+    /// The compiled module is cached on disk under [`bundled_module_cache_dir`]
+    /// so repeated cold starts deserialize the prebuilt artifact instead of
+    /// Cranelift-compiling the ~1.7 MiB fixture (~550 ms) on every process. The
+    /// cache is advisory and the cache directory is verified owner-private
+    /// before any artifact is trusted, so a missing or untrusted cache only
+    /// forfeits the speedup.
+    ///
     /// # Errors
     ///
     /// Returns a filesystem error if the bundled module cannot be compiled.
     pub fn from_bundled_wasm() -> FsResult<Self> {
-        Self::from_wasm_bytes(rust_wasi_quickjs::QUICKJS_WASM_FIXTURE)
+        let module = QuickJsModule::from_bytes_with_default_engine_cached(
+            rust_wasi_quickjs::QUICKJS_WASM_FIXTURE,
+            &bundled_module_cache_dir(),
+        )
+        .map_err(|err| FsError::Other(format!("failed to load QuickJS wasm: {err:#}")))?;
+        Ok(Self { module })
     }
 
     /// Creates a QuickJS runtime with live Wanix-backed WASI imports.

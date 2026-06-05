@@ -64,6 +64,32 @@ limits are bounded host execution policy. CLI and serve surfaces may expose
 those knobs for deterministic demos and tests, but they are not a general
 scheduler, signal system, cancellation model, or task checkpoint format.
 
+### Bundled-module compiled-artifact cache
+
+Cranelift-compiling the ~1.7 MiB bundled QuickJS fixture dominates qjs cold
+start (~550 ms, ~100% of the cost). The bundled module is therefore cached on
+disk as a Wasmtime-serialized artifact and deserialized on warm starts (~0.5 ms,
+~1000x faster; also ~5x lower peak RSS). This is an accepted runtime decision,
+not just a test fixture optimization.
+
+- **Cache key = `sha256(wasm-bytes)`.** It authenticates the *input wasm*, so a
+  changed fixture lands under a new key.
+- **Advisory, recompile-on-mismatch.** A missing, stale, or unreadable artifact
+  falls back to a fresh compile. Wasmtime embeds its own engine/version marker
+  in the artifact and rejects mismatches on `deserialize`, so an engine upgrade
+  recompiles automatically under the same key.
+- **Cache-dir trust boundary.** `deserialize` is `unsafe` and equivalent to
+  loading native code, and the sha256 key does *not* authenticate the cached
+  artifact bytes. The cache directory is therefore a trust boundary: the default
+  is a per-user, owner-private directory (`0o700`, ownership + non-group/other-
+  writable verified before any read), never a shared world-writable temp dir.
+  `WANIX_QJS_CACHE_DIR` is an explicit operator opt-in to a trusted path and is
+  still subject to the same ownership/permission check. An untrusted or hostile
+  cache directory is ignored (fresh compile), never deserialized.
+- **Non-goal.** This is the *bundled QuickJS* module cache only. A compiled-
+  module cache for the standalone `.wasm` runner is deliberately out of scope
+  here and belongs to the wasm-runner phase.
+
 ## Consequences
 
 JavaScript running through `qjs:std`, `qjs:os`, `scriptArgs`, stdio, and
