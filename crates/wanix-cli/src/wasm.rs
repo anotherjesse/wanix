@@ -127,7 +127,7 @@ fn preopen_cwd(cwd: &NormalizedPath) -> Result<Namespace, CliError> {
 fn stdin_file(bytes: &[u8]) -> Result<Box<dyn File>, CliError> {
     let fs = MemFs::new();
     fs.write_file("stdin", bytes)?;
-    Ok(fs.open(&NormalizedPath::new("stdin")?, OpenOptions::read_write())?)
+    Ok(fs.open(&NormalizedPath::new("stdin")?, OpenOptions::read())?)
 }
 
 #[cfg(test)]
@@ -135,8 +135,8 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{WasmCommand, run_wasm};
-    use wanix_fs::NormalizedPath;
+    use super::{WasmCommand, run_wasm, stdin_file};
+    use wanix_fs::{FsError, NormalizedPath};
 
     const RUST_GUEST: &[u8] = include_bytes!("../../wanix-wasm/fixtures/rust-guest.wasm");
 
@@ -176,5 +176,21 @@ mod tests {
             "rust-wasm saw: hello"
         );
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn stdin_file_exposes_bytes_through_readable_file() {
+        let mut file = stdin_file(b"stdin bytes").unwrap();
+        let mut bytes = vec![0; 16];
+
+        let count = file.read(&mut bytes).unwrap();
+        let eof = file.read(&mut bytes[count..]).unwrap();
+
+        assert_eq!(&bytes[..count], b"stdin bytes");
+        assert_eq!(eof, 0);
+        assert_eq!(
+            file.write(b"not stdin").unwrap_err(),
+            FsError::PermissionDenied
+        );
     }
 }
