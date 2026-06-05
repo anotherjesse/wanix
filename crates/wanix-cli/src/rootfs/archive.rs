@@ -50,7 +50,7 @@ pub(super) fn extract_tgz(archive_path: &Path, out_path: &Path) -> Result<(), Cl
             })?
             .into_owned();
         validate_archive_path(&path)?;
-        if !entry.unpack_in(out_path).map_err(|error| {
+        let unpacked = entry.unpack_in(out_path).map_err(|error| {
             CliError::new(
                 format!(
                     "failed to unpack rootfs archive entry {}: {error}",
@@ -58,11 +58,9 @@ pub(super) fn extract_tgz(archive_path: &Path, out_path: &Path) -> Result<(), Cl
                 ),
                 1,
             )
-        })? {
-            return Err(CliError::new(
-                format!("unsafe rootfs archive path {}", path.display()),
-                1,
-            ));
+        })?;
+        if !unpacked {
+            return Err(unsafe_archive_path_error(&path));
         }
     }
     Ok(())
@@ -75,10 +73,7 @@ fn validate_archive_path(path: &Path) -> Result<(), CliError> {
             Component::Normal(_) => has_normal = true,
             Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(CliError::new(
-                    format!("unsafe rootfs archive path {}", path.display()),
-                    1,
-                ));
+                return Err(unsafe_archive_path_error(path));
             }
         }
     }
@@ -86,5 +81,37 @@ fn validate_archive_path(path: &Path) -> Result<(), CliError> {
         Ok(())
     } else {
         Err(CliError::new("rootfs archive contains an empty path", 1))
+    }
+}
+
+fn unsafe_archive_path_error(path: &Path) -> CliError {
+    CliError::new(format!("unsafe rootfs archive path {}", path.display()), 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::validate_archive_path;
+
+    #[test]
+    fn archive_path_validation_accepts_relative_entries() {
+        validate_archive_path(Path::new("./bin/init")).unwrap();
+    }
+
+    #[test]
+    fn archive_path_validation_rejects_escape_entries() {
+        let error = validate_archive_path(Path::new("../escape.txt")).unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("unsafe rootfs archive path"));
+    }
+
+    #[test]
+    fn archive_path_validation_rejects_empty_entries() {
+        let error = validate_archive_path(Path::new(".")).unwrap_err();
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("empty path"));
     }
 }
