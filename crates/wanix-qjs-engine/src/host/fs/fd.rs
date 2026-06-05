@@ -50,25 +50,42 @@ pub(super) fn fd_prestat_dir_name(
             Ok(prestat) => prestat,
             Err(errno) => return Ok(errno.preview1_result()),
         };
-        let path_len = guest_len(path_len)?;
-        let path = prestat.dir_name().as_bytes();
-        if path_len < path.len() {
-            return Ok(ERRNO_INVAL);
-        }
-        let memory = caller_memory(&caller)?;
-        memory.write(&mut caller, guest_offset(path_ptr), path)?;
-        return Ok(ERRNO_SUCCESS);
+        return write_prestat_dir_name(
+            &mut caller,
+            path_ptr,
+            path_len,
+            prestat.dir_name().as_bytes(),
+        );
     }
 
+    write_virtual_prestat_dir_name(&mut caller, fd, path_ptr, path_len)
+}
+
+fn write_virtual_prestat_dir_name(
+    caller: &mut Caller<'_, HostState>,
+    fd: i32,
+    path_ptr: i32,
+    path_len: i32,
+) -> wasmtime::Result<i32> {
     if !caller.data().is_virtual_preopen_fd(fd) {
         return Ok(ERRNO_BADF);
     }
-    let path_len = guest_len(path_len)?;
-    if path_len < PREOPEN_ROOT_PATH.len() {
+
+    write_prestat_dir_name(caller, path_ptr, path_len, PREOPEN_ROOT_PATH)
+}
+
+fn write_prestat_dir_name(
+    caller: &mut Caller<'_, HostState>,
+    path_ptr: i32,
+    path_len: i32,
+    path: &[u8],
+) -> wasmtime::Result<i32> {
+    let len = guest_len(path_len)?;
+    if len < path.len() {
         return Ok(ERRNO_INVAL);
     }
-    let memory = caller_memory(&caller)?;
-    memory.write(&mut caller, guest_offset(path_ptr), PREOPEN_ROOT_PATH)?;
+    let memory = caller_memory(caller)?;
+    memory.write(caller, guest_offset(path_ptr), path)?;
     Ok(ERRNO_SUCCESS)
 }
 
