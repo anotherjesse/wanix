@@ -21,6 +21,7 @@ mod runtime_control;
 mod task_command;
 mod task_context;
 mod task_runtime;
+mod task_runtime_attach;
 mod task_stdio;
 mod wanix_runtime;
 mod wasi_host;
@@ -311,7 +312,7 @@ std.writeFile("output.txt", text + " / qjs");
 
     #[test]
     fn task_runtime_options_mirror_wasi_clock_into_quickjs_host_config() {
-        let create_options = crate::task_runtime::task_create_options(
+        let create_options = crate::task_runtime_attach::task_create_options(
             WasiConfig::default().with_clock_time_ns(12_345_000_000),
             crate::task_context::WanixExitState::default(),
         )
@@ -328,7 +329,7 @@ std.writeFile("output.txt", text + " / qjs");
         assert_eq!(runtime.eval_number("Date.now()").unwrap(), 12_345.0);
         let snapshot_bytes = runtime.snapshot().unwrap().try_to_bytes().unwrap();
 
-        let restore_options = crate::task_runtime::task_restore_options(
+        let restore_options = crate::task_runtime_attach::task_restore_options(
             WasiConfig::default().with_clock_time_ns(67_890_000_000),
             crate::task_context::WanixExitState::default(),
         )
