@@ -46,3 +46,15 @@ where
         run_with_process_io(args, stdin.lock(), stdout.lock(), stderr.lock())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run_native_process;
+
+    #[test]
+    fn native_process_reports_usage_without_raw_terminal_mode() {
+        let error = run_native_process(["unknown-command"]).unwrap_err();
+
+        assert_eq!(error.exit_code(), 2);
+    }
+}
