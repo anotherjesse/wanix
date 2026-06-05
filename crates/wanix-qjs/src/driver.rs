@@ -4,7 +4,8 @@ use std::time::Duration;
 use wanix_fs::FsResult;
 use wanix_task::{Task, TaskDriver};
 
-use crate::{QuickJsRunner, task_program_for_check};
+use crate::QuickJsRunner;
+use crate::task_command::task_program_for_check;
 
 /// Wanix task driver for QuickJS tasks.
 #[derive(Debug, Clone)]

@@ -2,7 +2,7 @@ use wanix_fs::{File, FsError, FsResult, Metadata, NormalizedPath};
 use wanix_task::{Fd, Task};
 use wanix_wasi::{Errno, WasiConfig, WasiFd, WasiFdObserver, WasiFile};
 
-use crate::{task_wasi_argv, task_wasi_cwd, task_wasi_env};
+use crate::task_command::{task_wasi_argv, task_wasi_cwd, task_wasi_env};
 
 pub(crate) fn task_wasi_config(task: &Task) -> WasiConfig {
     let mut config = WasiConfig::new(task.namespace())

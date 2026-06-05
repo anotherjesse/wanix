@@ -10,19 +10,17 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-#[cfg(test)]
-use std::collections::BTreeMap;
-
 use rust_wasi_quickjs::{
     QuickJsCreateOptions, QuickJsHostConfig, QuickJsModule, QuickJsRestoreOptions, QuickJsRuntime,
 };
-use wanix_fs::{FsError, FsResult, NormalizedPath};
-use wanix_task::{Fd, Task, TaskSpec, quote_cmd_argv};
+use wanix_fs::{FsError, FsResult};
+use wanix_task::{Fd, Task};
 use wanix_wasi::WasiConfig;
 
 mod driver;
 mod fd_api;
 mod host_api;
+mod task_command;
 mod task_context;
 mod task_runtime;
 mod task_stdio;
@@ -36,6 +34,9 @@ use host_api::{
     define_output_callback, define_output_callback_with_exit_state, define_wanix_module_loader,
     define_wanix_task_globals, qjs_error, read_namespace_file, take_buffer,
 };
+#[cfg(test)]
+use task_command::task_env_map;
+use task_command::{task_command, task_wasi_argv};
 use task_context::{WanixExitState, WanixTaskContext};
 use task_stdio::task_wasi_config;
 use wasi_host::WanixQuickJsWasiHost;
@@ -643,119 +644,6 @@ fn uses_module_syntax(source: &str) -> bool {
         let line = line.trim_start();
         line.starts_with("import ") || line.starts_with("export ")
     })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TaskCommand {
-    raw: String,
-    program: NormalizedPath,
-    args: Vec<String>,
-    cwd: NormalizedPath,
-}
-
-fn task_command(task: &Task) -> FsResult<TaskCommand> {
-    let raw = task.cmd();
-    let spec = task.spec();
-    if task_spec_is_set(&spec) {
-        let program = resolve_from_cwd(&spec.cwd, &spec.program)?;
-        let raw = if raw.is_empty() {
-            raw_command(&spec.program, &spec.args)
-        } else {
-            raw
-        };
-        return Ok(TaskCommand {
-            raw,
-            program,
-            args: spec.args,
-            cwd: spec.cwd,
-        });
-    }
-
-    let cwd = task.dir();
-    let argv = task
-        .cmd_argv()
-        .ok_or_else(|| FsError::Other("qjs task cmd is empty".to_owned()))?;
-    let (script, args) = argv
-        .split_first()
-        .ok_or_else(|| FsError::Other("qjs task cmd is empty".to_owned()))?;
-    let program = resolve_from_cwd(&cwd, &NormalizedPath::new(script)?)?;
-    Ok(TaskCommand {
-        raw,
-        program,
-        args: args.to_vec(),
-        cwd,
-    })
-}
-
-pub(crate) fn task_wasi_argv(task: &Task) -> Vec<String> {
-    let spec = task.spec();
-    if task_spec_is_set(&spec) {
-        return std::iter::once(spec.program.to_string())
-            .chain(spec.args)
-            .collect();
-    }
-    task.cmd_argv().unwrap_or_default()
-}
-
-pub(crate) fn task_wasi_env(task: &Task) -> Vec<String> {
-    let spec = task.spec();
-    if task_spec_is_set(&spec) {
-        return spec
-            .env
-            .into_iter()
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect();
-    }
-    task.env()
-}
-
-pub(crate) fn task_wasi_cwd(task: &Task) -> NormalizedPath {
-    let spec = task.spec();
-    if task_spec_is_set(&spec) {
-        return spec.cwd;
-    }
-    task.dir()
-}
-
-pub(crate) fn task_program_for_check(task: &Task) -> Option<String> {
-    let spec = task.spec();
-    if task_spec_is_set(&spec) {
-        return Some(spec.program.to_string());
-    }
-    task.cmd_argv()
-        .and_then(|argv| argv.first().map(ToOwned::to_owned))
-}
-
-fn task_spec_is_set(spec: &TaskSpec) -> bool {
-    spec.program.as_str() != "."
-}
-
-fn raw_command(program: &NormalizedPath, args: &[String]) -> String {
-    quote_cmd_argv(std::iter::once(program.as_str()).chain(args.iter().map(String::as_str)))
-}
-
-fn resolve_from_cwd(cwd: &NormalizedPath, path: &NormalizedPath) -> FsResult<NormalizedPath> {
-    if cwd.as_str() == "." {
-        return Ok(path.clone());
-    }
-    if path.as_str() == "." {
-        return Ok(cwd.clone());
-    }
-    NormalizedPath::new(format!("{cwd}/{path}"))
-}
-
-#[cfg(test)]
-fn task_env_map(task: &Task) -> BTreeMap<String, String> {
-    task_wasi_env(task)
-        .into_iter()
-        .filter_map(|line| {
-            let (key, value) = line.split_once('=')?;
-            if key.is_empty() {
-                return None;
-            }
-            Some((key.to_owned(), value.to_owned()))
-        })
-        .collect()
 }
 
 fn write_task_output(task: &Task, output: &RunOutput) -> FsResult<()> {

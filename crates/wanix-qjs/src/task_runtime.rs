@@ -8,12 +8,13 @@ use wanix_task::{Fd, Task};
 use wanix_wasi::WasiConfig;
 
 use crate::host_api::{define_wanix_module_loader, define_wanix_task_globals, qjs_error};
+use crate::task_command::{task_command, task_wasi_argv};
 use crate::task_context::{WanixExitState, WanixTaskContext};
 use crate::task_stdio::task_wasi_config;
 use crate::wasi_host::WanixQuickJsWasiHost;
 use crate::{
     CONSOLE_PRELUDE, QuickJsRunner, captured_stdio_config_for_wasi, define_task_output_callback,
-    drain_runtime_work, exit_requested, task_command, task_wasi_argv, wanix_wasi_host_error,
+    drain_runtime_work, exit_requested, wanix_wasi_host_error,
 };
 
 /// A live QuickJS runtime attached to a Wanix task.
