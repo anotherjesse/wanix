@@ -3,9 +3,9 @@ use crate::QuickJsValue;
 use crate::runtime::cleanup::finish_with_cleanup;
 use crate::runtime::raw_value::RawJsValue;
 use anyhow::{Result, anyhow, bail};
-use wasmtime::error::Context as _;
 
 mod big_int;
+mod read;
 
 impl QuickJsRuntime {
     pub(in crate::runtime) fn raw_value_to_scalar(
@@ -25,102 +25,6 @@ impl QuickJsRuntime {
             return Ok(value);
         }
         bail!("QuickJS value is not a supported copied scalar");
-    }
-
-    pub(in crate::runtime) fn maybe_raw_value_to_scalar_ref(
-        &mut self,
-        value: &RawJsValue,
-    ) -> Result<Option<QuickJsValue>> {
-        self.ensure_scalar_value_capability()?;
-
-        let qjs_is_undefined = self
-            .qjs_is_undefined
-            .clone()
-            .ok_or_else(|| scalar_value_unsupported_error("qjs_is_undefined"))?;
-        if qjs_is_undefined
-            .call(&mut self.store, value.ptr())
-            .context("failed to inspect undefined result")?
-            != 0
-        {
-            return Ok(Some(QuickJsValue::Undefined));
-        }
-
-        let qjs_is_null = self
-            .qjs_is_null
-            .clone()
-            .ok_or_else(|| scalar_value_unsupported_error("qjs_is_null"))?;
-        if qjs_is_null
-            .call(&mut self.store, value.ptr())
-            .context("failed to inspect null result")?
-            != 0
-        {
-            return Ok(Some(QuickJsValue::Null));
-        }
-
-        let qjs_is_bool = self
-            .qjs_is_bool
-            .clone()
-            .ok_or_else(|| scalar_value_unsupported_error("qjs_is_bool"))?;
-        if qjs_is_bool
-            .call(&mut self.store, value.ptr())
-            .context("failed to inspect bool result")?
-            != 0
-        {
-            let qjs_get_bool = self
-                .qjs_get_bool
-                .clone()
-                .ok_or_else(|| scalar_value_unsupported_error("qjs_get_bool"))?;
-            return Ok(Some(QuickJsValue::Bool(
-                qjs_get_bool
-                    .call(&mut self.store, value.ptr())
-                    .context("failed to read bool result")?
-                    != 0,
-            )));
-        }
-
-        let is_number = self
-            .qjs_is_number
-            .call(&mut self.store, value.ptr())
-            .context("failed to inspect number result")?;
-        if is_number != 0 {
-            return Ok(Some(QuickJsValue::Number(
-                self.qjs_get_float64
-                    .call(&mut self.store, value.ptr())
-                    .context("failed to read number result")?,
-            )));
-        }
-
-        let is_string = self
-            .qjs_is_string
-            .call(&mut self.store, value.ptr())
-            .context("failed to inspect string result")?;
-        if is_string != 0 {
-            let c_string = self
-                .qjs_get_string
-                .call(&mut self.store, value.ptr())
-                .context("failed to convert result to string")?;
-            if c_string == 0 {
-                bail!("QuickJS failed to convert string result to a C string");
-            }
-            return self
-                .read_and_free_quickjs_c_string(c_string, "failed to free QuickJS C string")
-                .map(QuickJsValue::String)
-                .map(Some);
-        }
-
-        if let Some(qjs_is_big_int) = self.qjs_is_big_int.clone()
-            && qjs_is_big_int
-                .call(&mut self.store, value.ptr())
-                .context("failed to inspect BigInt result")?
-                != 0
-        {
-            return self
-                .read_big_int64_value(value)
-                .map(QuickJsValue::BigIntI64)
-                .map(Some);
-        }
-
-        Ok(None)
     }
 
     pub(in crate::runtime) fn scalar_to_raw_value(
