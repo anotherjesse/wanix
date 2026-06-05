@@ -1,7 +1,9 @@
 # Porting rs-speed features onto the `rust` branch
 
-Status: **Phase A in progress.** Branch: `rust` (direct). Cache decision recorded by
-**extending ADR 0002** (not a new ADR).
+Status: **Phase A DONE** (cycles A1–A6 committed `33e54e8`..`a69806b`, `just check` green;
+interleaved with a concurrent same-branch session that also cleaned the wasm CLI). **Phase B
+in progress**, opening with a B0 cache trust-boundary hardening cycle (from the A-gate security
+review). Branch: `rust` (direct). Cache decision recorded by **extending ADR 0002**.
 
 ## Goal
 
@@ -371,6 +373,17 @@ group them into committable units.
 
 Turns the Tier-1 runner into a first-class Wanix task runtime. Additive over A's `WasiRunner`.
 
+- **B0 — cache trust-boundary hardening** (from the A-gate security review). The bundled-qjs
+  cache loads via `unsafe Module::deserialize`; the A4 leaf-directory check holds but two medium
+  gaps remain: (a) ancestor dirs unverified → a writable ancestor permits dir/symlink swap +
+  TOCTOU; (b) the artifact *file* itself is read with `std::fs::read` (follows symlinks, no
+  regular-file/ownership check) before deserialize. Fix fd-based: open the cache dir with
+  `O_NOFOLLOW` (rustix — already in the lock), `openat` the artifact `O_NOFOLLOW` relative to
+  that fd, `fstat` and require `S_ISREG && uid==euid && (mode&0o022)==0` before deserializing;
+  verify ancestors (or document+assert the owner-private-ancestor assumption). Plus: create the
+  temp artifact `0o600` (defense-in-depth), correct the `WANIX_QJS_CACHE_DIR` doc comment to say
+  "leaf-directory ownership/permissions", and note the hardened model in ADR 0002. Independent
+  of the driver cycles; goes first so the trust boundary is solid before B4 reuses it.
 - **B1 — `WasmTaskDriver: TaskDriver`.** `check()` matches `.wasm`; `start()` runs the existing
   `WasiRunner` against the Task's Wanix state (namespace, env/cwd/argv, fd 0/1/2 from the task
   fd table, exit status observable through task state). Register in the driver registry.
