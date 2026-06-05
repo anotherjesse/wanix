@@ -794,11 +794,21 @@ struct ReentrantFile {
 }
 
 impl File for ReentrantFile {
+    fn read_ready(&self) -> wanix_fs::FsResult<bool> {
+        self.task.set_exit("read-ready-reentered")?;
+        Ok(false)
+    }
+
     fn read(&mut self, buf: &mut [u8]) -> wanix_fs::FsResult<usize> {
         self.task.set_exit("reentered")?;
         let bytes = b"ok";
         buf[..bytes.len()].copy_from_slice(bytes);
         Ok(bytes.len())
+    }
+
+    fn write_ready(&self) -> wanix_fs::FsResult<bool> {
+        self.task.set_exit("write-ready-reentered")?;
+        Ok(true)
     }
 
     fn metadata(&self) -> wanix_fs::FsResult<Metadata> {
@@ -830,6 +840,11 @@ fn fd_io_does_not_hold_task_lock_while_calling_file() {
     assert_eq!(count, 2);
     assert_eq!(&buf, b"ok");
     assert_eq!(task.exit(), "reentered");
+
+    assert!(!task.fd_read_ready(fd).unwrap());
+    assert_eq!(task.exit(), "read-ready-reentered");
+    assert!(task.fd_write_ready(fd).unwrap());
+    assert_eq!(task.exit(), "write-ready-reentered");
 }
 
 #[test]
