@@ -42,23 +42,19 @@ impl Error for P9WsConnectionError {
     }
 }
 
-impl From<WsError> for P9WsConnectionError {
-    fn from(error: WsError) -> Self {
-        Self::WebSocket(error)
-    }
+macro_rules! impl_connection_error_from {
+    ($source:ty => $variant:ident) => {
+        impl From<$source> for P9WsConnectionError {
+            fn from(error: $source) -> Self {
+                Self::$variant(error)
+            }
+        }
+    };
 }
 
-impl From<P9Error> for P9WsConnectionError {
-    fn from(error: P9Error) -> Self {
-        Self::Protocol(error)
-    }
-}
-
-impl From<wanix_9p::Wanix9pError> for P9WsConnectionError {
-    fn from(error: wanix_9p::Wanix9pError) -> Self {
-        Self::Server(error)
-    }
-}
+impl_connection_error_from!(WsError => WebSocket);
+impl_connection_error_from!(P9Error => Protocol);
+impl_connection_error_from!(wanix_9p::Wanix9pError => Server);
 
 pub(crate) fn serve_websocket_connection(
     root: Arc<dyn FileSystem>,
