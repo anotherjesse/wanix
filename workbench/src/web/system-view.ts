@@ -27,6 +27,7 @@ type TaskRecord = {
 	label: string;
 	status: TaskStatus;
 	exitCode?: number;
+	sourcePath?: string;
 };
 
 type TerminalRecord = {
@@ -106,8 +107,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		context.subscriptions.push(this);
 	}
 
-	taskStarted(id: string, kind: string, label: string): void {
-		this.tasks.set(id, { id, kind, label, status: "running" });
+	taskStarted(id: string, kind: string, label: string, options: { sourcePath?: string } = {}): void {
+		this.tasks.set(id, { id, kind, label, status: "running", sourcePath: options.sourcePath });
 		this.addActivity(`${taskDisplayName({ kind, label })} started`);
 		this.refresh();
 	}
@@ -215,7 +216,13 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			const description = task.status === "exited"
 				? `exited ${formatExitCode(task.exitCode)}`
 				: task.status;
-			return leaf(`task:${task.id}`, `${task.id} ${taskDisplayName(task)}`, description, taskIcon(task.status));
+			const command = task.sourcePath ? {
+				command: "workbench.openWanixTaskSource",
+				title: "Open Task Source",
+				arguments: [task.sourcePath],
+			} : undefined;
+			const contextValue = task.sourcePath ? "wanixTaskWithSource" : "wanixTask";
+			return leaf(`task:${task.id}`, `${task.id} ${taskDisplayName(task)}`, description, taskIcon(task.status), command, contextValue);
 		});
 	}
 

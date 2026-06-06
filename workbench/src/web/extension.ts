@@ -139,6 +139,17 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixTaskSource', async (sourcePath?: string) => {
+			try {
+				if (!sourcePath) {
+					throw new Error("Task source is not available");
+				}
+				await openWanixPath(sourcePath);
+				systemView.filesystemActivity(`opened task source ${baseName(sourcePath)}`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.installHttpAppDemo', async () => {
 			try {
 				await installHttpAppDemo(fsys, bridge, systemView);
@@ -189,8 +200,13 @@ async function openWanixUri(uri: vscode.Uri): Promise<void> {
 async function openWanixPath(path: string): Promise<void> {
 	await openWanixUri(vscode.Uri.from({
 		scheme: WanixBridge.scheme,
-		path,
+		path: absoluteWanixPath(path),
 	}));
+}
+
+function absoluteWanixPath(path: string): string {
+	const trimmed = path.trim();
+	return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
 function configuredOpenUri(target: string | undefined): vscode.Uri | undefined {
@@ -320,7 +336,7 @@ async function createActiveTaskTerminal(
 		taskLabel: target.name,
 		terminalLabel: taskTerminalName(kind, target.name),
 		onTaskStarted: (event) => {
-			systemView.taskStarted(event.id, event.kind, event.label);
+			systemView.taskStarted(event.id, event.kind, event.label, { sourcePath: target.path });
 			revealWanixSystemView();
 		},
 		onTaskExited: (event) => {

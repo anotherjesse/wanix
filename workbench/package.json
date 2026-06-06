@@ -79,6 +79,12 @@
         "icon": "$(new-file)"
       },
       {
+        "command": "workbench.openWanixTaskSource",
+        "title": "Open Task Source",
+        "category": "Wanix",
+        "icon": "$(go-to-file)"
+      },
+      {
         "command": "workbench.installDuetDemo",
         "title": "Install JS and WASM Duet Demo",
         "category": "Wanix",
@@ -156,6 +162,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "workbench.openWanixTaskSource",
+          "when": "view == wanix.system && viewItem == wanixTaskWithSource",
+          "group": "navigation@0"
+        },
         {
           "command": "workbench.openHttpAppDemo",
           "when": "view == wanix.system && viewItem == wanixHttpRoute",
