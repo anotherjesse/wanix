@@ -149,42 +149,70 @@ impl QuickJsRuntime {
         let mut turns = 0usize;
         let mut waited = Duration::ZERO;
         loop {
-            let remaining = max_turns.saturating_sub(turns);
-            let jobs = self.execute_pending_jobs_with_limit(remaining)?;
-            turns = turns
-                .checked_add(jobs)
-                .ok_or_else(|| anyhow!("QuickJS event loop turn count overflowed"))?;
-            if turns >= max_turns {
-                bail!("QuickJS event loop limit reached after {turns} turns");
-            }
+            self.drain_event_loop_jobs(&mut turns, max_turns)?;
 
             match self.execute_event_loop_once()? {
                 QuickJsEventLoopStatus::Idle => return Ok(QuickJsEventLoopStatus::Idle),
                 QuickJsEventLoopStatus::Pending => {
-                    turns = turns
-                        .checked_add(1)
-                        .ok_or_else(|| anyhow!("QuickJS event loop turn count overflowed"))?;
+                    record_event_loop_turn(&mut turns)?;
                 }
                 QuickJsEventLoopStatus::Wait(delay) => {
-                    turns = turns
-                        .checked_add(1)
-                        .ok_or_else(|| anyhow!("QuickJS event loop turn count overflowed"))?;
-                    if turns >= max_turns {
-                        bail!("QuickJS event loop limit reached after {turns} turns");
-                    }
-                    let Some(next_waited) = waited.checked_add(delay) else {
-                        return Ok(QuickJsEventLoopStatus::Wait(delay));
-                    };
-                    if next_waited > max_wait {
+                    record_wait_turn(&mut turns, max_turns)?;
+                    if self.wait_for_event_loop_timer(&mut waited, delay, max_wait)? {
                         return Ok(QuickJsEventLoopStatus::Wait(delay));
                     }
-                    if !delay.is_zero() {
-                        thread::sleep(delay);
-                        self.store.data_mut().advance_clock_time_by(delay)?;
-                    }
-                    waited = next_waited;
                 }
             }
         }
     }
+
+    fn drain_event_loop_jobs(&mut self, turns: &mut usize, max_turns: usize) -> Result<()> {
+        let remaining = max_turns.saturating_sub(*turns);
+        let jobs = self.execute_pending_jobs_with_limit(remaining)?;
+        add_event_loop_turns(turns, jobs)?;
+        ensure_event_loop_limit_available(*turns, max_turns)
+    }
+
+    fn wait_for_event_loop_timer(
+        &mut self,
+        waited: &mut Duration,
+        delay: Duration,
+        max_wait: Duration,
+    ) -> Result<bool> {
+        let Some(next_waited) = waited.checked_add(delay) else {
+            return Ok(true);
+        };
+        if next_waited > max_wait {
+            return Ok(true);
+        }
+        if !delay.is_zero() {
+            thread::sleep(delay);
+            self.store.data_mut().advance_clock_time_by(delay)?;
+        }
+        *waited = next_waited;
+        Ok(false)
+    }
+}
+
+fn record_event_loop_turn(turns: &mut usize) -> Result<()> {
+    add_event_loop_turns(turns, 1)
+}
+
+fn record_wait_turn(turns: &mut usize, max_turns: usize) -> Result<()> {
+    record_event_loop_turn(turns)?;
+    ensure_event_loop_limit_available(*turns, max_turns)
+}
+
+fn add_event_loop_turns(turns: &mut usize, count: usize) -> Result<()> {
+    *turns = turns
+        .checked_add(count)
+        .ok_or_else(|| anyhow!("QuickJS event loop turn count overflowed"))?;
+    Ok(())
+}
+
+fn ensure_event_loop_limit_available(turns: usize, max_turns: usize) -> Result<()> {
+    if turns >= max_turns {
+        bail!("QuickJS event loop limit reached after {turns} turns");
+    }
+    Ok(())
 }

@@ -394,6 +394,69 @@ fn quickjs_os_future_timer_runs_with_wait_budget() -> Result<()> {
 }
 
 #[test]
+fn quickjs_os_future_timer_beyond_wait_budget_does_not_advance_clock() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create_with_host_config(
+        &engine,
+        &module,
+        QuickJsHostConfig::new().with_clock_time_ns(1_700_000_000_000_000_000),
+    )?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+        globalThis.futureTimerEvents = [];
+        os.setTimeout(() => {
+          globalThis.futureTimerEvents.push("timeout:" + Date.now());
+        }, 25);
+        "#,
+        "stdlib-future-timer-over-budget.mjs",
+    )?;
+
+    match vm.execute_event_loop_with_wait_budget(8, Duration::from_millis(10))? {
+        QuickJsEventLoopStatus::Wait(delay) => {
+            assert!(delay.as_millis() <= 25, "delay was {delay:?}");
+        }
+        status => bail!("expected future timer wait status, got {status:?}"),
+    }
+    assert_eq!(vm.eval_string("futureTimerEvents.join(',')")?, "");
+    assert_eq!(vm.eval_number("Date.now()")?, 1_700_000_000_000.0);
+    Ok(())
+}
+
+#[test]
+fn quickjs_os_future_timer_wait_budget_advances_clock_once() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create_with_host_config(
+        &engine,
+        &module,
+        QuickJsHostConfig::new().with_clock_time_ns(1_700_000_000_000_000_000),
+    )?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as os from "qjs:os";
+        globalThis.futureTimerEvents = [];
+        os.setTimeout(() => {
+          globalThis.futureTimerEvents.push("timeout:" + Date.now());
+        }, 1);
+        "#,
+        "stdlib-future-timer-clock-budget.mjs",
+    )?;
+
+    assert_eq!(
+        vm.execute_event_loop_with_wait_budget(8, Duration::from_millis(10))?,
+        QuickJsEventLoopStatus::Idle
+    );
+    assert_eq!(
+        vm.eval_string("futureTimerEvents.join(',')")?,
+        "timeout:1700000000001"
+    );
+    assert_eq!(vm.eval_number("Date.now()")?, 1_700_000_000_001.0);
+    Ok(())
+}
+
+#[test]
 fn quickjs_os_interval_runs_with_wait_budget_until_cleared() -> Result<()> {
     let (engine, module) = quickjs_fixture()?;
     let mut vm = QuickJsRuntime::create(&engine, &module)?;
