@@ -698,6 +698,10 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
         "{response}"
     );
     assert!(
+        response.contains("workbenchConfig.drivers = discovery.services.drivers || []"),
+        "{response}"
+    );
+    assert!(
         response.contains("if (discovery.routes?.qjsShell?.websocket)"),
         "{response}"
     );

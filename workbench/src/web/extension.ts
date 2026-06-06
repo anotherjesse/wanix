@@ -1,6 +1,7 @@
 
 import * as vscode from 'vscode';
 import { WanixBridge } from './bridge.js';
+import { WanixSystemView } from './system-view.js';
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
 //@ts-ignore
 import { WanixHandle } from '../wanix/fs.js';
@@ -12,6 +13,7 @@ type Config = {
 	p9?: WanixP9Route;
 	qjsShellUrl?: string;
 	qjsTask?: boolean;
+	drivers?: string[];
 	term?: boolean;
 	raw?: boolean;
 	open?: string;
@@ -37,7 +39,12 @@ export async function activate(context: vscode.ExtensionContext) {
 		config = nextConfig;
 	});
 	const bridge = new WanixBridge(wanix, "");
-	const refreshFiles = () => refreshWorkbenchFiles(bridge);
+	const systemView = new WanixSystemView();
+	systemView.register(context);
+	const refreshFiles = async () => {
+		await refreshWorkbenchFiles(bridge);
+		systemView.filesystemActivity("filesystem refreshed");
+	};
 	let activeQjsTaskTerminal: vscode.Terminal | undefined;
 	context.subscriptions.push(bridge);
 	rememberWanixEditor();
@@ -51,14 +58,29 @@ export async function activate(context: vscode.ExtensionContext) {
 	}));
 
 	bridge.ready.then((fsys) => {
+		systemView.configure(config);
+		revealWanixSystemView();
 		fsys.logger = (...args: any[]) => {
 			// console.log(...args);
 		};
 		if (config.qjsShellUrl || config.shell) {
 			context.subscriptions.push(vscode.commands.registerCommand('workbench.createTerminal', async () => {
+				if (config.qjsShellUrl) {
+					systemView.terminalOpened("shell", "Shell");
+				}
 				const term = vscode.window.createTerminal({ 
 					name: 'Shell', 
-					pty: config.qjsShellUrl ? createQjsShellTerminal(config, refreshFiles) : await createTerminal(fsys, config, refreshFiles)
+					pty: config.qjsShellUrl
+						? createQjsShellTerminal(config, refreshFiles, systemView)
+						: await createTerminal(fsys, config, refreshFiles, {
+							taskLabel: "shell",
+							terminalLabel: "Shell",
+							onTaskStarted: (event) => systemView.taskStarted(event.id, event.kind, event.label),
+							onTaskExited: (event) => systemView.taskExited(event.id, event.code),
+							onTaskClosed: (event) => systemView.taskClosed(event.id),
+							onTerminalOpened: (event) => systemView.terminalOpened(event.id, event.label),
+							onTerminalClosed: (event) => systemView.terminalClosed(event.id),
+						})
 				});
 				term.show();
 				context.subscriptions.push(term);
@@ -77,7 +99,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				activeQjsTaskTerminal = undefined;
 				const term = vscode.window.createTerminal({
 					name: await qjsTerminalName(),
-					pty: await createActiveQjsTaskTerminal(fsys, bridge, config)
+					pty: await createActiveQjsTaskTerminal(fsys, bridge, config, systemView)
 				});
 				activeQjsTaskTerminal = term;
 				term.show();
@@ -125,7 +147,7 @@ async function qjsTerminalName(): Promise<string> {
 	return `qjs: ${baseName(editor.document.uri.path)}`;
 }
 
-async function createActiveQjsTaskTerminal(fsys: any, bridge: WanixBridge, config: Config) {
+async function createActiveQjsTaskTerminal(fsys: any, bridge: WanixBridge, config: Config, systemView: WanixSystemView) {
 	if (!config.ns?.task || !config.ns?.term) {
 		throw new Error("Wanix task and terminal services are not available");
 	}
@@ -151,13 +173,38 @@ async function createActiveQjsTaskTerminal(fsys: any, bridge: WanixBridge, confi
 			type: "qjs",
 			wd: scriptDir
 		}
-	}, () => refreshWorkbenchFiles(bridge), { keepOpenOnExit: true });
+	}, async () => {
+		await refreshWorkbenchFiles(bridge);
+		systemView.filesystemActivity("qjs task filesystem refresh");
+		revealWanixSystemView();
+	}, {
+		keepOpenOnExit: true,
+		taskLabel: scriptName,
+		terminalLabel: `qjs: ${scriptName}`,
+		onTaskStarted: (event) => {
+			systemView.taskStarted(event.id, event.kind, event.label);
+			revealWanixSystemView();
+		},
+		onTaskExited: (event) => {
+			systemView.taskExited(event.id, event.code);
+			revealWanixSystemView();
+		},
+		onTaskClosed: (event) => systemView.taskClosed(event.id),
+		onTerminalOpened: (event) => systemView.terminalOpened(event.id, event.label),
+		onTerminalClosed: (event) => systemView.terminalClosed(event.id),
+	});
 }
 
-function refreshWorkbenchFiles(bridge: WanixBridge): void {
+async function refreshWorkbenchFiles(bridge: WanixBridge): Promise<void> {
 	bridge.refresh();
-	Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
+	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
+	});
+}
+
+function revealWanixSystemView(): void {
+	Promise.resolve(vscode.commands.executeCommand("workbench.view.extension.wanix")).catch((error: unknown) => {
+		console.warn("Wanix system view focus failed", error);
 	});
 }
 
@@ -242,7 +289,7 @@ function delay(ms: number): Promise<void> {
 const DIRECT_TASK_EXIT_POLL_MS = 100;
 const DIRECT_TASK_EXIT_DRAIN_MS = 100;
 
-function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => void) {
+function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => void, systemView?: WanixSystemView) {
 	const writeEmitter = new vscode.EventEmitter<string>();
 	const closeEmitter = new vscode.EventEmitter<number | void>();
 	const dec = new TextDecoder();
@@ -250,6 +297,7 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => voi
 	let socket: WebSocket | undefined;
 	let opened = false;
 	let closed = false;
+	let shellTaskId: string | undefined;
 	const pending: Uint8Array[] = [];
 	let pendingResize: vscode.TerminalDimensions | undefined;
 	const qjsShellUrl = () => {
@@ -265,6 +313,14 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => voi
 			return;
 		}
 		closed = true;
+		if (shellTaskId) {
+			if (typeof code === "number") {
+				systemView?.taskExited(shellTaskId, code);
+			} else {
+				systemView?.taskClosed(shellTaskId);
+			}
+		}
+		systemView?.terminalClosed("shell");
 		closeEmitter.fire(code);
 	};
 	const sendInput = (bytes: Uint8Array) => {
@@ -326,7 +382,13 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => voi
 				const bytes = event.data instanceof Blob
 					? await event.data.arrayBuffer()
 					: event.data;
-				writeEmitter.fire(dec.decode(bytes));
+				const output = dec.decode(bytes);
+				const shellTaskMatch = output.match(/shell task:\s*(\d+)/);
+				if (shellTaskMatch && !shellTaskId) {
+					shellTaskId = shellTaskMatch[1];
+					systemView?.taskStarted(shellTaskId, "shell", "shell");
+				}
+				writeEmitter.fire(output);
 			};
 			socket.onerror = () => {
 				writeEmitter.fire("\r\nterminal websocket failed\r\n");
@@ -339,7 +401,7 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => voi
 			if (closed) {
 				return;
 			}
-			closed = true;
+			finish();
 			socket?.close();
 		},
 		handleInput: (data: string) => {
@@ -356,12 +418,19 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => voi
 
 type TerminalOptions = {
 	keepOpenOnExit?: boolean;
+	taskLabel?: string;
+	terminalLabel?: string;
+	onTaskStarted?: (event: { id: string; kind: string; label: string }) => void;
+	onTaskExited?: (event: { id: string; code?: number }) => void;
+	onTaskClosed?: (event: { id: string }) => void;
+	onTerminalOpened?: (event: { id: string; label: string }) => void;
+	onTerminalClosed?: (event: { id: string }) => void;
 }
 
 async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: () => void, options: TerminalOptions = {}) {
 	await fsys.waitFor(config.ns?.task, 30000);
 	const termID = (await fsys.readText(`${config.ns?.term}/new`)).trim();
-    const termPath = [config.ns?.term, termID].join("/");
+	const termPath = [config.ns?.term, termID].join("/");
 	const taskID = (await fsys.readText(`${config.ns?.task}/new/${config.shell?.type || 'auto'}`)).trim();
 	const taskPath = [config.ns?.task, taskID].join("/");
 	await fsys.writeFile(`${taskPath}/cmd`, config.shell?.cmd);
@@ -370,6 +439,11 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 	await fsys.writeFile(`${taskPath}/ctl`, `bind ${quoteShellArg(`${termPath}/program`)} fd/1`);
 	await fsys.writeFile(`${taskPath}/ctl`, `bind ${quoteShellArg(`${termPath}/program`)} fd/2`);
 	await fsys.writeFile(`${taskPath}/ctl`, "start");
+	const taskKind = config.shell?.type || "auto";
+	const taskLabel = options.taskLabel || config.shell?.cmd || taskKind;
+	const terminalLabel = options.terminalLabel || taskLabel;
+	options.onTerminalOpened?.({ id: termID, label: terminalLabel });
+	options.onTaskStarted?.({ id: taskID, kind: taskKind, label: taskLabel });
 
 	const writeEmitter = new vscode.EventEmitter<string>();
 	const closeEmitter = new vscode.EventEmitter<number | void>();
@@ -380,8 +454,23 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 	const writable = (await fsys.openWritable(`${termPath}/data`)).getWriter();
 	let pendingResize: Promise<void> = Promise.resolve();
 	let closed = false;
+	let taskExitObserved = false;
+	let terminalClosed = false;
 	let buffer = '';
 	let lastOutputAt = Date.now();
+	const markTerminalClosed = () => {
+		if (terminalClosed) {
+			return;
+		}
+		terminalClosed = true;
+		options.onTerminalClosed?.({ id: termID });
+	};
+	const markTaskClosed = () => {
+		if (taskExitObserved) {
+			return;
+		}
+		options.onTaskClosed?.({ id: taskID });
+	};
 	const closeTerminalResource = () => {
 		(async () => {
 			try {
@@ -411,6 +500,8 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 			return;
 		}
 		closed = true;
+		markTaskClosed();
+		markTerminalClosed();
 		closeTerminalResource();
 		closeWriter();
 		cancelReader();
@@ -423,6 +514,7 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 		closed = true;
 		const suffix = typeof code === "number" ? ` ${code}` : "";
 		writeEmitter.fire(`\r\n[wanix task exited${suffix}]\r\n`);
+		markTerminalClosed();
 		closeTerminalResource();
 		closeWriter();
 		cancelReader();
@@ -441,6 +533,8 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 				}
 				notifyFilesystemActivity(onFilesystemActivity);
 				const code = parseTerminalExitCode(exit);
+				taskExitObserved = true;
+				options.onTaskExited?.({ id: taskID, code });
 				if (options.keepOpenOnExit) {
 					finishAndKeepOpen(code);
 				} else {
@@ -496,6 +590,8 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 				return;
 			}
 			closed = true;
+			markTaskClosed();
+			markTerminalClosed();
 			closeTerminalResource();
 			closeWriter();
 			cancelReader();

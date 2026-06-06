@@ -37,6 +37,23 @@
     "@progrium/duplex": "^0.2.1"
   },
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wanix",
+          "title": "Wanix",
+          "icon": "media/wanix.svg"
+        }
+      ]
+    },
+    "views": {
+      "wanix": [
+        {
+          "id": "wanix.system",
+          "name": "System"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "workbench.createTerminal",
