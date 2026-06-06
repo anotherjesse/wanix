@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use super::{ServeRoots, connection::ServeConnectionError};
 
+pub(super) mod app;
 mod request;
 mod response;
 mod routes;

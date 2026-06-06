@@ -94,6 +94,37 @@ not just terminal output or a toast.
 
 ![Guided duet output file](assets/wanix-workbench-browser-dx/08-guided-duet-output.png)
 
+The newest slice makes Wanix serve a tiny HTTP program from inside the same
+system. With services enabled, `GET /.wanix/app/hello?from=browser` looks for
+`apps/hello.js`, starts it as a qjs task, passes request metadata through
+environment variables and argv, captures stdout, and returns that stdout as the
+HTTP response.
+
+The demo handler is intentionally boring:
+
+```js
+import * as std from "qjs:std";
+
+const app = std.getenv("WANIX_HTTP_APP");
+const target = std.getenv("WANIX_HTTP_TARGET");
+std.out.puts("wanix http app " + app + " saw " + target + "\n");
+```
+
+The browser response is now bytes from a Wanix task, not static file content.
+
+![HTTP app route backed by qjs](assets/wanix-workbench-browser-dx/09-http-app-route.png)
+
+That route proof immediately exposed the next browser papercut: nobody should
+have to type the handler by hand. The Wanix system view now has an
+`Install HTTP App Demo` action. It creates `/apps/hello.js`, refreshes Explorer,
+opens the handler in the editor, and leaves the served route ready at:
+
+```text
+http://127.0.0.1:4444/.wanix/app/hello
+```
+
+![HTTP app demo installer](assets/wanix-workbench-browser-dx/10-http-app-installer.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -168,6 +199,17 @@ The output now opens automatically at the end of that guided run. This makes the
 demo land on a concrete artifact in the Wanix namespace, which is a better
 teaching moment than ending on a notification alone.
 
+The HTTP-app route is the first app-platform proof. It is deliberately local
+and narrow: `/.wanix/app/<name>` maps to `apps/<name>.js`, requires
+`--wanix-services`, rejects non-loopback clients, binds stdout and stderr to
+`.wanix/http/<task>.out` and `.wanix/http/<task>.err`, and returns stdout as
+`text/plain`. Discovery advertises the contract as `wanix-http-app.v1`.
+
+The browser then got a matching installer command. That command uses the same
+direct 9P filesystem surface as the rest of the workbench, so the handler file
+is not a fake sample hidden in the extension. It is a normal Wanix file under
+`/apps`, ready to edit and serve.
+
 ## The Feeling Now
 
 The current loop is:
@@ -185,6 +227,9 @@ The current loop is:
     sequence.
 11. Inspect the generated `duet/shared/out.txt` result when the guided run
     opens it.
+12. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
+13. Open
+    `/.wanix/app/hello?from=browser` to get an HTTP response from a Wanix task.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -197,6 +242,8 @@ The next round should probably focus on making the workbench less demo-only:
 - Let the sidebar inspect service files directly, not just extension-observed events.
 - Add a small run history or output link per task entry.
 - Add a reset button for the duet demo's generated files.
+- Add a split in-workbench HTTP preview that can render the app route without
+  navigating away from the workbench.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.

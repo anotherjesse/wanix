@@ -193,6 +193,67 @@ fn serve_once_returns_mjs_static_file_as_javascript() {
 }
 
 #[test]
+fn serve_once_runs_qjs_http_app_route() {
+    let root = temp_dir("wanix-cli-serve-http-app");
+    fs::create_dir_all(root.join("apps")).unwrap();
+    fs::write(
+        root.join("apps/hello.js"),
+        br##"
+import * as std from "qjs:std";
+
+const app = std.getenv("WANIX_HTTP_APP");
+const target = std.getenv("WANIX_HTTP_TARGET");
+std.out.puts("app " + app + "\n");
+std.out.puts("target " + target + "\n");
+std.out.puts("argv " + scriptArgs.join("|") + "\n");
+std.writeFile("ran.txt", "ran " + target);
+"##,
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let command = ServeCommand {
+        root_path: root.clone(),
+        addr: addr.to_string(),
+        bundle: None,
+        wanix_services: true,
+        once: true,
+    };
+
+    let handle = thread::spawn(move || {
+        let mut stderr = Vec::new();
+        let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+        (exit_code, stderr)
+    });
+
+    let response = http_request(
+        addr,
+        b"GET /.wanix/app/hello?from=browser HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    );
+    let (exit_code, _stderr) = handle.join().unwrap();
+
+    assert_eq!(exit_code, 0);
+    let (headers, body) = http_response_parts(&response);
+    assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+    assert!(
+        headers.contains("Content-Type: text/plain; charset=utf-8\r\n"),
+        "{headers}"
+    );
+    assert_eq!(
+        body,
+        b"app hello\ntarget /.wanix/app/hello?from=browser\nargv hello.js|/.wanix/app/hello?from=browser\n"
+    );
+    assert_eq!(
+        fs::read(root.join("apps/ran.txt")).unwrap(),
+        b"ran /.wanix/app/hello?from=browser"
+    );
+    assert!(
+        root.join(".wanix/http/2.out").exists(),
+        "route stdout trace should be visible in the served filesystem"
+    );
+}
+
+#[test]
 fn serve_once_reports_bundle_url_when_configured() {
     let root = temp_dir("wanix-cli-serve-bundle");
     fs::write(root.join("index.html"), b"wanix serve bundle").unwrap();
@@ -707,6 +768,10 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
     );
     assert!(
         response.contains("workbenchConfig.qjsShellUrl = discovery.routes.qjsShell.websocket"),
+        "{response}"
+    );
+    assert!(
+        response.contains("workbenchConfig.httpApp = discovery.routes.httpApp"),
         "{response}"
     );
     assert!(
@@ -1242,6 +1307,14 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
         qjs_shell["terminalLifecycle"],
         "owned-resource-closed-on-session-close"
     );
+    let http_app = &discovery_json["routes"]["httpApp"];
+    assert_eq!(http_app["url"], "http://demo.local:7654/.wanix/app/{name}");
+    assert_eq!(http_app["protocol"], "wanix-http-app.v1");
+    assert_eq!(http_app["status"], "available");
+    assert_eq!(http_app["route"], "/.wanix/app/<name>");
+    assert_eq!(http_app["source"], "apps/<name>.js");
+    assert_eq!(http_app["response"], "stdout");
+    assert_eq!(http_app["scope"], "loopback");
 
     let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
     let response = server

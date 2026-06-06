@@ -106,6 +106,9 @@
               workbenchConfig.qjsShellUrl = discovery.routes.qjsShell.websocket;
               workbenchConfig.term = params.has("term");
             }
+            if (discovery.routes?.httpApp) {
+              workbenchConfig.httpApp = discovery.routes.httpApp;
+            }
             if (discovery.services?.task && discovery.services?.term) {
               workbenchConfig.ns = {
                 task: discovery.services.task,

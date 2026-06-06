@@ -6,6 +6,7 @@ use super::super::WORKBENCH_FS9P_BUNDLE;
 use super::super::direct_v86::direct_v86_asset_response;
 use super::super::discovery::{rootfs_handoff_response, serve_discovery_response};
 use super::super::html::bundle_html;
+use super::app::app_route_response;
 use super::{HttpStatus, StaticResponse, read_static_response, request_target};
 
 pub(super) fn http_route_response(
@@ -16,6 +17,7 @@ pub(super) fn http_route_response(
 ) -> Option<StaticResponse> {
     well_known_response(roots, relative_path, request, peer_addr)
         .or_else(|| bundle_response(roots, relative_path, request))
+        .or_else(|| app_route_response(roots, relative_path, request, peer_addr))
         .or_else(|| workbench_asset_response(roots, relative_path))
         .or_else(|| direct_v86_asset_response(roots, relative_path))
 }

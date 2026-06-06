@@ -176,7 +176,7 @@ data/count.txt
 Open:
 
 ```text
-http://127.0.0.1:4444/app/counter
+http://127.0.0.1:4444/.wanix/app/counter
 ```
 
 Each refresh increments `data/count.txt`. The workbench shows the file changing, and the panel shows route task execution.
@@ -185,10 +185,11 @@ Each refresh increments `data/count.txt`. The workbench shows the file changing,
 
 - Tighten v86/direct-9P demo handoff enough to present a reliable shared-file round trip.
 - Add a minimal route runner on Rust serve:
-  - route prefix such as `/app/:name`
-  - maps to `routes/:name.js` initially
+  - route prefix `/.wanix/app/<name>`
+  - maps to `apps/<name>.js` initially
   - runs through Wanix qjs task machinery
-  - captures response body/status in a simple contract
+  - captures stdout/stderr in `.wanix/http/<task>.out` and `.err`
+  - returns stdout as the first response contract
 - Start with a deliberately tiny HTTP response API; do not design a full workers platform yet.
 - Reflect route execution in discovery and the Wanix sidebar.
 - Add loopback-only guardrails for HTTP app routes while auth is not implemented.
@@ -196,7 +197,7 @@ Each refresh increments `data/count.txt`. The workbench shows the file changing,
 ### Acceptance Criteria
 
 - A v86/Linux demo can read a workbench-written file and write a file visible to the workbench.
-- `/app/counter` runs a Wanix-backed route and mutates Wanix state.
+- `/.wanix/app/counter` runs a Wanix-backed route and mutates Wanix state.
 - Route task execution appears in the Wanix panel.
 - The route contract is documented and has focused tests.
 - `just check` passes.

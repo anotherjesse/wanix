@@ -83,6 +83,18 @@
         "title": "Run JS and WASM Duet Demo",
         "category": "Wanix",
         "icon": "$(run-all)"
+      },
+      {
+        "command": "workbench.installHttpAppDemo",
+        "title": "Install HTTP App Demo",
+        "category": "Wanix",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "workbench.openHttpAppDemo",
+        "title": "Open HTTP App Demo",
+        "category": "Wanix",
+        "icon": "$(globe)"
       }
     ],
     "menus": {
@@ -108,6 +120,11 @@
           "command": "workbench.installDuetDemo",
           "when": "view == wanix.system",
           "group": "navigation@2"
+        },
+        {
+          "command": "workbench.installHttpAppDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@3"
         }
       ],
       "explorer/context": [
