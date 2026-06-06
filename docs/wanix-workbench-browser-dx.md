@@ -97,7 +97,7 @@ In this smoke test, `guest.wasm` reads `/shared/in.txt`, writes
 
 The next polish pass removed another bit of demo friction: you no longer need
 to hand-copy a WASM fixture into the served root. The Wanix system view has an
-`Install JS and WASM Duet Demo` action. It creates:
+`Open JS and WASM Duet Demo` action. It creates missing starter files:
 
 ```text
 /duet/producer.js
@@ -117,10 +117,10 @@ The sidebar shows all three tasks as one system story.
 ![JS and WASM duet demo](assets/wanix-workbench-browser-dx/06-js-wasm-duet-demo.png)
 
 The latest pass makes that sequence a button. `Run JS and WASM Duet Demo`
-refreshes the sample files, runs qjs producer, runs the WASM transform, runs qjs
-verify, and stops if a step exits nonzero. The result is a one-click proof that
-the browser workbench can coordinate multiple Wanix runtimes through the same
-task and filesystem surface.
+ensures the sample files exist, runs qjs producer, runs the WASM transform, runs
+qjs verify, and stops if a step exits nonzero. The result is a one-click proof
+that the browser workbench can coordinate multiple Wanix runtimes through the
+same task and filesystem surface.
 
 ![Guided JS and WASM duet run](assets/wanix-workbench-browser-dx/07-guided-duet-run.png)
 
@@ -129,6 +129,14 @@ generated `duet/shared/out.txt` file. The user sees the actual namespace result,
 not just terminal output or a toast.
 
 ![Guided duet output file](assets/wanix-workbench-browser-dx/08-guided-duet-output.png)
+
+The duet run no longer rewrites the sample program every time it starts. It
+leaves edited `producer.js` and `verify.js` alone. A separate `Reset JS and WASM
+Duet Demo` action is the explicit overwrite path, and it clears the generated
+`duet/shared/in.txt` and `duet/shared/out.txt` files so the next run starts
+clean.
+
+![Duet reset command keeps reset explicit](assets/wanix-workbench-browser-dx/28-duet-reset-command.png)
 
 The newest slice makes Wanix serve a tiny HTTP program from inside the same
 system. With services enabled, `GET /.wanix/app/hello?from=browser` looks for
@@ -337,6 +345,10 @@ The output now opens automatically at the end of that guided run. This makes the
 demo land on a concrete artifact in the Wanix namespace, which is a better
 teaching moment than ending on a notification alone.
 
+The duet run now follows the same edit-preserving rule as the HTTP demo: run
+fills in missing starter files but does not overwrite local edits. Reset is a
+separate command, and it owns clearing the generated shared input/output.
+
 The HTTP-app route is the first app-platform proof. It is deliberately local
 and narrow: `/.wanix/app/<name>` maps to `apps/<name>.js`, requires
 `--wanix-services`, rejects non-loopback clients, binds stdout and stderr to
@@ -410,30 +422,32 @@ The current loop is:
     sequence.
 15. Inspect the generated `duet/shared/out.txt` result when the guided run
     opens it.
-16. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
-17. Open
+16. Edit `duet/producer.js`, run the guided duet without losing the edit, then
+    explicitly reset the duet when you want the starter files back.
+17. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
+18. Open
     `/.wanix/app/hello?from=browser` to get an HTTP response from a Wanix task.
-18. See the HTTP app route contract in the Wanix sidebar.
-19. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
+19. See the HTTP app route contract in the Wanix sidebar.
+20. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
     `/apps/hello.response.txt` report inside the workbench.
-20. Click the `/.wanix/app/<name>` route row itself to run the same preview from
+21. Click the `/.wanix/app/<name>` route row itself to run the same preview from
     the visible system contract.
-21. Edit `/apps/hello.js`, preview again, and see the changed handler output
+22. Edit `/apps/hello.js`, preview again, and see the changed handler output
     without losing the edit or reopening the report.
-22. Open the HTTP handler source directly, and reset the demo only through the
+23. Open the HTTP handler source directly, and reset the demo only through the
     explicit reset command.
-23. Right-click the route row to preview, open source, copy the route URL, or
+24. Right-click the route row to preview, open source, copy the route URL, or
     intentionally reset the demo handler.
-24. Click `New qjs Script` to create a unique runnable scratch script without
+25. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-25. Run that script, then click or right-click its task row to reopen the
+26. Run that script, then click or right-click its task row to reopen the
     source, open the saved transcript, or focus the terminal output that
     produced the task.
-26. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+27. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-27. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+28. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-28. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
+29. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
     `agent/out/result.txt`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
@@ -447,7 +461,6 @@ The next round should probably focus on making the workbench less demo-only:
 - Make shell-created files refresh more precisely than "refresh the root after activity."
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract.
-- Add a reset button for the duet demo's generated files.
 - Add a route detail panel showing latest preview status and output path.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 

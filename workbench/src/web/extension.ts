@@ -2,7 +2,7 @@
 import * as vscode from 'vscode';
 import { installAgentRepairDemo, repairQjsProgram } from './agent-repair-demo.js';
 import { WanixBridge } from './bridge.js';
-import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo } from './duet-demo.js';
+import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
 import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
@@ -148,6 +148,13 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.installDuetDemo', async () => {
 			try {
 				await installDuetDemo(context, fsys, bridge, systemView);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.resetDuetDemo', async () => {
+			try {
+				await resetDuetDemo(context, fsys, bridge, systemView);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}

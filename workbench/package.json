@@ -122,9 +122,15 @@
       },
       {
         "command": "workbench.installDuetDemo",
-        "title": "Install JS and WASM Duet Demo",
+        "title": "Open JS and WASM Duet Demo",
         "category": "Wanix",
         "icon": "$(layers-active)"
+      },
+      {
+        "command": "workbench.resetDuetDemo",
+        "title": "Reset JS and WASM Duet Demo",
+        "category": "Wanix",
+        "icon": "$(debug-restart)"
       },
       {
         "command": "workbench.runDuetDemo",
@@ -192,19 +198,24 @@
           "group": "navigation@2"
         },
         {
-          "command": "workbench.openHttpAppDemo",
+          "command": "workbench.resetDuetDemo",
           "when": "view == wanix.system",
           "group": "navigation@3"
         },
         {
-          "command": "workbench.openHttpAppHandler",
+          "command": "workbench.openHttpAppDemo",
           "when": "view == wanix.system",
           "group": "navigation@4"
         },
         {
-          "command": "workbench.installAgentRepairDemo",
+          "command": "workbench.openHttpAppHandler",
           "when": "view == wanix.system",
           "group": "navigation@5"
+        },
+        {
+          "command": "workbench.installAgentRepairDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@6"
         }
       ],
       "view/item/context": [
