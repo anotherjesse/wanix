@@ -2162,6 +2162,12 @@ fn qjs_shell_websocket_cwd_query_uses_wanix_paths() {
         "."
     );
     assert_eq!(
+        qjs_shell_cwd_from_target(Some("/.well-known/qjs-shell?term=1"))
+            .map(|cwd| cwd.to_string())
+            .unwrap_or_else(|_| panic!("query without cwd should use default qjs shell cwd")),
+        "."
+    );
+    assert_eq!(
         qjs_shell_cwd_from_target(Some("/.well-known/qjs-shell?cwd=%2Fapp%2Fsub"))
             .map(|cwd| cwd.to_string())
             .unwrap_or_else(|_| panic!("absolute qjs shell cwd should parse")),

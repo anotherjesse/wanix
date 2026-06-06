@@ -29,7 +29,7 @@ pub(in crate::serve) fn qjs_shell_cwd_from_target(
 }
 
 fn default_qjs_shell_cwd() -> NormalizedPath {
-    NormalizedPath::new(".").expect("default cwd is valid")
+    NormalizedPath::root()
 }
 
 fn qjs_shell_cwd_from_query_value(value: &str) -> Result<NormalizedPath, StaticResponse> {
