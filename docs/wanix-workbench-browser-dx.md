@@ -80,6 +80,14 @@ The sidebar shows all three tasks as one system story.
 
 ![JS and WASM duet demo](assets/wanix-workbench-browser-dx/06-js-wasm-duet-demo.png)
 
+The latest pass makes that sequence a button. `Run JS and WASM Duet Demo`
+refreshes the sample files, runs qjs producer, runs the WASM transform, runs qjs
+verify, and stops if a step exits nonzero. The result is a one-click proof that
+the browser workbench can coordinate multiple Wanix runtimes through the same
+task and filesystem surface.
+
+![Guided JS and WASM duet run](assets/wanix-workbench-browser-dx/07-guided-duet-run.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -145,6 +153,11 @@ not that the sample is fancy. The point is that a teammate can now open the
 served workbench and prove the shared-runtime claim without preparing files by
 hand.
 
+The follow-up made the proof runnable as a single guided action. The command
+still uses the same task objects and terminal resources as manual runs, but it
+awaits each task exit before starting the next step. That gives us a demo button
+without inventing a fake demo backend.
+
 ## The Feeling Now
 
 The current loop is:
@@ -158,6 +171,8 @@ The current loop is:
 7. See output and exit status in the terminal.
 8. Run again without terminal clutter.
 9. Install the duet demo and run qjs -> wasm -> qjs as one visible workflow.
+10. Or click `Run JS and WASM Duet Demo` and let the workbench drive the
+    sequence.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -169,8 +184,7 @@ The next round should probably focus on making the workbench less demo-only:
 - Make shell-created files refresh more precisely than "refresh the root after activity."
 - Let the sidebar inspect service files directly, not just extension-observed events.
 - Add a small run history or output link per task entry.
-- Add a guided "run next step" affordance for the duet demo, so users do not
-  need to remember the sequence from docs.
+- Make the guided duet run open the generated `shared/out.txt` when it succeeds.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.

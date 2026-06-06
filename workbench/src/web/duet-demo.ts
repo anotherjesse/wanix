@@ -10,6 +10,18 @@ const WASM_PATH = `${DUET_DIR}/transform.wasm`;
 const README_PATH = `${DUET_DIR}/README.md`;
 const WASM_ASSET = "media/rust-guest.wasm";
 
+export type DuetDemoStep = {
+	kind: "qjs" | "wasm";
+	path: string;
+	label: string;
+};
+
+export const DUET_DEMO_STEPS: DuetDemoStep[] = [
+	{ kind: "qjs", path: PRODUCER_PATH, label: "producer" },
+	{ kind: "wasm", path: WASM_PATH, label: "transform" },
+	{ kind: "qjs", path: VERIFY_PATH, label: "verify" },
+];
+
 const PRODUCER_JS = `import * as std from "qjs:std";
 
 const message = "hello from qjs duet";
@@ -51,7 +63,10 @@ export async function installDuetDemo(
 	fsys: any,
 	bridge: WanixBridge,
 	systemView: WanixSystemView,
+	options: { openProducer?: boolean; notify?: boolean } = {},
 ): Promise<void> {
+	const openProducer = options.openProducer ?? true;
+	const notify = options.notify ?? true;
 	await fsys.makeDirAll(DUET_DIR);
 	await fsys.makeDirAll(SHARED_DIR);
 	const wasm = await fetchWorkbenchAsset(context, WASM_ASSET);
@@ -67,8 +82,12 @@ export async function installDuetDemo(
 	await Promise.resolve(vscode.commands.executeCommand("workbench.view.extension.wanix")).catch((error: unknown) => {
 		console.warn("Wanix system view focus failed", error);
 	});
-	await openWanixFile(PRODUCER_PATH);
-	vscode.window.showInformationMessage("Installed Wanix JS and WASM duet demo in /duet");
+	if (openProducer) {
+		await openWanixFile(PRODUCER_PATH);
+	}
+	if (notify) {
+		vscode.window.showInformationMessage("Installed Wanix JS and WASM duet demo in /duet");
+	}
 }
 
 async function openWanixFile(path: string): Promise<void> {

@@ -1,7 +1,7 @@
 
 import * as vscode from 'vscode';
 import { WanixBridge } from './bridge.js';
-import { installDuetDemo } from './duet-demo.js';
+import { DUET_DEMO_STEPS, installDuetDemo } from './duet-demo.js';
 import { WanixSystemView } from './system-view.js';
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
 //@ts-ignore
@@ -122,6 +122,13 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.runDuetDemo', async () => {
+			try {
+				await runDuetDemo(fsys, bridge, config, systemView, activeTaskTerminals, context);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 	});
 	
 	console.log('System extension activated');
@@ -164,19 +171,71 @@ async function runWanixTask(
 	context: vscode.ExtensionContext,
 ): Promise<void> {
 	try {
-		activeTaskTerminals.get(kind)?.dispose();
-		activeTaskTerminals.delete(kind);
 		const target = await taskRunTarget(kind, bridge, resource);
-		const term = vscode.window.createTerminal({
-			name: taskTerminalName(kind, target.name),
-			pty: await createActiveTaskTerminal(fsys, bridge, config, systemView, kind, target)
-		});
-		activeTaskTerminals.set(kind, term);
-		term.show();
-		context.subscriptions.push(term);
+		await runWanixTaskTarget(fsys, bridge, config, systemView, activeTaskTerminals, kind, target, context);
 	} catch (error) {
 		vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 	}
+}
+
+async function runDuetDemo(
+	fsys: any,
+	bridge: WanixBridge,
+	config: Config,
+	systemView: WanixSystemView,
+	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	context: vscode.ExtensionContext,
+): Promise<void> {
+	await installDuetDemo(context, fsys, bridge, systemView, { openProducer: false, notify: false });
+	systemView.filesystemActivity("duet demo run started");
+	for (const step of DUET_DEMO_STEPS) {
+		const code = await runWanixTaskTarget(
+			fsys,
+			bridge,
+			config,
+			systemView,
+			activeTaskTerminals,
+			step.kind,
+			taskRunTargetFromPath(bridge, step.kind, step.path),
+			context,
+			{ waitForExit: true },
+		);
+		if (code !== 0) {
+			throw new Error(`Duet ${step.label} exited ${formatTaskExitCode(code)}`);
+		}
+	}
+	systemView.filesystemActivity("duet demo verified");
+	vscode.window.showInformationMessage("Wanix JS and WASM duet demo completed");
+}
+
+async function runWanixTaskTarget(
+	fsys: any,
+	bridge: WanixBridge,
+	config: Config,
+	systemView: WanixSystemView,
+	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	kind: TaskRunKind,
+	target: TaskRunTarget,
+	context: vscode.ExtensionContext,
+	options: { waitForExit?: boolean } = {},
+): Promise<number | undefined> {
+	activeTaskTerminals.get(kind)?.dispose();
+	activeTaskTerminals.delete(kind);
+	let resolveExit: (code: number | undefined) => void = () => {};
+	const exit = new Promise<number | undefined>((resolve) => {
+		resolveExit = resolve;
+	});
+	const term = vscode.window.createTerminal({
+		name: taskTerminalName(kind, target.name),
+		pty: await createActiveTaskTerminal(fsys, bridge, config, systemView, kind, target, {
+			onExit: resolveExit,
+			onClose: () => resolveExit(undefined),
+		})
+	});
+	activeTaskTerminals.set(kind, term);
+	term.show();
+	context.subscriptions.push(term);
+	return options.waitForExit ? await exit : undefined;
 }
 
 async function createActiveTaskTerminal(
@@ -186,6 +245,7 @@ async function createActiveTaskTerminal(
 	systemView: WanixSystemView,
 	kind: TaskRunKind,
 	target: TaskRunTarget,
+	lifecycle: { onExit?: (code: number | undefined) => void; onClose?: () => void } = {},
 ) {
 	if (!config.ns?.task || !config.ns?.term) {
 		throw new Error("Wanix task and terminal services are not available");
@@ -215,9 +275,13 @@ async function createActiveTaskTerminal(
 		},
 		onTaskExited: (event) => {
 			systemView.taskExited(event.id, event.code);
+			lifecycle.onExit?.(event.code);
 			revealWanixSystemView();
 		},
-		onTaskClosed: (event) => systemView.taskClosed(event.id),
+		onTaskClosed: (event) => {
+			systemView.taskClosed(event.id);
+			lifecycle.onClose?.();
+		},
 		onTerminalOpened: (event) => systemView.terminalOpened(event.id, event.label),
 		onTerminalClosed: (event) => systemView.terminalClosed(event.id),
 	});
@@ -241,6 +305,19 @@ async function taskRunTarget(kind: TaskRunKind, bridge: WanixBridge, resource?: 
 		path,
 		dir: parentPath(path) || ".",
 		name: baseName(path),
+	};
+}
+
+function taskRunTargetFromPath(bridge: WanixBridge, kind: TaskRunKind, path: string): TaskRunTarget {
+	const normalized = bridge.normalizePath(path);
+	const expectedExtension = TASK_RUNNERS[kind].extension;
+	if (!normalized.endsWith(expectedExtension)) {
+		throw new Error(`Run ${kind} expects a ${expectedExtension} file`);
+	}
+	return {
+		path: normalized,
+		dir: parentPath(normalized) || ".",
+		name: baseName(normalized),
 	};
 }
 
@@ -270,6 +347,10 @@ function taskDriverAdvertised(config: Config, kind: TaskRunKind): boolean {
 
 function taskTerminalName(kind: TaskRunKind, name: string): string {
 	return `${kind}: ${name}`;
+}
+
+function formatTaskExitCode(code: number | undefined): string {
+	return typeof code === "number" ? String(code) : "before reporting an exit code";
 }
 
 async function refreshWorkbenchFiles(bridge: WanixBridge): Promise<void> {
