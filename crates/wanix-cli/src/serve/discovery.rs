@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::path::Path;
 
-use crate::json::json_string;
+use crate::json::{json_string, json_string_array};
 use crate::rootfs::rootfs_json_handoff_for_prepared_root;
 
 use super::ServeRoots;
@@ -145,8 +145,14 @@ fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr)
 }
 
 fn serve_services_json(roots: &ServeRoots) -> String {
+    // Advertise the drivers derived from the registry (`serve_task_table`) so the
+    // discovery JSON cannot silently drift from what clients can actually launch
+    // via `#task/new/<kind>`. Today this is `["auto","noop","qjs","wasm"]`.
     if roots.wanix_services {
-        "{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\",\"qjs\"]}".to_owned()
+        format!(
+            "{{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":{}}}",
+            json_string_array(&roots.driver_kinds)
+        )
     } else {
         "null".to_owned()
     }

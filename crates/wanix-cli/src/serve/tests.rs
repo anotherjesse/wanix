@@ -21,7 +21,7 @@ use wanix_protocol::{
 use super::direct_v86::{DIRECT_V86_BUNDLE, direct_v86_asset_response};
 use super::discovery::{rootfs_handoff_response, serve_discovery_json};
 use super::http::HttpStatus;
-use super::roots::ServeRoots;
+use super::roots::{ServeRoots, serve_task_table};
 use super::terminal_ws::{parse_terminal_resize_message, qjs_shell_cwd_from_target};
 use super::{
     DEFAULT_SERVE_ADDR, FS9P_BUNDLE, ServeCommand, WORKBENCH_FS9P_BUNDLE, parse_serve_command,
@@ -1134,7 +1134,7 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     assert!(
         discovery.contains(
             "\"services\":{\"task\":\"#task\",\"term\":\"#term\",\
-                 \"drivers\":[\"noop\",\"qjs\"]}"
+                 \"drivers\":[\"auto\",\"noop\",\"qjs\",\"wasm\"]}"
         ),
         "{discovery}"
     );
@@ -1213,6 +1213,40 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     let response = server.handle_frame(&p9_tread(10, 4, 0, 64)).unwrap();
     assert_eq!(response.message_type(), P9_RREAD);
     assert_eq!(p9_decode_rread(&response).unwrap(), b"2\n");
+}
+
+#[test]
+fn discovery_services_advertises_every_registered_driver() {
+    // Drift guard: the advertised drivers must derive from the task-driver
+    // registry, not a hand-maintained literal. Previously discovery hardcoded
+    // ["noop","qjs"] while serve_task_table also registered "wasm", so wasm was
+    // registered-but-hidden. Compare the advertised list against the registry.
+    let root = temp_dir("wanix-cli-serve-services-drivers");
+    fs::write(root.join("host.txt"), b"host file").unwrap();
+    let roots = ServeRoots::new(&root, "127.0.0.1:7655".parse().unwrap(), None, true).unwrap();
+
+    let discovery = serve_discovery_json(
+        &roots,
+        b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7655\r\n\r\n",
+        "127.0.0.1:12345".parse().unwrap(),
+    );
+    let discovery_json: serde_json::Value = serde_json::from_str(&discovery).unwrap();
+    let advertised: Vec<String> = discovery_json["services"]["drivers"]
+        .as_array()
+        .expect("services.drivers is an array")
+        .iter()
+        .map(|value| value.as_str().expect("driver name is a string").to_owned())
+        .collect();
+
+    let registered = serve_task_table().unwrap().driver_kinds();
+    assert_eq!(
+        advertised, registered,
+        "discovery must advertise exactly the registered driver kinds"
+    );
+    assert!(
+        advertised.contains(&"wasm".to_owned()),
+        "wasm must be advertised: {advertised:?}"
+    );
 }
 
 #[test]

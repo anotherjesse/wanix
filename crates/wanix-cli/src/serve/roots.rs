@@ -16,6 +16,10 @@ use crate::{CliError, quickjs_runner};
 pub(super) struct ServeRoots {
     pub(super) static_root: PathBuf,
     pub(super) p9_root: Arc<dyn FileSystem>,
+    /// Task driver kinds advertised by service discovery, captured from the
+    /// registry at build time so the discovery JSON cannot drift from what
+    /// `serve_task_table` actually registers. Empty when services are disabled.
+    pub(super) driver_kinds: Vec<String>,
     pub(super) local_addr: SocketAddr,
     pub(super) bundle: Option<String>,
     pub(super) wanix_services: bool,
@@ -34,10 +38,11 @@ impl ServeRoots {
                 1,
             )
         })?;
-        let p9_root = serve_p9_root(root_path, wanix_services)?;
+        let (p9_root, driver_kinds) = serve_p9_root(root_path, wanix_services)?;
         Ok(Self {
             static_root,
             p9_root,
+            driver_kinds,
             local_addr,
             bundle,
             wanix_services,
@@ -45,11 +50,14 @@ impl ServeRoots {
     }
 }
 
-fn serve_p9_root(root_path: &Path, wanix_services: bool) -> Result<Arc<dyn FileSystem>, CliError> {
+fn serve_p9_root(
+    root_path: &Path,
+    wanix_services: bool,
+) -> Result<(Arc<dyn FileSystem>, Vec<String>), CliError> {
     let host_root = open_host_p9_root(root_path)?;
     match wanix_services {
         true => serve_services_root(host_root),
-        false => Ok(host_root),
+        false => Ok((host_root, Vec::new())),
     }
 }
 
@@ -65,10 +73,13 @@ fn open_host_p9_root(root_path: &Path) -> Result<Arc<dyn FileSystem>, CliError> 
     })?))
 }
 
-fn serve_services_root(host_root: Arc<dyn FileSystem>) -> Result<Arc<dyn FileSystem>, CliError> {
+fn serve_services_root(
+    host_root: Arc<dyn FileSystem>,
+) -> Result<(Arc<dyn FileSystem>, Vec<String>), CliError> {
     let table = serve_task_table()?;
+    let driver_kinds = table.driver_kinds();
     let namespace = serve_services_namespace(host_root, &table)?;
-    Ok(Arc::new(namespace))
+    Ok((Arc::new(namespace), driver_kinds))
 }
 
 fn serve_services_namespace(
@@ -104,7 +115,7 @@ fn bind_task_service(namespace: &mut Namespace, table: &TaskTable) -> Result<(),
     Ok(())
 }
 
-fn serve_task_table() -> Result<TaskTable, CliError> {
+pub(super) fn serve_task_table() -> Result<TaskTable, CliError> {
     let table = TaskTable::new();
     table.register_noop_driver("noop")?;
     table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(quickjs_runner()?)))?;
