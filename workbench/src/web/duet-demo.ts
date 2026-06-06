@@ -10,6 +10,8 @@ const WASM_PATH = `${DUET_DIR}/transform.wasm`;
 const README_PATH = `${DUET_DIR}/README.md`;
 const WASM_ASSET = "media/rust-guest.wasm";
 
+export const DUET_OUTPUT_PATH = `${SHARED_DIR}/out.txt`;
+
 export type DuetDemoStep = {
 	kind: "qjs" | "wasm";
 	path: string;

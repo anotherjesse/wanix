@@ -88,6 +88,12 @@ task and filesystem surface.
 
 ![Guided JS and WASM duet run](assets/wanix-workbench-browser-dx/07-guided-duet-run.png)
 
+One more click of polish: after the guided run succeeds, the workbench opens the
+generated `duet/shared/out.txt` file. The user sees the actual namespace result,
+not just terminal output or a toast.
+
+![Guided duet output file](assets/wanix-workbench-browser-dx/08-guided-duet-output.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -158,6 +164,10 @@ still uses the same task objects and terminal resources as manual runs, but it
 awaits each task exit before starting the next step. That gives us a demo button
 without inventing a fake demo backend.
 
+The output now opens automatically at the end of that guided run. This makes the
+demo land on a concrete artifact in the Wanix namespace, which is a better
+teaching moment than ending on a notification alone.
+
 ## The Feeling Now
 
 The current loop is:
@@ -173,6 +183,8 @@ The current loop is:
 9. Install the duet demo and run qjs -> wasm -> qjs as one visible workflow.
 10. Or click `Run JS and WASM Duet Demo` and let the workbench drive the
     sequence.
+11. Inspect the generated `duet/shared/out.txt` result when the guided run
+    opens it.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -184,7 +196,7 @@ The next round should probably focus on making the workbench less demo-only:
 - Make shell-created files refresh more precisely than "refresh the root after activity."
 - Let the sidebar inspect service files directly, not just extension-observed events.
 - Add a small run history or output link per task entry.
-- Make the guided duet run open the generated `shared/out.txt` when it succeeds.
+- Add a reset button for the duet demo's generated files.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.

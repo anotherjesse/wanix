@@ -1,7 +1,7 @@
 
 import * as vscode from 'vscode';
 import { WanixBridge } from './bridge.js';
-import { DUET_DEMO_STEPS, installDuetDemo } from './duet-demo.js';
+import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo } from './duet-demo.js';
 import { WanixSystemView } from './system-view.js';
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
 //@ts-ignore
@@ -139,9 +139,20 @@ async function openConfiguredDocument(config: Config): Promise<void> {
 	if (!uri) {
 		return;
 	}
+	await openWanixUri(uri);
+}
+
+async function openWanixUri(uri: vscode.Uri): Promise<void> {
 	const document = await vscode.workspace.openTextDocument(uri);
 	await vscode.window.showTextDocument(document, { preview: false });
 	rememberWanixEditor();
+}
+
+async function openWanixPath(path: string): Promise<void> {
+	await openWanixUri(vscode.Uri.from({
+		scheme: WanixBridge.scheme,
+		path,
+	}));
 }
 
 function configuredOpenUri(target: string | undefined): vscode.Uri | undefined {
@@ -205,6 +216,7 @@ async function runDuetDemo(
 		}
 	}
 	systemView.filesystemActivity("duet demo verified");
+	await openWanixPath(DUET_OUTPUT_PATH);
 	vscode.window.showInformationMessage("Wanix JS and WASM duet demo completed");
 }
 
