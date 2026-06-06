@@ -1,0 +1,22 @@
+[package]
+name = "wanix-9p-client"
+description = "9P client backed by Rust Wanix filesystem contracts."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+wanix-fs = { path = "../wanix-fs" }
+wanix-protocol = { path = "../wanix-protocol" }
+
+[dev-dependencies]
+wanix-9p = { path = "../wanix-9p" }
+
+[lib]
+name = "wanix_9p_client"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

@@ -22,24 +22,28 @@ use wanix_fs::{File, FileSystem, FsError, Metadata, MetadataLookup, NormalizedPa
 use wanix_protocol::{
     P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_CTIME, P9_SETATTR_GID,
     P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
-    P9_SETATTR_UID, P9Frame, P9Qid, P9SetAttr, p9_decode_tclunk, p9_rclunk, p9_rlerror,
+    P9_SETATTR_UID, P9Frame, P9Qid, P9SetAttr, p9_decode_tclunk, p9_open_intent, p9_rclunk,
+    p9_rlerror,
 };
 
 pub use error::Wanix9pError;
 pub use transport::{P9TransportError, P9TransportStats};
 
 pub(crate) use error::{EBADF, EINVAL, EISDIR, ENOSYS, EOPNOTSUPP, errno_for_fs};
+pub(crate) use wanix_protocol::{
+    O_ACCMODE, O_APPEND, O_CREAT, O_TRUNC, RLOPEN_OVERHEAD, RREAD_HEADER_LEN, RREADDIR_HEADER_LEN,
+};
 
 #[cfg(test)]
 pub(crate) use error::{EACCES, ENOTDIR};
 
-#[cfg(test)]
-use attrs::{
-    DT_DIR, DT_REG, P9_DEFAULT_BLOCK_SIZE, P9_DEFAULT_NAME_LENGTH, P9_FS_MAGIC, P9_MODE_DIR,
-    P9_MODE_LNK, P9_MODE_REG, P9_MODE_TYPE_MASK,
-};
 use attrs::{fs_stat, qid_for_metadata};
 use path::{is_same_or_descendant_path, rebase_path};
+#[cfg(test)]
+use wanix_protocol::{
+    DT_DIR, DT_REG, O_RDWR, O_WRONLY, P9_DEFAULT_BLOCK_SIZE, P9_DEFAULT_NAME_LENGTH, P9_FS_MAGIC,
+    P9_MODE_DIR, P9_MODE_LNK, P9_MODE_REG, P9_MODE_TYPE_MASK,
+};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix 9P filesystem server adapters";
@@ -47,16 +51,6 @@ pub const CRATE_PURPOSE: &str = "wanix 9P filesystem server adapters";
 /// Default maximum 9P message size accepted by the Rust Wanix server.
 pub const DEFAULT_MAX_MSIZE: u32 = 131_072;
 
-const RREAD_HEADER_LEN: u32 = 11;
-const RREADDIR_HEADER_LEN: u32 = 11;
-const RLOPEN_OVERHEAD: u32 = 24;
-
-const O_ACCMODE: u32 = 0o3;
-const O_WRONLY: u32 = 0o1;
-const O_RDWR: u32 = 0o2;
-const O_CREAT: u32 = 0o100;
-const O_TRUNC: u32 = 0o1000;
-const O_APPEND: u32 = 0o2000;
 const AT_REMOVEDIR: u32 = 0x200;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
@@ -205,12 +199,12 @@ impl P9Server {
 }
 
 fn open_options_from_flags(flags: u32) -> OpenOptions {
-    let access = flags & O_ACCMODE;
+    let intent = p9_open_intent(flags);
     OpenOptions {
-        read: access != O_WRONLY,
-        write: access == O_WRONLY || access == O_RDWR,
-        create: flags & O_CREAT != 0,
-        truncate: flags & O_TRUNC != 0,
+        read: intent.read,
+        write: intent.write,
+        create: intent.create,
+        truncate: intent.truncate,
     }
 }
 

@@ -15,6 +15,7 @@ sha2 = "0.10"
 tar = "0.4"
 tungstenite = "0.29.0"
 wanix-9p = { path = "../wanix-9p" }
+wanix-9p-client = { path = "../wanix-9p-client" }
 wanix-agent = { path = "../wanix-agent" }
 wanix-fs = { path = "../wanix-fs" }
 wanix-kv = { path = "../wanix-kv" }

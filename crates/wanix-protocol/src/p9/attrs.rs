@@ -1,5 +1,61 @@
 use super::types::P9Qid;
 
+/// `readdir` directory-entry type for a directory.
+pub const DT_DIR: u8 = 4;
+/// `readdir` directory-entry type for a regular file.
+pub const DT_REG: u8 = 8;
+/// `readdir` directory-entry type for a symbolic link.
+pub const DT_LNK: u8 = 10;
+
+/// Mask selecting the POSIX file-type bits of a mode word.
+pub const P9_MODE_TYPE_MASK: u32 = 0o170000;
+/// POSIX mode file-type bits for a directory.
+pub const P9_MODE_DIR: u32 = 0o040000;
+/// POSIX mode file-type bits for a regular file.
+pub const P9_MODE_REG: u32 = 0o100000;
+/// POSIX mode file-type bits for a symbolic link.
+pub const P9_MODE_LNK: u32 = 0o120000;
+
+/// QID type byte for a directory.
+pub const P9_QID_TYPE_DIR: u8 = 0x80;
+/// QID type byte for a symbolic link.
+pub const P9_QID_TYPE_SYMLINK: u8 = 0x02;
+/// QID type byte for a regular file.
+pub const P9_QID_TYPE_FILE: u8 = 0;
+
+/// Preferred block size reported for Wanix files in `Rgetattr`/`Rstatfs`.
+pub const P9_DEFAULT_BLOCK_SIZE: u64 = 65_536;
+/// Synthetic filesystem magic reported by `Rstatfs`.
+pub const P9_FS_MAGIC: u32 = 0x0102_1997;
+/// Maximum filename length reported by `Rstatfs`.
+pub const P9_DEFAULT_NAME_LENGTH: u32 = 255;
+
+/// Returns the `readdir` directory-entry type byte for a QID type byte.
+///
+/// Directories and symbolic links map to their dedicated entry types; every
+/// other QID type is reported as a regular file.
+#[must_use]
+pub fn p9_dirent_type_for_qid_type(qid_type: u8) -> u8 {
+    match qid_type {
+        P9_QID_TYPE_DIR => DT_DIR,
+        P9_QID_TYPE_SYMLINK => DT_LNK,
+        _ => DT_REG,
+    }
+}
+
+/// Returns the POSIX mode file-type bits for a QID type byte.
+///
+/// Directories and symbolic links map to their dedicated mode bits; every other
+/// QID type is reported as a regular file.
+#[must_use]
+pub fn p9_mode_type_for_qid_type(qid_type: u8) -> u32 {
+    match qid_type {
+        P9_QID_TYPE_DIR => P9_MODE_DIR,
+        P9_QID_TYPE_SYMLINK => P9_MODE_LNK,
+        _ => P9_MODE_REG,
+    }
+}
+
 /// 9P2000.L attribute payload returned by `Rgetattr`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct P9Attr {

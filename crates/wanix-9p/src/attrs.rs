@@ -1,23 +1,11 @@
 use wanix_fs::{FileType, Metadata, NormalizedPath};
-use wanix_protocol::{P9Attr, P9FsStat, P9Qid};
+use wanix_protocol::{
+    DT_DIR, DT_LNK, DT_REG, P9_DEFAULT_BLOCK_SIZE, P9_DEFAULT_NAME_LENGTH, P9_FS_MAGIC,
+    P9_MODE_DIR, P9_MODE_LNK, P9_MODE_REG, P9_MODE_TYPE_MASK, P9_QID_TYPE_DIR, P9_QID_TYPE_FILE,
+    P9_QID_TYPE_SYMLINK, P9Attr, P9FsStat, P9Qid,
+};
 
 use crate::P9OwnerAttrs;
-
-pub(super) const DT_DIR: u8 = 4;
-pub(super) const DT_REG: u8 = 8;
-const DT_LNK: u8 = 10;
-
-pub(super) const P9_MODE_TYPE_MASK: u32 = 0o170000;
-pub(super) const P9_MODE_DIR: u32 = 0o040000;
-pub(super) const P9_MODE_REG: u32 = 0o100000;
-pub(super) const P9_MODE_LNK: u32 = 0o120000;
-pub(super) const P9_DEFAULT_BLOCK_SIZE: u64 = 65_536;
-pub(super) const P9_FS_MAGIC: u32 = 0x0102_1997;
-pub(super) const P9_DEFAULT_NAME_LENGTH: u32 = 255;
-
-const P9_QID_TYPE_DIR: u8 = 0x80;
-const P9_QID_TYPE_SYMLINK: u8 = 0x02;
-const P9_QID_TYPE_FILE: u8 = 0;
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
 

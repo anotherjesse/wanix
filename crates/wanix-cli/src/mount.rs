@@ -1,0 +1,188 @@
+//! `wanix-rust mount` subcommands: dial a TCP 9P server, build a [`RemoteFs`],
+//! bind it into a fresh namespace at `/n/remote`, and perform one filesystem
+//! operation through the namespace.
+//!
+//! These are deliberately small, collected (non-streaming) demos: each verb
+//! opens one connection, runs one op, prints the result, and returns a
+//! [`CliOutput`]. They exist so a blog reader can copy-paste a `serve` and a
+//! `mount` command across two processes and watch Plan 9 import work over a real
+//! socket.
+
+use std::ffi::OsString;
+use std::net::TcpStream;
+
+use wanix_9p_client::RemoteFs;
+use wanix_fs::NormalizedPath;
+use wanix_vfs::{BindOptions, Namespace};
+
+use crate::{CliError, CliOutput};
+
+mod ops;
+
+#[cfg(test)]
+mod tests;
+
+/// Namespace destination (a relative Wanix path) the remote is bound at.
+pub(crate) const MOUNT_POINT: &str = "n/remote";
+
+/// Human-facing label for the mount point used in messages.
+const MOUNT_LABEL: &str = "/n/remote";
+
+/// One parsed `mount` subcommand: a verb plus its already-validated arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum MountCommand {
+    /// List a directory at `path` (default the mount root).
+    Ls { addr: String, path: String },
+    /// Print the bytes of the file at `path`.
+    Cat { addr: String, path: String },
+    /// Write `text` to the file at `path`, creating or truncating it.
+    Write {
+        addr: String,
+        path: String,
+        text: String,
+    },
+}
+
+/// Parses a `mount-ls` / `mount-cat` / `mount-write` invocation.
+///
+/// The leading `mount-*` command name selects the verb; `rest` carries the
+/// `tcp://HOST:PORT` address followed by the verb operands.
+///
+/// # Errors
+///
+/// Returns a usage error when the verb is unknown or operands are missing.
+pub(super) fn parse_mount_command(verb: &str, rest: &[OsString]) -> Result<MountCommand, CliError> {
+    match verb {
+        "mount-ls" => parse_ls(rest),
+        "mount-cat" => parse_cat(rest),
+        "mount-write" => parse_write(rest),
+        other => Err(CliError::usage(format!("unknown mount command: {other}"))),
+    }
+}
+
+fn parse_ls(rest: &[OsString]) -> Result<MountCommand, CliError> {
+    let addr = mount_addr(rest.first(), "mount-ls")?;
+    let path = optional_path_arg(rest.get(1), "mount-ls")?.unwrap_or_else(|| ".".to_owned());
+    Ok(MountCommand::Ls { addr, path })
+}
+
+fn parse_cat(rest: &[OsString]) -> Result<MountCommand, CliError> {
+    let addr = mount_addr(rest.first(), "mount-cat")?;
+    let path = required_path_arg(rest.get(1), "mount-cat")?;
+    Ok(MountCommand::Cat { addr, path })
+}
+
+fn parse_write(rest: &[OsString]) -> Result<MountCommand, CliError> {
+    let addr = mount_addr(rest.first(), "mount-write")?;
+    let path = required_path_arg(rest.get(1), "mount-write")?;
+    let text = rest
+        .get(2)
+        .ok_or_else(|| CliError::usage("mount-write requires tcp://HOST:PORT PATH TEXT"))?
+        .to_str()
+        .ok_or_else(|| CliError::usage("mount-write TEXT must be valid UTF-8"))?
+        .to_owned();
+    Ok(MountCommand::Write { addr, path, text })
+}
+
+fn mount_addr(arg: Option<&OsString>, verb: &str) -> Result<String, CliError> {
+    arg.ok_or_else(|| CliError::usage(format!("{verb} requires tcp://HOST:PORT")))?
+        .to_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| CliError::usage(format!("{verb} address must be valid UTF-8")))
+}
+
+fn required_path_arg(arg: Option<&OsString>, verb: &str) -> Result<String, CliError> {
+    optional_path_arg(arg, verb)?
+        .ok_or_else(|| CliError::usage(format!("{verb} requires tcp://HOST:PORT PATH")))
+}
+
+fn optional_path_arg(arg: Option<&OsString>, verb: &str) -> Result<Option<String>, CliError> {
+    let Some(arg) = arg else {
+        return Ok(None);
+    };
+    let value = arg
+        .to_str()
+        .ok_or_else(|| CliError::usage(format!("{verb} PATH must be valid UTF-8")))?;
+    Ok(Some(value.to_owned()))
+}
+
+/// Runs a parsed `mount` subcommand and returns its captured output.
+///
+/// # Errors
+///
+/// Returns a CLI error when the server cannot be dialed, the session cannot be
+/// negotiated, or the requested filesystem operation fails.
+pub(super) fn run_mount_command(command: MountCommand) -> Result<CliOutput, CliError> {
+    match command {
+        MountCommand::Ls { addr, path } => {
+            let namespace = mount_namespace(&addr)?;
+            ops::mount_ls(&namespace, &mount_path(&path)?)
+        }
+        MountCommand::Cat { addr, path } => {
+            let namespace = mount_namespace(&addr)?;
+            ops::mount_cat(&namespace, &mount_path(&path)?)
+        }
+        MountCommand::Write { addr, path, text } => {
+            let namespace = mount_namespace(&addr)?;
+            ops::mount_write(&namespace, &mount_path(&path)?, text.as_bytes())
+        }
+    }
+}
+
+/// Dials `addr`, negotiates a 9P session, and binds the remote at `/n/remote`.
+fn mount_namespace(addr: &str) -> Result<Namespace, CliError> {
+    let remote = dial_remote(addr)?;
+    let mut namespace = Namespace::new();
+    namespace
+        .bind(remote, ".", MOUNT_POINT, BindOptions::default())
+        .map_err(|error| {
+            CliError::new(
+                format!("failed to bind remote at {MOUNT_LABEL}: {error}"),
+                1,
+            )
+        })?;
+    Ok(namespace)
+}
+
+/// Connects a TCP stream to the `tcp://HOST:PORT` address and negotiates 9P.
+fn dial_remote(addr: &str) -> Result<std::sync::Arc<RemoteFs>, CliError> {
+    let host_port = addr
+        .strip_prefix("tcp://")
+        .ok_or_else(|| CliError::usage(format!("mount address must be tcp://HOST:PORT: {addr}")))?;
+    let stream = TcpStream::connect(host_port).map_err(|error| {
+        CliError::new(format!("failed to dial 9P server {host_port}: {error}"), 1)
+    })?;
+    let remote = RemoteFs::connect(Box::new(stream))
+        .map_err(|error| CliError::new(format!("failed to negotiate 9P session: {error}"), 1))?;
+    Ok(std::sync::Arc::new(remote))
+}
+
+/// Joins a user-supplied relative path under the `/n/remote` mount point.
+fn mount_path(path: &str) -> Result<NormalizedPath, CliError> {
+    let trimmed = path.trim_start_matches('/');
+    let joined = if trimmed.is_empty() || trimmed == "." {
+        MOUNT_POINT.to_owned()
+    } else {
+        format!("{MOUNT_POINT}/{trimmed}")
+    };
+    NormalizedPath::new(&joined)
+        .map_err(|error| CliError::new(format!("invalid mount path {path}: {error}"), 1))
+}
+
+/// Runs a namespace operation against an already-built namespace.
+///
+/// Exposed so tests can bind a local `RemoteFs` and reuse the exact verb code
+/// the CLI runs.
+#[cfg(test)]
+pub(crate) fn run_mount_op_for_tests(
+    namespace: &Namespace,
+    command: &MountCommand,
+) -> Result<CliOutput, CliError> {
+    match command {
+        MountCommand::Ls { path, .. } => ops::mount_ls(namespace, &mount_path(path)?),
+        MountCommand::Cat { path, .. } => ops::mount_cat(namespace, &mount_path(path)?),
+        MountCommand::Write { path, text, .. } => {
+            ops::mount_write(namespace, &mount_path(path)?, text.as_bytes())
+        }
+    }
+}

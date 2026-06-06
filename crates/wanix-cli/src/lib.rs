@@ -8,6 +8,7 @@ mod collected;
 mod command_args;
 mod help;
 mod json;
+mod mount;
 mod native;
 mod new;
 mod p9_listen;

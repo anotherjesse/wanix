@@ -3,7 +3,7 @@ use std::io::Read;
 
 use crate::wasm_args::parse_wasm_command;
 use crate::{
-    CliError, CliOutput, agent, agent_exec_server, capsule, new, p9_listen, p9_stdio, p9_ws,
+    CliError, CliOutput, agent, agent_exec_server, capsule, mount, new, p9_listen, p9_stdio, p9_ws,
     parse_qjs_command, parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term, rootfs,
     serve, wasm,
 };
@@ -20,6 +20,9 @@ pub(super) fn run_collected_command(
         ) => run_qjs_collected_command(command_name, rest, process_stdin),
         Some(command_name @ ("p9-stdio" | "p9-listen" | "p9-ws")) => {
             run_9p_collected_command(command_name, rest, process_stdin)
+        }
+        Some(verb @ ("mount-ls" | "mount-cat" | "mount-write")) => {
+            mount::run_mount_command(mount::parse_mount_command(verb, rest)?)
         }
         Some("wasm") => wasm::run_wasm(parse_wasm_command(rest)?, process_stdin),
         Some("agent") => agent::run_agent_command(agent::parse_agent_command(rest)?),
