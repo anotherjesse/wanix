@@ -5,6 +5,238 @@ interleaved with a concurrent same-branch session that also cleaned the wasm CLI
 in progress**, opening with a B0 cache trust-boundary hardening cycle (from the A-gate security
 review). Branch: `rust` (direct). Cache decision recorded by **extending ADR 0002**.
 
+## Current reconciliation status
+
+This document is now best read as historical planning plus port rationale. A later conceptual
+audit compared `origin/rs-speed` against the current `rust` branch by area (qjs engine/cache,
+compiled-wasm runtime, shared WASI linker, and CLI/docs/bench ergonomics). The useful
+`rs-speed` work is present on `rust`, and several pieces landed in a stronger form than the
+spike.
+
+### Audit conclusion
+
+No large missing port chunk was found. The main `rs-speed` concepts are either present or
+superseded by a better current-branch design:
+
+- QuickJS compiled-module caching is in, but through the shared `wanix-module-cache` crate
+  instead of qjs-local cache code.
+- The compiled `wasm32-wasi` runner is in, and `.wasm` has since been promoted from the
+  original spike's standalone demo runner into a first-class Wanix task driver.
+- The WASI syscalls added or proven by `rs-speed` are present through `wanix-wasi` and
+  `wanix-wasi-host`.
+- The CLI, benchmark, performance-doc, shared-VFS proof, and wasm guest fixture work are in.
+- The deliberately junk spike artifacts are absent.
+
+The remaining work is cleanup and proof hardening, not a missing feature port:
+
+- stale docs/comments that still describe wasm as "not yet a task driver";
+- one overbroad `wanix-wasi-host` module comment that says QuickJS uses that linker directly;
+- stale cache wording and one stray closing code fence in `performance.md`;
+- one useful missing cross-runtime parity test for truncate / `fd_filestat_set_size`.
+
+### Per-area audit
+
+#### qjs engine, module cache, clock/random overrides
+
+`rs-speed` commit intent covered:
+
+- `f098ce6` ("Cache compiled QuickJS module to cut qjs cold-start")
+- `02082c0`, `fdaca39`, `71be4db`, `d5cc140`, `2c755ee` (startup/perf docs and benches)
+- `fbdf483` ("Cover engine clock/random overrides on the Ctx path")
+
+Current status:
+
+- Included: `QuickJsModule::from_bytes_cached` exists in
+  `crates/wanix-qjs-engine/src/module/load.rs`, and bundled qjs uses the cached path through
+  `crates/wanix-qjs/src/lib.rs` / `crates/wanix-qjs/src/bundled.rs`.
+- Better than the spike: the cache moved from qjs-local code into `crates/wanix-module-cache`.
+  That crate is shared by qjs and wasm, documents `unsafe Module::deserialize` as the trust
+  boundary, uses owner-private cache directories, rejects symlinked or world-writable cache
+  artifacts, checks artifacts with fd-based metadata on Unix, and treats all cache failures as
+  advisory misses.
+- Better than the spike: default cache path resolution now goes through
+  `wanix_module_cache::owner_private_cache_dir`, with runtime-specific subdirs
+  (`qjs-module-cache`, `wasm-module-cache`) instead of a predictable shared temp path.
+- Included: qjs clock/random behavior is implemented on the current qjs host-import path.
+  `clock_time_get` accepts realtime/monotonic and rejects unsupported clocks before writing
+  memory; `random_get` fills guest memory from the configured deterministic byte and traps on
+  out-of-bounds ranges.
+- Included: startup and performance artifacts exist:
+  `crates/wanix-qjs-engine/examples/startup_bench.rs`,
+  `crates/wanix-qjs-engine/examples/concurrency_bench.rs`,
+  `crates/wanix-qjs-engine/examples/wasm_speed_bench.rs`,
+  `crates/wanix-cli/examples/compute_bench.rs`, `performance.md`, and
+  `docs/scaling-eli5.md`.
+
+Nuance:
+
+- The exact `fbdf483` `Ctx`-path regression file from `rs-speed`
+  (`crates/wanix-qjs-engine/src/host_tests/ctx_overrides.rs`) is not present on current
+  `rust`. The old harness covered a `WasiBacking::Ctx + wanix_wasi_host::add_to_linker`
+  shadowing path. Current qjs no longer uses that architecture; it links its own
+  `define_wasi_imports` host path instead. The behavior survived, but the literal Ctx-path
+  test did not.
+- Treat the old Ctx/shadowing test as retired unless qjs is deliberately moved onto a shared
+  linker later.
+
+#### compiled wasm runner, task driver, shared-VFS parity
+
+`rs-speed` commit intent covered:
+
+- `44a8e51` compiled-to-wasm performance tier
+- `03f7a8e` generic WASI task runner and qjs/rust shared-VFS proof
+- `77590b5` `fd_readdir`
+- `2633b4a` `path_rename`
+- `1aa31a3` `path_remove_directory`
+- `5d734eb` `fd_filestat_set_size`
+- `7af33c8` `fd_tell`
+- `df60a54` turnkey `wanix-rust wasm`
+
+Current status:
+
+- Included: `WasiRunner` exists in `crates/wanix-wasm/src/runner.rs`.
+- Included and better: `WasmTaskDriver` exists in `crates/wanix-wasm/src/driver.rs`.
+  It matches `.wasm` task programs, reads the module from the task namespace, builds a live
+  WASI config from the task namespace/cwd/env/argv and fds, runs `_start`, and records the
+  guest exit on the Wanix task.
+- Included and better: `serve` registers the wasm driver alongside qjs in
+  `crates/wanix-cli/src/serve/roots.rs`, making `#task/new/wasm` and `.wasm` auto-start
+  behavior part of the served Wanix services shape.
+- Included and better: task fd/env/cwd/argv setup is shared through
+  `crates/wanix-wasi/src/task_config.rs`, so qjs and wasm follow the same ADR 0002
+  fd-mirroring/task-state contract where possible.
+- Included: `wanix-rust wasm` dispatch is wired through the collected CLI path
+  (`crates/wanix-cli/src/collected.rs`, `crates/wanix-cli/src/wasm.rs`,
+  `crates/wanix-cli/src/wasm_args/mod.rs`) rather than the spike's streaming
+  `wasm_run.rs` shape.
+- Included: embedding helpers exist (`WasiRunner::run_in_dir`, `CaptureFile`, stdout/stderr
+  capture) for non-task runner use.
+- Included: `shared_vfs_differential` proves qjs and rust-wasm agree on directory listing,
+  rename, rmdir, symlink/readlink in both directions, `fd_tell`, and two-way file writes over
+  the same `MemFs`.
+
+Syscall evidence:
+
+- `fd_readdir`: wrapper in `crates/wanix-wasi-host/src/fd.rs`, backend in
+  `crates/wanix-wasi/src/ctx/fd_ops.rs`, differential coverage in
+  `crates/wanix-cli/tests/shared_vfs_differential.rs`.
+- `path_rename`: wrapper in `crates/wanix-wasi-host/src/path/mutation.rs`, backend in
+  `crates/wanix-wasi/src/ctx/path_ops.rs`, differential coverage in
+  `shared_vfs_differential`.
+- `path_remove_directory`: wrapper in `path/mutation.rs`, backend in `ctx/path_ops.rs`,
+  parity and error coverage in `shared_vfs_differential`.
+- `path_symlink` / `path_readlink`: wrappers in `wanix-wasi-host`, backend in `wanix-wasi`,
+  two-way qjs/rust-wasm parity in `shared_vfs_differential`.
+- `fd_tell`: wrapper in `wanix-wasi-host/src/fd.rs`, backend in `wanix-wasi/src/ctx/fd_ops.rs`,
+  qjs/rust-wasm parity in `shared_vfs_differential`.
+- `fd_filestat_set_size`: wrapper in `wanix-wasi-host/src/fd.rs`, backend and lower-level tests
+  in `wanix-wasi`, wasm runner tests in `wanix-wasm`.
+
+Remaining useful proof gap:
+
+- Add a qjs-vs-wasm shared-VFS differential for truncate / `fd_filestat_set_size`. The behavior
+  is already covered by wasm runner tests and `wanix-wasi` tests, but it is the one
+  `rs-speed` syscall concept that does not have the same cross-runtime proof style as rename,
+  rmdir, readdir, symlink/readlink, and tell.
+
+#### shared WASI linker and qjs layering
+
+`rs-speed` commit intent covered:
+
+- `0749c5e` shared WASI Preview 1 linker extraction
+- `215a3b6` shared linker superset / set-times
+- `e986067` migrate QuickJS engine onto shared WASI linker
+- `2270a3e` delete dead QuickJsWasiHost adapter
+
+Current status:
+
+- Included: `crates/wanix-wasi-host` exists as the generic command-style Preview 1 Wasmtime
+  linker over `wanix_wasi::WasiCtx`.
+- Included: `wanix-wasm` uses `wanix_wasi_host::add_to_linker` directly.
+- Included: the linker registers args/env/process exit, `random_get`, `clock_time_get`,
+  `poll_oneoff` as `NOSYS`, fd io/stat/seek/tell/readdir, path open/stat/readlink,
+  path mutations, and set-times.
+- Better/different: qjs did **not** migrate onto `wanix-wasi-host` directly. Current qjs keeps
+  a crate-local `QuickJsWasiHost` boundary with snapshot blockers, live fd readiness hooks,
+  restore reattachment, and richer `poll_oneoff` behavior than the command-style wasm linker.
+- Better/different: `wanix-qjs-engine` has no direct dependency on `wanix-wasi` or
+  `wanix-wasi-host`, preserving the crate layering in AGENTS.md: the engine owns engine
+  mechanics, while `wanix-qjs` adapts Wanix task semantics and live `WasiCtx` state.
+
+Decision recorded by this audit:
+
+- Do not treat the missing literal qjs migration as a missed port. The current architecture is
+  the better layering unless a future design explicitly chooses one shared linker for qjs and
+  wasm.
+- The shared boundary is `wanix-wasi::WasiCtx` and task config/fd contracts, not necessarily
+  one Wasmtime linker implementation for every runtime.
+
+Cleanup from this area:
+
+- `crates/wanix-wasi-host/src/lib.rs` currently says both QuickJS and `wanix-wasm` are backed
+  by this crate. Narrow that text: the crate is currently the generic command-style linker
+  used by `wanix-wasm`; qjs has a separate engine-local live-host import path while sharing
+  `wanix-wasi` contracts at the adapter/task layer.
+
+#### CLI, docs, benchmarks, and artifacts
+
+Current status:
+
+- Included: `wanix-rust wasm [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT |
+  --stdin-file PATH|-] FILE.wasm [args...]` exists.
+- Included and better: the CLI uses the repo's collected-output `CliOutput` model instead of
+  the spike's streaming `wasm_run.rs` file.
+- Included and better: wasm parsing is wasm-specific and only accepts relevant flags instead
+  of reusing qjs options that would silently accept qjs-only flags.
+- Included: `Justfile` knows about wasm-related crates in the fmt/check flow.
+- Included: `performance.md` now documents the compiled-wasm performance tier and the
+  qjs/wasm cache.
+- Included: `docs/scaling-eli5.md` exists.
+- Intentionally absent: `MSG=hello`, `MSG=world`, and `crates/wanix-wasm/fixtures/out.txt`.
+  They were spike droppings, not port targets.
+- Intentionally absent: old `crates/wanix-cli/src/wasm_run.rs`, replaced by
+  `crates/wanix-cli/src/wasm.rs`.
+
+Cleanup from this area:
+
+- `crates/wanix-cli/src/help.rs` still describes `wanix-rust wasm` as
+  "not yet a task driver". Replace that with language matching current reality:
+  command-style WASI subset, no `poll_oneoff` readiness, **also** available as a first-class
+  Wanix task driver for `.wasm` task programs.
+- `crates/wanix-cli/src/wasm.rs` module docs still say the CLI runner is "not yet a Wanix task
+  driver". Clarify the distinction: this file is the standalone CLI runner path, while
+  `wanix-wasm::WasmTaskDriver` provides task-driver integration.
+- `performance.md` says `WANIX_QJS_CACHE_DIR` falls back to "a temp subdir". Update it to say
+  it falls back through `wanix_module_cache::owner_private_cache_dir`: explicit env override,
+  else per-user cache root, else UID-scoped temp fallback.
+- `performance.md` currently ends with a stray closing code fence. Remove it.
+- This plan document itself remains historical below this reconciliation section. If that
+  becomes confusing, add a clear "Historical plan follows" note before `## Goal` or move old
+  Phase A/B material under an appendix heading.
+
+### Audit spot checks
+
+Commands run during the reconciliation audit:
+
+- `cargo test -p wanix-wasi-host` — passed (`1` unit test).
+- `cargo test -p wanix-wasm` — passed (`21` unit tests).
+- `cargo test -p wanix-cli --test shared_vfs_differential` — passed (`8` integration tests).
+- `cargo test -p wanix-module-cache` — passed (`12` unit tests).
+- `cargo test -p wanix-qjs-engine clock_time_get` — passed (`3` filtered tests).
+- `cargo test -p wanix-qjs-engine random_get` — passed (`2` filtered tests).
+
+Additional evidence from subagent runs:
+
+- `cargo test -p wanix-wasi` passed in the wasm/runtime audit (`58` tests).
+- `cargo run -p wanix-cli -- wasm crates/wanix-wasm/fixtures/rust-guest.wasm --echo` ran and
+  printed the expected empty env/stdin echo shape.
+- qjs live-host filters and restore/snapshot filters were checked in the shared-linker audit.
+
+One invalid command was attempted during local verification:
+
+- `cargo test -p wanix-qjs-engine clock_time_get random_get` fails because Cargo accepts only
+  one test filter. The filters were rerun separately and passed.
+
 ## Goal
 
 Bring the additive performance/feature work from `origin/rs-speed` onto `origin/rust`
