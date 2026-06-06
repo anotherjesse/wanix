@@ -1179,7 +1179,7 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     assert!(
         discovery.contains(
             "\"services\":{\"task\":\"#task\",\"term\":\"#term\",\
-                 \"drivers\":[\"noop\",\"qjs\"]}"
+                 \"drivers\":[\"noop\",\"qjs\",\"wasm\"]}"
         ),
         "{discovery}"
     );

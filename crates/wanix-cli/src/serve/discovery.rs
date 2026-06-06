@@ -146,7 +146,7 @@ fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr)
 
 fn serve_services_json(roots: &ServeRoots) -> String {
     if roots.wanix_services {
-        "{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\",\"qjs\"]}".to_owned()
+        "{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":[\"noop\",\"qjs\",\"wasm\"]}".to_owned()
     } else {
         "null".to_owned()
     }
