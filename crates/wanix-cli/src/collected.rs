@@ -3,7 +3,7 @@ use std::io::Read;
 
 use crate::wasm_args::parse_wasm_command;
 use crate::{
-    CliError, CliOutput, agent, agent_exec_server, new, p9_listen, p9_stdio, p9_ws,
+    CliError, CliOutput, agent, agent_exec_server, capsule, new, p9_listen, p9_stdio, p9_ws,
     parse_qjs_command, parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term, rootfs,
     serve, wasm,
 };
@@ -23,6 +23,7 @@ pub(super) fn run_collected_command(
         }
         Some("wasm") => wasm::run_wasm(parse_wasm_command(rest)?, process_stdin),
         Some("agent") => agent::run_agent_command(agent::parse_agent_command(rest)?),
+        Some("capsule") => capsule::run_capsule_command(capsule::parse_capsule_command(rest)?),
         Some("agent-exec-server") => require_live_process_io(
             agent_exec_server::parse_agent_exec_server_command(rest),
             "agent-exec-server",

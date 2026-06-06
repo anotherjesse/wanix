@@ -3,6 +3,7 @@
 mod agent;
 mod agent_exec_server;
 mod agent_program;
+mod capsule;
 mod collected;
 mod command_args;
 mod help;
