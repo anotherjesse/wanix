@@ -79,6 +79,18 @@
         "icon": "$(new-file)"
       },
       {
+        "command": "workbench.installWasmStarter",
+        "title": "Install WASM Starter",
+        "category": "Wanix",
+        "icon": "$(package)"
+      },
+      {
+        "command": "workbench.runWasmStarter",
+        "title": "Run WASM Starter",
+        "category": "Wanix",
+        "icon": "$(play)"
+      },
+      {
         "command": "workbench.installAgentRepairDemo",
         "title": "Install Agent Repair Demo",
         "category": "Wanix",
@@ -194,34 +206,44 @@
           "group": "navigation@0"
         },
         {
-          "command": "workbench.runDuetDemo",
+          "command": "workbench.runWasmStarter",
           "when": "view == wanix.system",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
-          "command": "workbench.installDuetDemo",
+          "command": "workbench.installWasmStarter",
           "when": "view == wanix.system",
           "group": "navigation@2"
         },
         {
-          "command": "workbench.resetDuetDemo",
+          "command": "workbench.runDuetDemo",
           "when": "view == wanix.system",
           "group": "navigation@3"
         },
         {
-          "command": "workbench.openHttpAppDemo",
+          "command": "workbench.installDuetDemo",
           "when": "view == wanix.system",
           "group": "navigation@4"
         },
         {
-          "command": "workbench.openHttpAppHandler",
+          "command": "workbench.resetDuetDemo",
           "when": "view == wanix.system",
           "group": "navigation@5"
         },
         {
-          "command": "workbench.installAgentRepairDemo",
+          "command": "workbench.openHttpAppDemo",
           "when": "view == wanix.system",
           "group": "navigation@6"
+        },
+        {
+          "command": "workbench.openHttpAppHandler",
+          "when": "view == wanix.system",
+          "group": "navigation@7"
+        },
+        {
+          "command": "workbench.installAgentRepairDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@8"
         }
       ],
       "view/item/context": [

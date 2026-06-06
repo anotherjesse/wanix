@@ -7,6 +7,7 @@ import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView } from './system-view.js';
+import { ensureWasmStarter, installWasmStarter, WASM_STARTER_OUTPUT_PATH, WASM_STARTER_PATH } from './wasm-starter.js';
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
 //@ts-ignore
 import { WanixHandle } from '../wanix/fs.js';
@@ -169,6 +170,20 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.newQjsScript', async () => {
 			try {
 				await createQjsStarter(fsys, bridge, systemView);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.installWasmStarter', async () => {
+			try {
+				await installWasmStarter(context, fsys, bridge, systemView);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.runWasmStarter', async () => {
+			try {
+				await runWasmStarter(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -444,6 +459,37 @@ async function runDuetDemo(
 	systemView.filesystemActivity("duet demo verified");
 	await openWanixPath(DUET_OUTPUT_PATH);
 	vscode.window.showInformationMessage("Wanix JS and WASM duet demo completed");
+}
+
+async function runWasmStarter(
+	fsys: any,
+	bridge: WanixBridge,
+	config: Config,
+	systemView: WanixSystemView,
+	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	taskTerminals: Map<string, vscode.Terminal>,
+	context: vscode.ExtensionContext,
+): Promise<void> {
+	await ensureWasmStarter(context, fsys, bridge);
+	systemView.filesystemActivity("wasm starter run started");
+	const code = await runWanixTaskTarget(
+		fsys,
+		bridge,
+		config,
+		systemView,
+		activeTaskTerminals,
+		taskTerminals,
+		"wasm",
+		taskRunTargetFromPath(bridge, "wasm", WASM_STARTER_PATH),
+		context,
+		{ waitForExit: true },
+	);
+	if (code !== 0) {
+		throw new Error(`WASM starter exited ${formatTaskExitCode(code)}`);
+	}
+	systemView.filesystemActivity("wasm starter output opened");
+	await openWanixPath(WASM_STARTER_OUTPUT_PATH);
+	vscode.window.showInformationMessage("Wanix WASM starter completed");
 }
 
 async function fixCurrentWanixProgram(

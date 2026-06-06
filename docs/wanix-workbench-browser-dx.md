@@ -95,6 +95,18 @@ In this smoke test, `guest.wasm` reads `/shared/in.txt`, writes
 
 ![WASM task shown in the Wanix sidebar](assets/wanix-workbench-browser-dx/05-wasm-task-sidebar.png)
 
+The standalone WASM path now has the same first-use shape as qjs. `Install WASM
+Starter` writes `/wasm/starter.wasm`, `/wasm/README.md`, and
+`/wasm/shared/in.txt`. `Run WASM Starter` runs that module as a wasm task and
+opens `/wasm/shared/out.txt` when the task exits.
+
+That first run found a useful boundary detail: browser-started tasks preopen
+their working directory as the guest root, so the guest's `/shared/in.txt`
+appears in Wanix as `/wasm/shared/in.txt`. The README names that explicitly
+instead of making the user rediscover it from a missing-file error.
+
+![WASM starter run opens the transformed output](assets/wanix-workbench-browser-dx/30-wasm-starter-run.png)
+
 The next polish pass removed another bit of demo friction: you no longer need
 to hand-copy a WASM fixture into the served root. The Wanix system view has an
 `Open JS and WASM Duet Demo` action. It creates missing starter files:
@@ -336,6 +348,11 @@ Explorer without trying to open binary modules as text. This is the first
 browser proof of the bigger claim: JS and compiled WASM are sibling runtimes on
 one Wanix substrate.
 
+The standalone WASM starter closes the first-use gap. The workbench can install
+the compiled Rust fixture, seed its input under the right task-rooted shared
+path, run it, and open its output without asking the user to prepare a binary or
+remember the cwd-to-guest-root mapping.
+
 Then the browser got a one-click duet installer. It writes the JavaScript,
 compiled WASM fixture, verifier, and local shared directory into the Wanix
 namespace, opens the producer, and logs the install in the sidebar. The point is
@@ -428,39 +445,41 @@ The current loop is:
 10. See why allocator/control/stream service files stay plain text.
 11. See output and exit status in the terminal.
 12. Run again without terminal clutter.
-13. Install the duet demo and run qjs -> wasm -> qjs as one visible workflow.
-14. Or click `Run JS and WASM Duet Demo` and let the workbench drive the
+13. Click `Install WASM Starter`, then `Run WASM Starter`, and inspect
+    `/wasm/shared/out.txt`.
+14. Install the duet demo and run qjs -> wasm -> qjs as one visible workflow.
+15. Or click `Run JS and WASM Duet Demo` and let the workbench drive the
     sequence.
-15. Inspect the generated `duet/shared/out.txt` result when the guided run
+16. Inspect the generated `duet/shared/out.txt` result when the guided run
     opens it.
-16. Edit `duet/producer.js`, run the guided duet without losing the edit, then
+17. Edit `duet/producer.js`, run the guided duet without losing the edit, then
     explicitly reset the duet when you want the starter files back.
-17. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
-18. Open
+18. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
+19. Open
     `/.wanix/app/hello?from=browser` to get an HTTP response from a Wanix task.
-19. See the HTTP app route contract in the Wanix sidebar.
-20. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
+20. See the HTTP app route contract in the Wanix sidebar.
+21. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
     `/apps/hello.response.txt` report inside the workbench.
-21. Click the `/.wanix/app/<name>` route row itself to run the same preview from
+22. Click the `/.wanix/app/<name>` route row itself to run the same preview from
     the visible system contract.
-22. Edit `/apps/hello.js`, preview again, and see the changed handler output
+23. Edit `/apps/hello.js`, preview again, and see the changed handler output
     without losing the edit or reopening the report.
-23. Open the HTTP handler source directly, and reset the demo only through the
+24. Open the HTTP handler source directly, and reset the demo only through the
     explicit reset command.
-24. Right-click the route row to preview, open source, copy the route URL, or
+25. Right-click the route row to preview, open source, copy the route URL, or
     intentionally reset the demo handler.
-25. After previewing, read the route row's latest HTTP status and reopen the
+26. After previewing, read the route row's latest HTTP status and reopen the
     saved response report from `Open Latest HTTP App Preview`.
-26. Click `New qjs Script` to create a unique runnable scratch script without
+27. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-27. Run that script, then click or right-click its task row to reopen the
+28. Run that script, then click or right-click its task row to reopen the
     source, open the saved transcript, or focus the terminal output that
     produced the task.
-28. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+29. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-29. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+30. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-30. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
+31. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
     `agent/out/result.txt`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
@@ -469,8 +488,6 @@ That is a much better base to build on. It makes the Rust Wanix port feel less l
 
 The next round should probably focus on making the workbench less demo-only:
 
-- Add a matching `New wasm` or `Install wasm starter` command when a useful
-  checked-in wasm fixture is available.
 - Make shell-created files refresh more precisely than "refresh the root after activity."
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract.
