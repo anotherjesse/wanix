@@ -5,6 +5,7 @@ mod command_args;
 mod help;
 mod json;
 mod native;
+mod new;
 mod p9_listen;
 mod p9_stdio;
 mod p9_ws;
