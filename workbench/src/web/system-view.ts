@@ -58,7 +58,7 @@ type CategoryId = "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
-	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string; outputPath?: string };
+	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string; outputPath?: string; path?: string };
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "drivers", label: "Drivers" },
@@ -187,7 +187,11 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			case "terminals":
 				return this.terminalItems();
 			case "namespace":
-				return this.namespace.map((entry) => leaf(`namespace:${entry.path}`, entry.path, entry.label, "root-folder"));
+				return this.namespace.map((entry) => leaf(`namespace:${entry.path}`, entry.path, entry.label, namespaceIcon(entry.path), {
+					command: "workbench.openWanixPath",
+					title: "Open Wanix Path",
+					arguments: [entry.path],
+				}, "wanixNamespacePath", { path: entry.path }));
 			case "routes":
 				return this.routes.length > 0
 					? this.routes.map((route) => leaf(`route:${route.id}`, route.label, route.description, "globe", {
@@ -262,7 +266,7 @@ function leaf(
 	icon?: string,
 	command?: vscode.Command,
 	contextValue?: string,
-	metadata: { taskId?: string; sourcePath?: string; outputPath?: string } = {},
+	metadata: { taskId?: string; sourcePath?: string; outputPath?: string; path?: string } = {},
 ): SystemTreeItem {
 	return {
 		type: "leaf",
@@ -275,6 +279,7 @@ function leaf(
 		taskId: metadata.taskId,
 		sourcePath: metadata.sourcePath,
 		outputPath: metadata.outputPath,
+		path: metadata.path,
 	};
 }
 
@@ -306,6 +311,13 @@ function routeRecords(config: WanixSystemConfig): RouteRecord[] {
 		description: route.source || route.protocol || "http app",
 		protocol: route.protocol || "wanix-http-app.v1",
 	}];
+}
+
+function namespaceIcon(path: string): string {
+	if (path.startsWith("#")) {
+		return "server";
+	}
+	return "root-folder";
 }
 
 function taskIcon(status: TaskStatus): string {

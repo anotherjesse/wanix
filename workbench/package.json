@@ -103,6 +103,12 @@
         "icon": "$(output)"
       },
       {
+        "command": "workbench.openWanixPath",
+        "title": "Open Wanix Path",
+        "category": "Wanix",
+        "icon": "$(go-to-file)"
+      },
+      {
         "command": "workbench.focusTaskTerminal",
         "title": "Focus Task Terminal",
         "category": "Wanix",
@@ -210,6 +216,11 @@
           "command": "workbench.focusTaskTerminal",
           "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
           "group": "navigation@2"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixNamespacePath",
+          "group": "navigation@0"
         },
         {
           "command": "workbench.openHttpAppDemo",

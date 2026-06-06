@@ -5,6 +5,7 @@ import { WanixBridge } from './bridge.js';
 import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo } from './duet-demo.js';
 import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
+import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView } from './system-view.js';
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
 //@ts-ignore
@@ -91,6 +92,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	}));
 
 	bridge.ready.then((fsys) => {
+		const serviceInspector = new WanixServiceInspector(fsys, bridge);
+		context.subscriptions.push(
+			serviceInspector,
+			vscode.workspace.registerTextDocumentContentProvider(WANIX_INSPECT_SCHEME, serviceInspector),
+		);
 		systemView.configure(config);
 		revealWanixSystemView();
 		fsys.logger = (...args: any[]) => {
@@ -179,6 +185,17 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixPath', async (target?: string | { path?: string }) => {
+			try {
+				const path = wanixPathTarget(target);
+				if (!path) {
+					throw new Error("No Wanix path available to open");
+				}
+				await openWanixPathOrReveal(fsys, bridge, serviceInspector, systemView, path);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixTaskOutput', async (output?: string | { outputPath?: string }) => {
 			try {
 				const outputPath = taskOutputPath(output);
@@ -261,6 +278,28 @@ async function openWanixPath(path: string): Promise<void> {
 	}));
 }
 
+async function openWanixPathOrReveal(
+	fsys: any,
+	bridge: WanixBridge,
+	serviceInspector: WanixServiceInspector,
+	systemView: WanixSystemView,
+	path: string,
+): Promise<void> {
+	const uri = vscode.Uri.from({
+		scheme: WanixBridge.scheme,
+		path: absoluteWanixPath(path),
+	});
+	const fsPath = bridge.normalizePath(uri.path);
+	const stat = await fsys.stat(fsPath);
+	if (stat?.IsDir) {
+		await serviceInspector.open(path);
+		systemView.filesystemActivity(`inspected ${fsPath}`);
+		return;
+	}
+	await openWanixUri(uri);
+	systemView.filesystemActivity(`opened ${fsPath}`);
+}
+
 function absoluteWanixPath(path: string): string {
 	const trimmed = path.trim();
 	return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
@@ -278,6 +317,13 @@ function taskOutputPath(output: string | { outputPath?: string } | undefined): s
 		return output;
 	}
 	return output?.outputPath;
+}
+
+function wanixPathTarget(target: string | { path?: string } | undefined): string | undefined {
+	if (typeof target === "string") {
+		return target;
+	}
+	return target?.path;
 }
 
 function taskIdFromArgument(task: string | { taskId?: string } | undefined): string | undefined {
