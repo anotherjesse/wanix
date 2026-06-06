@@ -249,6 +249,17 @@ impl ExecServer {
         Ok(())
     }
 
+    pub(crate) fn make_dir(&self, path: &str) -> FsResult<()> {
+        self.fs.create_dir(&vpath(path)?)
+    }
+
+    pub(crate) fn remove(&self, path: &str) -> FsResult<()> {
+        let path = vpath(path)?;
+        self.fs
+            .remove_file(&path)
+            .or_else(|_| self.fs.remove_dir(&path))
+    }
+
     pub(crate) fn list(&self, path: &str) -> FsResult<Vec<String>> {
         Ok(self
             .fs
