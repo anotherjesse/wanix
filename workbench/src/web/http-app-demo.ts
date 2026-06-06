@@ -44,7 +44,7 @@ export async function installHttpAppDemo(
 		await openWanixFile(APP_PATH);
 	}
 	if (notify) {
-		vscode.window.showInformationMessage("Installed Wanix HTTP app demo in /apps");
+		vscode.window.showInformationMessage("Reset Wanix HTTP app demo in /apps");
 	}
 }
 
@@ -60,6 +60,16 @@ async function ensureHttpAppDemo(
 	await fsys.writeFile(APP_PATH, APP_JS);
 	refreshWanixFile(bridge, APP_PATH);
 	systemView.filesystemActivity("http app demo installed");
+}
+
+export async function openHttpAppHandler(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	await ensureHttpAppDemo(fsys, bridge, systemView);
+	systemView.filesystemActivity("http app handler opened");
+	await openWanixFile(APP_PATH);
 }
 
 export async function openHttpAppDemo(

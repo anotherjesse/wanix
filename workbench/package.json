@@ -86,9 +86,15 @@
       },
       {
         "command": "workbench.installHttpAppDemo",
-        "title": "Install HTTP App Demo",
+        "title": "Reset HTTP App Demo",
         "category": "Wanix",
         "icon": "$(file-code)"
+      },
+      {
+        "command": "workbench.openHttpAppHandler",
+        "title": "Open HTTP App Handler",
+        "category": "Wanix",
+        "icon": "$(go-to-file)"
       },
       {
         "command": "workbench.openHttpAppDemo",
@@ -125,6 +131,11 @@
           "command": "workbench.openHttpAppDemo",
           "when": "view == wanix.system",
           "group": "navigation@3"
+        },
+        {
+          "command": "workbench.openHttpAppHandler",
+          "when": "view == wanix.system",
+          "group": "navigation@4"
         }
       ],
       "explorer/context": [

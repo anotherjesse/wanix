@@ -160,6 +160,13 @@ handler and response files.
 
 ![HTTP preview preserves handler edits and refreshes the open report](assets/wanix-workbench-browser-dx/15-http-preview-preserves-edits.jpg)
 
+After that, handler source got its own action. Preview now means "run whatever
+is there," while `Open HTTP App Handler` means "show me the source," and the
+old install command is labeled as an explicit reset. That keeps the editing loop
+honest: open, edit, preview, reset only when you ask for reset.
+
+![HTTP handler source opened without resetting edits](assets/wanix-workbench-browser-dx/16-http-open-handler.jpg)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -257,6 +264,10 @@ The no-clobber preview is the difference between a demo and a usable tool. Once
 you edit `apps/hello.js`, previewing the route keeps your handler intact and
 updates the already-open report instead of showing stale output.
 
+The handler action separates exploration from mutation. A user can inspect or
+edit the qjs-backed HTTP program without accidentally reinstalling the starter
+code.
+
 ## The Feeling Now
 
 The current loop is:
@@ -284,6 +295,8 @@ The current loop is:
     the visible system contract.
 17. Edit `/apps/hello.js`, preview again, and see the changed handler output
     without losing the edit or reopening the report.
+18. Open the HTTP handler source directly, and reset the demo only through the
+    explicit reset command.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -298,8 +311,8 @@ The next round should probably focus on making the workbench less demo-only:
 - Add a reset button for the duet demo's generated files.
 - Add a route detail panel or context menu for copying the raw URL and opening
   the handler source.
-- Add an explicit reset action for the HTTP demo now that preview preserves
-  edits.
+- Surface the HTTP reset action in the route context menu, not just the command
+  palette.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.
