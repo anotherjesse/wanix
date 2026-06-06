@@ -77,13 +77,15 @@ type AgentRecord = {
 	description?: string;
 	icon?: string;
 	path?: string;
+	beforePath?: string;
+	afterPath?: string;
 };
 
 type CategoryId = "actions" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "agent" | "activity";
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
-	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string; children?: SystemTreeItem[] };
+	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string; beforePath?: string; afterPath?: string; children?: SystemTreeItem[] };
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "actions", label: "Actions" },
@@ -198,13 +200,15 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.agentStep(label, { icon: "tools" });
 	}
 
-	agentStep(label: string, options: { description?: string; icon?: string; path?: string } = {}): void {
+	agentStep(label: string, options: { description?: string; icon?: string; path?: string; beforePath?: string; afterPath?: string } = {}): void {
 		this.agent.push({
 			id: this.nextAgentId++,
 			label,
 			description: options.description,
 			icon: options.icon,
 			path: options.path,
+			beforePath: options.beforePath,
+			afterPath: options.afterPath,
 		});
 		this.addActivity(`agent ${label}`);
 		this.refresh();
@@ -324,19 +328,28 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		if (this.agent.length === 0) {
 			return [leaf("agent:empty", "no agent steps yet")];
 		}
-		return this.agent.map((entry) => leaf(
-			`agent:${entry.id}`,
-			entry.label,
-			entry.description,
-			entry.icon || "tools",
-			entry.path ? {
-				command: "workbench.openWanixPath",
-				title: "Open Wanix Path",
-				arguments: [entry.path],
-			} : undefined,
-			entry.path ? "wanixAgentArtifact" : undefined,
-			{ path: entry.path },
-		));
+		return this.agent.map((entry) => {
+			if (entry.beforePath && entry.afterPath) {
+				return leaf(`agent:${entry.id}`, entry.label, entry.description, entry.icon || "diff", {
+					command: "workbench.openWanixDiff",
+					title: "Open Wanix Diff",
+					arguments: [{ beforePath: entry.beforePath, afterPath: entry.afterPath }],
+				}, "wanixAgentDiff", { beforePath: entry.beforePath, afterPath: entry.afterPath });
+			}
+			return leaf(
+				`agent:${entry.id}`,
+				entry.label,
+				entry.description,
+				entry.icon || "tools",
+				entry.path ? {
+					command: "workbench.openWanixPath",
+					title: "Open Wanix Path",
+					arguments: [entry.path],
+				} : undefined,
+				entry.path ? "wanixAgentArtifact" : undefined,
+				{ path: entry.path },
+			);
+		});
 	}
 
 	private terminalItems(): SystemTreeItem[] {
@@ -396,7 +409,7 @@ function leaf(
 	icon?: string,
 	command?: vscode.Command,
 	contextValue?: string,
-	metadata: { taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string; children?: SystemTreeItem[] } = {},
+	metadata: { taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string; beforePath?: string; afterPath?: string; children?: SystemTreeItem[] } = {},
 ): SystemTreeItem {
 	return {
 		type: "leaf",
@@ -411,6 +424,8 @@ function leaf(
 		outputPath: metadata.outputPath,
 		metadataPath: metadata.metadataPath,
 		path: metadata.path,
+		beforePath: metadata.beforePath,
+		afterPath: metadata.afterPath,
 		children: metadata.children,
 	};
 }

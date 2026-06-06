@@ -244,6 +244,18 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixDiff', async (target?: { beforePath?: string; afterPath?: string }) => {
+			try {
+				const diff = wanixDiffTarget(target);
+				if (!diff) {
+					throw new Error("No Wanix diff paths available to open");
+				}
+				await openWanixDiff(diff.beforePath, diff.afterPath);
+				systemView.filesystemActivity(`opened diff ${baseName(diff.afterPath)}`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixTaskOutput', async (output?: string | { outputPath?: string }) => {
 			try {
 				const outputPath = taskOutputPath(output);
@@ -344,10 +356,18 @@ async function openWanixUri(uri: vscode.Uri): Promise<void> {
 }
 
 async function openWanixPath(path: string): Promise<void> {
-	await openWanixUri(vscode.Uri.from({
-		scheme: WanixBridge.scheme,
-		path: absoluteWanixPath(path),
-	}));
+	await openWanixUri(wanixUri(path));
+}
+
+async function openWanixDiff(beforePath: string, afterPath: string): Promise<void> {
+	await vscode.commands.executeCommand(
+		"vscode.diff",
+		wanixUri(beforePath),
+		wanixUri(afterPath),
+		`Agent repair: ${baseName(afterPath)}`,
+		{ preview: false },
+	);
+	rememberWanixEditor();
 }
 
 async function openWanixPathOrReveal(
@@ -357,10 +377,7 @@ async function openWanixPathOrReveal(
 	systemView: WanixSystemView,
 	path: string,
 ): Promise<void> {
-	const uri = vscode.Uri.from({
-		scheme: WanixBridge.scheme,
-		path: absoluteWanixPath(path),
-	});
+	const uri = wanixUri(path);
 	const fsPath = bridge.normalizePath(uri.path);
 	const stat = await fsys.stat(fsPath);
 	if (stat?.IsDir) {
@@ -370,6 +387,13 @@ async function openWanixPathOrReveal(
 	}
 	await openWanixUri(uri);
 	systemView.filesystemActivity(`opened ${fsPath}`);
+}
+
+function wanixUri(path: string): vscode.Uri {
+	return vscode.Uri.from({
+		scheme: WanixBridge.scheme,
+		path: absoluteWanixPath(path),
+	});
 }
 
 function absoluteWanixPath(path: string): string {
@@ -403,6 +427,16 @@ function wanixPathTarget(target: string | { path?: string } | undefined): string
 		return target;
 	}
 	return target?.path;
+}
+
+function wanixDiffTarget(target: { beforePath?: string; afterPath?: string } | undefined): { beforePath: string; afterPath: string } | undefined {
+	if (!target?.beforePath || !target.afterPath) {
+		return undefined;
+	}
+	return {
+		beforePath: target.beforePath,
+		afterPath: target.afterPath,
+	};
 }
 
 function taskIdFromArgument(task: string | { taskId?: string } | undefined): string | undefined {
@@ -557,11 +591,25 @@ async function fixCurrentWanixProgram(
 		vscode.window.showInformationMessage(`${target.name} already looks repaired`);
 		return;
 	}
+	const diff = agentDiffPaths(target);
+	await fsys.makeDirAll(diff.dir);
+	await fsys.writeFile(diff.beforePath, source);
+	systemView.agentStep("snapshot original", { icon: "go-to-file", path: diff.beforePath });
 	await fsys.writeFile(target.path, repaired);
+	await fsys.writeFile(diff.afterPath, repaired);
 	bridge.refresh(target.path);
+	bridge.refresh(diff.beforePath);
+	bridge.refresh(diff.afterPath);
 	await refreshWorkbenchFiles(bridge);
 	systemView.agentStep(`edit ${target.name}`, { icon: "edit", path: target.path });
 	await openWanixPath(target.path);
+	systemView.agentStep(`diff ${target.name}`, {
+		description: `${baseName(diff.beforePath)} -> ${baseName(diff.afterPath)}`,
+		icon: "diff",
+		beforePath: diff.beforePath,
+		afterPath: diff.afterPath,
+	});
+	await openWanixDiff(diff.beforePath, diff.afterPath);
 	let secondRun: TaskRunStart | undefined;
 	systemView.agentStep(`rerun qjs ${target.name}`, { icon: "run" });
 	const secondCode = await runWanixTaskTarget(
@@ -895,6 +943,17 @@ function agentObservation(code: number | undefined, transcript: string): string 
 function agentResultPath(target: TaskRunTarget): string {
 	const dir = target.dir === "." ? "" : target.dir.replace(/^\/+|\/+$/g, "");
 	return dir ? `${dir}/out/result.txt` : "out/result.txt";
+}
+
+function agentDiffPaths(target: TaskRunTarget): { dir: string; beforePath: string; afterPath: string } {
+	const dir = target.dir === "." ? "" : target.dir.replace(/^\/+|\/+$/g, "");
+	const artifactDir = dir ? `${dir}/out` : "out";
+	const stem = safeOutputFileName(target.name.replace(/\.js$/i, ""));
+	return {
+		dir: artifactDir,
+		beforePath: `${artifactDir}/${stem}.before.js`,
+		afterPath: `${artifactDir}/${stem}.after.js`,
+	};
 }
 
 async function refreshWorkbenchFiles(bridge: WanixBridge): Promise<void> {

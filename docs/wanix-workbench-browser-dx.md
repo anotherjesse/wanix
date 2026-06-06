@@ -314,6 +314,13 @@ running. Rows with filesystem artifacts open those Wanix paths directly.
 
 ![Wanix agent action log](assets/wanix-workbench-browser-dx/35-agent-action-log.png)
 
+The repair now leaves a durable before/after trail too. Before editing, the
+agent writes a source snapshot under `/agent/out`; after editing, it writes the
+repaired snapshot beside it. The `diff broken.js` row reopens a browser-native
+diff so the inserted line is visible without leaving the cockpit.
+
+![Wanix agent repair diff](assets/wanix-workbench-browser-dx/36-agent-repair-diff.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -333,6 +340,8 @@ But the first browser pass had several small breaks in the loop:
 - The WASM driver existed in Rust but did not have a usable browser entrypoint.
 - The agent repair loop worked, but its actions were mixed into generic
   activity instead of appearing as a clickable repair trace.
+- The repaired source changed in the editor, but there was no durable
+  before/after diff artifact to inspect later.
 
 None of those are huge by themselves. Together, they make the browser experience feel like a prototype you have to babysit. The point of this pass was to remove enough of that babysitting that the system starts to feel direct.
 
@@ -540,6 +549,8 @@ The current loop is:
     rerun, capture transcripts, and verify `agent/out/result.txt`.
 36. Click an Agent row with an artifact to reopen the source, transcript, or
     result file from the same system panel.
+37. Click `diff broken.js` to reopen the before/after repair diff from
+    `/agent/out`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
