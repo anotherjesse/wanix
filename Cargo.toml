@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/wanix-agent",
     "crates/wanix-cli",
     "crates/wanix-9p",
     "crates/wanix-fs",

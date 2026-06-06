@@ -1062,6 +1062,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wanix-agent"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wanix-fs",
+]
+
+[[package]]
 name = "wanix-cli"
 version = "0.1.0"
 dependencies = [
