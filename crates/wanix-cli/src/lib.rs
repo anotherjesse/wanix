@@ -1,5 +1,6 @@
 //! Native CLI plumbing for Rust Wanix demos.
 
+mod cli;
 mod collected;
 mod command_args;
 mod help;
@@ -26,8 +27,8 @@ mod wasm_args;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
 
-use wanix_fs::FsError;
-
+pub(crate) use cli::write_process_output;
+pub use cli::{CliError, CliOutput};
 pub use native::run_native_process;
 #[cfg(unix)]
 pub use process_io::UnixTerminalFds;
@@ -43,82 +44,6 @@ pub(crate) use qjs_support::{
     read_utf8_script,
 };
 pub use terminal_mode::{NativeRawTerminalMode, command_requests_raw_tty};
-
-/// Captured native CLI output.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CliOutput {
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    exit_code: i32,
-}
-
-impl CliOutput {
-    fn new(stdout: Vec<u8>, stderr: Vec<u8>, exit_code: i32) -> Self {
-        Self {
-            stdout,
-            stderr,
-            exit_code,
-        }
-    }
-
-    /// Returns stdout bytes that should be written to the native process.
-    #[must_use]
-    pub fn stdout(&self) -> &[u8] {
-        &self.stdout
-    }
-
-    /// Returns stderr bytes that should be written to the native process.
-    #[must_use]
-    pub fn stderr(&self) -> &[u8] {
-        &self.stderr
-    }
-
-    /// Returns the native process exit code.
-    #[must_use]
-    pub fn exit_code(&self) -> i32 {
-        self.exit_code
-    }
-}
-
-/// CLI execution error.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CliError {
-    message: String,
-    exit_code: i32,
-}
-
-impl CliError {
-    fn new(message: impl Into<String>, exit_code: i32) -> Self {
-        Self {
-            message: message.into(),
-            exit_code,
-        }
-    }
-
-    fn usage(message: impl AsRef<str>) -> Self {
-        Self::new(format!("{}\n\n{}", message.as_ref(), help::USAGE), 2)
-    }
-
-    /// Returns the native process exit code for this error.
-    #[must_use]
-    pub fn exit_code(&self) -> i32 {
-        self.exit_code
-    }
-}
-
-impl std::fmt::Display for CliError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for CliError {}
-
-impl From<FsError> for CliError {
-    fn from(error: FsError) -> Self {
-        Self::new(error.to_string(), 1)
-    }
-}
 
 /// Runs the native CLI command and returns captured process output.
 ///
@@ -257,15 +182,6 @@ fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<Cl
         return Ok(help::help_output());
     }
     collected::run_collected_command(command, rest, process_stdin)
-}
-
-fn write_process_output(output: &mut dyn Write, label: &str, bytes: &[u8]) -> Result<(), CliError> {
-    output
-        .write_all(bytes)
-        .map_err(|error| CliError::new(format!("failed to write process {label}: {error}"), 1))?;
-    output
-        .flush()
-        .map_err(|error| CliError::new(format!("failed to flush process {label}: {error}"), 1))
 }
 
 #[cfg(test)]
