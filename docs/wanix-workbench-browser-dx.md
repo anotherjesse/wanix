@@ -201,6 +201,19 @@ moves away from the terminal.
 
 ![Task output transcript opened from the sidebar](assets/wanix-workbench-browser-dx/21-task-output-transcript.jpg)
 
+With transcripts in place, the first agent-shaped loop can be deterministic and
+still honest. `Install Agent Repair Demo` writes `/agent/broken.js`. `Fix
+Current Wanix Program` reads that source, runs it as qjs, observes
+`ReferenceError: missingValue is not defined` from the saved transcript, edits
+the file, reruns it, and opens `/agent/out/result.txt`.
+
+This is not pretending to be the final app-server integration yet. It is the
+risk-gate version of the Wanix agent contract: read file, run task, observe
+task output, write file, rerun task, verify filesystem output, and show every
+step in the same system panel.
+
+![Deterministic Wanix agent repair demo](assets/wanix-workbench-browser-dx/22-agent-repair-demo.jpg)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -322,6 +335,11 @@ Persisted transcripts make the output handle a real Wanix file. That matters for
 the agentic repair work too: a person, a script, or an agent can inspect the
 same `/.wanix/tasks/...output.txt` artifact after the run.
 
+The repair demo is deliberately narrow, but it changes the feel of the cockpit:
+an automated helper is no longer outside the system. It uses the same qjs task
+runner, transcript files, source edits, result files, and activity log that a
+person can inspect.
+
 ## The Feeling Now
 
 The current loop is:
@@ -358,6 +376,10 @@ The current loop is:
 21. Run that script, then click or right-click its task row to reopen the
     source, open the saved transcript, or focus the terminal output that
     produced the task.
+22. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+    `/agent/broken.js`.
+23. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
+    `agent/out/result.txt`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -371,6 +393,8 @@ The next round should probably focus on making the workbench less demo-only:
 - Let the sidebar inspect service files directly, not just extension-observed events.
 - Add richer task metadata files for argv, cwd, env, and exit alongside output
   transcripts.
+- Replace the deterministic repair backend with Codex app-server behind the
+  same Wanix-shaped command contract.
 - Add a reset button for the duet demo's generated files.
 - Add a route detail panel showing latest preview status and output path.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.

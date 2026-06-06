@@ -79,6 +79,18 @@
         "icon": "$(new-file)"
       },
       {
+        "command": "workbench.installAgentRepairDemo",
+        "title": "Install Agent Repair Demo",
+        "category": "Wanix",
+        "icon": "$(bug)"
+      },
+      {
+        "command": "workbench.fixCurrentWanixProgram",
+        "title": "Fix Current Wanix Program",
+        "category": "Wanix",
+        "icon": "$(tools)"
+      },
+      {
         "command": "workbench.openWanixTaskSource",
         "title": "Open Task Source",
         "category": "Wanix",
@@ -141,6 +153,11 @@
           "group": "navigation"
         },
         {
+          "command": "workbench.fixCurrentWanixProgram",
+          "when": "resourceScheme == wanix && resourceExtname == .js",
+          "group": "navigation@1"
+        },
+        {
           "command": "workbench.runWasmTask",
           "when": "resourceScheme == wanix && resourceExtname == .wasm",
           "group": "navigation"
@@ -171,6 +188,11 @@
           "command": "workbench.openHttpAppHandler",
           "when": "view == wanix.system",
           "group": "navigation@4"
+        },
+        {
+          "command": "workbench.installAgentRepairDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [

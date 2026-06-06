@@ -1,5 +1,6 @@
 
 import * as vscode from 'vscode';
+import { installAgentRepairDemo, repairQjsProgram } from './agent-repair-demo.js';
 import { WanixBridge } from './bridge.js';
 import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo } from './duet-demo.js';
 import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, type HttpAppRouteConfig } from './http-app-demo.js';
@@ -38,6 +39,11 @@ type TaskRunTarget = {
 	path: string;
 	dir: string;
 	name: string;
+};
+
+type TaskRunStart = {
+	taskId: string;
+	outputPath?: string;
 };
 
 const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = {
@@ -143,6 +149,20 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.newQjsScript', async () => {
 			try {
 				await createQjsStarter(fsys, bridge, systemView);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.installAgentRepairDemo', async () => {
+			try {
+				await installAgentRepairDemo(fsys, bridge, systemView);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.fixCurrentWanixProgram', async () => {
+			try {
+				await fixCurrentWanixProgram(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -335,6 +355,83 @@ async function runDuetDemo(
 	vscode.window.showInformationMessage("Wanix JS and WASM duet demo completed");
 }
 
+async function fixCurrentWanixProgram(
+	fsys: any,
+	bridge: WanixBridge,
+	config: Config,
+	systemView: WanixSystemView,
+	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	taskTerminals: Map<string, vscode.Terminal>,
+	context: vscode.ExtensionContext,
+): Promise<void> {
+	const target = await taskRunTarget("qjs", bridge);
+	systemView.filesystemActivity(`agent read ${target.name}`);
+	const source = await fsys.readText(target.path);
+	let firstRun: TaskRunStart | undefined;
+	systemView.filesystemActivity(`agent ran qjs ${target.name}`);
+	const firstCode = await runWanixTaskTarget(
+		fsys,
+		bridge,
+		config,
+		systemView,
+		activeTaskTerminals,
+		taskTerminals,
+		"qjs",
+		target,
+		context,
+		{
+			waitForExit: true,
+			onTaskStarted: (event) => {
+				firstRun = event;
+			},
+		},
+	);
+	const firstTranscript = firstRun?.outputPath
+		? await waitForTaskTranscript(fsys, firstRun.outputPath)
+		: "";
+	systemView.filesystemActivity(`agent saw ${agentObservation(firstCode, firstTranscript)}`);
+	const repaired = repairQjsProgram(source);
+	if (repaired === source && firstCode === 0) {
+		vscode.window.showInformationMessage(`${target.name} already looks repaired`);
+		return;
+	}
+	await fsys.writeFile(target.path, repaired);
+	bridge.refresh(target.path);
+	await refreshWorkbenchFiles(bridge);
+	systemView.filesystemActivity(`agent edited ${target.name}`);
+	await openWanixPath(target.path);
+	let secondRun: TaskRunStart | undefined;
+	systemView.filesystemActivity(`agent reran qjs ${target.name}`);
+	const secondCode = await runWanixTaskTarget(
+		fsys,
+		bridge,
+		config,
+		systemView,
+		activeTaskTerminals,
+		taskTerminals,
+		"qjs",
+		target,
+		context,
+		{
+			waitForExit: true,
+			onTaskStarted: (event) => {
+				secondRun = event;
+			},
+		},
+	);
+	if (secondRun?.outputPath) {
+		await waitForTaskTranscript(fsys, secondRun.outputPath);
+	}
+	if (secondCode !== 0) {
+		throw new Error(`Agent repair rerun exited ${formatTaskExitCode(secondCode)}`);
+	}
+	const resultPath = agentResultPath(target);
+	const result = await waitForTextFile(fsys, resultPath);
+	systemView.filesystemActivity(`agent verified ${baseName(resultPath)}`);
+	await openWanixPath(resultPath);
+	vscode.window.showInformationMessage(`Wanix agent repair wrote ${resultPath}: ${result.trim()}`);
+}
+
 async function runWanixTaskTarget(
 	fsys: any,
 	bridge: WanixBridge,
@@ -345,7 +442,7 @@ async function runWanixTaskTarget(
 	kind: TaskRunKind,
 	target: TaskRunTarget,
 	context: vscode.ExtensionContext,
-	options: { waitForExit?: boolean } = {},
+	options: { waitForExit?: boolean; onTaskStarted?: (event: TaskRunStart) => void } = {},
 ): Promise<number | undefined> {
 	activeTaskTerminals.get(kind)?.dispose();
 	activeTaskTerminals.delete(kind);
@@ -355,8 +452,9 @@ async function runWanixTaskTarget(
 	});
 	let startedTaskId: string | undefined;
 	const pty = await createActiveTaskTerminal(fsys, bridge, config, systemView, kind, target, {
-		onStart: (taskId) => {
-			startedTaskId = taskId;
+		onStart: (event) => {
+			startedTaskId = event.taskId;
+			options.onTaskStarted?.(event);
 		},
 		onExit: resolveExit,
 		onClose: () => {
@@ -386,7 +484,7 @@ async function createActiveTaskTerminal(
 	systemView: WanixSystemView,
 	kind: TaskRunKind,
 	target: TaskRunTarget,
-	lifecycle: { onStart?: (taskId: string) => void; onExit?: (code: number | undefined) => void; onClose?: () => void } = {},
+	lifecycle: { onStart?: (event: TaskRunStart) => void; onExit?: (code: number | undefined) => void; onClose?: () => void } = {},
 ) {
 	if (!config.ns?.task || !config.ns?.term) {
 		throw new Error("Wanix task and terminal services are not available");
@@ -412,8 +510,8 @@ async function createActiveTaskTerminal(
 		taskLabel: target.name,
 		terminalLabel: taskTerminalName(kind, target.name),
 		onTaskStarted: (event) => {
-			lifecycle.onStart?.(event.id);
 			const outputPath = output.start(event.id);
+			lifecycle.onStart?.({ taskId: event.id, outputPath });
 			systemView.taskStarted(event.id, event.kind, event.label, { sourcePath: target.path, outputPath });
 			revealWanixSystemView();
 		},
@@ -569,6 +667,37 @@ function taskTerminalName(kind: TaskRunKind, name: string): string {
 
 function formatTaskExitCode(code: number | undefined): string {
 	return typeof code === "number" ? String(code) : "before reporting an exit code";
+}
+
+async function waitForTaskTranscript(fsys: any, path: string): Promise<string> {
+	return await waitForTextFile(fsys, path, 3000);
+}
+
+async function waitForTextFile(fsys: any, path: string, timeoutMs = 3000): Promise<string> {
+	const start = Date.now();
+	let lastError: unknown;
+	while (Date.now() - start <= timeoutMs) {
+		try {
+			return await fsys.readText(path);
+		} catch (error) {
+			lastError = error;
+			await delay(100);
+		}
+	}
+	throw new Error(`Timed out waiting for ${path}: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+function agentObservation(code: number | undefined, transcript: string): string {
+	const referenceError = transcript.match(/ReferenceError[^\r\n]*/)?.[0];
+	if (referenceError) {
+		return referenceError;
+	}
+	return `exit ${formatTaskExitCode(code)}`;
+}
+
+function agentResultPath(target: TaskRunTarget): string {
+	const dir = target.dir === "." ? "" : target.dir.replace(/^\/+|\/+$/g, "");
+	return dir ? `${dir}/out/result.txt` : "out/result.txt";
 }
 
 async function refreshWorkbenchFiles(bridge: WanixBridge): Promise<void> {
