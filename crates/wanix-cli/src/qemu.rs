@@ -45,19 +45,36 @@ enum QemuOutputFormat {
 }
 
 pub(super) fn run_qemu_command(command: QemuCommand) -> Result<CliOutput, CliError> {
-    if command.exec {
-        return Err(CliError::usage(
-            "qemu --exec requires live process IO; use the wanix-rust binary",
-        ));
-    }
+    reject_captured_qemu_exec(&command)?;
     let handoff = qemu_virtio9p_handoff(&command)?;
-    let output = match command.output_format {
-        QemuOutputFormat::Shell => quote_cmd_argv(handoff.argv.iter().map(String::as_str)),
-        QemuOutputFormat::Json => qemu_handoff_json(&handoff),
-    };
+    let output = qemu_handoff_output(&handoff, command.output_format);
+    Ok(captured_qemu_output(output))
+}
+
+fn reject_captured_qemu_exec(command: &QemuCommand) -> Result<(), CliError> {
+    if !command.exec {
+        return Ok(());
+    }
+    Err(CliError::usage(
+        "qemu --exec requires live process IO; use the wanix-rust binary",
+    ))
+}
+
+fn qemu_handoff_output(handoff: &handoff::QemuHandoff, format: QemuOutputFormat) -> String {
+    match format {
+        QemuOutputFormat::Shell => qemu_handoff_shell_command(handoff),
+        QemuOutputFormat::Json => qemu_handoff_json(handoff),
+    }
+}
+
+fn qemu_handoff_shell_command(handoff: &handoff::QemuHandoff) -> String {
+    quote_cmd_argv(handoff.argv.iter().map(String::as_str))
+}
+
+fn captured_qemu_output(output: String) -> CliOutput {
     let mut output = output.into_bytes();
     output.push(b'\n');
-    Ok(CliOutput::new(output, Vec::new(), 0))
+    CliOutput::new(output, Vec::new(), 0)
 }
 
 pub(super) fn run_qemu_streaming(
