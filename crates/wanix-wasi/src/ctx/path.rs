@@ -17,19 +17,24 @@ pub(super) fn wasi_path(path: &str) -> Result<NormalizedPath, Errno> {
     if path == "." {
         return NormalizedPath::new(path).map_err(Errno::from);
     }
-    if path.is_empty()
+    if has_forbidden_wasi_path_shape(path) || has_forbidden_wasi_path_component(path) {
+        return Err(Errno::Notcapable);
+    }
+    NormalizedPath::new(path).map_err(Errno::from)
+}
+
+fn has_forbidden_wasi_path_shape(path: &str) -> bool {
+    path.is_empty()
         || path.starts_with('/')
         || path.ends_with('/')
         || path.contains("//")
         || path.contains('\\')
         || path.contains('\0')
-        || path
-            .split('/')
-            .any(|component| component == "." || component == "..")
-    {
-        return Err(Errno::Notcapable);
-    }
-    NormalizedPath::new(path).map_err(Errno::from)
+}
+
+fn has_forbidden_wasi_path_component(path: &str) -> bool {
+    path.split('/')
+        .any(|component| component == "." || component == "..")
 }
 
 pub(super) fn wasi_symlink_target(target: &[u8]) -> Result<&[u8], Errno> {

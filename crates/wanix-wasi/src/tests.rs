@@ -2153,11 +2153,27 @@ fn path_errors_map_to_wasi_errno() {
         Err(Errno::Notcapable)
     );
     assert_eq!(
+        ctx.path_open(WasiFd::ROOT, "", WasiOpenOptions::read()),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.path_open(WasiFd::ROOT, "bad/path/", WasiOpenOptions::read()),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
         ctx.path_open(WasiFd::ROOT, "bad//path", WasiOpenOptions::read()),
         Err(Errno::Notcapable)
     );
     assert_eq!(
+        ctx.path_open(WasiFd::ROOT, "bad/./path", WasiOpenOptions::read()),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
         ctx.path_open(WasiFd::ROOT, "bad\\path", WasiOpenOptions::read()),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        ctx.path_open(WasiFd::ROOT, "bad\0path", WasiOpenOptions::read()),
         Err(Errno::Notcapable)
     );
     assert_eq!(
