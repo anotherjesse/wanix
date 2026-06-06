@@ -48,6 +48,8 @@ type RouteRecord = {
 	label: string;
 	description: string;
 	protocol: string;
+	previewStatus?: string;
+	previewPath?: string;
 };
 
 type ActivityRecord = {
@@ -157,6 +159,17 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
+	routePreviewed(id: string, preview: { status: number; statusText?: string; previewPath: string }): void {
+		const route = this.routes.find((candidate) => candidate.id === id);
+		if (!route) {
+			return;
+		}
+		route.previewStatus = formatHttpStatus(preview.status, preview.statusText);
+		route.previewPath = preview.previewPath;
+		this.addActivity(`${route.label} preview ${route.previewStatus}`);
+		this.refresh();
+	}
+
 	getTreeItem(element: SystemTreeItem): vscode.TreeItem {
 		if (element.type === "category") {
 			const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Expanded);
@@ -195,10 +208,10 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				}, "wanixNamespacePath", { path: entry.path }));
 			case "routes":
 				return this.routes.length > 0
-					? this.routes.map((route) => leaf(`route:${route.id}`, route.label, route.description, "globe", {
+					? this.routes.map((route) => leaf(`route:${route.id}`, route.label, routeDescription(route), "globe", {
 						command: "workbench.openHttpAppDemo",
 						title: "Preview HTTP App Demo",
-					}, "wanixHttpRoute"))
+					}, route.previewPath ? "wanixHttpRouteWithPreview" : "wanixHttpRoute", { path: route.previewPath }))
 					: [leaf("routes:empty", "no routes advertised")];
 			case "activity":
 				return this.activity.length > 0
@@ -317,6 +330,18 @@ function routeRecords(config: WanixSystemConfig): RouteRecord[] {
 		description: route.source || route.protocol || "http app",
 		protocol: route.protocol || "wanix-http-app.v1",
 	}];
+}
+
+function routeDescription(route: RouteRecord): string {
+	if (!route.previewStatus) {
+		return route.description;
+	}
+	return `${route.description} · last ${route.previewStatus}`;
+}
+
+function formatHttpStatus(status: number, statusText?: string): string {
+	const suffix = statusText?.trim();
+	return suffix ? `${status} ${suffix}` : String(status);
 }
 
 function namespaceIcon(path: string): string {

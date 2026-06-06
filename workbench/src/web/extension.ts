@@ -264,6 +264,18 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openHttpAppPreview', async (target?: string | { path?: string }) => {
+			try {
+				const path = wanixPathTarget(target);
+				if (!path) {
+					throw new Error("No HTTP app preview has been saved yet");
+				}
+				await openWanixPath(path);
+				systemView.filesystemActivity(`opened http app preview ${baseName(path)}`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openHttpAppHandler', async () => {
 			try {
 				await openHttpAppHandler(fsys, bridge, systemView);

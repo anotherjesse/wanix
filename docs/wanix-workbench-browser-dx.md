@@ -218,6 +218,13 @@ than a label that happens to be clickable.
 
 ![HTTP route context actions reset the handler intentionally](assets/wanix-workbench-browser-dx/17-http-route-context-actions.jpg)
 
+The latest route polish makes the row remember what happened. After previewing,
+the route description includes the last HTTP status, and right-clicking the row
+adds `Open Latest HTTP App Preview` so the response report stays attached to the
+system object that produced it.
+
+![HTTP route row shows latest status and preview action](assets/wanix-workbench-browser-dx/29-http-route-status-preview.png)
+
 The first-use loop got a small entry point too: `New qjs Script` creates a
 unique `/scratch/qjs-N.js`, opens it, and gives it a tiny program that writes
 both terminal output and `last-run.txt`. New users no longer need to know where
@@ -380,6 +387,10 @@ The route context menu is a small but important cockpit pattern: visible system
 objects should have operations attached to them. A route is not just something
 to read; it is something to run, inspect, copy, and intentionally reset.
 
+The route row now also keeps the latest preview status and saved report path.
+That makes the HTTP app route behave more like a live system resource: it shows
+last `200 OK` state and exposes the response artifact from the same row.
+
 The scratch-script action is the same philosophy applied to creation. The
 cockpit should not only inspect Wanix; it should help you make the next Wanix
 object.
@@ -438,16 +449,18 @@ The current loop is:
     explicit reset command.
 24. Right-click the route row to preview, open source, copy the route URL, or
     intentionally reset the demo handler.
-25. Click `New qjs Script` to create a unique runnable scratch script without
+25. After previewing, read the route row's latest HTTP status and reopen the
+    saved response report from `Open Latest HTTP App Preview`.
+26. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-26. Run that script, then click or right-click its task row to reopen the
+27. Run that script, then click or right-click its task row to reopen the
     source, open the saved transcript, or focus the terminal output that
     produced the task.
-27. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+28. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-28. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+29. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-29. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
+30. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
     `agent/out/result.txt`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
@@ -461,7 +474,6 @@ The next round should probably focus on making the workbench less demo-only:
 - Make shell-created files refresh more precisely than "refresh the root after activity."
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract.
-- Add a route detail panel showing latest preview status and output path.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.

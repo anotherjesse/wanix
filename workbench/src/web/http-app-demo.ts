@@ -102,6 +102,11 @@ export async function openHttpAppDemo(
 	});
 	await fsys.writeFile(APP_PREVIEW_PATH, preview);
 	refreshWanixFile(bridge, APP_PREVIEW_PATH);
+	systemView.routePreviewed("http-app", {
+		status: response.status,
+		statusText: response.statusText,
+		previewPath: APP_PREVIEW_PATH,
+	});
 	systemView.filesystemActivity("http app demo previewed");
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
