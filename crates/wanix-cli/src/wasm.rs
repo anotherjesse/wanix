@@ -7,9 +7,12 @@
 //! captured into [`CaptureFile`] sinks and returned as a [`CliOutput`] — the
 //! collected handler model the rest of the CLI uses.
 //!
-//! This is a Tier-1 demo runner: a standalone WASI command host, not yet a
-//! Wanix task driver, and the underlying linker speaks a command-style WASI
-//! subset (no `poll_oneoff` readiness).
+//! This is the standalone CLI runner path: a one-shot WASI command host that
+//! compiles and runs a `.wasm` file directly. Task-driver integration (auto-start
+//! as a `#task/new/wasm` Wanix task) lives separately in
+//! [`wanix_wasm::WasmTaskDriver`]; this file does not go through the task model.
+//! The underlying linker speaks a command-style WASI subset (no `poll_oneoff`
+//! readiness).
 
 use std::io::Read;
 use std::path::Path;

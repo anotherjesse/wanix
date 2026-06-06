@@ -467,6 +467,57 @@ std.out.flush();
 }
 
 #[test]
+fn rust_wasm_truncates_qjs_observes_new_size() {
+    // Differential proof for the fd_filestat_set_size import: rust-wasm shrinks a
+    // file via `File::set_len` on the SHARED namespace, then qjs (os.stat) and the
+    // backing fs both observe the new length and the truncated bytes. Both engines
+    // route truncate/stat through one WasiCtx VFS.
+    let fs = Arc::new(MemFs::new());
+    fs.write_file("shared.txt", b"hello world")
+        .expect("seed shared.txt");
+
+    let qjs = QuickJsRunner::from_bundled_wasm().expect("qjs runner");
+    let rust = WasiRunner::from_bytes(RUST_GUEST).expect("compile rust guest");
+
+    // 1. rust-wasm truncates 11 -> 4 bytes through fd_filestat_set_size.
+    let (exit, rust_out) = run_rust(&rust, &fs, &["guest", "--truncate", "/shared.txt", "4"]);
+    assert_eq!(exit, 0, "rust truncate step exit: {rust_out:?}");
+    assert!(
+        rust_out.contains("truncated /shared.txt to 4"),
+        "rust truncate output: {rust_out:?}"
+    );
+
+    // 2. qjs, on the same namespace, observes the new size and bytes via os.stat.
+    let observed = run_qjs(
+        &qjs,
+        &fs,
+        r#"import * as std from "qjs:std";
+import * as os from "qjs:os";
+const [st, err] = os.stat("/shared.txt");
+if (err !== 0) { throw new Error("stat: " + err); }
+std.out.puts("size " + st.size + "\n");
+std.out.puts("body " + std.loadFile("/shared.txt") + "\n");
+std.out.flush();
+"#,
+    );
+    assert!(
+        observed.contains("size 4"),
+        "qjs should see the truncated size 4: {observed:?}"
+    );
+    assert!(
+        observed.contains("body hell"),
+        "qjs should read the truncated bytes: {observed:?}"
+    );
+
+    // 3. Host-side confirmation straight from the shared backing filesystem.
+    assert_eq!(
+        fs.read_file("shared.txt").expect("file exists"),
+        b"hell",
+        "backing fs should reflect the truncated length"
+    );
+}
+
+#[test]
 fn qjs_and_rust_wasm_share_one_vfs_two_way() {
     // Backs the `shared_vfs` example as a real automated test: qjs writes a file,
     // rust-wasm reads it and writes its own, qjs reads that back.

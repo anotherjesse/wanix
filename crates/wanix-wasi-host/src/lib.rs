@@ -1,12 +1,16 @@
-//! The single WASI Preview 1 Wasmtime linker over [`WasiCtx`].
+//! The generic command-style WASI Preview 1 Wasmtime linker over [`WasiCtx`].
 //!
-//! Both the QuickJS engine and the generic `wanix-wasm` task runner are "a wasm
-//! module on Wasmtime backed by Wanix WASI". This crate is the shared half: the
-//! guest-memory marshalling that turns Preview 1 imports into [`WasiCtx`] calls.
+//! This crate is the guest-memory marshalling that turns Preview 1 imports into
+//! [`WasiCtx`] calls for an arbitrary `wasm32-wasi` command module. The
+//! `wanix-wasm` runner uses it directly; the QuickJS engine does **not** — qjs
+//! keeps its own engine-local host-import path (with snapshot blockers, live fd
+//! readiness, restore reattachment, and a richer `poll_oneoff`), sharing only the
+//! `wanix-wasi` [`WasiCtx`] and task-config contracts, not this linker.
+//!
 //! A host store-state implements [`WasiHost`] to expose its [`WasiCtx`], clock,
-//! and exit hook; everything that differs between task types (the wasm module,
-//! the QuickJS `env` imports, the reactor-vs-command entry) stays in the
-//! consumer. Fixing a Preview 1 detail here fixes it for every task type.
+//! and exit hook; what differs per consumer (the wasm module, the command entry)
+//! stays in the consumer. Fixing a Preview 1 detail here fixes it for every
+//! consumer of this linker.
 
 use wanix_wasi::WasiCtx;
 use wasmtime::{Linker, Result};

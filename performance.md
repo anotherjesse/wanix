@@ -54,10 +54,13 @@ cold-start is cranelift compiling the QuickJS module every process.
 
 `QuickJsModule::from_bytes_cached` writes a Wasmtime-serialized artifact keyed by
 the wasm SHA-256, and deserializes it on later loads. `wanix-qjs`'
-`from_bundled_wasm` uses it under `bundled_module_cache_dir()`
-(`WANIX_QJS_CACHE_DIR` override, else a temp subdir). The cache is advisory: a
-missing, stale, or engine-incompatible artifact transparently recompiles, so a
-Wasmtime upgrade just recompiles under a new key.
+`from_bundled_wasm` uses it under `bundled_module_cache_dir()`, which resolves
+through `wanix_module_cache::owner_private_cache_dir`: an explicit
+`WANIX_QJS_CACHE_DIR` override, else a per-user cache root (`$XDG_CACHE_HOME` /
+`$HOME/.cache`), else a UID-scoped temp fallback — never a shared world-writable
+temp path. The cache is advisory: a missing, stale, untrusted, or
+engine-incompatible artifact transparently recompiles, so a Wasmtime upgrade
+just recompiles under a new key.
 
 End-to-end `wanix-rust qjs examples/qjs-demo.js`:
 

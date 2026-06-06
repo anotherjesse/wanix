@@ -31,7 +31,7 @@ pub(super) const USAGE: &str = concat!(
     "[--mount HOST=GUEST ...] <before.js> <after.js>\n",
     "       wanix-rust wasm [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] FILE.wasm [args...] ",
-    "(Tier-1 demo runner: command-style WASI subset, no poll readiness; not yet a task driver)\n",
+    "(command-style WASI subset, no poll readiness; .wasm is also a first-class Wanix task driver)\n",
     "       wanix-rust p9-stdio --root DIR\n",
     "       wanix-rust p9-listen --root DIR --addr HOST:PORT [--once]\n",
     "       wanix-rust p9-ws --root DIR --addr HOST:PORT [--once]\n",
