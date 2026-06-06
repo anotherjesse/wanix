@@ -420,6 +420,29 @@ fn standard_fd_readiness_comes_from_attached_files() {
 }
 
 #[test]
+fn regular_fd_readiness_respects_open_capabilities() {
+    let root = fixture(&[("read.txt", b"hello")]);
+    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+
+    let read_fd = ctx
+        .path_open(WasiFd::ROOT, "read.txt", WasiOpenOptions::read())
+        .unwrap();
+    let write_fd = ctx
+        .path_open(WasiFd::ROOT, "write.txt", WasiOpenOptions::create_write())
+        .unwrap();
+    let read_write_fd = ctx
+        .path_open(WasiFd::ROOT, "read.txt", WasiOpenOptions::read_write())
+        .unwrap();
+
+    assert!(ctx.fd_read_ready(read_fd).unwrap());
+    assert_eq!(ctx.fd_write_ready(read_fd), Err(Errno::Notcapable));
+    assert_eq!(ctx.fd_read_ready(write_fd), Err(Errno::Notcapable));
+    assert!(ctx.fd_write_ready(write_fd).unwrap());
+    assert!(ctx.fd_read_ready(read_write_fd).unwrap());
+    assert!(ctx.fd_write_ready(read_write_fd).unwrap());
+}
+
+#[test]
 fn task_service_paths_are_reachable_through_wasi_namespace() {
     let table = TaskTable::new();
     table.register_noop_driver("qjs").unwrap();

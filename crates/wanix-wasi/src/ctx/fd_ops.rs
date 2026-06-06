@@ -1,6 +1,6 @@
 use wanix_fs::{DirEntry, FileSystem};
 
-use crate::{Errno, WasiCtx, WasiFd, WasiRights};
+use crate::{Errno, WasiCtx, WasiFd, WasiFile, WasiRights};
 
 use super::handle::Handle;
 use super::seek::{WasiWhence, seek_handle, tell_handle};
@@ -58,50 +58,16 @@ impl WasiCtx {
 
     /// Returns whether a nonblocking read on an open fd would produce data now.
     pub fn fd_read_ready(&self, fd: WasiFd) -> Result<bool, Errno> {
-        match self.fds.get(&fd).ok_or(Errno::Badf)? {
-            Handle::Stdio { file } => {
-                if !file.can_read() {
-                    return Err(Errno::Notcapable);
-                }
-                file.read_ready_file().map_err(Errno::from)
-            }
-            Handle::File {
-                file,
-                read,
-                rights_base,
-                ..
-            } => {
-                if !*read || !rights_base.contains(WasiRights::FD_READ) {
-                    return Err(Errno::Notcapable);
-                }
-                file.read_ready_file().map_err(Errno::from)
-            }
-            Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Isdir),
-        }
+        let handle = self.fds.get(&fd).ok_or(Errno::Badf)?;
+        ready_wasi_file(handle, ReadyAccess::Read)
+            .and_then(|file| file.read_ready_file().map_err(Errno::from))
     }
 
     /// Returns whether a nonblocking write on an open fd can be attempted now.
     pub fn fd_write_ready(&self, fd: WasiFd) -> Result<bool, Errno> {
-        match self.fds.get(&fd).ok_or(Errno::Badf)? {
-            Handle::Stdio { file } => {
-                if !file.can_write() {
-                    return Err(Errno::Notcapable);
-                }
-                file.write_ready_file().map_err(Errno::from)
-            }
-            Handle::File {
-                file,
-                write,
-                rights_base,
-                ..
-            } => {
-                if !*write || !rights_base.contains(WasiRights::FD_WRITE) {
-                    return Err(Errno::Notcapable);
-                }
-                file.write_ready_file().map_err(Errno::from)
-            }
-            Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Isdir),
-        }
+        let handle = self.fds.get(&fd).ok_or(Errno::Badf)?;
+        ready_wasi_file(handle, ReadyAccess::Write)
+            .and_then(|file| file.write_ready_file().map_err(Errno::from))
     }
 
     /// Closes a dynamic fd.
@@ -143,6 +109,54 @@ impl WasiCtx {
             }
             Handle::Stdio { .. } | Handle::File { .. } => Err(Errno::Notdir),
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ReadyAccess {
+    Read,
+    Write,
+}
+
+impl ReadyAccess {
+    fn stdio_allows(self, file: &WasiFile) -> bool {
+        match self {
+            Self::Read => file.can_read(),
+            Self::Write => file.can_write(),
+        }
+    }
+
+    fn file_allows(self, read: bool, write: bool, rights_base: WasiRights) -> bool {
+        match self {
+            Self::Read => read && rights_base.contains(WasiRights::FD_READ),
+            Self::Write => write && rights_base.contains(WasiRights::FD_WRITE),
+        }
+    }
+}
+
+fn ready_wasi_file(handle: &Handle, access: ReadyAccess) -> Result<&WasiFile, Errno> {
+    match handle {
+        Handle::Stdio { file } => {
+            if access.stdio_allows(file) {
+                Ok(file)
+            } else {
+                Err(Errno::Notcapable)
+            }
+        }
+        Handle::File {
+            file,
+            read,
+            write,
+            rights_base,
+            ..
+        } => {
+            if access.file_allows(*read, *write, *rights_base) {
+                Ok(file)
+            } else {
+                Err(Errno::Notcapable)
+            }
+        }
+        Handle::Preopen { .. } | Handle::Directory { .. } => Err(Errno::Isdir),
     }
 }
 
