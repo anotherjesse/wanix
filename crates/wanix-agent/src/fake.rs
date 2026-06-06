@@ -35,6 +35,7 @@ struct FakeSession {
     stream: Arc<EventStream>,
     turns: AtomicU64,
     pending: Mutex<Option<PendingApproval>>,
+    last_reply: Mutex<Option<String>>,
 }
 
 impl FakeSession {
@@ -43,6 +44,13 @@ impl FakeSession {
             stream: Arc::new(EventStream::new()),
             turns: AtomicU64::new(0),
             pending: Mutex::new(None),
+            last_reply: Mutex::new(None),
+        }
+    }
+
+    fn set_reply(&self, text: String) {
+        if let Ok(mut reply) = self.last_reply.lock() {
+            *reply = Some(text);
         }
     }
 
@@ -54,9 +62,10 @@ impl FakeSession {
         self.stream
             .push_line(&json!({ "t": "message.delta", "text": &reply[split..] }).to_string());
         self.stream
-            .push_line(&json!({ "t": "message", "text": reply }).to_string());
+            .push_line(&json!({ "t": "message", "text": &reply }).to_string());
         self.stream
             .push_line(&json!({ "t": "tokens", "total": 1, "input": 1, "output": 1 }).to_string());
+        self.set_reply(reply);
         self.finish(turn);
     }
 
@@ -143,10 +152,21 @@ impl AgentSession for FakeSession {
         } else {
             "declined"
         };
+        let message = format!("{verb}: {action}");
         self.stream
-            .push_line(&json!({ "t": "message", "text": format!("{verb}: {action}") }).to_string());
+            .push_line(&json!({ "t": "message", "text": &message }).to_string());
+        self.set_reply(message);
         self.finish(self.turns.load(Ordering::Relaxed));
         Ok(())
+    }
+
+    fn wait_reply(&self) -> FsResult<String> {
+        Ok(self
+            .last_reply
+            .lock()
+            .ok()
+            .and_then(|reply| reply.clone())
+            .unwrap_or_default())
     }
 
     fn close(&self) {

@@ -73,7 +73,9 @@ fn new_allocates_a_session_directory() {
         .collect();
     assert_eq!(
         entries,
-        ["ctl", "events", "id", "pending", "prompt", "status"]
+        [
+            "ctl", "events", "id", "pending", "prompt", "reply", "status"
+        ]
     );
 
     let mut id_file = device.open(&np("1/id"), OpenOptions::read()).unwrap();
@@ -99,6 +101,24 @@ fn prompt_submit_streams_a_normalized_reply() {
     assert!(stream.contains("\"t\":\"message.delta\""), "{stream}");
     assert!(stream.contains("you said: hi there"), "{stream}");
     assert!(stream.contains("\"t\":\"turn.completed\""), "{stream}");
+}
+
+#[test]
+fn reply_gives_a_single_read_eof_terminated_answer() {
+    // The reply file is how one agent delegates to another: a single read that
+    // blocks for the answer and ends, unlike the never-EOF events stream.
+    let device = device();
+    let id = alloc_session(&device);
+    device
+        .open(&np(&format!("{id}/prompt")), write_options())
+        .unwrap()
+        .write(b"do the thing")
+        .unwrap();
+
+    let mut reply = device
+        .open(&np(&format!("{id}/reply")), OpenOptions::read())
+        .unwrap();
+    assert_eq!(read_all(&mut reply), "you said: do the thing\n");
 }
 
 #[test]

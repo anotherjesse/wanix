@@ -21,6 +21,8 @@ pub(crate) enum AgentPath<'a> {
     Status(&'a str),
     /// `<id>/pending`: read open approval requests as a JSON array.
     Pending(&'a str),
+    /// `<id>/reply`: block for the final message of the latest turn, then EOF.
+    Reply(&'a str),
 }
 
 pub(crate) fn parse_path(path: &NormalizedPath) -> FsResult<AgentPath<'_>> {
@@ -39,6 +41,7 @@ pub(crate) fn parse_path(path: &NormalizedPath) -> FsResult<AgentPath<'_>> {
         (id, Some("ctl"), None) => Ok(AgentPath::Ctl(id)),
         (id, Some("status"), None) => Ok(AgentPath::Status(id)),
         (id, Some("pending"), None) => Ok(AgentPath::Pending(id)),
+        (id, Some("reply"), None) => Ok(AgentPath::Reply(id)),
         _ => Err(FsError::NotFound),
     }
 }

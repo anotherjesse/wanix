@@ -154,6 +154,11 @@ impl FileSystem for AgentDevice {
                     format!("{pending}\n").into_bytes(),
                 )))
             }
+            AgentPath::Reply(id) => {
+                require_read_only(options)?;
+                let reply = self.session(id)?.wait_reply()?;
+                Ok(Box::new(BytesFile::new(format!("{reply}\n").into_bytes())))
+            }
             AgentPath::Prompt(id) => Ok(Box::new(PromptFile::new(self.session(id)?))),
             AgentPath::Ctl(id) => {
                 self.session(id)?;
@@ -170,7 +175,10 @@ impl FileSystem for AgentDevice {
                 self.session(id)?;
                 Ok(directory_metadata())
             }
-            AgentPath::Id(id) | AgentPath::Status(id) | AgentPath::Pending(id) => {
+            AgentPath::Id(id)
+            | AgentPath::Status(id)
+            | AgentPath::Pending(id)
+            | AgentPath::Reply(id) => {
                 self.session(id)?;
                 Ok(file_metadata(0, modes::READ_ONLY_FILE))
             }
@@ -209,6 +217,7 @@ impl FileSystem for AgentDevice {
                     DirEntry::new("id", file_metadata(0, modes::READ_ONLY_FILE)),
                     DirEntry::new("pending", file_metadata(0, modes::READ_ONLY_FILE)),
                     DirEntry::new("prompt", file_metadata(0, modes::STREAM_FILE)),
+                    DirEntry::new("reply", file_metadata(0, modes::READ_ONLY_FILE)),
                     DirEntry::new("status", file_metadata(0, modes::READ_ONLY_FILE)),
                 ])
             }

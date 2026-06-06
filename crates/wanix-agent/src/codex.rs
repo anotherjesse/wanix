@@ -40,8 +40,10 @@ fn environments_value(environment: &EnvSpec) -> Value {
 const WANIX_WORLD_INSTRUCTIONS: &str = "Your filesystem is a Wanix namespace rooted at `/`. \
 Besides ordinary files, these service paths exist (they are not listed by `ls /`): \
 `/#kv/<key>` is a key/value store — write a file to set a key, read it to get the value, \
-list `/#kv` for keys. `/#task`, `/#term`, and `/#pipe` are the Wanix task, terminal, and \
-pipe devices. Operate on all of them with ordinary file reads and writes.";
+list `/#kv` for keys. `/#agent` lets you delegate to another agent: read `/#agent/new` for a \
+session id, write a sub-task to `/#agent/<id>/prompt`, then read `/#agent/<id>/reply` for its \
+final answer (a single read that ends). `/#task`, `/#term`, and `/#pipe` are the Wanix task, \
+terminal, and pipe devices. Operate on all of them with ordinary file reads and writes.";
 
 /// An [`AgentEngine`] that bridges a real `codex app-server` subprocess.
 ///

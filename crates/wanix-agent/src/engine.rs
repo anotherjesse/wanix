@@ -68,6 +68,17 @@ pub trait AgentSession: Send + Sync {
         Err(FsError::NotFound)
     }
 
+    /// Blocks until the latest turn completes and returns its final assistant
+    /// message — a single-read, EOF-terminating reply (unlike the streaming
+    /// `events`), which makes one agent delegating to another clean.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when a reply cannot be produced.
+    fn wait_reply(&self) -> FsResult<String> {
+        Err(FsError::NotSupported)
+    }
+
     /// Closes the session, ending the event stream and releasing the engine.
     fn close(&self);
 }
