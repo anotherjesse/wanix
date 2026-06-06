@@ -21,30 +21,35 @@ fn quickjs_scalar_value_to_js(
     value: QuickJsValue,
 ) -> wasmtime::Result<i32> {
     match value {
-        QuickJsValue::Undefined => {
-            let qjs_get_undefined = quickjs_export::<(), i32>(caller, "qjs_get_undefined")?;
-            ensure_non_null_js_value(qjs_get_undefined.call(caller, ())?, "qjs_get_undefined")
-        }
-        QuickJsValue::Null => {
-            let qjs_get_null = quickjs_export::<(), i32>(caller, "qjs_get_null")?;
-            ensure_non_null_js_value(qjs_get_null.call(caller, ())?, "qjs_get_null")
-        }
-        QuickJsValue::Bool(value) => {
-            let name = if value {
-                "qjs_get_true"
-            } else {
-                "qjs_get_false"
-            };
-            let qjs_get_bool = quickjs_export::<(), i32>(caller, name)?;
-            ensure_non_null_js_value(qjs_get_bool.call(caller, ())?, name)
-        }
-        QuickJsValue::Number(value) => {
-            let qjs_new_number = quickjs_export::<f64, i32>(caller, "qjs_new_number")?;
-            ensure_non_null_js_value(qjs_new_number.call(caller, value)?, "qjs_new_number")
-        }
+        QuickJsValue::Undefined => get_quickjs_singleton(caller, "qjs_get_undefined"),
+        QuickJsValue::Null => get_quickjs_singleton(caller, "qjs_get_null"),
+        QuickJsValue::Bool(value) => get_quickjs_bool(caller, value),
+        QuickJsValue::Number(value) => create_quickjs_number(caller, value),
         QuickJsValue::String(value) => create_quickjs_string(caller, &value),
         QuickJsValue::BigIntI64(value) => create_quickjs_big_int64(caller, value),
     }
+}
+
+fn get_quickjs_singleton(
+    caller: &mut Caller<'_, HostState>,
+    export_name: &'static str,
+) -> wasmtime::Result<i32> {
+    let qjs_get_value = quickjs_export::<(), i32>(caller, export_name)?;
+    ensure_non_null_js_value(qjs_get_value.call(caller, ())?, export_name)
+}
+
+fn get_quickjs_bool(caller: &mut Caller<'_, HostState>, value: bool) -> wasmtime::Result<i32> {
+    let export_name = if value {
+        "qjs_get_true"
+    } else {
+        "qjs_get_false"
+    };
+    get_quickjs_singleton(caller, export_name)
+}
+
+fn create_quickjs_number(caller: &mut Caller<'_, HostState>, value: f64) -> wasmtime::Result<i32> {
+    let qjs_new_number = quickjs_export::<f64, i32>(caller, "qjs_new_number")?;
+    ensure_non_null_js_value(qjs_new_number.call(caller, value)?, "qjs_new_number")
 }
 
 fn create_quickjs_big_int64(
