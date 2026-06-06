@@ -133,10 +133,14 @@ mod tests {
         task
     }
 
+    fn wasi_ctx(config: crate::WasiConfig) -> WasiCtx {
+        WasiCtx::try_new(config).unwrap()
+    }
+
     #[test]
     fn dynamic_file_fd_is_mirrored_into_task_table_and_released_on_close() {
         let task = task_with_data();
-        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let mut ctx = wasi_ctx(task_wasi_config(&task));
 
         let fd = ctx
             .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
@@ -171,7 +175,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let mut ctx = wasi_ctx(task_wasi_config(&task));
         let fd = ctx
             .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
             .unwrap();
@@ -190,7 +194,7 @@ mod tests {
     fn dropping_the_ctx_releases_mirrored_dynamic_fds() {
         let task = task_with_data();
         {
-            let mut ctx = WasiCtx::new(task_wasi_config(&task));
+            let mut ctx = wasi_ctx(task_wasi_config(&task));
             let fd = ctx
                 .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
                 .unwrap();

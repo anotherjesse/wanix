@@ -25,6 +25,16 @@ pub struct Preopen {
 }
 
 impl Preopen {
+    /// Creates the default root preopen.
+    #[must_use]
+    pub fn root() -> Self {
+        let path = NormalizedPath::root();
+        Self {
+            source_path: path.clone(),
+            guest_path: path,
+        }
+    }
+
     /// Creates a preopen rooted at a Wanix namespace path and reported at the same guest path.
     ///
     /// # Errors
@@ -120,7 +130,7 @@ impl WasiConfig {
         Self {
             namespace,
             stdio: BTreeMap::new(),
-            preopens: vec![Preopen::new(".").expect("root path is valid")],
+            preopens: vec![Preopen::root()],
             args: Vec::new(),
             env: Vec::new(),
             clock_time_ns: DEFAULT_CLOCK_TIME_NS,
@@ -236,7 +246,7 @@ impl WasiConfig {
     pub fn with_root_preopen_source(mut self, source_path: NormalizedPath) -> Self {
         self.preopens[0] = Preopen {
             source_path,
-            guest_path: NormalizedPath::new(".").expect("root path is valid"),
+            guest_path: NormalizedPath::root(),
         };
         self
     }

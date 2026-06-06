@@ -69,10 +69,14 @@ mod tests {
         exit_code: Option<i32>,
     }
 
+    fn wasi_ctx(config: WasiConfig) -> WasiCtx {
+        WasiCtx::try_new(config).unwrap()
+    }
+
     impl TestHost {
         fn new() -> Self {
             Self {
-                wasi: WasiCtx::new(WasiConfig::new(Default::default())),
+                wasi: wasi_ctx(WasiConfig::new(Default::default())),
                 exit_code: None,
             }
         }

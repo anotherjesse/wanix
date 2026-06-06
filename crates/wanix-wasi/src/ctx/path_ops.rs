@@ -11,7 +11,8 @@ impl WasiCtx {
         dirfd: WasiFd,
         path: impl AsRef<str>,
     ) -> Result<FileStat, Errno> {
-        self.path_filestat_get_with_flags(dirfd, WasiLookupFlags::SYMLINK_FOLLOW, path)
+        let path = self.resolve_path(dirfd, path.as_ref(), WasiRights::PATH_FILESTAT_GET)?;
+        self.stat_path_with_lookup(&path, WasiLookupFlags::FOLLOW_SYMLINKS)
     }
 
     /// Returns stat data for a namespace path using raw Preview 1 lookup flags.
@@ -106,11 +107,7 @@ impl WasiCtx {
     }
 
     pub(super) fn stat_path(&self, path: &NormalizedPath) -> Result<FileStat, Errno> {
-        self.stat_path_with_lookup(
-            path,
-            WasiLookupFlags::from_preview1(WasiLookupFlags::SYMLINK_FOLLOW)
-                .expect("constant lookup flag is supported"),
-        )
+        self.stat_path_with_lookup(path, WasiLookupFlags::FOLLOW_SYMLINKS)
     }
 
     pub(super) fn stat_path_with_lookup(

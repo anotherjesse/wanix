@@ -9,6 +9,8 @@ pub struct WasiLookupFlags(u32);
 impl WasiLookupFlags {
     /// Follow the final symlink component while resolving a path.
     pub const SYMLINK_FOLLOW: u32 = 1 << 0;
+    /// Typed flag set that follows the final symlink component.
+    pub const FOLLOW_SYMLINKS: Self = Self(Self::SYMLINK_FOLLOW);
     const SUPPORTED: u32 = Self::SYMLINK_FOLLOW;
 
     /// Converts raw Preview 1 lookup flags into a validated set.

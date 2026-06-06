@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt, sync::Arc};
 use wanix_fs::NormalizedPath;
 use wanix_vfs::Namespace;
 
-use crate::{Errno, WasiConfig, WasiFd, WasiFdObserver, WasiRights};
+use crate::{Errno, WasiFd, WasiFdObserver, WasiRights};
 
 mod fd_ops;
 mod handle;
@@ -45,12 +45,6 @@ impl fmt::Debug for WasiCtx {
 }
 
 impl WasiCtx {
-    /// Creates a WASI context with fd 3 preopened at namespace root.
-    #[must_use]
-    pub fn new(config: WasiConfig) -> Self {
-        Self::try_new(config).expect("WASI config preopens must be valid")
-    }
-
     /// Returns the namespace backing this WASI context.
     #[must_use]
     pub fn namespace(&self) -> &Namespace {

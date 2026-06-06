@@ -35,6 +35,10 @@ fn path(value: &str) -> NormalizedPath {
     NormalizedPath::new(value).unwrap()
 }
 
+fn wasi_ctx(config: WasiConfig) -> WasiCtx {
+    WasiCtx::try_new(config).unwrap()
+}
+
 fn temp_host_dir(label: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     let nonce = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
@@ -107,7 +111,7 @@ fn config_and_ctx_expose_process_args_and_env() {
     assert!(!debug.contains("main.js"));
     assert!(!debug.contains("MODE=test"));
 
-    let ctx = WasiCtx::new(config);
+    let ctx = wasi_ctx(config);
 
     assert_eq!(ctx.args(), ["main.js", "--flag"]);
     assert_eq!(ctx.env(), ["MODE=test", "EMPTY="]);
@@ -128,7 +132,7 @@ fn ctx_debug_summarizes_handle_kinds_without_dynamic_file_internals() {
         .with_env(["MODE=secret-env"])
         .with_preopen("dir")
         .unwrap();
-    let mut ctx = WasiCtx::new(config);
+    let mut ctx = wasi_ctx(config);
 
     let dir_fd = ctx
         .path_open(WasiFd::ROOT, "dir", WasiOpenOptions::read())
@@ -172,7 +176,7 @@ fn preopen_validates_guest_paths() {
 #[test]
 fn root_preopen_stats_and_lists_namespace() {
     let root = fixture(&[("hello.txt", b"hello"), ("dir/nested.txt", b"nested")]);
-    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     let prestat = ctx.fd_prestat_get(WasiFd::ROOT).unwrap();
     assert_eq!(prestat.dir_name(), "/");
@@ -213,7 +217,7 @@ fn root_preopen_can_map_guest_root_to_namespace_subdirectory() {
         ("app/main.js", b"from app"),
         ("app/nested.txt", b"nested"),
     ]);
-    let mut ctx = WasiCtx::new(
+    let mut ctx = wasi_ctx(
         WasiConfig::new(namespace_with_root(root))
             .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
     );
@@ -289,7 +293,7 @@ fn preopens_must_exist_and_be_directories() {
 #[test]
 fn path_open_and_fd_read_use_wanix_namespace() {
     let root = fixture(&[("hello.txt", b"hello")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     let fd = ctx
         .path_open(WasiFd::ROOT, "hello.txt", WasiOpenOptions::read())
@@ -305,7 +309,7 @@ fn path_open_and_fd_read_use_wanix_namespace() {
 #[test]
 fn unconfigured_standard_fds_are_closed() {
     let root = fixture(&[]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     assert_eq!(ctx.fd_read(WasiFd::STDIN, &mut [0; 1]), Err(Errno::Badf));
     assert_eq!(ctx.fd_write(WasiFd::STDOUT, b"out"), Err(Errno::Badf));
@@ -350,7 +354,7 @@ fn configured_standard_fds_read_write_and_remain_non_closeable() {
         config.stdio_fds(),
         [WasiFd::STDIN, WasiFd::STDOUT, WasiFd::STDERR]
     );
-    let mut ctx = WasiCtx::new(config);
+    let mut ctx = wasi_ctx(config);
 
     let mut buf = [0; 8];
     let count = ctx.fd_read(WasiFd::STDIN, &mut buf).unwrap();
@@ -397,7 +401,7 @@ fn configured_standard_fds_read_write_and_remain_non_closeable() {
 #[test]
 fn standard_fd_readiness_comes_from_attached_files() {
     let root = fixture(&[]);
-    let ctx = WasiCtx::new(
+    let ctx = wasi_ctx(
         WasiConfig::new(namespace_with_root(root))
             .with_stdin(
                 Box::new(ReadinessFile {
@@ -422,7 +426,7 @@ fn standard_fd_readiness_comes_from_attached_files() {
 #[test]
 fn regular_fd_readiness_respects_open_capabilities() {
     let root = fixture(&[("read.txt", b"hello")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     let read_fd = ctx
         .path_open(WasiFd::ROOT, "read.txt", WasiOpenOptions::read())
@@ -447,7 +451,7 @@ fn task_service_paths_are_reachable_through_wasi_namespace() {
     let table = TaskTable::new();
     table.register_noop_driver("qjs").unwrap();
     let task = table.allocate_root("qjs").unwrap();
-    let mut ctx = WasiCtx::new(WasiConfig::new(task.namespace()));
+    let mut ctx = wasi_ctx(WasiConfig::new(task.namespace()));
 
     let fd = ctx
         .path_open(WasiFd::ROOT, "#task/self/id", WasiOpenOptions::read())
@@ -471,7 +475,7 @@ fn service_paths_remain_rooted_when_guest_root_maps_to_cwd() {
         ("#term/1/winch", b"rooted terminal service"),
     ]);
     task.bind(root, ".", ".", BindOptions::default()).unwrap();
-    let mut ctx = WasiCtx::new(
+    let mut ctx = wasi_ctx(
         WasiConfig::new(task.namespace())
             .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
     );
@@ -503,7 +507,7 @@ fn service_paths_remain_rooted_when_guest_root_maps_to_cwd() {
 #[test]
 fn writes_and_creates_flow_back_to_namespace() {
     let root = Arc::new(MemFs::new());
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root.clone())));
 
     let fd = ctx
         .path_open(WasiFd::ROOT, "out.txt", WasiOpenOptions::create_write())
@@ -538,7 +542,7 @@ fn path_filestat_get_lookup_flags_control_final_symlink_following_on_host_mounts
     symlink(&outside, root.join("dir-link")).unwrap();
 
     let local = Arc::new(LocalFs::new(&root).unwrap());
-    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(local)));
+    let ctx = wasi_ctx(WasiConfig::new(namespace_with_root(local)));
 
     let link = ctx
         .path_filestat_get_with_flags(WasiFd::ROOT, 0, "inside-link")
@@ -584,7 +588,7 @@ fn path_readlink_and_symlink_reach_host_mounts_without_following_escapes() {
     let root = temp_host_dir("link-root");
     std::fs::write(root.join("target.txt"), "inside").unwrap();
     let local = Arc::new(LocalFs::new(&root).unwrap());
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(local)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(local)));
 
     ctx.path_symlink(b"target.txt", WasiFd::ROOT, "created-link")
         .unwrap();
@@ -621,7 +625,7 @@ fn path_readlink_and_symlink_reach_host_mounts_without_following_escapes() {
 #[test]
 fn path_readlink_and_symlink_require_directory_rights() {
     let root = fixture(&[("dir/file.txt", b"file")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
     let dir_fd = ctx
         .path_open_preview1(
             WasiFd::ROOT,
@@ -643,7 +647,7 @@ fn path_readlink_and_symlink_require_directory_rights() {
 #[test]
 fn path_filestat_set_times_updates_namespace_metadata() {
     let root = fixture(&[("stamp.txt", b"stamp")]);
-    let ctx = WasiCtx::new(
+    let ctx = wasi_ctx(
         WasiConfig::new(namespace_with_root(root.clone())).with_clock_time_ns(9_000_000_000),
     );
 
@@ -726,7 +730,7 @@ fn path_filestat_set_times_updates_namespace_metadata() {
 #[test]
 fn path_filestat_set_times_validates_rights_and_flags() {
     let root = fixture(&[("dir/file.txt", b"stamp")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
     let dir_fd = ctx
         .path_open_preview1(
             WasiFd::ROOT,
@@ -784,7 +788,7 @@ fn path_filestat_set_times_validates_rights_and_flags() {
 #[test]
 fn fd_filestat_set_times_updates_namespace_metadata() {
     let root = fixture(&[("stamp.txt", b"stamp")]);
-    let mut ctx = WasiCtx::new(
+    let mut ctx = wasi_ctx(
         WasiConfig::new(namespace_with_root(root.clone())).with_clock_time_ns(9_000_000_000),
     );
     let fd = ctx
@@ -854,7 +858,7 @@ fn fd_filestat_set_times_updates_namespace_metadata() {
 #[test]
 fn fd_filestat_set_times_validates_rights_and_flags() {
     let root = fixture(&[("dir/file.txt", b"stamp")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
     let fd_without_set_times = ctx
         .path_open_preview1(
             WasiFd::ROOT,
@@ -907,7 +911,7 @@ fn fd_filestat_set_times_validates_rights_and_flags() {
 #[test]
 fn path_unlink_file_removes_namespace_files() {
     let root = fixture(&[("remove.txt", b"remove me"), ("dir/keep.txt", b"keep")]);
-    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root.clone())));
 
     ctx.path_unlink_file(WasiFd::ROOT, "remove.txt").unwrap();
 
@@ -925,7 +929,7 @@ fn path_unlink_file_removes_namespace_files() {
 #[test]
 fn path_create_directory_creates_namespace_directories() {
     let root = fixture(&[("parent/file.txt", b"file")]);
-    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root.clone())));
 
     ctx.path_create_directory(WasiFd::ROOT, "parent/newdir")
         .unwrap();
@@ -957,7 +961,7 @@ fn path_create_directory_creates_namespace_directories() {
 #[test]
 fn path_create_directory_respects_root_preopen_source() {
     let root = fixture(&[("app/existing.txt", b"file")]);
-    let ctx = WasiCtx::new(
+    let ctx = wasi_ctx(
         WasiConfig::new(namespace_with_root(root.clone()))
             .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
     );
@@ -979,7 +983,7 @@ fn path_create_directory_respects_root_preopen_source() {
 #[test]
 fn path_create_directory_requires_directory_right() {
     let root = fixture(&[("dir/file.txt", b"file")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
     let dir_fd = ctx
         .path_open_preview1(
             WasiFd::ROOT,
@@ -1001,7 +1005,7 @@ fn path_create_directory_requires_directory_right() {
 fn path_remove_directory_removes_empty_namespace_directories() {
     let root = fixture(&[("nonempty/file.txt", b"file"), ("file.txt", b"file")]);
     root.create_dir_all("empty").unwrap();
-    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root.clone())));
 
     ctx.path_remove_directory(WasiFd::ROOT, "empty").unwrap();
 
@@ -1032,7 +1036,7 @@ fn path_remove_directory_respects_root_preopen_source() {
     let root = fixture(&[("app/file.txt", b"file")]);
     root.create_dir_all("app/empty").unwrap();
     root.create_dir_all("empty").unwrap();
-    let ctx = WasiCtx::new(
+    let ctx = wasi_ctx(
         WasiConfig::new(namespace_with_root(root.clone()))
             .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
     );
@@ -1054,7 +1058,7 @@ fn path_remove_directory_respects_root_preopen_source() {
 #[test]
 fn path_remove_directory_requires_directory_right() {
     let root = fixture(&[("dir/empty/file.txt", b"file")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
     let dir_fd = ctx
         .path_open_preview1(
             WasiFd::ROOT,
@@ -1080,7 +1084,7 @@ fn path_rename_renames_namespace_paths() {
         ("dir/sub/file.txt", b"nested"),
     ]);
     root.create_dir_all("empty").unwrap();
-    let ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root.clone())));
 
     ctx.path_rename(WasiFd::ROOT, "old.txt", WasiFd::ROOT, "renamed.txt")
         .unwrap();
@@ -1109,7 +1113,7 @@ fn path_rename_renames_namespace_paths() {
 #[test]
 fn path_rename_respects_root_preopen_source() {
     let root = fixture(&[("app/old.txt", b"app"), ("old.txt", b"root")]);
-    let ctx = WasiCtx::new(
+    let ctx = wasi_ctx(
         WasiConfig::new(namespace_with_root(root.clone()))
             .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
     );
@@ -1126,7 +1130,7 @@ fn path_rename_respects_root_preopen_source() {
 fn path_rename_requires_source_and_target_directory_rights() {
     let root = fixture(&[("src/old.txt", b"old")]);
     root.create_dir_all("dst").unwrap();
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root.clone())));
     let source_fd = ctx
         .path_open_preview1(
             WasiFd::ROOT,
@@ -1155,7 +1159,7 @@ fn path_rename_requires_source_and_target_directory_rights() {
 
     let root = fixture(&[("src/old.txt", b"old")]);
     root.create_dir_all("dst").unwrap();
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
     let target_only_fd = ctx
         .path_open_preview1(
             WasiFd::ROOT,
@@ -1190,7 +1194,7 @@ fn path_rename_requires_source_and_target_directory_rights() {
 #[test]
 fn rights_are_enforced_on_open_fds() {
     let root = fixture(&[("read.txt", b"read"), ("write.txt", b"")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     let read_fd = ctx
         .path_open(WasiFd::ROOT, "read.txt", WasiOpenOptions::read())
@@ -1216,7 +1220,7 @@ fn rights_are_enforced_on_open_fds() {
 #[test]
 fn fd_filestat_set_size_updates_regular_files() {
     let root = fixture(&[("file.txt", b"hello"), ("read.txt", b"read")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root.clone())));
 
     let fd = ctx
         .path_open(
@@ -1262,7 +1266,7 @@ fn fd_filestat_set_size_updates_regular_files() {
 #[test]
 fn directories_can_be_opened_and_read_but_not_written() {
     let root = fixture(&[("dir/file.txt", b"file")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     let dir_fd = ctx
         .path_open(WasiFd::ROOT, "dir", WasiOpenOptions::read())
@@ -1308,7 +1312,7 @@ fn readdir_inherits_namespace_union_synthesis_and_hidden_filtering() {
             BindOptions::default(),
         )
         .unwrap();
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace));
 
     assert_eq!(
         ctx.fd_read_dir(WasiFd::ROOT)
@@ -1337,7 +1341,7 @@ fn readdir_inherits_namespace_union_synthesis_and_hidden_filtering() {
 #[test]
 fn close_only_accepts_dynamic_fds() {
     let root = fixture(&[("hello.txt", b"hello")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
     assert_eq!(ctx.open_dynamic_fd_count(), 0);
     let fd = ctx
         .path_open(WasiFd::ROOT, "hello.txt", WasiOpenOptions::read())
@@ -1375,7 +1379,7 @@ impl WasiFdObserver for FailingCloseObserver {
 fn fd_close_keeps_wasi_fd_open_when_observer_close_fails() {
     let root = fixture(&[("hello.txt", b"hello")]);
     let closed = Arc::new(Mutex::new(Vec::new()));
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)).with_fd_observer(
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)).with_fd_observer(
         FailingCloseObserver {
             closed: Arc::clone(&closed),
         },
@@ -1396,7 +1400,7 @@ fn fd_close_keeps_wasi_fd_open_when_observer_close_fails() {
 #[test]
 fn fdstat_reports_preopen_and_regular_file_rights() {
     let root = fixture(&[("read.txt", b"read"), ("write.txt", b"")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     let root_stat = ctx.fd_fdstat_get(WasiFd::ROOT).unwrap();
     assert_eq!(root_stat.file_type(), WasiFileType::Directory);
@@ -1531,7 +1535,7 @@ fn fdstat_reports_preopen_and_regular_file_rights() {
 #[test]
 fn fd_seek_and_tell_use_seekable_file_handles() {
     let root = fixture(&[("hello.txt", b"hello")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
     let fd = ctx
         .path_open(WasiFd::ROOT, "hello.txt", WasiOpenOptions::read())
         .unwrap();
@@ -1569,7 +1573,7 @@ fn fd_seek_and_tell_use_seekable_file_handles() {
 #[test]
 fn preview1_append_fdflag_writes_at_end_of_file() {
     let root = fixture(&[("log.txt", b"start")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root.clone())));
     let fd = ctx
         .path_open_preview1(
             WasiFd::ROOT,
@@ -1596,7 +1600,7 @@ fn preview1_append_fdflag_writes_at_end_of_file() {
 #[test]
 fn preview1_fd_fdstat_set_flags_updates_append_mode() {
     let root = fixture(&[("log.txt", b"start"), ("read.txt", b"read")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root.clone())));
     let fd = ctx
         .path_open_preview1(
             WasiFd::ROOT,
@@ -1819,7 +1823,7 @@ fn preview1_path_open_flags_convert_to_wanix_open_options() {
 #[test]
 fn preview1_path_open_preserves_reduced_file_rights() {
     let root = fixture(&[("data.txt", b"data")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     let fd = ctx
         .path_open_preview1(
@@ -1848,7 +1852,7 @@ fn preview1_path_open_preserves_reduced_file_rights() {
 #[test]
 fn preview1_path_open_projects_libc_regular_file_rights() {
     let root = fixture(&[("data.txt", b"data")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
     let libc_read_rights = WasiRights::FD_READ
         | WasiRights::FD_SEEK
         | WasiRights::FD_TELL
@@ -1895,7 +1899,7 @@ fn preview1_path_open_projects_libc_rights_for_rooted_service_paths() {
     let task = table.allocate_root("qjs").unwrap();
     let root = fixture(&[("app/main.js", b"from app")]);
     task.bind(root, ".", ".", BindOptions::default()).unwrap();
-    let mut ctx = WasiCtx::new(
+    let mut ctx = wasi_ctx(
         WasiConfig::new(task.namespace())
             .with_root_preopen_source(NormalizedPath::new("app").unwrap()),
     );
@@ -1932,7 +1936,7 @@ fn preview1_path_open_projects_libc_write_rights_for_task_service_files() {
     let table = TaskTable::new();
     table.register_noop_driver("qjs").unwrap();
     let task = table.allocate_root("qjs").unwrap();
-    let mut ctx = WasiCtx::new(WasiConfig::new(task.namespace()));
+    let mut ctx = wasi_ctx(WasiConfig::new(task.namespace()));
     let libc_write_rights = WasiRights::FD_SEEK
         | WasiRights::FD_TELL
         | WasiRights::FD_WRITE
@@ -1969,7 +1973,7 @@ fn preview1_path_open_projects_libc_write_rights_for_task_service_files() {
 #[test]
 fn preview1_path_open_projects_libc_regular_file_write_rights() {
     let root = fixture(&[("created.txt", b"older longer content")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root.clone())));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root.clone())));
     let libc_write_rights = WasiRights::FD_SEEK
         | WasiRights::FD_TELL
         | WasiRights::FD_WRITE
@@ -2010,7 +2014,7 @@ fn preview1_path_open_projects_libc_regular_file_write_rights() {
 #[test]
 fn preview1_path_open_preserves_reduced_directory_rights() {
     let root = fixture(&[("dir/file.txt", b"data")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     let dir_fd = ctx
         .path_open_preview1(
@@ -2065,7 +2069,7 @@ fn preview1_path_open_preserves_reduced_directory_rights() {
 #[test]
 fn preview1_path_open_accepts_libc_directory_rights() {
     let root = fixture(&[("dir/file.txt", b"data")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
     let libc_directory_base = WasiRights::from_preview1_bits(
         WasiRights::DIRECTORY_INHERITING.bits() & !WasiRights::FD_WRITE.bits(),
     );
@@ -2098,7 +2102,7 @@ fn preview1_path_open_accepts_libc_directory_rights() {
 #[test]
 fn preview1_path_open_enforces_parent_inheriting_rights() {
     let root = fixture(&[("dir/file.txt", b"data")]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     let dir_fd = ctx
         .path_open_preview1(
@@ -2173,7 +2177,7 @@ fn preview1_path_open_enforces_parent_inheriting_rights() {
 #[test]
 fn path_errors_map_to_wasi_errno() {
     let root = fixture(&[]);
-    let mut ctx = WasiCtx::new(WasiConfig::new(namespace_with_root(root)));
+    let mut ctx = wasi_ctx(WasiConfig::new(namespace_with_root(root)));
 
     assert_eq!(
         ctx.path_open(WasiFd::ROOT, "../bad", WasiOpenOptions::read()),

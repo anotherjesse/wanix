@@ -192,6 +192,10 @@ mod tests {
     use wanix_vfs::{BindOptions, Namespace};
     use wanix_wasi::{Errno, WasiConfig, WasiCtx, WasiFd, WasiOpenOptions};
 
+    fn wasi_ctx(config: WasiConfig) -> WasiCtx {
+        WasiCtx::try_new(config).unwrap()
+    }
+
     fn runner() -> Arc<QuickJsRunner> {
         static RUNNER: OnceLock<Result<Arc<QuickJsRunner>, String>> = OnceLock::new();
         match RUNNER.get_or_init(|| {
@@ -423,7 +427,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         )
         .unwrap();
 
-        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let mut ctx = wasi_ctx(task_wasi_config(&task));
         assert_eq!(
             task_wasi_config(&task).stdio_fds(),
             vec![WasiFd::STDIN, WasiFd::STDOUT, WasiFd::STDERR]
@@ -461,7 +465,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         root.write_file("data.txt", b"from namespace").unwrap();
         task.bind(root, ".", ".", BindOptions::default()).unwrap();
 
-        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let mut ctx = wasi_ctx(task_wasi_config(&task));
 
         assert!(task_wasi_config(&task).stdio_fds().is_empty());
         assert_eq!(ctx.fd_read(WasiFd::STDIN, &mut [0; 1]), Err(Errno::Badf));
@@ -480,7 +484,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         task.set_cmd("main.js --mode test").unwrap();
         task.set_env_lines("MODE=test\nEMPTY=").unwrap();
 
-        let ctx = WasiCtx::new(task_wasi_config(&task));
+        let ctx = wasi_ctx(task_wasi_config(&task));
 
         assert_eq!(ctx.args(), ["main.js", "--mode", "test"]);
         assert_eq!(ctx.env(), ["MODE=test", "EMPTY="]);
@@ -505,7 +509,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         task.set_env_lines("RAW=1").unwrap();
 
         let command = task_command(&task).unwrap();
-        let ctx = WasiCtx::new(task_wasi_config(&task));
+        let ctx = wasi_ctx(task_wasi_config(&task));
 
         assert_eq!(command.raw, "main.js two words");
         assert_eq!(command.program.as_str(), "app/main.js");
@@ -531,7 +535,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         task.set_dir("app").unwrap();
 
         let command = task_command(&task).unwrap();
-        let ctx = WasiCtx::new(task_wasi_config(&task));
+        let ctx = wasi_ctx(task_wasi_config(&task));
 
         assert_eq!(command.raw, "main.js alpha 'two words' '' plain\\ arg");
         assert_eq!(command.program.as_str(), "app/main.js");
@@ -557,7 +561,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         spec.cwd = NormalizedPath::new("app").unwrap();
         task.set_spec(spec).unwrap();
 
-        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let mut ctx = wasi_ctx(task_wasi_config(&task));
         let fd = ctx
             .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
             .unwrap();
@@ -586,7 +590,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         )
         .unwrap();
 
-        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let mut ctx = wasi_ctx(task_wasi_config(&task));
 
         assert!(task_wasi_config(&task).stdio_fds().is_empty());
         assert_eq!(ctx.fd_read(WasiFd::ROOT, &mut [0; 4]), Err(Errno::Isdir));
@@ -605,7 +609,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         root.write_file("data.txt", b"from mirrored fd").unwrap();
         task.bind(root, ".", ".", BindOptions::default()).unwrap();
 
-        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let mut ctx = wasi_ctx(task_wasi_config(&task));
         let fd = ctx
             .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
             .unwrap();
@@ -643,7 +647,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         )
         .unwrap();
 
-        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let mut ctx = wasi_ctx(task_wasi_config(&task));
         let fd = ctx
             .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
             .unwrap();
@@ -666,7 +670,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         task.bind(root, ".", ".", BindOptions::default()).unwrap();
 
         {
-            let mut ctx = WasiCtx::new(task_wasi_config(&task));
+            let mut ctx = wasi_ctx(task_wasi_config(&task));
             let fd = ctx
                 .path_open(WasiFd::ROOT, "data.txt", WasiOpenOptions::read())
                 .unwrap();
@@ -698,7 +702,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         )
         .unwrap();
 
-        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let mut ctx = wasi_ctx(task_wasi_config(&task));
         task.close_fd(Fd::STDOUT).unwrap();
 
         assert_eq!(ctx.fd_write(WasiFd::STDOUT, b"after"), Err(Errno::Badf));
@@ -728,7 +732,7 @@ std.writeFile("observed.txt", std.loadFile("input.txt"));
         )
         .unwrap();
 
-        let mut ctx = WasiCtx::new(task_wasi_config(&task));
+        let mut ctx = wasi_ctx(task_wasi_config(&task));
         task.insert_fd(
             Fd::STDOUT,
             new_stdout
