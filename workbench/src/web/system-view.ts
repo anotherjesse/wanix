@@ -57,7 +57,7 @@ type CategoryId = "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
-	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string };
+	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string };
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "drivers", label: "Drivers" },
@@ -222,7 +222,10 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				arguments: [task.sourcePath],
 			} : undefined;
 			const contextValue = task.sourcePath ? "wanixTaskWithSource" : "wanixTask";
-			return leaf(`task:${task.id}`, `${task.id} ${taskDisplayName(task)}`, description, taskIcon(task.status), command, contextValue);
+			return leaf(`task:${task.id}`, `${task.id} ${taskDisplayName(task)}`, description, taskIcon(task.status), command, contextValue, {
+				taskId: task.id,
+				sourcePath: task.sourcePath,
+			});
 		});
 	}
 
@@ -250,7 +253,15 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	}
 }
 
-function leaf(id: string, label: string, description?: string, icon?: string, command?: vscode.Command, contextValue?: string): SystemTreeItem {
+function leaf(
+	id: string,
+	label: string,
+	description?: string,
+	icon?: string,
+	command?: vscode.Command,
+	contextValue?: string,
+	metadata: { taskId?: string; sourcePath?: string } = {},
+): SystemTreeItem {
 	return {
 		type: "leaf",
 		id,
@@ -259,6 +270,8 @@ function leaf(id: string, label: string, description?: string, icon?: string, co
 		icon: icon ? new vscode.ThemeIcon(icon) : undefined,
 		command,
 		contextValue,
+		taskId: metadata.taskId,
+		sourcePath: metadata.sourcePath,
 	};
 }
 

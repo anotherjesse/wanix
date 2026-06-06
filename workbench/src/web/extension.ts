@@ -63,6 +63,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		systemView.filesystemActivity("filesystem refreshed");
 	};
 	const activeTaskTerminals = new Map<TaskRunKind, vscode.Terminal>();
+	const taskTerminals = new Map<string, vscode.Terminal>();
 	context.subscriptions.push(bridge);
 	rememberWanixEditor();
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
@@ -72,6 +73,11 @@ export async function activate(context: vscode.ExtensionContext) {
 		for (const [kind, activeTerminal] of activeTaskTerminals) {
 			if (terminal === activeTerminal) {
 				activeTaskTerminals.delete(kind);
+			}
+		}
+		for (const [taskId, taskTerminal] of taskTerminals) {
+			if (terminal === taskTerminal) {
+				taskTerminals.delete(taskId);
 			}
 		}
 	}));
@@ -113,10 +119,10 @@ export async function activate(context: vscode.ExtensionContext) {
 			vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 		});
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runQjsTask', (resource?: vscode.Uri) => {
-			runWanixTask(fsys, bridge, config, systemView, activeTaskTerminals, "qjs", resource, context);
+			runWanixTask(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, "qjs", resource, context);
 		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runWasmTask', (resource?: vscode.Uri) => {
-			runWanixTask(fsys, bridge, config, systemView, activeTaskTerminals, "wasm", resource, context);
+			runWanixTask(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, "wasm", resource, context);
 		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.installDuetDemo', async () => {
 			try {
@@ -127,7 +133,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runDuetDemo', async () => {
 			try {
-				await runDuetDemo(fsys, bridge, config, systemView, activeTaskTerminals, context);
+				await runDuetDemo(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -139,13 +145,30 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
-		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixTaskSource', async (sourcePath?: string) => {
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixTaskSource', async (source?: string | { sourcePath?: string }) => {
 			try {
+				const sourcePath = taskSourcePath(source);
 				if (!sourcePath) {
 					throw new Error("Task source is not available");
 				}
 				await openWanixPath(sourcePath);
 				systemView.filesystemActivity(`opened task source ${baseName(sourcePath)}`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.focusTaskTerminal', async (task?: string | { taskId?: string }) => {
+			try {
+				const taskId = taskIdFromArgument(task);
+				if (!taskId) {
+					throw new Error("Task terminal is not available");
+				}
+				const terminal = taskTerminals.get(taskId);
+				if (!terminal) {
+					throw new Error(`Task ${taskId} terminal is no longer open`);
+				}
+				terminal.show();
+				systemView.filesystemActivity(`focused task terminal ${taskId}`);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -209,6 +232,20 @@ function absoluteWanixPath(path: string): string {
 	return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
+function taskSourcePath(source: string | { sourcePath?: string } | undefined): string | undefined {
+	if (typeof source === "string") {
+		return source;
+	}
+	return source?.sourcePath;
+}
+
+function taskIdFromArgument(task: string | { taskId?: string } | undefined): string | undefined {
+	if (typeof task === "string") {
+		return task;
+	}
+	return task?.taskId;
+}
+
 function configuredOpenUri(target: string | undefined): vscode.Uri | undefined {
 	const trimmed = target?.trim();
 	if (!trimmed) {
@@ -231,13 +268,14 @@ async function runWanixTask(
 	config: Config,
 	systemView: WanixSystemView,
 	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	taskTerminals: Map<string, vscode.Terminal>,
 	kind: TaskRunKind,
 	resource: vscode.Uri | undefined,
 	context: vscode.ExtensionContext,
 ): Promise<void> {
 	try {
 		const target = await taskRunTarget(kind, bridge, resource);
-		await runWanixTaskTarget(fsys, bridge, config, systemView, activeTaskTerminals, kind, target, context);
+		await runWanixTaskTarget(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, kind, target, context);
 	} catch (error) {
 		vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 	}
@@ -249,6 +287,7 @@ async function runDuetDemo(
 	config: Config,
 	systemView: WanixSystemView,
 	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	taskTerminals: Map<string, vscode.Terminal>,
 	context: vscode.ExtensionContext,
 ): Promise<void> {
 	await installDuetDemo(context, fsys, bridge, systemView, { openProducer: false, notify: false });
@@ -260,6 +299,7 @@ async function runDuetDemo(
 			config,
 			systemView,
 			activeTaskTerminals,
+			taskTerminals,
 			step.kind,
 			taskRunTargetFromPath(bridge, step.kind, step.path),
 			context,
@@ -280,6 +320,7 @@ async function runWanixTaskTarget(
 	config: Config,
 	systemView: WanixSystemView,
 	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	taskTerminals: Map<string, vscode.Terminal>,
 	kind: TaskRunKind,
 	target: TaskRunTarget,
 	context: vscode.ExtensionContext,
@@ -291,14 +332,27 @@ async function runWanixTaskTarget(
 	const exit = new Promise<number | undefined>((resolve) => {
 		resolveExit = resolve;
 	});
+	let startedTaskId: string | undefined;
+	const pty = await createActiveTaskTerminal(fsys, bridge, config, systemView, kind, target, {
+		onStart: (taskId) => {
+			startedTaskId = taskId;
+		},
+		onExit: resolveExit,
+		onClose: () => {
+			if (startedTaskId) {
+				taskTerminals.delete(startedTaskId);
+			}
+			resolveExit(undefined);
+		},
+	});
 	const term = vscode.window.createTerminal({
 		name: taskTerminalName(kind, target.name),
-		pty: await createActiveTaskTerminal(fsys, bridge, config, systemView, kind, target, {
-			onExit: resolveExit,
-			onClose: () => resolveExit(undefined),
-		})
+		pty,
 	});
 	activeTaskTerminals.set(kind, term);
+	if (startedTaskId) {
+		taskTerminals.set(startedTaskId, term);
+	}
 	term.show();
 	context.subscriptions.push(term);
 	return options.waitForExit ? await exit : undefined;
@@ -311,7 +365,7 @@ async function createActiveTaskTerminal(
 	systemView: WanixSystemView,
 	kind: TaskRunKind,
 	target: TaskRunTarget,
-	lifecycle: { onExit?: (code: number | undefined) => void; onClose?: () => void } = {},
+	lifecycle: { onStart?: (taskId: string) => void; onExit?: (code: number | undefined) => void; onClose?: () => void } = {},
 ) {
 	if (!config.ns?.task || !config.ns?.term) {
 		throw new Error("Wanix task and terminal services are not available");
@@ -336,6 +390,7 @@ async function createActiveTaskTerminal(
 		taskLabel: target.name,
 		terminalLabel: taskTerminalName(kind, target.name),
 		onTaskStarted: (event) => {
+			lifecycle.onStart?.(event.id);
 			systemView.taskStarted(event.id, event.kind, event.label, { sourcePath: target.path });
 			revealWanixSystemView();
 		},

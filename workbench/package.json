@@ -85,6 +85,12 @@
         "icon": "$(go-to-file)"
       },
       {
+        "command": "workbench.focusTaskTerminal",
+        "title": "Focus Task Terminal",
+        "category": "Wanix",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "workbench.installDuetDemo",
         "title": "Install JS and WASM Duet Demo",
         "category": "Wanix",
@@ -166,6 +172,11 @@
           "command": "workbench.openWanixTaskSource",
           "when": "view == wanix.system && viewItem == wanixTaskWithSource",
           "group": "navigation@0"
+        },
+        {
+          "command": "workbench.focusTaskTerminal",
+          "when": "view == wanix.system && viewItem == wanixTaskWithSource",
+          "group": "navigation@1"
         },
         {
           "command": "workbench.openHttpAppDemo",
