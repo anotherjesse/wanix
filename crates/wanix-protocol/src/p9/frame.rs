@@ -154,7 +154,9 @@ impl P9Frame {
         if bytes.len() < P9_HEADER_LEN {
             return Err(P9Error::ShortFrame { len: bytes.len() });
         }
-        let declared = p9_declared_size(bytes)?.expect("header length was checked");
+        let Some(declared) = p9_declared_size(bytes)? else {
+            return Err(P9Error::ShortFrame { len: bytes.len() });
+        };
         if declared != bytes.len() {
             return Err(P9Error::FrameSizeMismatch {
                 declared,
@@ -194,11 +196,7 @@ pub fn p9_declared_size(bytes: &[u8]) -> Result<Option<usize>, P9Error> {
     if bytes.len() < P9_SIZE_FIELD_LEN {
         return Ok(None);
     }
-    let size = u32::from_le_bytes(
-        bytes[..P9_SIZE_FIELD_LEN]
-            .try_into()
-            .expect("slice length was checked before conversion"),
-    ) as usize;
+    let size = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
     if size < P9_HEADER_LEN {
         return Err(P9Error::InvalidFrameSize { size });
     }
@@ -330,6 +328,7 @@ mod tests {
 
         let encoded = frame.encode().unwrap();
         assert_eq!(p9_declared_size(&encoded).unwrap(), Some(encoded.len()));
+        assert_eq!(p9_declared_size(&encoded[..3]).unwrap(), None);
         assert_eq!(p9_tag_from_frame_bytes(&encoded).unwrap(), 7);
         assert_eq!(P9Frame::decode(&encoded).unwrap(), frame);
     }
