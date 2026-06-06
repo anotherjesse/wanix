@@ -265,6 +265,12 @@ system object that produced it.
 
 ![HTTP route row shows latest status and preview action](assets/wanix-workbench-browser-dx/29-http-route-status-preview.png)
 
+The route execution itself is visible now too. When the workbench previews
+`/.wanix/app/hello`, the `Route Runs` section records the run, shows the HTTP
+status and URL, and opens the saved response report for that execution.
+
+![HTTP route run row](assets/wanix-workbench-browser-dx/37-http-route-run-row.png)
+
 The first-use loop got a small entry point too: `New qjs Script` creates a
 unique `/scratch/qjs-N.js`, opens it, and gives it a tiny program that writes
 both terminal output and `last-run.txt`. New users no longer need to know where
@@ -342,6 +348,8 @@ But the first browser pass had several small breaks in the loop:
   activity instead of appearing as a clickable repair trace.
 - The repaired source changed in the editor, but there was no durable
   before/after diff artifact to inspect later.
+- HTTP route previews updated route status, but the execution itself was not a
+  first-class row in the system panel.
 
 None of those are huge by themselves. Together, they make the browser experience feel like a prototype you have to babysit. The point of this pass was to remove enough of that babysitting that the system starts to feel direct.
 
@@ -456,6 +464,10 @@ The route row now also keeps the latest preview status and saved report path.
 That makes the HTTP app route behave more like a live system resource: it shows
 last `200 OK` state and exposes the response artifact from the same row.
 
+The route-run row closes the Week 3 loop from another angle: an HTTP request is
+now represented in the cockpit as an execution, with the response report and
+handler source hanging off the run instead of living only in the editor.
+
 The scratch-script action is the same philosophy applied to creation. The
 cockpit should not only inspect Wanix; it should help you make the next Wanix
 object.
@@ -535,21 +547,23 @@ The current loop is:
     intentionally reset the demo handler.
 29. After previewing, read the route row's latest HTTP status and reopen the
     saved response report from `Open Latest HTTP App Preview`.
-30. Click `New qjs Script` to create a unique runnable scratch script without
+30. Expand `Route Runs` to see the previewed HTTP route execution and reopen
+    its response report or handler source.
+31. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-31. Run that script, then expand its task row to reopen the source, transcript,
+32. Run that script, then expand its task row to reopen the source, transcript,
     metadata, terminal output, or `#task/<id>` service directory.
-32. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+33. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-33. Click `Clear Finished Rows` when old exited tasks and closed terminals are
+34. Click `Clear Finished Rows` when old exited tasks and closed terminals are
     crowding the sidebar.
-34. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+35. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-35. Watch the `Agent` section list the repair loop: read, run, observe, edit,
+36. Watch the `Agent` section list the repair loop: read, run, observe, edit,
     rerun, capture transcripts, and verify `agent/out/result.txt`.
-36. Click an Agent row with an artifact to reopen the source, transcript, or
+37. Click an Agent row with an artifact to reopen the source, transcript, or
     result file from the same system panel.
-37. Click `diff broken.js` to reopen the before/after repair diff from
+38. Click `diff broken.js` to reopen the before/after repair diff from
     `/agent/out`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.

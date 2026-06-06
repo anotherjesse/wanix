@@ -307,6 +307,11 @@
           "group": "navigation@0"
         },
         {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixRouteRun",
+          "group": "navigation@0"
+        },
+        {
           "command": "workbench.openWanixDiff",
           "when": "view == wanix.system && viewItem == wanixAgentDiff",
           "group": "navigation@0"

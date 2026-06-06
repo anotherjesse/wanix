@@ -66,6 +66,16 @@ type RouteRecord = {
 	previewPath?: string;
 };
 
+type RouteRunRecord = {
+	id: number;
+	routeId: string;
+	label: string;
+	status: string;
+	url?: string;
+	sourcePath?: string;
+	previewPath?: string;
+};
+
 type ActivityRecord = {
 	id: number;
 	label: string;
@@ -81,7 +91,7 @@ type AgentRecord = {
 	afterPath?: string;
 };
 
-type CategoryId = "actions" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "agent" | "activity";
+type CategoryId = "actions" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
@@ -95,6 +105,7 @@ const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "terminals", label: "Terminals" },
 	{ type: "category", id: "namespace", label: "Namespace" },
 	{ type: "category", id: "routes", label: "Routes" },
+	{ type: "category", id: "routeRuns", label: "Route Runs" },
 	{ type: "category", id: "activity", label: "Activity" },
 ];
 
@@ -106,11 +117,13 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private terminals = new Map<string, TerminalRecord>();
 	private namespace: NamespaceRecord[] = [];
 	private routes: RouteRecord[] = [];
+	private routeRuns: RouteRunRecord[] = [];
 	private agent: AgentRecord[] = [];
 	private activity: ActivityRecord[] = [];
 	private hasHttpApp = false;
 	private hasV86 = false;
 	private nextActivityId = 1;
+	private nextRouteRunId = 1;
 	private nextAgentId = 1;
 
 	readonly onDidChangeTreeData = this.emitter.event;
@@ -224,14 +237,24 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		return { tasks, terminals };
 	}
 
-	routePreviewed(id: string, preview: { status: number; statusText?: string; previewPath: string }): void {
+	routePreviewed(id: string, preview: { status: number; statusText?: string; previewPath: string; sourcePath?: string; url?: string }): void {
 		const route = this.routes.find((candidate) => candidate.id === id);
 		if (!route) {
 			return;
 		}
 		route.previewStatus = formatHttpStatus(preview.status, preview.statusText);
 		route.previewPath = preview.previewPath;
-		this.addActivity(`${route.label} preview ${route.previewStatus}`);
+		this.routeRuns.unshift({
+			id: this.nextRouteRunId++,
+			routeId: route.id,
+			label: route.label,
+			status: route.previewStatus,
+			url: preview.url,
+			sourcePath: preview.sourcePath,
+			previewPath: preview.previewPath,
+		});
+		this.routeRuns = this.routeRuns.slice(0, 8);
+		this.addActivity(`${route.label} route task ${route.previewStatus}`);
 		this.refresh();
 	}
 
@@ -287,6 +310,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 						{ path: route.previewPath },
 					))
 					: [leaf("routes:empty", "no routes advertised")];
+			case "routeRuns":
+				return this.routeRunItems();
 			case "agent":
 				return this.agentItems();
 			case "activity":
@@ -350,6 +375,28 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				{ path: entry.path },
 			);
 		});
+	}
+
+	private routeRunItems(): SystemTreeItem[] {
+		if (this.routeRuns.length === 0) {
+			return [leaf("route-runs:empty", "no route runs yet")];
+		}
+		return this.routeRuns.map((run) => leaf(
+			`route-run:${run.id}`,
+			`${run.id} ${run.label}`,
+			routeRunDescription(run),
+			"globe",
+			run.previewPath ? {
+				command: "workbench.openWanixPath",
+				title: "Open Wanix Path",
+				arguments: [run.previewPath],
+			} : undefined,
+			run.previewPath ? "wanixRouteRun" : undefined,
+			{
+				path: run.previewPath,
+				children: routeRunArtifactItems(run),
+			},
+		));
 	}
 
 	private terminalItems(): SystemTreeItem[] {
@@ -466,6 +513,32 @@ function taskArtifactItems(task: TaskRecord): SystemTreeItem[] {
 	return items;
 }
 
+function routeRunArtifactItems(run: RouteRunRecord): SystemTreeItem[] {
+	const items: SystemTreeItem[] = [];
+	if (run.previewPath) {
+		items.push(leaf(`route-run:${run.id}:response`, "Response Report", pathDescription(run.previewPath), "output", {
+			command: "workbench.openWanixPath",
+			title: "Open Wanix Path",
+			arguments: [run.previewPath],
+		}));
+	}
+	if (run.sourcePath) {
+		items.push(leaf(`route-run:${run.id}:source`, "Handler Source", pathDescription(run.sourcePath), "go-to-file", {
+			command: "workbench.openWanixPath",
+			title: "Open Wanix Path",
+			arguments: [run.sourcePath],
+		}));
+	}
+	if (run.url) {
+		items.push(leaf(`route-run:${run.id}:url`, "URL", run.url, "link-external"));
+	}
+	return items;
+}
+
+function routeRunDescription(run: RouteRunRecord): string {
+	return run.url ? `${run.status} · ${run.url}` : run.status;
+}
+
 function pathDescription(path: string): string {
 	const normalized = path.endsWith("/") && path.length > 1 ? path.slice(0, -1) : path;
 	const slash = normalized.lastIndexOf("/");
@@ -513,6 +586,8 @@ function categoryIcon(id: CategoryId): vscode.ThemeIcon {
 		case "namespace":
 			return new vscode.ThemeIcon("root-folder");
 		case "routes":
+			return new vscode.ThemeIcon("globe");
+		case "routeRuns":
 			return new vscode.ThemeIcon("globe");
 		case "agent":
 			return new vscode.ThemeIcon("tools");
