@@ -144,6 +144,13 @@ back in the Wanix namespace.
 
 ![HTTP app response report previewed in the workbench](assets/wanix-workbench-browser-dx/13-http-app-preview-report.jpg)
 
+Then the route row itself became clickable. The Wanix System view no longer
+just announces `/.wanix/app/<name>` as a passive contract; selecting that route
+runs the preview action and opens the response report. That is the small shift
+from "this exists" to "this is usable."
+
+![HTTP route row runs the preview report](assets/wanix-workbench-browser-dx/14-http-route-row-preview.jpg)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -260,6 +267,8 @@ The current loop is:
 14. See the HTTP app route contract in the Wanix sidebar.
 15. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
     `/apps/hello.response.txt` report inside the workbench.
+16. Click the `/.wanix/app/<name>` route row itself to run the same preview from
+    the visible system contract.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -272,8 +281,8 @@ The next round should probably focus on making the workbench less demo-only:
 - Let the sidebar inspect service files directly, not just extension-observed events.
 - Add a small run history or output link per task entry.
 - Add a reset button for the duet demo's generated files.
-- Make the HTTP route row itself runnable, so users do not need to know the
-  toolbar icon.
+- Add a route detail panel or context menu for copying the raw URL and opening
+  the handler source.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.
