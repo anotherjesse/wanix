@@ -56,7 +56,7 @@ type CategoryId = "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
-	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command };
+	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string };
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "drivers", label: "Drivers" },
@@ -164,6 +164,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		item.description = element.description;
 		item.iconPath = element.icon;
 		item.command = element.command;
+		item.contextValue = element.contextValue;
 		return item;
 	}
 
@@ -190,7 +191,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 					? this.routes.map((route) => leaf(`route:${route.id}`, route.label, route.description, "globe", {
 						command: "workbench.openHttpAppDemo",
 						title: "Preview HTTP App Demo",
-					}))
+					}, "wanixHttpRoute"))
 					: [leaf("routes:empty", "no routes advertised")];
 			case "activity":
 				return this.activity.length > 0
@@ -242,7 +243,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	}
 }
 
-function leaf(id: string, label: string, description?: string, icon?: string, command?: vscode.Command): SystemTreeItem {
+function leaf(id: string, label: string, description?: string, icon?: string, command?: vscode.Command, contextValue?: string): SystemTreeItem {
 	return {
 		type: "leaf",
 		id,
@@ -250,6 +251,7 @@ function leaf(id: string, label: string, description?: string, icon?: string, co
 		description,
 		icon: icon ? new vscode.ThemeIcon(icon) : undefined,
 		command,
+		contextValue,
 	};
 }
 

@@ -167,6 +167,13 @@ honest: open, edit, preview, reset only when you ask for reset.
 
 ![HTTP handler source opened without resetting edits](assets/wanix-workbench-browser-dx/16-http-open-handler.jpg)
 
+The route row now has the same controls in its context menu: preview the route,
+open the handler, copy the concrete local URL, or reset the starter handler.
+That makes `/.wanix/app/<name>` feel like an inspectable system object rather
+than a label that happens to be clickable.
+
+![HTTP route context actions reset the handler intentionally](assets/wanix-workbench-browser-dx/17-http-route-context-actions.jpg)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -268,6 +275,10 @@ The handler action separates exploration from mutation. A user can inspect or
 edit the qjs-backed HTTP program without accidentally reinstalling the starter
 code.
 
+The route context menu is a small but important cockpit pattern: visible system
+objects should have operations attached to them. A route is not just something
+to read; it is something to run, inspect, copy, and intentionally reset.
+
 ## The Feeling Now
 
 The current loop is:
@@ -297,6 +308,8 @@ The current loop is:
     without losing the edit or reopening the report.
 18. Open the HTTP handler source directly, and reset the demo only through the
     explicit reset command.
+19. Right-click the route row to preview, open source, copy the route URL, or
+    intentionally reset the demo handler.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -309,10 +322,7 @@ The next round should probably focus on making the workbench less demo-only:
 - Let the sidebar inspect service files directly, not just extension-observed events.
 - Add a small run history or output link per task entry.
 - Add a reset button for the duet demo's generated files.
-- Add a route detail panel or context menu for copying the raw URL and opening
-  the handler source.
-- Surface the HTTP reset action in the route context menu, not just the command
-  palette.
+- Add a route detail panel showing latest preview status and output path.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.

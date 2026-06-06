@@ -36,7 +36,7 @@ export async function installHttpAppDemo(
 	await fsys.makeDirAll(APP_DIR);
 	await fsys.writeFile(APP_PATH, APP_JS);
 	refreshWanixFile(bridge, APP_PATH);
-	systemView.filesystemActivity("http app demo installed");
+	systemView.filesystemActivity("http app demo reset");
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
 	});
@@ -70,6 +70,16 @@ export async function openHttpAppHandler(
 	await ensureHttpAppDemo(fsys, bridge, systemView);
 	systemView.filesystemActivity("http app handler opened");
 	await openWanixFile(APP_PATH);
+}
+
+export async function copyHttpAppUrl(
+	config: HttpAppDemoConfig,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const url = httpAppDemoUrl(config);
+	await vscode.env.clipboard.writeText(url);
+	systemView.filesystemActivity("http app url copied");
+	vscode.window.showInformationMessage("Copied Wanix HTTP app URL");
 }
 
 export async function openHttpAppDemo(

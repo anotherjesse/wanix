@@ -101,6 +101,12 @@
         "title": "Preview HTTP App Demo",
         "category": "Wanix",
         "icon": "$(globe)"
+      },
+      {
+        "command": "workbench.copyHttpAppUrl",
+        "title": "Copy HTTP App URL",
+        "category": "Wanix",
+        "icon": "$(copy)"
       }
     ],
     "menus": {
@@ -136,6 +142,28 @@
           "command": "workbench.openHttpAppHandler",
           "when": "view == wanix.system",
           "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "workbench.openHttpAppDemo",
+          "when": "view == wanix.system && viewItem == wanixHttpRoute",
+          "group": "navigation@1"
+        },
+        {
+          "command": "workbench.openHttpAppHandler",
+          "when": "view == wanix.system && viewItem == wanixHttpRoute",
+          "group": "navigation@2"
+        },
+        {
+          "command": "workbench.copyHttpAppUrl",
+          "when": "view == wanix.system && viewItem == wanixHttpRoute",
+          "group": "navigation@3"
+        },
+        {
+          "command": "workbench.installHttpAppDemo",
+          "when": "view == wanix.system && viewItem == wanixHttpRoute",
+          "group": "reset@1"
         }
       ],
       "explorer/context": [
