@@ -14,13 +14,26 @@ use wanix_fs::{FsError, FsResult};
 use crate::engine::{AgentEngine, AgentSession, EventStream};
 
 mod normalize;
+mod overlay;
 use normalize::normalize_notification;
+use overlay::build_codex_overlay;
 
 /// How long to wait for a JSON-RPC response before giving up.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
 fn other(message: impl Into<String>) -> FsError {
     FsError::Other(message.into())
+}
+
+/// A codex "environment" selecting the wanix exec-server for a thread/turn.
+#[derive(Debug, Clone)]
+struct EnvSpec {
+    id: String,
+    cwd: String,
+}
+
+fn environments_value(environment: &EnvSpec) -> Value {
+    json!([{"environmentId": environment.id, "cwd": environment.cwd}])
 }
 
 /// An [`AgentEngine`] that bridges a real `codex app-server` subprocess.
@@ -35,25 +48,59 @@ pub struct CodexEngine {
     codex_bin: PathBuf,
     codex_home: Option<PathBuf>,
     cwd: String,
+    environment: Option<EnvSpec>,
 }
 
 impl CodexEngine {
     /// Creates an engine that runs `codex_bin` (resolved from `PATH` when a bare
     /// name) with the agent working directory `cwd` and an optional
-    /// `CODEX_HOME` override (defaults to codex's own `~/.codex`).
+    /// `CODEX_HOME` override (defaults to codex's own `~/.codex`). The agent
+    /// reads the host filesystem under a read-only sandbox.
     #[must_use]
     pub fn new(codex_bin: PathBuf, codex_home: Option<PathBuf>, cwd: String) -> Self {
         Self {
             codex_bin,
             codex_home,
             cwd,
+            environment: None,
         }
+    }
+
+    /// Creates an engine whose agent edits a confined Wanix world: the host
+    /// directory `world_root` is exposed as the agent's ENTIRE filesystem via
+    /// the wanix exec-server, so the agent's reads/writes/commands land there
+    /// and nowhere else (even under a full-access sandbox). Builds a private
+    /// `CODEX_HOME` overlay registering the exec-server.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the overlay cannot be built.
+    pub fn with_wanix_world(codex_bin: PathBuf, world_root: PathBuf) -> FsResult<Self> {
+        // The exec-server backs the agent's filesystem with the host directory
+        // `world_root`, but the agent SEES that as its root `/` — so the agent's
+        // cwd is "/", not the host path (otherwise it builds doubly-rooted paths).
+        let world = world_root.to_string_lossy().into_owned();
+        let overlay = build_codex_overlay(&world)?;
+        Ok(Self {
+            codex_bin,
+            codex_home: Some(overlay),
+            cwd: "/".to_owned(),
+            environment: Some(EnvSpec {
+                id: "wanix".to_owned(),
+                cwd: "/".to_owned(),
+            }),
+        })
     }
 }
 
 impl AgentEngine for CodexEngine {
     fn start_session(&self) -> FsResult<Arc<dyn AgentSession>> {
-        let session = CodexSession::start(&self.codex_bin, self.codex_home.as_deref(), &self.cwd)?;
+        let session = CodexSession::start(
+            &self.codex_bin,
+            self.codex_home.as_deref(),
+            &self.cwd,
+            self.environment.clone(),
+        )?;
         Ok(Arc::new(session))
     }
 
@@ -67,25 +114,33 @@ struct CodexSession {
     thread_id: String,
     stream: Arc<EventStream>,
     turns: AtomicU64,
+    environment: Option<EnvSpec>,
 }
 
 impl CodexSession {
-    fn start(codex_bin: &Path, codex_home: Option<&Path>, cwd: &str) -> FsResult<Self> {
+    fn start(
+        codex_bin: &Path,
+        codex_home: Option<&Path>,
+        cwd: &str,
+        environment: Option<EnvSpec>,
+    ) -> FsResult<Self> {
         let stream = Arc::new(EventStream::new());
         let client = AppServerClient::spawn(codex_bin, codex_home, Arc::clone(&stream))?;
-        let thread_id = client.start_thread(cwd)?;
+        let thread_id = client.start_thread(cwd, environment.as_ref())?;
         Ok(Self {
             client,
             thread_id,
             stream,
             turns: AtomicU64::new(0),
+            environment,
         })
     }
 }
 
 impl AgentSession for CodexSession {
     fn submit(&self, prompt: &str) -> FsResult<()> {
-        self.client.turn_start(&self.thread_id, prompt)?;
+        self.client
+            .turn_start(&self.thread_id, prompt, self.environment.as_ref())?;
         self.turns.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -210,25 +265,37 @@ impl AppServerClient {
         self.notify("initialized", json!({}))
     }
 
-    fn start_thread(&self, cwd: &str) -> FsResult<String> {
-        let result = self.request(
-            "thread/start",
-            json!({"cwd": cwd, "approvalPolicy": "never", "sandbox": "read-only"}),
-        )?;
+    fn start_thread(&self, cwd: &str, environment: Option<&EnvSpec>) -> FsResult<String> {
+        let sandbox = if environment.is_some() {
+            "danger-full-access"
+        } else {
+            "read-only"
+        };
+        let mut params = json!({"cwd": cwd, "approvalPolicy": "never", "sandbox": sandbox});
+        if let Some(environment) = environment {
+            params["environments"] = environments_value(environment);
+        }
+        let result = self.request("thread/start", params)?;
         result["thread"]["id"]
             .as_str()
             .map(str::to_owned)
             .ok_or_else(|| other("codex thread/start returned no thread id"))
     }
 
-    fn turn_start(&self, thread_id: &str, prompt: &str) -> FsResult<()> {
-        self.request(
-            "turn/start",
-            json!({
-                "threadId": thread_id,
-                "input": [{"type": "text", "text": prompt, "text_elements": []}]
-            }),
-        )?;
+    fn turn_start(
+        &self,
+        thread_id: &str,
+        prompt: &str,
+        environment: Option<&EnvSpec>,
+    ) -> FsResult<()> {
+        let mut params = json!({
+            "threadId": thread_id,
+            "input": [{"type": "text", "text": prompt, "text_elements": []}]
+        });
+        if let Some(environment) = environment {
+            params["environments"] = environments_value(environment);
+        }
+        self.request("turn/start", params)?;
         Ok(())
     }
 

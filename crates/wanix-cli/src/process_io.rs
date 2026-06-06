@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 mod fd;
 
 use crate::{
-    CliError, p9_listen, p9_stdio, p9_ws, qemu, qjs_term, run_collected, serve,
+    CliError, agent_exec_server, p9_listen, p9_stdio, p9_ws, qemu, qjs_term, run_collected, serve,
     write_process_output,
 };
 
@@ -113,6 +113,12 @@ fn run_streaming_command(
     match command.to_str() {
         Some("qjs-term" | "qjs-shell") => run_qjs_streaming_command(command, rest, io),
         Some("p9-stdio" | "p9-listen" | "p9-ws") => run_9p_streaming_command(command, rest, io),
+        Some("agent-exec-server") => Ok(Some(agent_exec_server::run_agent_exec_server_streaming(
+            agent_exec_server::parse_agent_exec_server_command(rest)?,
+            io.stdin,
+            io.stdout,
+            io.stderr,
+        )?)),
         Some("qemu") => Ok(Some(run_qemu_process_io(rest, io)?)),
         Some("serve") => Ok(Some(serve::run_serve_streaming(
             serve::parse_serve_command(rest)?,

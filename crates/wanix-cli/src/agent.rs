@@ -19,6 +19,7 @@ mod tests;
 pub(super) struct AgentCommand {
     fake: bool,
     cwd: String,
+    world: Option<String>,
     prompt: String,
 }
 
@@ -30,6 +31,7 @@ pub(super) struct AgentCommand {
 pub(super) fn parse_agent_command(args: &[OsString]) -> Result<AgentCommand, CliError> {
     let mut fake = false;
     let mut cwd = ".".to_owned();
+    let mut world = None;
     let mut prompt_parts: Vec<String> = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -45,6 +47,14 @@ pub(super) fn parse_agent_command(args: &[OsString]) -> Result<AgentCommand, Cli
                     .ok_or_else(|| CliError::usage("agent: --cwd requires a directory"))?
                     .to_owned();
             }
+            "--world" => {
+                world = Some(
+                    iter.next()
+                        .and_then(|value| value.to_str())
+                        .ok_or_else(|| CliError::usage("agent: --world requires a directory"))?
+                        .to_owned(),
+                );
+            }
             other if other.starts_with("--") => {
                 return Err(CliError::usage(format!("agent: unknown option {other}")));
             }
@@ -57,6 +67,7 @@ pub(super) fn parse_agent_command(args: &[OsString]) -> Result<AgentCommand, Cli
     Ok(AgentCommand {
         fake,
         cwd,
+        world,
         prompt: prompt_parts.join(" "),
     })
 }
@@ -70,6 +81,11 @@ pub(super) fn parse_agent_command(args: &[OsString]) -> Result<AgentCommand, Cli
 pub(super) fn run_agent_command(command: AgentCommand) -> Result<CliOutput, CliError> {
     let engine: Arc<dyn AgentEngine> = if command.fake {
         Arc::new(FakeEngine)
+    } else if let Some(world) = command.world {
+        Arc::new(
+            CodexEngine::with_wanix_world(PathBuf::from("codex"), PathBuf::from(world))
+                .map_err(|error| CliError::new(format!("agent: {error:?}"), 1))?,
+        )
     } else {
         Arc::new(CodexEngine::new(PathBuf::from("codex"), None, command.cwd))
     };
