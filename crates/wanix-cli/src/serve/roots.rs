@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use wanix_fs::{FileSystem, LocalFs};
+use wanix_kv::KvDevice;
+use wanix_pipe::PipeDevice;
 use wanix_qjs::QuickJsTaskDriver;
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
@@ -99,6 +101,18 @@ fn bind_host_and_terminal(
     let terminal = Arc::new(TermDevice::new());
     namespace.bind(host_root, ".", ".", BindOptions::default())?;
     namespace.bind(terminal, ".", "#term", BindOptions::default())?;
+    namespace.bind(
+        Arc::new(PipeDevice::new()),
+        ".",
+        "#pipe",
+        BindOptions::default(),
+    )?;
+    namespace.bind(
+        Arc::new(KvDevice::new()),
+        ".",
+        "#kv",
+        BindOptions::default(),
+    )?;
     Ok(())
 }
 

@@ -1073,6 +1073,8 @@ dependencies = [
  "tungstenite",
  "wanix-9p",
  "wanix-fs",
+ "wanix-kv",
+ "wanix-pipe",
  "wanix-protocol",
  "wanix-qjs",
  "wanix-task",
@@ -1087,6 +1089,13 @@ name = "wanix-fs"
 version = "0.1.0"
 
 [[package]]
+name = "wanix-kv"
+version = "0.1.0"
+dependencies = [
+ "wanix-fs",
+]
+
+[[package]]
 name = "wanix-module-cache"
 version = "0.1.0"
 dependencies = [
@@ -1094,6 +1103,13 @@ dependencies = [
  "rustix",
  "sha2",
  "wasmtime",
+]
+
+[[package]]
+name = "wanix-pipe"
+version = "0.1.0"
+dependencies = [
+ "wanix-fs",
 ]
 
 [[package]]
