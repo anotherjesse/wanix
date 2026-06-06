@@ -686,6 +686,10 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
         "{response}"
     );
     assert!(
+        response.contains("nameLong: \"Wanix Workbench\""),
+        "{response}"
+    );
+    assert!(
         response.contains("workspace: { folderUri: wb.URI.parse(workspaceUri) }"),
         "{response}"
     );
