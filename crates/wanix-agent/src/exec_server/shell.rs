@@ -8,8 +8,14 @@
 
 use super::{CompletedProcess, ExecServer};
 
-pub(super) fn run(server: &ExecServer, argv: &[String], cwd: &str) -> CompletedProcess {
-    interpret_sequence(server, &shell_source(argv), cwd)
+/// Unwraps an argv into a shell source string (peels nested `sh -c '...'`).
+pub(super) fn unwrap_source(argv: &[String]) -> String {
+    shell_source(argv)
+}
+
+/// Runs an already-unwrapped shell source against the Wanix filesystem.
+pub(super) fn run_source(server: &ExecServer, source: &str, cwd: &str) -> CompletedProcess {
+    interpret_sequence(server, source, cwd)
 }
 
 fn shell_source(argv: &[String]) -> String {

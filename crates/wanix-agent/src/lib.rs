@@ -25,7 +25,7 @@ mod path;
 
 pub use codex::CodexEngine;
 pub use engine::{AgentEngine, AgentSession, EventStream};
-pub use exec_server::ExecServer;
+pub use exec_server::{ExecServer, ProcessRunner};
 pub use fake::FakeEngine;
 
 use files::{BytesFile, CtlFile, EventsFile, NewAgentFile, PromptFile, require_read_only};

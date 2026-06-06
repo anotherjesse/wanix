@@ -29,10 +29,17 @@ struct CompletedProcess {
     exit_code: i64,
 }
 
+/// A pluggable runner tried before the built-in shell for `process/start`.
+/// Given the unwrapped shell source and cwd, it returns `(stdout, stderr,
+/// exit_code)` when it handles the command, or `None` to fall back to the shell.
+/// A host wires real Wanix program execution (`qjs`/`wasm`) in here.
+pub type ProcessRunner = Box<dyn FnMut(&str, &str) -> Option<(Vec<u8>, Vec<u8>, i64)> + Send>;
+
 /// A Wanix-filesystem-backed codex environment exec-server.
 pub struct ExecServer {
     fs: Arc<dyn FileSystem>,
     processes: HashMap<String, CompletedProcess>,
+    process_runner: Option<ProcessRunner>,
 }
 
 impl ExecServer {
@@ -42,7 +49,14 @@ impl ExecServer {
         Self {
             fs,
             processes: HashMap::new(),
+            process_runner: None,
         }
+    }
+
+    /// Installs a runner tried before the built-in shell for `process/start`,
+    /// so a host can execute real Wanix programs for the agent.
+    pub fn set_process_runner(&mut self, runner: ProcessRunner) {
+        self.process_runner = Some(runner);
     }
 
     /// Serves the JSON-RPC protocol over newline-delimited `input`/`output`
@@ -181,9 +195,24 @@ impl ExecServer {
         let process_id = params["processId"].as_str().unwrap_or("p0").to_owned();
         let argv: Vec<String> = serde_json::from_value(params["argv"].clone()).unwrap_or_default();
         let cwd = params["cwd"].as_str().unwrap_or("/").to_owned();
-        let completed = shell::run(self, &argv, &cwd);
+        let source = shell::unwrap_source(&argv);
+        let completed = self.run_process(&source, &cwd);
         self.processes.insert(process_id.clone(), completed);
         Ok(json!({ "processId": process_id }))
+    }
+
+    fn run_process(&mut self, source: &str, cwd: &str) -> CompletedProcess {
+        let mut runner = self.process_runner.take();
+        let hooked = runner.as_mut().and_then(|run| run(source, cwd));
+        self.process_runner = runner;
+        match hooked {
+            Some((stdout, stderr, exit_code)) => CompletedProcess {
+                stdout,
+                stderr,
+                exit_code,
+            },
+            None => shell::run_source(self, source, cwd),
+        }
     }
 
     fn process_read(&mut self, params: &Value) -> Result<Value, String> {

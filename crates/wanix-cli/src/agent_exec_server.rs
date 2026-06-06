@@ -87,7 +87,8 @@ pub(super) fn run_agent_exec_server_streaming(
         })?;
         Arc::new(root)
     };
-    let mut server = ExecServer::new(world);
+    let mut server = ExecServer::new(Arc::clone(&world));
+    server.set_process_runner(crate::agent_program::wanix_process_runner(world));
     match server.serve(BufReader::new(process_stdin), process_stdout) {
         Ok(()) => Ok(0),
         Err(error) => {
