@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use wanix_agent::{AgentDevice, FakeEngine};
 use wanix_fs::{FileSystem, LocalFs};
 use wanix_kv::KvDevice;
 use wanix_pipe::PipeDevice;
@@ -111,6 +112,14 @@ fn bind_host_and_terminal(
         Arc::new(KvDevice::new()),
         ".",
         "#kv",
+        BindOptions::default(),
+    )?;
+    // Served #agent uses the deterministic fake engine: the real codex bridge is
+    // local-trust only (auth + unattended execution) and stays on the CLI path.
+    namespace.bind(
+        Arc::new(AgentDevice::new(Arc::new(FakeEngine))),
+        ".",
+        "#agent",
         BindOptions::default(),
     )?;
     Ok(())

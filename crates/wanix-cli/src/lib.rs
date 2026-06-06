@@ -1,5 +1,6 @@
 //! Native CLI plumbing for Rust Wanix demos.
 
+mod agent;
 mod collected;
 mod command_args;
 mod help;

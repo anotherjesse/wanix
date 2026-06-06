@@ -1080,6 +1080,7 @@ dependencies = [
  "tar",
  "tungstenite",
  "wanix-9p",
+ "wanix-agent",
  "wanix-fs",
  "wanix-kv",
  "wanix-pipe",
