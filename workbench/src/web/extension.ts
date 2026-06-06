@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { installAgentRepairDemo, repairQjsProgram } from './agent-repair-demo.js';
 import { WanixBridge } from './bridge.js';
 import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
-import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, type HttpAppRouteConfig } from './http-app-demo.js';
+import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView } from './system-view.js';
@@ -306,6 +306,13 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openHttpAppDemo', async () => {
 			try {
 				await openHttpAppDemo(fsys, bridge, config, systemView);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openHttpCounterDemo', async () => {
+			try {
+				await openHttpCounterDemo(fsys, bridge, config, systemView);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}

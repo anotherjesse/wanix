@@ -6,6 +6,10 @@ const APP_DIR = "/apps";
 const APP_NAME = "hello";
 const APP_PATH = `${APP_DIR}/${APP_NAME}.js`;
 const APP_PREVIEW_PATH = `${APP_DIR}/${APP_NAME}.response.txt`;
+const COUNTER_NAME = "counter";
+const COUNTER_PATH = `${APP_DIR}/${COUNTER_NAME}.js`;
+const COUNTER_PREVIEW_PATH = `${APP_DIR}/${COUNTER_NAME}.response.txt`;
+const COUNTER_STATE_PATH = `${APP_DIR}/${COUNTER_NAME}.count.txt`;
 
 export type HttpAppRouteConfig = {
 	url?: string;
@@ -23,6 +27,27 @@ const app = std.getenv("WANIX_HTTP_APP");
 const target = std.getenv("WANIX_HTTP_TARGET");
 
 std.out.puts("wanix http app " + app + " saw " + target + "\\n");
+`;
+
+const COUNTER_JS = `import * as std from "qjs:std";
+
+const target = std.getenv("WANIX_HTTP_TARGET");
+const countPath = "counter.count.txt";
+let count = 0;
+
+try {
+  const previous = std.loadFile(countPath).trim();
+  const parsed = parseInt(previous, 10);
+  if (!isNaN(parsed)) {
+    count = parsed;
+  }
+} catch (_) {
+}
+
+count += 1;
+std.writeFile(countPath, String(count) + "\\n");
+std.out.puts("counter=" + count + "\\n");
+std.out.puts("target=" + target + "\\n");
 `;
 
 export async function installHttpAppDemo(
@@ -60,6 +85,28 @@ async function ensureHttpAppDemo(
 	await fsys.writeFile(APP_PATH, APP_JS);
 	refreshWanixFile(bridge, APP_PATH);
 	systemView.filesystemActivity("http app demo installed");
+}
+
+async function ensureHttpCounterDemo(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	let installed = false;
+	await fsys.makeDirAll(APP_DIR);
+	if (!await wanixPathExists(fsys, COUNTER_PATH)) {
+		await fsys.writeFile(COUNTER_PATH, COUNTER_JS);
+		installed = true;
+		refreshWanixFile(bridge, COUNTER_PATH);
+	}
+	if (!await wanixPathExists(fsys, COUNTER_STATE_PATH)) {
+		await fsys.writeFile(COUNTER_STATE_PATH, "0\n");
+		installed = true;
+		refreshWanixFile(bridge, COUNTER_STATE_PATH);
+	}
+	if (installed) {
+		systemView.filesystemActivity("http counter demo installed");
+	}
 }
 
 export async function openHttpAppHandler(
@@ -119,12 +166,50 @@ export async function openHttpAppDemo(
 	vscode.window.showInformationMessage("Previewed Wanix HTTP app response in /apps");
 }
 
-function httpAppDemoUrl(config: HttpAppDemoConfig): string {
+export async function openHttpCounterDemo(
+	fsys: any,
+	bridge: WanixBridge,
+	config: HttpAppDemoConfig,
+	systemView: WanixSystemView,
+): Promise<void> {
+	await ensureHttpCounterDemo(fsys, bridge, systemView);
+	const url = `${httpAppDemoUrl(config, COUNTER_NAME)}?from=workbench`;
+	const response = await fetch(url, { cache: "no-store" });
+	const body = await response.text();
+	const preview = httpAppPreviewReport({
+		url,
+		status: response.status,
+		statusText: response.statusText,
+		contentType: response.headers.get("content-type"),
+		body,
+		generatedAt: new Date().toISOString(),
+	});
+	await fsys.writeFile(COUNTER_PREVIEW_PATH, preview);
+	refreshWanixFile(bridge, COUNTER_PREVIEW_PATH);
+	refreshWanixFile(bridge, COUNTER_STATE_PATH);
+	systemView.routePreviewed("http-app", {
+		status: response.status,
+		statusText: response.statusText,
+		previewPath: COUNTER_PREVIEW_PATH,
+		sourcePath: COUNTER_PATH,
+		url,
+	});
+	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
+		console.warn("Wanix explorer refresh failed", error);
+	});
+	await openWanixFile(COUNTER_PREVIEW_PATH);
+	if (!response.ok) {
+		throw new Error(`Wanix HTTP counter returned ${response.status}; preview saved to ${COUNTER_PREVIEW_PATH}`);
+	}
+	vscode.window.showInformationMessage("Previewed Wanix HTTP counter response in /apps");
+}
+
+function httpAppDemoUrl(config: HttpAppDemoConfig, name = APP_NAME): string {
 	const template = config.httpApp?.url;
 	if (!template || config.httpApp?.status === "disabled") {
 		throw new Error("Wanix HTTP app route was not advertised by serve");
 	}
-	return template.replace("{name}", encodeURIComponent(APP_NAME));
+	return template.replace("{name}", encodeURIComponent(name));
 }
 
 function refreshWanixFile(bridge: WanixBridge, path: string): void {

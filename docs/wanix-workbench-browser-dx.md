@@ -271,6 +271,19 @@ status and URL, and opens the saved response report for that execution.
 
 ![HTTP route run row](assets/wanix-workbench-browser-dx/37-http-route-run-row.png)
 
+The route can now prove state too. `Preview HTTP Counter Demo` installs
+`/apps/counter.js` and `/apps/counter.count.txt`, calls
+`/.wanix/app/counter?from=workbench`, and saves the response report to
+`/apps/counter.response.txt`. Run it twice and the second report says
+`counter=2` while the `Route Runs` section keeps both HTTP executions.
+
+This small slice caught a real route boundary: app handlers run with `/apps` as
+their working directory, so the demo keeps its writable state beside the
+handler instead of pretending app routes can freely write broader namespace
+state.
+
+![HTTP counter route run](assets/wanix-workbench-browser-dx/38-http-counter-route-run.png)
+
 The first-use loop got a small entry point too: `New qjs Script` creates a
 unique `/scratch/qjs-N.js`, opens it, and gives it a tiny program that writes
 both terminal output and `last-run.txt`. New users no longer need to know where
@@ -350,6 +363,8 @@ But the first browser pass had several small breaks in the loop:
   before/after diff artifact to inspect later.
 - HTTP route previews updated route status, but the execution itself was not a
   first-class row in the system panel.
+- HTTP route previews could prove a qjs handler returned text, but not yet that
+  a browser-triggered app could mutate Wanix state.
 
 None of those are huge by themselves. Together, they make the browser experience feel like a prototype you have to babysit. The point of this pass was to remove enough of that babysitting that the system starts to feel direct.
 
@@ -468,6 +483,10 @@ The route-run row closes the Week 3 loop from another angle: an HTTP request is
 now represented in the cockpit as an execution, with the response report and
 handler source hanging off the run instead of living only in the editor.
 
+The counter route makes the app-platform proof stateful. It also documents the
+current write boundary in practice: keep app-local state under `/apps` unless
+the route contract grows broader namespace write semantics on purpose.
+
 The scratch-script action is the same philosophy applied to creation. The
 cockpit should not only inspect Wanix; it should help you make the next Wanix
 object.
@@ -549,21 +568,23 @@ The current loop is:
     saved response report from `Open Latest HTTP App Preview`.
 30. Expand `Route Runs` to see the previewed HTTP route execution and reopen
     its response report or handler source.
-31. Click `New qjs Script` to create a unique runnable scratch script without
+31. Click `Preview HTTP Counter Demo` twice to run a stateful qjs-backed HTTP
+    app, then inspect `apps/counter.response.txt` and `apps/counter.count.txt`.
+32. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-32. Run that script, then expand its task row to reopen the source, transcript,
+33. Run that script, then expand its task row to reopen the source, transcript,
     metadata, terminal output, or `#task/<id>` service directory.
-33. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+34. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-34. Click `Clear Finished Rows` when old exited tasks and closed terminals are
+35. Click `Clear Finished Rows` when old exited tasks and closed terminals are
     crowding the sidebar.
-35. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+36. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-36. Watch the `Agent` section list the repair loop: read, run, observe, edit,
+37. Watch the `Agent` section list the repair loop: read, run, observe, edit,
     rerun, capture transcripts, and verify `agent/out/result.txt`.
-37. Click an Agent row with an artifact to reopen the source, transcript, or
+38. Click an Agent row with an artifact to reopen the source, transcript, or
     result file from the same system panel.
-38. Click `diff broken.js` to reopen the before/after repair diff from
+39. Click `diff broken.js` to reopen the before/after repair diff from
     `/agent/out`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.

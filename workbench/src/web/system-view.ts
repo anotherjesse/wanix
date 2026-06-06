@@ -429,6 +429,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		if (this.hasHttpApp) {
 			items.splice(4, 0,
 				actionLeaf("action:preview-http", "Preview HTTP App Demo", "http", "globe", "workbench.openHttpAppDemo"),
+				actionLeaf("action:preview-http-counter", "Preview HTTP Counter Demo", "stateful http", "server-process", "workbench.openHttpCounterDemo"),
 				actionLeaf("action:open-http-handler", "Open HTTP App Handler", "http", "go-to-file", "workbench.openHttpAppHandler"),
 			);
 		}
