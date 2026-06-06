@@ -230,6 +230,34 @@ fn serve_once_reports_bundle_url_when_configured() {
 }
 
 #[test]
+fn serve_once_reports_terminal_workbench_url_when_services_enabled() {
+    let root = temp_dir("wanix-cli-serve-workbench-terminal-url");
+    fs::write(root.join("index.html"), b"wanix serve terminal url").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let command = ServeCommand {
+        root_path: root,
+        addr: addr.to_string(),
+        bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+        wanix_services: true,
+        once: true,
+    };
+
+    let handle = thread::spawn(move || {
+        let mut stderr = Vec::new();
+        let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+        (exit_code, stderr)
+    });
+
+    let _response = http_request(addr, b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    let (exit_code, stderr) = handle.join().unwrap();
+
+    assert_eq!(exit_code, 0);
+    let stderr = String::from_utf8(stderr).unwrap();
+    assert!(stderr.contains("/?bundle=workbench-fs9p&term"), "{stderr}");
+}
+
+#[test]
 fn serve_once_returns_direct_v86_bundle_page() {
     let root = temp_dir("wanix-cli-serve-direct-v86");
     fs::write(root.join("index.html"), b"static index").unwrap();

@@ -102,7 +102,7 @@ fn write_serve_startup_status(
     write_process_output(
         process_stderr,
         "stderr",
-        serve_url_status(local_addr, bundle).as_bytes(),
+        serve_url_status(local_addr, bundle, roots.wanix_services).as_bytes(),
     )
 }
 
@@ -130,14 +130,23 @@ fn run_serve_with_listener_for_connections(
     run_serve_with_listener_inner(command, listener, process_stderr, Some(connection_limit))
 }
 
-fn serve_url_status(local_addr: SocketAddr, bundle: Option<&str>) -> String {
+fn serve_url_status(local_addr: SocketAddr, bundle: Option<&str>, wanix_services: bool) -> String {
     let host = display_host(local_addr);
     match bundle {
         Some(bundle) => {
-            format!("wanix-rust serve: bundle available at http://{host}/?bundle={bundle}\n")
+            let query = bundle_status_query(bundle, wanix_services);
+            format!("wanix-rust serve: bundle available at http://{host}/?{query}\n")
         }
         None => format!("wanix-rust serve: listening on http://{host}/\n"),
     }
+}
+
+fn bundle_status_query(bundle: &str, wanix_services: bool) -> String {
+    let mut query = format!("bundle={bundle}");
+    if bundle == WORKBENCH_FS9P_BUNDLE && wanix_services {
+        query.push_str("&term");
+    }
+    query
 }
 
 #[cfg(test)]
