@@ -59,6 +59,27 @@ In this smoke test, `guest.wasm` reads `/shared/in.txt`, writes
 
 ![WASM task shown in the Wanix sidebar](assets/wanix-workbench-browser-dx/05-wasm-task-sidebar.png)
 
+The next polish pass removed another bit of demo friction: you no longer need
+to hand-copy a WASM fixture into the served root. The Wanix system view has an
+`Install JS and WASM Duet Demo` action. It creates:
+
+```text
+/duet/producer.js
+/duet/transform.wasm
+/duet/verify.js
+/duet/shared/
+```
+
+The demo flow is deliberately small and inspectable:
+
+1. `producer.js` runs as qjs and writes `shared/in.txt`.
+2. `transform.wasm` runs as compiled WASM and writes `shared/out.txt`.
+3. `verify.js` runs as qjs and checks the WASM output.
+
+The sidebar shows all three tasks as one system story.
+
+![JS and WASM duet demo](assets/wanix-workbench-browser-dx/06-js-wasm-duet-demo.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -117,6 +138,13 @@ Explorer without trying to open binary modules as text. This is the first
 browser proof of the bigger claim: JS and compiled WASM are sibling runtimes on
 one Wanix substrate.
 
+Then the browser got a one-click duet installer. It writes the JavaScript,
+compiled WASM fixture, verifier, and local shared directory into the Wanix
+namespace, opens the producer, and logs the install in the sidebar. The point is
+not that the sample is fancy. The point is that a teammate can now open the
+served workbench and prove the shared-runtime claim without preparing files by
+hand.
+
 ## The Feeling Now
 
 The current loop is:
@@ -129,6 +157,7 @@ The current loop is:
 6. Watch tasks, terminals, exits, and filesystem refreshes in the Wanix sidebar.
 7. See output and exit status in the terminal.
 8. Run again without terminal clutter.
+9. Install the duet demo and run qjs -> wasm -> qjs as one visible workflow.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -137,10 +166,11 @@ That is a much better base to build on. It makes the Rust Wanix port feel less l
 The next round should probably focus on making the workbench less demo-only:
 
 - Add a visible `New JS` or `New qjs script` command that creates a starter file and opens it.
-- Add a checked-in JS plus WASM duet fixture that the browser can run end to end.
 - Make shell-created files refresh more precisely than "refresh the root after activity."
 - Let the sidebar inspect service files directly, not just extension-observed events.
 - Add a small run history or output link per task entry.
+- Add a guided "run next step" affordance for the duet demo, so users do not
+  need to remember the sequence from docs.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.

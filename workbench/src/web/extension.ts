@@ -1,6 +1,7 @@
 
 import * as vscode from 'vscode';
 import { WanixBridge } from './bridge.js';
+import { installDuetDemo } from './duet-demo.js';
 import { WanixSystemView } from './system-view.js';
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
 //@ts-ignore
@@ -113,6 +114,13 @@ export async function activate(context: vscode.ExtensionContext) {
 		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runWasmTask', (resource?: vscode.Uri) => {
 			runWanixTask(fsys, bridge, config, systemView, activeTaskTerminals, "wasm", resource, context);
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.installDuetDemo', async () => {
+			try {
+				await installDuetDemo(context, fsys, bridge, systemView);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
 		}));
 	});
 	
