@@ -87,12 +87,12 @@ type SystemTreeItem =
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "actions", label: "Actions" },
+	{ type: "category", id: "agent", label: "Agent" },
 	{ type: "category", id: "drivers", label: "Drivers" },
 	{ type: "category", id: "tasks", label: "Tasks" },
 	{ type: "category", id: "terminals", label: "Terminals" },
 	{ type: "category", id: "namespace", label: "Namespace" },
 	{ type: "category", id: "routes", label: "Routes" },
-	{ type: "category", id: "agent", label: "Agent" },
 	{ type: "category", id: "activity", label: "Activity" },
 ];
 

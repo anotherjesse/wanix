@@ -309,7 +309,8 @@ The latest pass makes that contract visible as its own system object. The
 Wanix sidebar now has an `Agent` section that resets for each install or repair
 run and records the concrete steps: install, read, run, capture transcript,
 observe the failure, edit source, rerun, capture output, and verify the result.
-Rows with filesystem artifacts open those Wanix paths directly.
+It sits directly under `Actions`, so the trace is visible while the repair is
+running. Rows with filesystem artifacts open those Wanix paths directly.
 
 ![Wanix agent action log](assets/wanix-workbench-browser-dx/35-agent-action-log.png)
 
