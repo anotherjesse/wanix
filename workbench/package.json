@@ -73,6 +73,12 @@
         "icon": "$(play)"
       },
       {
+        "command": "workbench.newQjsScript",
+        "title": "New qjs Script",
+        "category": "Wanix",
+        "icon": "$(new-file)"
+      },
+      {
         "command": "workbench.installDuetDemo",
         "title": "Install JS and WASM Duet Demo",
         "category": "Wanix",
@@ -123,6 +129,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "workbench.newQjsScript",
+          "when": "view == wanix.system",
+          "group": "navigation@0"
+        },
         {
           "command": "workbench.runDuetDemo",
           "when": "view == wanix.system",

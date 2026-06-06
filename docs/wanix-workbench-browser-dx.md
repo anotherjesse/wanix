@@ -174,6 +174,13 @@ than a label that happens to be clickable.
 
 ![HTTP route context actions reset the handler intentionally](assets/wanix-workbench-browser-dx/17-http-route-context-actions.jpg)
 
+The first-use loop got a small entry point too: `New qjs Script` creates a
+unique `/scratch/qjs-N.js`, opens it, and gives it a tiny program that writes
+both terminal output and `last-run.txt`. New users no longer need to know where
+to put their first qjs file before trying the runtime.
+
+![New qjs Script creates a runnable scratch file](assets/wanix-workbench-browser-dx/18-new-qjs-script.jpg)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -279,6 +286,10 @@ The route context menu is a small but important cockpit pattern: visible system
 objects should have operations attached to them. A route is not just something
 to read; it is something to run, inspect, copy, and intentionally reset.
 
+The scratch-script action is the same philosophy applied to creation. The
+cockpit should not only inspect Wanix; it should help you make the next Wanix
+object.
+
 ## The Feeling Now
 
 The current loop is:
@@ -310,6 +321,8 @@ The current loop is:
     explicit reset command.
 19. Right-click the route row to preview, open source, copy the route URL, or
     intentionally reset the demo handler.
+20. Click `New qjs Script` to create a unique runnable scratch script without
+    leaving the workbench.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -317,7 +330,8 @@ That is a much better base to build on. It makes the Rust Wanix port feel less l
 
 The next round should probably focus on making the workbench less demo-only:
 
-- Add a visible `New JS` or `New qjs script` command that creates a starter file and opens it.
+- Add a matching `New wasm` or `Install wasm starter` command when a useful
+  checked-in wasm fixture is available.
 - Make shell-created files refresh more precisely than "refresh the root after activity."
 - Let the sidebar inspect service files directly, not just extension-observed events.
 - Add a small run history or output link per task entry.
