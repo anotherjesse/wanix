@@ -71,14 +71,15 @@ export class WanixServiceInspector implements vscode.TextDocumentContentProvider
 			"## Entries",
 			"",
 			...(entries.length > 0
-				? entries.map((entry) => `- ${entryKind(entry)} ${joinWanixPath(displayPath, entryName(entry))}`)
+				? entries.map((entry) => renderEntry(displayPath, entry))
 				: ["- empty"]),
 			"",
 			"## Note",
 			"",
 			"Service directories are reachable even when they are hidden from ordinary root listings.",
 			"This snapshot lists paths without reading files that allocate resources.",
-			"Safe metadata files and child directories are document links; allocator, control, and stream files stay plain text.",
+			"Safe metadata files and child directories are document links.",
+			"Allocator, control, and stream files stay plain text with reasons.",
 		].join("\n");
 	}
 
@@ -151,7 +152,7 @@ type ServiceEntry = {
 };
 
 function serviceEntryFromLine(line: string): ServiceEntry | undefined {
-	const match = line.match(/^- (dir|file) (.+)$/);
+	const match = line.match(/^- (dir|file) (\S+)/);
 	if (!match) {
 		return undefined;
 	}
@@ -175,15 +176,43 @@ function entryTarget(entry: ServiceEntry): vscode.Uri | undefined {
 }
 
 function isSafeFileLink(path: string): boolean {
+	return unsafeFileReason(path) === undefined;
+}
+
+function unsafeFileReason(path: string): string | undefined {
 	const normalized = displayWanixPath(path).replace(/^\/+/, "");
 	const parts = normalized.split("/");
 	if (!parts[0]?.startsWith("#")) {
-		return true;
+		return undefined;
 	}
 	if (parts[0] === "#task") {
-		return parts.length === 3 && ["cmd", "dir", "env", "exit", "id", "kind"].includes(parts[2]);
+		if (parts.length === 3 && ["cmd", "dir", "env", "exit", "id", "kind"].includes(parts[2])) {
+			return undefined;
+		}
+		if (parts[2] === "ctl") {
+			return "control file; write-only operations are not linked";
+		}
+		if (parts[2] === "fd") {
+			return "task fd stream; inspect the fd directory first";
+		}
+		return "task service file; left plain until its read semantics are explicit";
 	}
-	return false;
+	if (parts[0] === "#term") {
+		if (parts.length === 2 && parts[1] === "new") {
+			return "allocator file; reading it creates a terminal";
+		}
+		if (parts[2] === "ctl") {
+			return "control file; write-only operations are not linked";
+		}
+		if (["data", "program"].includes(parts[2])) {
+			return "terminal stream; opening it can consume live I/O";
+		}
+		if (parts[2] === "winch") {
+			return "terminal resize feed; left plain until stream reads are explicit";
+		}
+		return "terminal service file; left plain until its read semantics are explicit";
+	}
+	return "service file; left plain until its read semantics are explicit";
 }
 
 function entryNameFromObject(entry: unknown): string | undefined {
@@ -203,6 +232,13 @@ function entryName(entry: string): string {
 
 function entryKind(entry: string): string {
 	return entry.endsWith("/") ? "dir" : "file";
+}
+
+function renderEntry(parent: string, entry: string): string {
+	const path = joinWanixPath(parent, entryName(entry));
+	const reason = entry.endsWith("/") ? undefined : unsafeFileReason(path);
+	const suffix = reason ? ` -- ${reason}` : "";
+	return `- ${entryKind(entry)} ${path}${suffix}`;
 }
 
 function joinWanixPath(parent: string, child: string): string {
