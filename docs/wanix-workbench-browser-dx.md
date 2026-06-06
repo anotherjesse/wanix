@@ -107,6 +107,13 @@ instead of making the user rediscover it from a missing-file error.
 
 ![WASM starter run opens the transformed output](assets/wanix-workbench-browser-dx/30-wasm-starter-run.png)
 
+The System view now has an `Actions` section too. The same useful first moves
+are present as rows: create a qjs script, run/install the WASM starter, run the
+duet, preview the HTTP app, open the handler, and install the repair demo. That
+keeps an empty or unfamiliar root from depending on tiny toolbar icons alone.
+
+![Wanix System action rows](assets/wanix-workbench-browser-dx/31-system-action-rows.png)
+
 The next polish pass removed another bit of demo friction: you no longer need
 to hand-copy a WASM fixture into the served root. The Wanix system view has an
 `Open JS and WASM Duet Demo` action. It creates missing starter files:
@@ -412,6 +419,11 @@ The scratch-script action is the same philosophy applied to creation. The
 cockpit should not only inspect Wanix; it should help you make the next Wanix
 object.
 
+The `Actions` section makes that discoverable as text rows, not only toolbar
+icons. It is the tiny welcome state in practice: when the filesystem is empty or
+unfamiliar, the System panel still has concrete things to run, create, and
+inspect.
+
 Task-row source actions push the sidebar toward the same object model. A task
 started from a file should carry enough memory to bring you back to that file,
 especially after the terminal or editor focus has moved elsewhere.
@@ -436,50 +448,52 @@ The current loop is:
 1. Start `wanix-rust serve`.
 2. Open the printed URL.
 3. Edit or create a file in `wanix:/`.
-4. Run it as a qjs task from the play button.
-5. Run a `.wasm` module from Explorer.
-6. Watch tasks, terminals, exits, and filesystem refreshes in the Wanix sidebar.
-7. Click `#task` or `#term` in the sidebar to inspect real service directories.
-8. Right-click a task row and inspect its `#task/<id>` service directory.
-9. Follow a safe service entry like `#task/1/kind` into the real Wanix file.
-10. See why allocator/control/stream service files stay plain text.
-11. See output and exit status in the terminal.
-12. Run again without terminal clutter.
-13. Click `Install WASM Starter`, then `Run WASM Starter`, and inspect
+4. Use the System view's `Actions` rows when you want visible commands instead
+   of toolbar icons.
+5. Run a qjs task from the play button or `New qjs Script` action.
+6. Run a `.wasm` module from Explorer.
+7. Watch tasks, terminals, exits, and filesystem refreshes in the Wanix sidebar.
+8. Click `#task` or `#term` in the sidebar to inspect real service directories.
+9. Right-click a task row and inspect its `#task/<id>` service directory.
+10. Follow a safe service entry like `#task/1/kind` into the real Wanix file.
+11. See why allocator/control/stream service files stay plain text.
+12. See output and exit status in the terminal.
+13. Run again without terminal clutter.
+14. Click `Install WASM Starter`, then `Run WASM Starter`, and inspect
     `/wasm/shared/out.txt`.
-14. Install the duet demo and run qjs -> wasm -> qjs as one visible workflow.
-15. Or click `Run JS and WASM Duet Demo` and let the workbench drive the
+15. Install the duet demo and run qjs -> wasm -> qjs as one visible workflow.
+16. Or click `Run JS and WASM Duet Demo` and let the workbench drive the
     sequence.
-16. Inspect the generated `duet/shared/out.txt` result when the guided run
+17. Inspect the generated `duet/shared/out.txt` result when the guided run
     opens it.
-17. Edit `duet/producer.js`, run the guided duet without losing the edit, then
+18. Edit `duet/producer.js`, run the guided duet without losing the edit, then
     explicitly reset the duet when you want the starter files back.
-18. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
-19. Open
+19. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
+20. Open
     `/.wanix/app/hello?from=browser` to get an HTTP response from a Wanix task.
-20. See the HTTP app route contract in the Wanix sidebar.
-21. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
+21. See the HTTP app route contract in the Wanix sidebar.
+22. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
     `/apps/hello.response.txt` report inside the workbench.
-22. Click the `/.wanix/app/<name>` route row itself to run the same preview from
+23. Click the `/.wanix/app/<name>` route row itself to run the same preview from
     the visible system contract.
-23. Edit `/apps/hello.js`, preview again, and see the changed handler output
+24. Edit `/apps/hello.js`, preview again, and see the changed handler output
     without losing the edit or reopening the report.
-24. Open the HTTP handler source directly, and reset the demo only through the
+25. Open the HTTP handler source directly, and reset the demo only through the
     explicit reset command.
-25. Right-click the route row to preview, open source, copy the route URL, or
+26. Right-click the route row to preview, open source, copy the route URL, or
     intentionally reset the demo handler.
-26. After previewing, read the route row's latest HTTP status and reopen the
+27. After previewing, read the route row's latest HTTP status and reopen the
     saved response report from `Open Latest HTTP App Preview`.
-27. Click `New qjs Script` to create a unique runnable scratch script without
+28. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-28. Run that script, then click or right-click its task row to reopen the
+29. Run that script, then click or right-click its task row to reopen the
     source, open the saved transcript, or focus the terminal output that
     produced the task.
-29. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+30. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-30. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+31. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-31. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
+32. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
     `agent/out/result.txt`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
@@ -491,6 +505,5 @@ The next round should probably focus on making the workbench less demo-only:
 - Make shell-created files refresh more precisely than "refresh the root after activity."
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract.
-- Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.

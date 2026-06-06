@@ -57,13 +57,14 @@ type ActivityRecord = {
 	label: string;
 };
 
-type CategoryId = "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "activity";
+type CategoryId = "actions" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "activity";
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
 	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string };
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
+	{ type: "category", id: "actions", label: "Actions" },
 	{ type: "category", id: "drivers", label: "Drivers" },
 	{ type: "category", id: "tasks", label: "Tasks" },
 	{ type: "category", id: "terminals", label: "Terminals" },
@@ -192,6 +193,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			return [];
 		}
 		switch (element.id) {
+			case "actions":
+				return this.actionItems();
 			case "drivers":
 				return this.drivers.length > 0
 					? this.drivers.map((driver) => leaf(`driver:${driver}`, driver, undefined, "symbol-method"))
@@ -264,6 +267,23 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		});
 	}
 
+	private actionItems(): SystemTreeItem[] {
+		const items = [
+			actionLeaf("action:new-qjs", "New qjs Script", "qjs", "new-file", "workbench.newQjsScript"),
+			actionLeaf("action:run-wasm-starter", "Run WASM Starter", "wasm", "play", "workbench.runWasmStarter"),
+			actionLeaf("action:install-wasm-starter", "Install WASM Starter", "wasm", "package", "workbench.installWasmStarter"),
+			actionLeaf("action:run-duet", "Run JS and WASM Duet Demo", "qjs + wasm", "run-all", "workbench.runDuetDemo"),
+			actionLeaf("action:install-agent-repair", "Install Agent Repair Demo", "agent", "bug", "workbench.installAgentRepairDemo"),
+		];
+		if (this.routes.length > 0) {
+			items.splice(4, 0,
+				actionLeaf("action:preview-http", "Preview HTTP App Demo", "http", "globe", "workbench.openHttpAppDemo"),
+				actionLeaf("action:open-http-handler", "Open HTTP App Handler", "http", "go-to-file", "workbench.openHttpAppHandler"),
+			);
+		}
+		return items;
+	}
+
 	private addActivity(label: string): void {
 		if (this.activity[0]?.label === label) {
 			return;
@@ -302,8 +322,23 @@ function leaf(
 	};
 }
 
+function actionLeaf(
+	id: string,
+	label: string,
+	description: string,
+	icon: string,
+	command: string,
+): SystemTreeItem {
+	return leaf(id, label, description, icon, {
+		command,
+		title: label,
+	});
+}
+
 function categoryIcon(id: CategoryId): vscode.ThemeIcon {
 	switch (id) {
+		case "actions":
+			return new vscode.ThemeIcon("run-all");
 		case "drivers":
 			return new vscode.ThemeIcon("symbol-method");
 		case "tasks":
