@@ -65,6 +65,12 @@
         "title": "Run Current JavaScript as qjs Task",
         "category": "Wanix",
         "icon": "$(play)"
+      },
+      {
+        "command": "workbench.runWasmTask",
+        "title": "Run Current WASM as wasm Task",
+        "category": "Wanix",
+        "icon": "$(play)"
       }
     ],
     "menus": {
@@ -72,6 +78,23 @@
         {
           "command": "workbench.runQjsTask",
           "when": "resourceScheme == wanix && resourceExtname == .js",
+          "group": "navigation"
+        },
+        {
+          "command": "workbench.runWasmTask",
+          "when": "resourceScheme == wanix && resourceExtname == .wasm",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "workbench.runQjsTask",
+          "when": "resourceScheme == wanix && resourceExtname == .js",
+          "group": "navigation"
+        },
+        {
+          "command": "workbench.runWasmTask",
+          "when": "resourceScheme == wanix && resourceExtname == .wasm",
           "group": "navigation"
         }
       ]

@@ -28,6 +28,19 @@ type Config = {
 	}
 }
 
+type TaskRunKind = "qjs" | "wasm";
+
+type TaskRunTarget = {
+	path: string;
+	dir: string;
+	name: string;
+};
+
+const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = {
+	qjs: { extension: ".js", label: "JavaScript" },
+	wasm: { extension: ".wasm", label: "WASM" },
+};
+
 export async function activate(context: vscode.ExtensionContext) {
 	if (typeof navigator !== 'object') {	// do not run under node.js
 		console.error("not running in browser");
@@ -45,15 +58,17 @@ export async function activate(context: vscode.ExtensionContext) {
 		await refreshWorkbenchFiles(bridge);
 		systemView.filesystemActivity("filesystem refreshed");
 	};
-	let activeQjsTaskTerminal: vscode.Terminal | undefined;
+	const activeTaskTerminals = new Map<TaskRunKind, vscode.Terminal>();
 	context.subscriptions.push(bridge);
 	rememberWanixEditor();
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
 		rememberWanixEditor(editor);
 	}));
 	context.subscriptions.push(vscode.window.onDidCloseTerminal((terminal) => {
-		if (terminal === activeQjsTaskTerminal) {
-			activeQjsTaskTerminal = undefined;
+		for (const [kind, activeTerminal] of activeTaskTerminals) {
+			if (terminal === activeTerminal) {
+				activeTaskTerminals.delete(kind);
+			}
 		}
 	}));
 
@@ -93,20 +108,11 @@ export async function activate(context: vscode.ExtensionContext) {
 		openConfiguredDocument(config).catch((error: unknown) => {
 			vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 		});
-		context.subscriptions.push(vscode.commands.registerCommand('workbench.runQjsTask', async () => {
-			try {
-				activeQjsTaskTerminal?.dispose();
-				activeQjsTaskTerminal = undefined;
-				const term = vscode.window.createTerminal({
-					name: await qjsTerminalName(),
-					pty: await createActiveQjsTaskTerminal(fsys, bridge, config, systemView)
-				});
-				activeQjsTaskTerminal = term;
-				term.show();
-				context.subscriptions.push(term);
-			} catch (error) {
-				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
-			}
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.runQjsTask', (resource?: vscode.Uri) => {
+			runWanixTask(fsys, bridge, config, systemView, activeTaskTerminals, "qjs", resource, context);
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.runWasmTask', (resource?: vscode.Uri) => {
+			runWanixTask(fsys, bridge, config, systemView, activeTaskTerminals, "wasm", resource, context);
 		}));
 	});
 	
@@ -139,48 +145,62 @@ function configuredOpenUri(target: string | undefined): vscode.Uri | undefined {
 	return vscode.Uri.from({ scheme: WanixBridge.scheme, path });
 }
 
-async function qjsTerminalName(): Promise<string> {
-	const editor = currentWanixEditor();
-	if (!editor) {
-		return "qjs";
+async function runWanixTask(
+	fsys: any,
+	bridge: WanixBridge,
+	config: Config,
+	systemView: WanixSystemView,
+	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	kind: TaskRunKind,
+	resource: vscode.Uri | undefined,
+	context: vscode.ExtensionContext,
+): Promise<void> {
+	try {
+		activeTaskTerminals.get(kind)?.dispose();
+		activeTaskTerminals.delete(kind);
+		const target = await taskRunTarget(kind, bridge, resource);
+		const term = vscode.window.createTerminal({
+			name: taskTerminalName(kind, target.name),
+			pty: await createActiveTaskTerminal(fsys, bridge, config, systemView, kind, target)
+		});
+		activeTaskTerminals.set(kind, term);
+		term.show();
+		context.subscriptions.push(term);
+	} catch (error) {
+		vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 	}
-	return `qjs: ${baseName(editor.document.uri.path)}`;
 }
 
-async function createActiveQjsTaskTerminal(fsys: any, bridge: WanixBridge, config: Config, systemView: WanixSystemView) {
+async function createActiveTaskTerminal(
+	fsys: any,
+	bridge: WanixBridge,
+	config: Config,
+	systemView: WanixSystemView,
+	kind: TaskRunKind,
+	target: TaskRunTarget,
+) {
 	if (!config.ns?.task || !config.ns?.term) {
 		throw new Error("Wanix task and terminal services are not available");
 	}
-	if (config.qjsTask === false) {
-		throw new Error("Wanix discovery did not advertise the qjs task driver");
+	if (!taskDriverAdvertised(config, kind)) {
+		throw new Error(`Wanix discovery did not advertise the ${kind} task driver`);
 	}
-	const editor = currentWanixEditor();
-	if (!editor) {
-		throw new Error("Open a wanix: JavaScript file before running a qjs task");
-	}
-	if (editor.document.isDirty && !(await editor.document.save())) {
-		throw new Error("Save the active file before running it as a qjs task");
-	}
-
-	const scriptPath = bridge.normalizePath(editor.document.uri.path);
-	const scriptDir = parentPath(scriptPath) || ".";
-	const scriptName = baseName(scriptPath);
 	return await createTerminal(fsys, {
 		...config,
 		qjsShellUrl: undefined,
 		shell: {
-			cmd: quoteShellArg(scriptName),
-			type: "qjs",
-			wd: scriptDir
+			cmd: quoteShellArg(target.name),
+			type: kind,
+			wd: target.dir
 		}
 	}, async () => {
 		await refreshWorkbenchFiles(bridge);
-		systemView.filesystemActivity("qjs task filesystem refresh");
+		systemView.filesystemActivity(`${kind} task filesystem refresh`);
 		revealWanixSystemView();
 	}, {
 		keepOpenOnExit: true,
-		taskLabel: scriptName,
-		terminalLabel: `qjs: ${scriptName}`,
+		taskLabel: target.name,
+		terminalLabel: taskTerminalName(kind, target.name),
 		onTaskStarted: (event) => {
 			systemView.taskStarted(event.id, event.kind, event.label);
 			revealWanixSystemView();
@@ -193,6 +213,55 @@ async function createActiveQjsTaskTerminal(fsys: any, bridge: WanixBridge, confi
 		onTerminalOpened: (event) => systemView.terminalOpened(event.id, event.label),
 		onTerminalClosed: (event) => systemView.terminalClosed(event.id),
 	});
+}
+
+async function taskRunTarget(kind: TaskRunKind, bridge: WanixBridge, resource?: vscode.Uri): Promise<TaskRunTarget> {
+	const uri = commandWanixUri(resource) || currentWanixEditor()?.document.uri;
+	if (!uri) {
+		throw new Error(`Open or select a wanix: ${TASK_RUNNERS[kind].label} file before running a ${kind} task`);
+	}
+	if (uri.scheme !== WanixBridge.scheme) {
+		throw new Error(`Run ${kind} expects a wanix: file`);
+	}
+	const path = bridge.normalizePath(uri.path);
+	const expectedExtension = TASK_RUNNERS[kind].extension;
+	if (!path.endsWith(expectedExtension)) {
+		throw new Error(`Run ${kind} expects a ${expectedExtension} file`);
+	}
+	await saveOpenDocument(uri, kind);
+	return {
+		path,
+		dir: parentPath(path) || ".",
+		name: baseName(path),
+	};
+}
+
+function commandWanixUri(resource: vscode.Uri | undefined): vscode.Uri | undefined {
+	if (resource instanceof vscode.Uri) {
+		return resource;
+	}
+	return undefined;
+}
+
+async function saveOpenDocument(uri: vscode.Uri, kind: TaskRunKind): Promise<void> {
+	const document = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === uri.toString());
+	if (document?.isDirty && !(await document.save())) {
+		throw new Error(`Save ${baseName(uri.path)} before running it as a ${kind} task`);
+	}
+}
+
+function taskDriverAdvertised(config: Config, kind: TaskRunKind): boolean {
+	if (config.drivers) {
+		return config.drivers.includes(kind);
+	}
+	if (kind === "qjs") {
+		return config.qjsTask !== false;
+	}
+	return false;
+}
+
+function taskTerminalName(kind: TaskRunKind, name: string): string {
+	return `${kind}: ${name}`;
 }
 
 async function refreshWorkbenchFiles(bridge: WanixBridge): Promise<void> {

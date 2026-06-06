@@ -44,6 +44,21 @@ Repeated runs replace the previous qjs task terminal instead of piling up stale 
 
 ![Repeated qjs run keeps one task terminal](assets/wanix-workbench-browser-dx/04-repeat-run-single-terminal.png)
 
+The workbench now also has a Wanix activity bar view. It shows the advertised
+drivers, observed tasks, terminal resources, namespace roots, and recent
+activity. That turns the browser from "an editor attached to Wanix" into a small
+cockpit for the system.
+
+The first compiled-WASM path is in the browser too. Right-click a `wanix:`
+`.wasm` file in Explorer and choose `Run Current WASM as wasm Task`. The module
+runs through `#task/new/wasm`, shares the same namespace as qjs and the shell,
+and reports its lifecycle in the Wanix sidebar.
+
+In this smoke test, `guest.wasm` reads `/shared/in.txt`, writes
+`/shared/out.txt`, prints its Rust WASI output in the terminal, and exits 0.
+
+![WASM task shown in the Wanix sidebar](assets/wanix-workbench-browser-dx/05-wasm-task-sidebar.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -58,6 +73,9 @@ But the first browser pass had several small breaks in the loop:
 - The obvious served URL did not open the terminal.
 - There was no URL-level way to open the file you wanted for a demo.
 - Repeated qjs runs left terminal clutter behind.
+- The task and terminal model was invisible unless you already knew which
+  service files to inspect.
+- The WASM driver existed in Rust but did not have a usable browser entrypoint.
 
 None of those are huge by themselves. Together, they make the browser experience feel like a prototype you have to babysit. The point of this pass was to remove enough of that babysitting that the system starts to feel direct.
 
@@ -87,6 +105,18 @@ hello.js - / - Wanix Workbench
 
 Finally, the URL became part of the workflow. `open=wanix:/hello.js` lets docs, demos, and tools drop a user straight into the file that matters, while the printed serve URL includes `&term` when `--wanix-services` is on.
 
+The next slice added the Wanix system sidebar and made task runs visible as
+operating-system activity. The view is intentionally backed by discovery and
+extension-observed task events first, rather than a new hidden backend protocol.
+That keeps the UI honest: it shows the same drivers, task starts, terminal
+resources, exits, and filesystem refreshes the workbench itself uses.
+
+WASM then got the same ergonomic path as qjs. The extension now has a shared
+task-runner path for qjs and wasm editor actions, so `.wasm` files can run from
+Explorer without trying to open binary modules as text. This is the first
+browser proof of the bigger claim: JS and compiled WASM are sibling runtimes on
+one Wanix substrate.
+
 ## The Feeling Now
 
 The current loop is:
@@ -95,8 +125,10 @@ The current loop is:
 2. Open the printed URL.
 3. Edit or create a file in `wanix:/`.
 4. Run it as a qjs task from the play button.
-5. See output and exit status in the terminal.
-6. Run again without terminal clutter.
+5. Run a `.wasm` module from Explorer.
+6. Watch tasks, terminals, exits, and filesystem refreshes in the Wanix sidebar.
+7. See output and exit status in the terminal.
+8. Run again without terminal clutter.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -105,9 +137,10 @@ That is a much better base to build on. It makes the Rust Wanix port feel less l
 The next round should probably focus on making the workbench less demo-only:
 
 - Add a visible `New JS` or `New qjs script` command that creates a starter file and opens it.
-- Add a `.wasm` run path now that discovery advertises the wasm driver.
-- Surface task status in a small workbench panel instead of relying only on terminal output.
+- Add a checked-in JS plus WASM duet fixture that the browser can run end to end.
 - Make shell-created files refresh more precisely than "refresh the root after activity."
+- Let the sidebar inspect service files directly, not just extension-observed events.
+- Add a small run history or output link per task entry.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.
