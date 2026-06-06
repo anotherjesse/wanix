@@ -231,6 +231,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				taskId: task.id,
 				sourcePath: task.sourcePath,
 				outputPath: task.outputPath,
+				path: `#task/${task.id}`,
 			});
 		});
 	}
@@ -242,7 +243,9 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}
 		return terminals.map((terminal) => {
 			const label = terminal.id === "shell" ? terminal.label : `${terminal.id} ${terminal.label}`;
-			return leaf(`terminal:${terminal.id}`, label, terminal.status, "terminal");
+			const path = terminal.id === "shell" ? undefined : `#term/${terminal.id}`;
+			const contextValue = path ? "wanixTerminalService" : undefined;
+			return leaf(`terminal:${terminal.id}`, label, terminal.status, "terminal", undefined, contextValue, { path });
 		});
 	}
 

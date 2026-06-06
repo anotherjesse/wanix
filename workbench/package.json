@@ -219,6 +219,21 @@
         },
         {
           "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
+          "group": "navigation@3"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixTask",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixTerminalService",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openWanixPath",
           "when": "view == wanix.system && viewItem == wanixNamespacePath",
           "group": "navigation@0"
         },
