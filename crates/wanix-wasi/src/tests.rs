@@ -1775,6 +1775,37 @@ fn preview1_path_open_flags_convert_to_wanix_open_options() {
         Err(Errno::Notcapable)
     );
     assert_eq!(
+        WasiPathOpen::from_preview1(1 << 15, WasiRights::FD_READ, WasiRights::NONE, 0),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiPathOpen::from_preview1(
+            0,
+            WasiRights::FD_READ,
+            WasiRights::NONE,
+            WasiOpenOptions::FDFLAGS_DSYNC
+        ),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiPathOpen::from_preview1(
+            WasiOpenOptions::OFLAGS_TRUNCATE,
+            WasiRights::FD_READ,
+            WasiRights::NONE,
+            0
+        ),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
+        WasiPathOpen::from_preview1(
+            0,
+            WasiRights::FD_READ,
+            WasiRights::NONE,
+            WasiOpenOptions::FDFLAGS_APPEND
+        ),
+        Err(Errno::Notcapable)
+    );
+    assert_eq!(
         WasiPathOpen::from_preview1(
             0,
             WasiRights::FD_READ,

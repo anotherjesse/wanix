@@ -127,6 +127,57 @@ pub struct WasiPathOpen {
     directory: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Preview1PathOpenFlags {
+    create: bool,
+    directory: bool,
+    truncate: bool,
+    append: bool,
+}
+
+impl Preview1PathOpenFlags {
+    const SUPPORTED_OFLAGS: u16 =
+        WasiOpenOptions::SUPPORTED_OFLAGS | WasiOpenOptions::OFLAGS_DIRECTORY;
+    const SUPPORTED_FDFLAGS: u16 =
+        WasiOpenOptions::FDFLAGS_APPEND | WasiOpenOptions::FDFLAGS_NONBLOCK;
+
+    fn from_preview1(oflags: u16, fdflags: u16) -> Result<Self, Errno> {
+        if fdflags & !Self::SUPPORTED_FDFLAGS != 0 {
+            return Err(Errno::Notcapable);
+        }
+        if oflags & !Self::SUPPORTED_OFLAGS != 0 {
+            return Err(Errno::Notcapable);
+        }
+        Ok(Self {
+            create: oflags & WasiOpenOptions::OFLAGS_CREATE != 0,
+            directory: oflags & WasiOpenOptions::OFLAGS_DIRECTORY != 0,
+            truncate: oflags & WasiOpenOptions::OFLAGS_TRUNCATE != 0,
+            append: fdflags & WasiOpenOptions::FDFLAGS_APPEND != 0,
+        })
+    }
+
+    fn validate_directory_compatibility(self) -> Result<(), Errno> {
+        if self.directory && self.mutates_file() {
+            return Err(Errno::Notcapable);
+        }
+        Ok(())
+    }
+
+    const fn mutates_file(self) -> bool {
+        self.create || self.truncate || self.append
+    }
+
+    const fn options(self, rights_base: WasiRights) -> WasiOpenOptions {
+        WasiOpenOptions {
+            read: rights_base.contains(WasiRights::FD_READ),
+            write: rights_base.contains(WasiRights::FD_WRITE),
+            create: self.create,
+            truncate: self.truncate,
+            append: self.append,
+        }
+    }
+}
+
 impl WasiPathOpen {
     /// Converts raw Preview 1 `path_open` flags and rights into a request.
     ///
@@ -140,39 +191,14 @@ impl WasiPathOpen {
         rights_inheriting: WasiRights,
         fdflags: u16,
     ) -> Result<Self, Errno> {
-        if fdflags & !(WasiOpenOptions::FDFLAGS_APPEND | WasiOpenOptions::FDFLAGS_NONBLOCK) != 0 {
-            return Err(Errno::Notcapable);
-        }
-        if oflags & !(WasiOpenOptions::SUPPORTED_OFLAGS | WasiOpenOptions::OFLAGS_DIRECTORY) != 0 {
-            return Err(Errno::Notcapable);
-        }
-        if !WasiRights::DIRECTORY_INHERITING.contains(rights_base)
-            || !WasiRights::DIRECTORY_INHERITING.contains(rights_inheriting)
-        {
-            return Err(Errno::Notcapable);
-        }
-        let create = oflags & WasiOpenOptions::OFLAGS_CREATE != 0;
-        let directory = oflags & WasiOpenOptions::OFLAGS_DIRECTORY != 0;
-        let truncate = oflags & WasiOpenOptions::OFLAGS_TRUNCATE != 0;
-        let append = fdflags & WasiOpenOptions::FDFLAGS_APPEND != 0;
-        if directory && (create || truncate || append) {
-            return Err(Errno::Notcapable);
-        }
-        if (create || truncate || append) && !rights_base.contains(WasiRights::FD_WRITE) {
-            return Err(Errno::Notcapable);
-        }
-        let options = WasiOpenOptions {
-            read: rights_base.contains(WasiRights::FD_READ),
-            write: rights_base.contains(WasiRights::FD_WRITE),
-            create,
-            truncate,
-            append,
-        };
+        let flags = Preview1PathOpenFlags::from_preview1(oflags, fdflags)?;
+        flags.validate_directory_compatibility()?;
+        validate_preview1_path_open_rights(flags, rights_base, rights_inheriting)?;
         Ok(Self {
-            options,
+            options: flags.options(rights_base),
             rights_base,
             rights_inheriting,
-            directory,
+            directory: flags.directory,
         })
     }
 
@@ -203,6 +229,22 @@ impl WasiPathOpen {
     pub(crate) const fn file_rights_base(self) -> WasiRights {
         self.rights_base.intersection(WasiRights::OPEN_FILE_BASE)
     }
+}
+
+fn validate_preview1_path_open_rights(
+    flags: Preview1PathOpenFlags,
+    rights_base: WasiRights,
+    rights_inheriting: WasiRights,
+) -> Result<(), Errno> {
+    if !WasiRights::DIRECTORY_INHERITING.contains(rights_base)
+        || !WasiRights::DIRECTORY_INHERITING.contains(rights_inheriting)
+    {
+        return Err(Errno::Notcapable);
+    }
+    if flags.mutates_file() && !rights_base.contains(WasiRights::FD_WRITE) {
+        return Err(Errno::Notcapable);
+    }
+    Ok(())
 }
 
 impl From<WasiOpenOptions> for wanix_fs::OpenOptions {
