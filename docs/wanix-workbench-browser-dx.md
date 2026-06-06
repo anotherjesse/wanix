@@ -151,6 +151,15 @@ from "this exists" to "this is usable."
 
 ![HTTP route row runs the preview report](assets/wanix-workbench-browser-dx/14-http-route-row-preview.jpg)
 
+The next browser pass caught a more subtle but important editor bug. Previewing
+the route used to re-install the demo handler before running it, so a user's
+edits could be overwritten. It also refreshed the root broadly, which meant an
+already-open response report could stay stale. The preview path now only creates
+`/apps/hello.js` when it is missing, and it emits precise refreshes for the
+handler and response files.
+
+![HTTP preview preserves handler edits and refreshes the open report](assets/wanix-workbench-browser-dx/15-http-preview-preserves-edits.jpg)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -244,6 +253,10 @@ The preview action closes the browser loop: edit a Wanix handler, run it as an
 HTTP app, and inspect a status-bearing response report without leaving the
 workbench.
 
+The no-clobber preview is the difference between a demo and a usable tool. Once
+you edit `apps/hello.js`, previewing the route keeps your handler intact and
+updates the already-open report instead of showing stale output.
+
 ## The Feeling Now
 
 The current loop is:
@@ -269,6 +282,8 @@ The current loop is:
     `/apps/hello.response.txt` report inside the workbench.
 16. Click the `/.wanix/app/<name>` route row itself to run the same preview from
     the visible system contract.
+17. Edit `/apps/hello.js`, preview again, and see the changed handler output
+    without losing the edit or reopening the report.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -283,6 +298,8 @@ The next round should probably focus on making the workbench less demo-only:
 - Add a reset button for the duet demo's generated files.
 - Add a route detail panel or context menu for copying the raw URL and opening
   the handler source.
+- Add an explicit reset action for the HTTP demo now that preview preserves
+  edits.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.

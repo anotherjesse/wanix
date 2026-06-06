@@ -35,7 +35,7 @@ export async function installHttpAppDemo(
 	const notify = options.notify ?? true;
 	await fsys.makeDirAll(APP_DIR);
 	await fsys.writeFile(APP_PATH, APP_JS);
-	bridge.refresh();
+	refreshWanixFile(bridge, APP_PATH);
 	systemView.filesystemActivity("http app demo installed");
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
@@ -48,13 +48,27 @@ export async function installHttpAppDemo(
 	}
 }
 
+async function ensureHttpAppDemo(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	await fsys.makeDirAll(APP_DIR);
+	if (await wanixPathExists(fsys, APP_PATH)) {
+		return;
+	}
+	await fsys.writeFile(APP_PATH, APP_JS);
+	refreshWanixFile(bridge, APP_PATH);
+	systemView.filesystemActivity("http app demo installed");
+}
+
 export async function openHttpAppDemo(
 	fsys: any,
 	bridge: WanixBridge,
 	config: HttpAppDemoConfig,
 	systemView: WanixSystemView,
 ): Promise<void> {
-	await installHttpAppDemo(fsys, bridge, systemView, { openHandler: false, notify: false });
+	await ensureHttpAppDemo(fsys, bridge, systemView);
 	const url = `${httpAppDemoUrl(config)}?from=workbench`;
 	const response = await fetch(url, { cache: "no-store" });
 	const body = await response.text();
@@ -67,7 +81,7 @@ export async function openHttpAppDemo(
 		generatedAt: new Date().toISOString(),
 	});
 	await fsys.writeFile(APP_PREVIEW_PATH, preview);
-	bridge.refresh();
+	refreshWanixFile(bridge, APP_PREVIEW_PATH);
 	systemView.filesystemActivity("http app demo previewed");
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
@@ -85,6 +99,20 @@ function httpAppDemoUrl(config: HttpAppDemoConfig): string {
 		throw new Error("Wanix HTTP app route was not advertised by serve");
 	}
 	return template.replace("{name}", encodeURIComponent(APP_NAME));
+}
+
+function refreshWanixFile(bridge: WanixBridge, path: string): void {
+	bridge.refresh(path);
+	bridge.refresh(APP_DIR);
+}
+
+async function wanixPathExists(fsys: any, path: string): Promise<boolean> {
+	try {
+		await fsys.stat(path);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function httpAppPreviewReport(preview: {
