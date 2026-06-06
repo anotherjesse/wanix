@@ -45,6 +45,12 @@ type TaskRunTarget = {
 type TaskRunStart = {
 	taskId: string;
 	outputPath?: string;
+	metadataPath?: string;
+};
+
+type TaskArtifacts = {
+	outputPath: string;
+	metadataPath: string;
 };
 
 const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = {
@@ -209,6 +215,18 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixTaskMetadata', async (metadata?: string | { metadataPath?: string }) => {
+			try {
+				const metadataPath = taskMetadataPath(metadata);
+				if (!metadataPath) {
+					throw new Error("Task metadata is not available");
+				}
+				await openWanixPath(metadataPath);
+				systemView.filesystemActivity(`opened task metadata ${baseName(metadataPath)}`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.focusTaskTerminal', async (task?: string | { taskId?: string }) => {
 			try {
 				const taskId = taskIdFromArgument(task);
@@ -318,6 +336,13 @@ function taskOutputPath(output: string | { outputPath?: string } | undefined): s
 		return output;
 	}
 	return output?.outputPath;
+}
+
+function taskMetadataPath(metadata: string | { metadataPath?: string } | undefined): string | undefined {
+	if (typeof metadata === "string") {
+		return metadata;
+	}
+	return metadata?.metadataPath;
 }
 
 function wanixPathTarget(target: string | { path?: string } | undefined): string | undefined {
@@ -557,9 +582,9 @@ async function createActiveTaskTerminal(
 		taskLabel: target.name,
 		terminalLabel: taskTerminalName(kind, target.name),
 		onTaskStarted: (event) => {
-			const outputPath = output.start(event.id);
-			lifecycle.onStart?.({ taskId: event.id, outputPath });
-			systemView.taskStarted(event.id, event.kind, event.label, { sourcePath: target.path, outputPath });
+			const artifacts = output.start(event.id);
+			lifecycle.onStart?.({ taskId: event.id, ...artifacts });
+			systemView.taskStarted(event.id, event.kind, event.label, { sourcePath: target.path, ...artifacts });
 			revealWanixSystemView();
 		},
 		onTaskExited: (event) => {
@@ -588,7 +613,9 @@ class TaskOutputRecorder {
 	private totalChars = 0;
 	private truncated = false;
 	private saved = false;
+	private taskId: string | undefined;
 	private outputPath: string | undefined;
+	private metadataPath: string | undefined;
 
 	constructor(
 		private readonly fsys: any,
@@ -598,9 +625,14 @@ class TaskOutputRecorder {
 		private readonly target: TaskRunTarget,
 	) {}
 
-	start(taskId: string): string {
+	start(taskId: string): TaskArtifacts {
+		this.taskId = taskId;
 		this.outputPath = `${TASK_OUTPUT_DIR}/${taskId}-${this.kind}-${safeOutputFileName(this.target.name)}.output.txt`;
-		return this.outputPath;
+		this.metadataPath = `${TASK_OUTPUT_DIR}/${taskId}-${this.kind}-${safeOutputFileName(this.target.name)}.metadata.json`;
+		return {
+			outputPath: this.outputPath,
+			metadataPath: this.metadataPath,
+		};
 	}
 
 	append(chunk: string): void {
@@ -621,14 +653,16 @@ class TaskOutputRecorder {
 	}
 
 	async finish(exitCode?: number): Promise<void> {
-		if (this.saved || !this.outputPath) {
+		if (this.saved || !this.outputPath || !this.metadataPath) {
 			return;
 		}
 		this.saved = true;
 		await this.fsys.makeDirAll(TASK_OUTPUT_DIR);
 		await this.fsys.writeFile(this.outputPath, this.render(exitCode));
+		await this.fsys.writeFile(this.metadataPath, this.renderMetadata(exitCode));
 		this.bridge.refresh(`/${TASK_OUTPUT_DIR}`);
 		this.bridge.refresh(`/${this.outputPath}`);
+		this.bridge.refresh(`/${this.metadataPath}`);
 		this.systemView.filesystemActivity(`wrote task output ${baseName(this.outputPath)}`);
 		await refreshWorkbenchFiles(this.bridge);
 	}
@@ -647,6 +681,28 @@ class TaskOutputRecorder {
 			this.chunks.join(""),
 			truncation,
 		].join("\n");
+	}
+
+	private renderMetadata(exitCode?: number): string {
+		const status = typeof exitCode === "number" ? "exited" : "closed";
+		return `${JSON.stringify({
+			taskId: this.taskId,
+			kind: this.kind,
+			label: this.target.name,
+			argv: [this.target.name],
+			cwd: this.target.dir,
+			env: {},
+			sourcePath: absoluteWanixPath(this.target.path),
+			outputPath: this.outputPath ? absoluteWanixPath(this.outputPath) : undefined,
+			status,
+			exitCode: typeof exitCode === "number" ? exitCode : null,
+			transcript: {
+				truncated: this.truncated,
+				maxChars: TASK_OUTPUT_MAX_CHARS,
+				capturedChars: this.totalChars,
+			},
+			recordedAt: new Date().toISOString(),
+		}, null, 2)}\n`;
 	}
 }
 

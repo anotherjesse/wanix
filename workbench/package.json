@@ -103,6 +103,12 @@
         "icon": "$(output)"
       },
       {
+        "command": "workbench.openWanixTaskMetadata",
+        "title": "Open Task Metadata",
+        "category": "Wanix",
+        "icon": "$(json)"
+      },
+      {
         "command": "workbench.openWanixPath",
         "title": "Open Wanix Path",
         "category": "Wanix",
@@ -213,14 +219,19 @@
           "group": "navigation@1"
         },
         {
-          "command": "workbench.focusTaskTerminal",
+          "command": "workbench.openWanixTaskMetadata",
           "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
           "group": "navigation@2"
         },
         {
-          "command": "workbench.openWanixPath",
+          "command": "workbench.focusTaskTerminal",
           "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
           "group": "navigation@3"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
+          "group": "navigation@4"
         },
         {
           "command": "workbench.openWanixPath",

@@ -77,6 +77,14 @@ surprising the user.
 
 ![Unsafe service entries explain why they are not links](assets/wanix-workbench-browser-dx/26-service-inspector-unsafe-entries.jpg)
 
+Task runs now write a second artifact beside the transcript:
+`/.wanix/tasks/<task>.metadata.json`. It records the task id, runtime kind,
+argv, cwd, env, source path, output path, exit status, and transcript capture
+details. The task row context menu has `Open Task Metadata`, so the run has a
+machine-readable record without leaving the workbench.
+
+![Task metadata JSON opened from the sidebar](assets/wanix-workbench-browser-dx/27-task-metadata-artifact.jpg)
+
 The first compiled-WASM path is in the browser too. Right-click a `wanix:`
 `.wasm` file in Explorer and choose `Run Current WASM as wasm Task`. The module
 runs through `#task/new/wasm`, shares the same namespace as qjs and the shell,
@@ -303,6 +311,9 @@ The generated snapshot now links safe files and child directories too, so the
 user can walk from task object to service metadata without memorizing paths.
 When a service file is deliberately not linked, the row now explains whether it
 is an allocator, control file, stream, or unspecified service file.
+Finally, each direct qjs/wasm task writes a metadata JSON artifact next to its
+transcript, giving agents and humans the same stable handle for cwd, argv,
+env, source, output, exit, and capture state.
 
 WASM then got the same ergonomic path as qjs. The extension now has a shared
 task-runner path for qjs and wasm editor actions, so `.wasm` files can run from
@@ -418,9 +429,11 @@ The current loop is:
 25. Run that script, then click or right-click its task row to reopen the
     source, open the saved transcript, or focus the terminal output that
     produced the task.
-26. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+26. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+    output, exit, and transcript capture state.
+27. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-27. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
+28. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
     `agent/out/result.txt`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
@@ -432,8 +445,6 @@ The next round should probably focus on making the workbench less demo-only:
 - Add a matching `New wasm` or `Install wasm starter` command when a useful
   checked-in wasm fixture is available.
 - Make shell-created files refresh more precisely than "refresh the root after activity."
-- Add richer task metadata files for argv, cwd, env, and exit alongside output
-  transcripts.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract.
 - Add a reset button for the duet demo's generated files.
