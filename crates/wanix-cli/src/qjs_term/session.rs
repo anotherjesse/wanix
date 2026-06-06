@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use wanix_fs::{FsError, LocalFs, MemFs, NormalizedPath};
-use wanix_qjs::{QuickJsTaskDriver, QuickJsTaskRuntime};
+use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
 use wanix_task::{Task, TaskTable};
 use wanix_term::TermDevice;
 use wanix_vfs::BindOptions;
@@ -12,7 +12,7 @@ use super::pump::{
     TermResize, drain_terminal_output_bytes, feed_terminal_after_eval,
     feed_terminal_resize_after_eval,
 };
-use super::terminal::attach_task_terminal;
+use super::terminal::{AttachedTerminal, attach_task_terminal};
 use super::{
     QJS_SHELL_IDLE_EVENT_LOOP_BUDGET_MS, QJS_SHELL_READY_IO_TURNS, QJS_SHELL_SCRIPT_SENTINEL,
     QJS_SHELL_SOURCE,
@@ -40,62 +40,24 @@ impl QjsShellSession {
         cwd: &NormalizedPath,
     ) -> Result<(Self, Vec<u8>), CliError> {
         let runner = quickjs_runner()?;
-        let table = TaskTable::new();
-        table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(Arc::clone(&runner))))?;
-        let task = table.allocate_root("qjs")?;
-
-        let host_root = Arc::new(LocalFs::new(root_path).map_err(|error| {
-            CliError::new(
-                format!(
-                    "failed to open terminal session root {}: {error}",
-                    root_path.display()
-                ),
-                1,
-            )
-        })?);
-        task.bind(host_root, ".", ".", BindOptions::default())?;
-
-        let shell_source = Arc::new(MemFs::new());
-        shell_source.write_file(QJS_SHELL_SCRIPT_SENTINEL, QJS_SHELL_SOURCE.as_bytes())?;
-        task.bind(
-            shell_source,
-            QJS_SHELL_SCRIPT_SENTINEL,
-            QJS_SHELL_SCRIPT_SENTINEL,
-            BindOptions::default(),
-        )?;
-
+        let task = prepare_shell_task(&runner, root_path)?;
         let terminal = attach_task_terminal(&task, None)?;
-        let runtime_cwd = NormalizedPath::new(".")?;
-        configure_qjs_task(
-            &task,
-            QJS_SHELL_SCRIPT_SENTINEL,
-            &[],
-            &["WANIX_QJS_SHELL_RAW=1".to_owned()],
-            &runtime_cwd,
-        )?;
-
-        let mut runtime = runner.create_task_runtime(&task)?;
-        task.set_dir(cwd.as_str())?;
-        eval_qjs_source(
-            &mut runtime,
-            QJS_SHELL_SOURCE,
-            QJS_SHELL_SCRIPT_SENTINEL,
-            Duration::ZERO,
-            0,
-        )?;
+        configure_shell_task(&task)?;
+        let runtime = start_shell_runtime(&runner, &task, cwd)?;
         let initial_output = drain_terminal_output_bytes(&terminal.device, &terminal.id)?;
-        Ok((
-            Self {
-                task,
-                terminal: terminal.device,
-                terminal_id: terminal.id,
-                runtime,
-                ready_io_turns: QJS_SHELL_READY_IO_TURNS,
-                finished: false,
-                terminal_closed: false,
-            },
-            initial_output,
-        ))
+        Ok((Self::new(task, terminal, runtime), initial_output))
+    }
+
+    fn new(task: Task, terminal: AttachedTerminal, runtime: QuickJsTaskRuntime) -> Self {
+        Self {
+            task,
+            terminal: terminal.device,
+            terminal_id: terminal.id,
+            runtime,
+            ready_io_turns: QJS_SHELL_READY_IO_TURNS,
+            finished: false,
+            terminal_closed: false,
+        }
     }
 
     pub(crate) fn input(&mut self, bytes: &[u8]) -> Result<Vec<u8>, CliError> {
@@ -180,4 +142,71 @@ impl Drop for QjsShellSession {
     fn drop(&mut self) {
         let _ = self.close_terminal_resource();
     }
+}
+
+fn prepare_shell_task(runner: &Arc<QuickJsRunner>, root_path: &Path) -> Result<Task, CliError> {
+    let task = allocate_shell_task(runner)?;
+    bind_shell_host_root(&task, root_path)?;
+    bind_shell_source(&task)?;
+    Ok(task)
+}
+
+fn allocate_shell_task(runner: &Arc<QuickJsRunner>) -> Result<Task, CliError> {
+    let table = TaskTable::new();
+    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(Arc::clone(runner))))?;
+    Ok(table.allocate_root("qjs")?)
+}
+
+fn bind_shell_host_root(task: &Task, root_path: &Path) -> Result<(), CliError> {
+    let host_root = Arc::new(LocalFs::new(root_path).map_err(|error| {
+        CliError::new(
+            format!(
+                "failed to open terminal session root {}: {error}",
+                root_path.display()
+            ),
+            1,
+        )
+    })?);
+    task.bind(host_root, ".", ".", BindOptions::default())?;
+    Ok(())
+}
+
+fn bind_shell_source(task: &Task) -> Result<(), CliError> {
+    let shell_source = Arc::new(MemFs::new());
+    shell_source.write_file(QJS_SHELL_SCRIPT_SENTINEL, QJS_SHELL_SOURCE.as_bytes())?;
+    task.bind(
+        shell_source,
+        QJS_SHELL_SCRIPT_SENTINEL,
+        QJS_SHELL_SCRIPT_SENTINEL,
+        BindOptions::default(),
+    )?;
+    Ok(())
+}
+
+fn configure_shell_task(task: &Task) -> Result<(), CliError> {
+    let runtime_cwd = NormalizedPath::new(".")?;
+    configure_qjs_task(
+        task,
+        QJS_SHELL_SCRIPT_SENTINEL,
+        &[],
+        &["WANIX_QJS_SHELL_RAW=1".to_owned()],
+        &runtime_cwd,
+    )
+}
+
+fn start_shell_runtime(
+    runner: &Arc<QuickJsRunner>,
+    task: &Task,
+    cwd: &NormalizedPath,
+) -> Result<QuickJsTaskRuntime, CliError> {
+    let mut runtime = runner.create_task_runtime(task)?;
+    task.set_dir(cwd.as_str())?;
+    eval_qjs_source(
+        &mut runtime,
+        QJS_SHELL_SOURCE,
+        QJS_SHELL_SCRIPT_SENTINEL,
+        Duration::ZERO,
+        0,
+    )?;
+    Ok(runtime)
 }
