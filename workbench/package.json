@@ -248,29 +248,24 @@
       ],
       "view/item/context": [
         {
-          "command": "workbench.openWanixTaskSource",
+          "command": "workbench.openWanixTaskOutput",
           "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
           "group": "navigation@0"
         },
         {
-          "command": "workbench.openWanixTaskOutput",
+          "command": "workbench.openWanixTaskMetadata",
           "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
           "group": "navigation@1"
         },
         {
-          "command": "workbench.openWanixTaskMetadata",
+          "command": "workbench.focusTaskTerminal",
           "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
           "group": "navigation@2"
         },
         {
-          "command": "workbench.focusTaskTerminal",
-          "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
-          "group": "navigation@3"
-        },
-        {
           "command": "workbench.openWanixPath",
           "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
-          "group": "navigation@4"
+          "group": "navigation@3"
         },
         {
           "command": "workbench.openWanixPath",

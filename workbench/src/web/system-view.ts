@@ -61,7 +61,7 @@ type CategoryId = "actions" | "drivers" | "tasks" | "terminals" | "namespace" | 
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
-	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string };
+	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string; children?: SystemTreeItem[] };
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "actions", label: "Actions" },
@@ -177,7 +177,9 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			item.iconPath = categoryIcon(element.id);
 			return item;
 		}
-		const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None);
+		const item = new vscode.TreeItem(element.label, element.children?.length
+			? vscode.TreeItemCollapsibleState.Collapsed
+			: vscode.TreeItemCollapsibleState.None);
 		item.description = element.description;
 		item.iconPath = element.icon;
 		item.command = element.command;
@@ -189,8 +191,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		if (!element) {
 			return CATEGORIES;
 		}
-		if (element.type !== "category") {
-			return [];
+		if (element.type === "leaf") {
+			return element.children || [];
 		}
 		switch (element.id) {
 			case "actions":
@@ -238,18 +240,15 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			const description = task.status === "exited"
 				? `exited ${formatExitCode(task.exitCode)}`
 				: task.status;
-			const command = task.sourcePath ? {
-				command: "workbench.openWanixTaskSource",
-				title: "Open Task Source",
-				arguments: [task.sourcePath],
-			} : undefined;
+			const children = taskArtifactItems(task);
 			const contextValue = task.sourcePath || task.outputPath || task.metadataPath ? "wanixTaskWithArtifacts" : "wanixTask";
-			return leaf(`task:${task.id}`, `${task.id} ${taskDisplayName(task)}`, description, taskIcon(task.status), command, contextValue, {
+			return leaf(`task:${task.id}`, `${task.id} ${taskDisplayName(task)}`, description, taskIcon(task.status), undefined, contextValue, {
 				taskId: task.id,
 				sourcePath: task.sourcePath,
 				outputPath: task.outputPath,
 				metadataPath: task.metadataPath,
 				path: `#task/${task.id}`,
+				children,
 			});
 		});
 	}
@@ -304,7 +303,7 @@ function leaf(
 	icon?: string,
 	command?: vscode.Command,
 	contextValue?: string,
-	metadata: { taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string } = {},
+	metadata: { taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string; children?: SystemTreeItem[] } = {},
 ): SystemTreeItem {
 	return {
 		type: "leaf",
@@ -319,7 +318,50 @@ function leaf(
 		outputPath: metadata.outputPath,
 		metadataPath: metadata.metadataPath,
 		path: metadata.path,
+		children: metadata.children,
 	};
+}
+
+function taskArtifactItems(task: TaskRecord): SystemTreeItem[] {
+	const items: SystemTreeItem[] = [];
+	if (task.sourcePath && task.kind === "qjs") {
+		items.push(leaf(`task:${task.id}:source`, "Source", pathDescription(task.sourcePath), "go-to-file", {
+			command: "workbench.openWanixTaskSource",
+			title: "Open Task Source",
+			arguments: [task.sourcePath],
+		}));
+	}
+	if (task.outputPath) {
+		items.push(leaf(`task:${task.id}:output`, "Transcript", pathDescription(task.outputPath), "output", {
+			command: "workbench.openWanixTaskOutput",
+			title: "Open Task Output",
+			arguments: [task.outputPath],
+		}));
+	}
+	if (task.metadataPath) {
+		items.push(leaf(`task:${task.id}:metadata`, "Metadata", pathDescription(task.metadataPath), "json", {
+			command: "workbench.openWanixTaskMetadata",
+			title: "Open Task Metadata",
+			arguments: [task.metadataPath],
+		}));
+	}
+	items.push(leaf(`task:${task.id}:terminal`, "Terminal", "focus output", "terminal", {
+		command: "workbench.focusTaskTerminal",
+		title: "Focus Task Terminal",
+		arguments: [{ taskId: task.id }],
+	}));
+	items.push(leaf(`task:${task.id}:service`, `#task/${task.id}`, "service dir", "server", {
+		command: "workbench.openWanixPath",
+		title: "Open Wanix Path",
+		arguments: [`#task/${task.id}`],
+	}));
+	return items;
+}
+
+function pathDescription(path: string): string {
+	const normalized = path.endsWith("/") && path.length > 1 ? path.slice(0, -1) : path;
+	const slash = normalized.lastIndexOf("/");
+	return slash >= 0 ? normalized.slice(slash + 1) : normalized;
 }
 
 function actionLeaf(

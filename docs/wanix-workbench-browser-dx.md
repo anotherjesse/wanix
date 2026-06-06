@@ -114,6 +114,13 @@ keeps an empty or unfamiliar root from depending on tiny toolbar icons alone.
 
 ![Wanix System action rows](assets/wanix-workbench-browser-dx/31-system-action-rows.png)
 
+Task rows now expand into the things you actually want after a run. For the
+WASM starter that means transcript, metadata, terminal, and `#task/<id>` service
+links are visible directly under the task. The row itself expands instead of
+trying to open the `.wasm` binary as text.
+
+![Wanix task artifact rows](assets/wanix-workbench-browser-dx/32-task-artifact-rows.png)
+
 The next polish pass removed another bit of demo friction: you no longer need
 to hand-copy a WASM fixture into the served root. The Wanix system view has an
 `Open JS and WASM Duet Demo` action. It creates missing starter files:
@@ -424,13 +431,11 @@ icons. It is the tiny welcome state in practice: when the filesystem is empty or
 unfamiliar, the System panel still has concrete things to run, create, and
 inspect.
 
-Task-row source actions push the sidebar toward the same object model. A task
-started from a file should carry enough memory to bring you back to that file,
-especially after the terminal or editor focus has moved elsewhere.
-
-The terminal action is the output half of that same idea. Source and output are
-the two handles a developer reaches for while iterating; both now live on the
-task object in the Wanix sidebar.
+Expandable task rows push the sidebar toward the same object model. A task
+started from a file should carry enough memory to bring you back to the source,
+transcript, metadata, terminal, and service directory without depending on a
+right-click menu. For binary WASM, the source link stays out of the way and the
+inspectable artifacts remain visible.
 
 Persisted transcripts make the output handle a real Wanix file. That matters for
 the agentic repair work too: a person, a script, or an agent can inspect the
@@ -486,9 +491,8 @@ The current loop is:
     saved response report from `Open Latest HTTP App Preview`.
 28. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-29. Run that script, then click or right-click its task row to reopen the
-    source, open the saved transcript, or focus the terminal output that
-    produced the task.
+29. Run that script, then expand its task row to reopen the source, transcript,
+    metadata, terminal output, or `#task/<id>` service directory.
 30. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
 31. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
