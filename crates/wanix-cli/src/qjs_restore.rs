@@ -41,19 +41,63 @@ struct QjsRestoreWorkspace {
     after_guest_script: String,
 }
 
+struct QjsRestoreSources {
+    before_script: String,
+    after_script: String,
+}
+
+struct QjsRestoreScripts {
+    root: Arc<MemFs>,
+    before_script: String,
+    after_script: String,
+    before_guest_script: String,
+    after_guest_script: String,
+}
+
 fn prepare_qjs_restore_workspace(
     command: &QjsRestoreCommand,
 ) -> Result<QjsRestoreWorkspace, CliError> {
+    let sources = read_qjs_restore_sources(command)?;
+    let runner = quickjs_runner()?;
+    let (table, before_task) = prepare_qjs_restore_before_task(Arc::clone(&runner))?;
+    let scripts = prepare_qjs_restore_scripts(command, sources)?;
+    let (stdout, stderr) = attach_qjs_restore_task_namespace(command, &before_task, scripts.root)?;
+
+    Ok(QjsRestoreWorkspace {
+        runner,
+        table,
+        before_task,
+        stdout,
+        stderr,
+        before_script: scripts.before_script,
+        after_script: scripts.after_script,
+        before_guest_script: scripts.before_guest_script,
+        after_guest_script: scripts.after_guest_script,
+    })
+}
+
+fn read_qjs_restore_sources(command: &QjsRestoreCommand) -> Result<QjsRestoreSources, CliError> {
+    Ok(QjsRestoreSources {
+        before_script: read_utf8_script(command.before_script_path.as_path())?,
+        after_script: read_utf8_script(command.after_script_path.as_path())?,
+    })
+}
+
+fn prepare_qjs_restore_before_task(
+    runner: Arc<QuickJsRunner>,
+) -> Result<(TaskTable, Task), CliError> {
+    let table = TaskTable::new();
+    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(runner)))?;
+    let before_task = table.allocate_root("qjs")?;
+    Ok((table, before_task))
+}
+
+fn prepare_qjs_restore_scripts(
+    command: &QjsRestoreCommand,
+    sources: QjsRestoreSources,
+) -> Result<QjsRestoreScripts, CliError> {
     let before_script_path = command.before_script_path.as_path();
     let after_script_path = command.after_script_path.as_path();
-    let before_script = read_utf8_script(before_script_path)?;
-    let after_script = read_utf8_script(after_script_path)?;
-
-    let runner = quickjs_runner()?;
-    let table = TaskTable::new();
-    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(Arc::clone(&runner))))?;
-    let before_task = table.allocate_root("qjs")?;
-
     let root = Arc::new(MemFs::new());
     copy_script_directory_into(
         before_script_path,
@@ -69,31 +113,39 @@ fn prepare_qjs_restore_workspace(
     )?;
     let before_guest_script = guest_path_in_cwd(&command.cwd, QJS_RESTORE_BEFORE_SCRIPT)?;
     let after_guest_script = guest_path_in_cwd(&command.cwd, QJS_RESTORE_AFTER_SCRIPT)?;
-    root.write_file(before_guest_script.as_str(), before_script.as_bytes())?;
-    root.write_file(after_guest_script.as_str(), after_script.as_bytes())?;
-    before_task.bind(root, ".", ".", BindOptions::default())?;
-    bind_host_mounts(&before_task, &command.mounts)?;
+    root.write_file(
+        before_guest_script.as_str(),
+        sources.before_script.as_bytes(),
+    )?;
+    root.write_file(after_guest_script.as_str(), sources.after_script.as_bytes())?;
 
-    let (stdout, stderr) = attach_task_stdio(&before_task, None)?;
+    Ok(QjsRestoreScripts {
+        root,
+        before_script: sources.before_script,
+        after_script: sources.after_script,
+        before_guest_script,
+        after_guest_script,
+    })
+}
+
+fn attach_qjs_restore_task_namespace(
+    command: &QjsRestoreCommand,
+    before_task: &Task,
+    root: Arc<MemFs>,
+) -> Result<(Arc<MemFs>, Arc<MemFs>), CliError> {
+    before_task.bind(root, ".", ".", BindOptions::default())?;
+    bind_host_mounts(before_task, &command.mounts)?;
+
+    let (stdout, stderr) = attach_task_stdio(before_task, None)?;
     configure_qjs_task(
-        &before_task,
+        before_task,
         QJS_RESTORE_BEFORE_SCRIPT,
         &command.before_args,
         &command.before_env,
         &command.cwd,
     )?;
 
-    Ok(QjsRestoreWorkspace {
-        runner,
-        table,
-        before_task,
-        stdout,
-        stderr,
-        before_script,
-        after_script,
-        before_guest_script,
-        after_guest_script,
-    })
+    Ok((stdout, stderr))
 }
 
 fn run_qjs_restore_workspace(
