@@ -2,6 +2,12 @@ import * as vscode from 'vscode';
 
 export type WanixSystemConfig = {
 	drivers?: string[];
+	httpApp?: {
+		route?: string;
+		source?: string;
+		status?: string;
+		protocol?: string;
+	};
 	ns?: {
 		task: string;
 		term: string;
@@ -34,12 +40,19 @@ type NamespaceRecord = {
 	label: string;
 };
 
+type RouteRecord = {
+	id: string;
+	label: string;
+	description: string;
+	protocol: string;
+};
+
 type ActivityRecord = {
 	id: number;
 	label: string;
 };
 
-type CategoryId = "drivers" | "tasks" | "terminals" | "namespace" | "activity";
+type CategoryId = "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "activity";
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
@@ -50,6 +63,7 @@ const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "tasks", label: "Tasks" },
 	{ type: "category", id: "terminals", label: "Terminals" },
 	{ type: "category", id: "namespace", label: "Namespace" },
+	{ type: "category", id: "routes", label: "Routes" },
 	{ type: "category", id: "activity", label: "Activity" },
 ];
 
@@ -60,6 +74,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private tasks = new Map<string, TaskRecord>();
 	private terminals = new Map<string, TerminalRecord>();
 	private namespace: NamespaceRecord[] = [];
+	private routes: RouteRecord[] = [];
 	private activity: ActivityRecord[] = [];
 	private nextActivityId = 1;
 
@@ -78,6 +93,10 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}
 		if (config.qjsShellUrl) {
 			this.addActivity("qjs shell route discovered");
+		}
+		this.routes = routeRecords(config);
+		if (this.routes.length > 0) {
+			this.addActivity("http app route discovered");
 		}
 		this.refresh();
 	}
@@ -165,6 +184,10 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				return this.terminalItems();
 			case "namespace":
 				return this.namespace.map((entry) => leaf(`namespace:${entry.path}`, entry.path, entry.label, "root-folder"));
+			case "routes":
+				return this.routes.length > 0
+					? this.routes.map((route) => leaf(`route:${route.id}`, route.label, route.description, "globe"))
+					: [leaf("routes:empty", "no routes advertised")];
 			case "activity":
 				return this.activity.length > 0
 					? this.activity.map((entry) => leaf(`activity:${entry.id}`, entry.label, undefined, "history"))
@@ -235,9 +258,24 @@ function categoryIcon(id: CategoryId): vscode.ThemeIcon {
 			return new vscode.ThemeIcon("terminal");
 		case "namespace":
 			return new vscode.ThemeIcon("root-folder");
+		case "routes":
+			return new vscode.ThemeIcon("globe");
 		case "activity":
 			return new vscode.ThemeIcon("history");
 	}
+}
+
+function routeRecords(config: WanixSystemConfig): RouteRecord[] {
+	const route = config.httpApp;
+	if (!route?.route || route.status === "disabled") {
+		return [];
+	}
+	return [{
+		id: "http-app",
+		label: route.route,
+		description: route.source || route.protocol || "http app",
+		protocol: route.protocol || "wanix-http-app.v1",
+	}];
 }
 
 function taskIcon(status: TaskStatus): string {

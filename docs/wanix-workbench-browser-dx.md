@@ -125,6 +125,16 @@ http://127.0.0.1:4444/.wanix/app/hello
 
 ![HTTP app demo installer](assets/wanix-workbench-browser-dx/10-http-app-installer.png)
 
+The cockpit now advertises the route contract too. The Wanix sidebar has a
+`Routes` section, populated from serve discovery, so the HTTP app path is not
+tribal knowledge:
+
+```text
+/.wanix/app/<name> -> apps/<name>.js
+```
+
+![HTTP route in the Wanix sidebar](assets/wanix-workbench-browser-dx/11-http-route-sidebar.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -210,6 +220,10 @@ direct 9P filesystem surface as the rest of the workbench, so the handler file
 is not a fake sample hidden in the extension. It is a normal Wanix file under
 `/apps`, ready to edit and serve.
 
+Finally, the route itself is visible in the Wanix system panel. That matters
+because the cockpit should explain the OS shape as you use it: drivers,
+services, namespace, and now served programs.
+
 ## The Feeling Now
 
 The current loop is:
@@ -230,6 +244,7 @@ The current loop is:
 12. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
 13. Open
     `/.wanix/app/hello?from=browser` to get an HTTP response from a Wanix task.
+14. See the HTTP app route contract in the Wanix sidebar.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
