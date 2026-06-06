@@ -96,6 +96,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(
 			serviceInspector,
 			vscode.workspace.registerTextDocumentContentProvider(WANIX_INSPECT_SCHEME, serviceInspector),
+			vscode.languages.registerDocumentLinkProvider({ scheme: WANIX_INSPECT_SCHEME }, serviceInspector),
 		);
 		systemView.configure(config);
 		revealWanixSystemView();

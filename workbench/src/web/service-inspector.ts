@@ -3,7 +3,7 @@ import { WanixBridge } from './bridge.js';
 
 export const WANIX_INSPECT_SCHEME = "wanix-inspect";
 
-export class WanixServiceInspector implements vscode.TextDocumentContentProvider, vscode.Disposable {
+export class WanixServiceInspector implements vscode.TextDocumentContentProvider, vscode.DocumentLinkProvider, vscode.Disposable {
 	private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
 	readonly onDidChange = this.emitter.event;
 
@@ -78,7 +78,29 @@ export class WanixServiceInspector implements vscode.TextDocumentContentProvider
 			"",
 			"Service directories are reachable even when they are hidden from ordinary root listings.",
 			"This snapshot lists paths without reading files that allocate resources.",
+			"Safe metadata files and child directories are document links; allocator, control, and stream files stay plain text.",
 		].join("\n");
+	}
+
+	provideDocumentLinks(document: vscode.TextDocument): vscode.DocumentLink[] {
+		const links: vscode.DocumentLink[] = [];
+		for (let lineNumber = 0; lineNumber < document.lineCount; lineNumber += 1) {
+			const line = document.lineAt(lineNumber);
+			const entry = serviceEntryFromLine(line.text);
+			if (!entry) {
+				continue;
+			}
+			const target = entryTarget(entry);
+			if (!target) {
+				continue;
+			}
+			const start = line.text.indexOf(entry.path);
+			const range = new vscode.Range(lineNumber, start, lineNumber, start + entry.path.length);
+			const link = new vscode.DocumentLink(range, target);
+			link.tooltip = entry.kind === "dir" ? `Inspect ${entry.path}` : `Open ${entry.path}`;
+			links.push(link);
+		}
+		return links;
 	}
 
 	dispose(): void {
@@ -121,6 +143,47 @@ function normalizeEntries(entries: unknown): string[] {
 		.map((entry) => typeof entry === "string" ? entry : entryNameFromObject(entry))
 		.filter((entry): entry is string => !!entry)
 		.sort((left, right) => entryName(left).localeCompare(entryName(right), undefined, { numeric: true }));
+}
+
+type ServiceEntry = {
+	kind: "dir" | "file";
+	path: string;
+};
+
+function serviceEntryFromLine(line: string): ServiceEntry | undefined {
+	const match = line.match(/^- (dir|file) (.+)$/);
+	if (!match) {
+		return undefined;
+	}
+	return {
+		kind: match[1] as "dir" | "file",
+		path: match[2].trim(),
+	};
+}
+
+function entryTarget(entry: ServiceEntry): vscode.Uri | undefined {
+	if (entry.kind === "dir") {
+		return inspectUri(entry.path);
+	}
+	if (!isSafeFileLink(entry.path)) {
+		return undefined;
+	}
+	return vscode.Uri.from({
+		scheme: WanixBridge.scheme,
+		path: uriPath(entry.path),
+	});
+}
+
+function isSafeFileLink(path: string): boolean {
+	const normalized = displayWanixPath(path).replace(/^\/+/, "");
+	const parts = normalized.split("/");
+	if (!parts[0]?.startsWith("#")) {
+		return true;
+	}
+	if (parts[0] === "#task") {
+		return parts.length === 3 && ["cmd", "dir", "env", "exit", "id", "kind"].includes(parts[2]);
+	}
+	return false;
 }
 
 function entryNameFromObject(entry: unknown): string | undefined {
