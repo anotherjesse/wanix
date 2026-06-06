@@ -71,7 +71,15 @@ type ActivityRecord = {
 	label: string;
 };
 
-type CategoryId = "actions" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "activity";
+type AgentRecord = {
+	id: number;
+	label: string;
+	description?: string;
+	icon?: string;
+	path?: string;
+};
+
+type CategoryId = "actions" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "agent" | "activity";
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
@@ -84,6 +92,7 @@ const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "terminals", label: "Terminals" },
 	{ type: "category", id: "namespace", label: "Namespace" },
 	{ type: "category", id: "routes", label: "Routes" },
+	{ type: "category", id: "agent", label: "Agent" },
 	{ type: "category", id: "activity", label: "Activity" },
 ];
 
@@ -95,10 +104,12 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private terminals = new Map<string, TerminalRecord>();
 	private namespace: NamespaceRecord[] = [];
 	private routes: RouteRecord[] = [];
+	private agent: AgentRecord[] = [];
 	private activity: ActivityRecord[] = [];
 	private hasHttpApp = false;
 	private hasV86 = false;
 	private nextActivityId = 1;
+	private nextAgentId = 1;
 
 	readonly onDidChangeTreeData = this.emitter.event;
 
@@ -181,6 +192,24 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
+	agentStarted(label: string): void {
+		this.agent = [];
+		this.nextAgentId = 1;
+		this.agentStep(label, { icon: "tools" });
+	}
+
+	agentStep(label: string, options: { description?: string; icon?: string; path?: string } = {}): void {
+		this.agent.push({
+			id: this.nextAgentId++,
+			label,
+			description: options.description,
+			icon: options.icon,
+			path: options.path,
+		});
+		this.addActivity(`agent ${label}`);
+		this.refresh();
+	}
+
 	clearFinishedRows(): { tasks: number; terminals: number } {
 		const tasks = removeMapEntries(this.tasks, (task) => task.status !== "running");
 		const terminals = removeMapEntries(this.terminals, (terminal) => terminal.status === "closed");
@@ -254,6 +283,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 						{ path: route.previewPath },
 					))
 					: [leaf("routes:empty", "no routes advertised")];
+			case "agent":
+				return this.agentItems();
 			case "activity":
 				return this.activity.length > 0
 					? this.activity.map((entry) => leaf(`activity:${entry.id}`, entry.label, undefined, "history"))
@@ -287,6 +318,25 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				children,
 			});
 		});
+	}
+
+	private agentItems(): SystemTreeItem[] {
+		if (this.agent.length === 0) {
+			return [leaf("agent:empty", "no agent steps yet")];
+		}
+		return this.agent.map((entry) => leaf(
+			`agent:${entry.id}`,
+			entry.label,
+			entry.description,
+			entry.icon || "tools",
+			entry.path ? {
+				command: "workbench.openWanixPath",
+				title: "Open Wanix Path",
+				arguments: [entry.path],
+			} : undefined,
+			entry.path ? "wanixAgentArtifact" : undefined,
+			{ path: entry.path },
+		));
 	}
 
 	private terminalItems(): SystemTreeItem[] {
@@ -449,6 +499,8 @@ function categoryIcon(id: CategoryId): vscode.ThemeIcon {
 			return new vscode.ThemeIcon("root-folder");
 		case "routes":
 			return new vscode.ThemeIcon("globe");
+		case "agent":
+			return new vscode.ThemeIcon("tools");
 		case "activity":
 			return new vscode.ThemeIcon("history");
 	}

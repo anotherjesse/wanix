@@ -26,12 +26,14 @@ export async function installAgentRepairDemo(
 	bridge: WanixBridge,
 	systemView: WanixSystemView,
 ): Promise<void> {
+	systemView.agentStarted("install repair demo");
 	await fsys.makeDirAll(AGENT_DIR);
+	systemView.agentStep("prepare /agent", { icon: "root-folder", path: AGENT_DIR });
 	await removeIfExists(fsys, AGENT_RESULT_PATH);
 	await fsys.writeFile(AGENT_BROKEN_PATH, BROKEN_JS);
 	bridge.refresh(AGENT_DIR);
 	bridge.refresh(AGENT_BROKEN_PATH);
-	systemView.filesystemActivity("agent repair demo installed");
+	systemView.agentStep("write broken.js", { icon: "go-to-file", path: AGENT_BROKEN_PATH });
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
 	});

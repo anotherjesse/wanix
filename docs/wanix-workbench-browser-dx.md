@@ -305,6 +305,14 @@ step in the same system panel.
 
 ![Deterministic Wanix agent repair demo](assets/wanix-workbench-browser-dx/22-agent-repair-demo.jpg)
 
+The latest pass makes that contract visible as its own system object. The
+Wanix sidebar now has an `Agent` section that resets for each install or repair
+run and records the concrete steps: install, read, run, capture transcript,
+observe the failure, edit source, rerun, capture output, and verify the result.
+Rows with filesystem artifacts open those Wanix paths directly.
+
+![Wanix agent action log](assets/wanix-workbench-browser-dx/35-agent-action-log.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -322,6 +330,8 @@ But the first browser pass had several small breaks in the loop:
 - The task and terminal model was invisible unless you already knew which
   service files to inspect.
 - The WASM driver existed in Rust but did not have a usable browser entrypoint.
+- The agent repair loop worked, but its actions were mixed into generic
+  activity instead of appearing as a clickable repair trace.
 
 None of those are huge by themselves. Together, they make the browser experience feel like a prototype you have to babysit. The point of this pass was to remove enough of that babysitting that the system starts to feel direct.
 
@@ -465,8 +475,8 @@ same `/.wanix/tasks/...output.txt` artifact after the run.
 
 The repair demo is deliberately narrow, but it changes the feel of the cockpit:
 an automated helper is no longer outside the system. It uses the same qjs task
-runner, transcript files, source edits, result files, and activity log that a
-person can inspect.
+runner, transcript files, source edits, result files, and Agent action log that
+a person can inspect.
 
 ## The Feeling Now
 
@@ -525,8 +535,10 @@ The current loop is:
     crowding the sidebar.
 34. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-35. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
-    `agent/out/result.txt`.
+35. Watch the `Agent` section list the repair loop: read, run, observe, edit,
+    rerun, capture transcripts, and verify `agent/out/result.txt`.
+36. Click an Agent row with an artifact to reopen the source, transcript, or
+    result file from the same system panel.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 

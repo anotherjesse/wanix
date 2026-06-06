@@ -521,10 +521,11 @@ async function fixCurrentWanixProgram(
 	context: vscode.ExtensionContext,
 ): Promise<void> {
 	const target = await taskRunTarget("qjs", bridge);
-	systemView.filesystemActivity(`agent read ${target.name}`);
+	systemView.agentStarted(`repair ${target.name}`);
+	systemView.agentStep(`read ${target.name}`, { icon: "book", path: target.path });
 	const source = await fsys.readText(target.path);
 	let firstRun: TaskRunStart | undefined;
-	systemView.filesystemActivity(`agent ran qjs ${target.name}`);
+	systemView.agentStep(`run qjs ${target.name}`, { icon: "play" });
 	const firstCode = await runWanixTaskTarget(
 		fsys,
 		bridge,
@@ -539,25 +540,30 @@ async function fixCurrentWanixProgram(
 			waitForExit: true,
 			onTaskStarted: (event) => {
 				firstRun = event;
+				if (event.outputPath) {
+					systemView.agentStep("capture first transcript", { icon: "output", path: event.outputPath });
+				}
 			},
 		},
 	);
 	const firstTranscript = firstRun?.outputPath
 		? await waitForTaskTranscript(fsys, firstRun.outputPath)
 		: "";
-	systemView.filesystemActivity(`agent saw ${agentObservation(firstCode, firstTranscript)}`);
+	const observation = agentObservation(firstCode, firstTranscript);
+	systemView.agentStep(`observe ${observation}`, { icon: firstCode === 0 ? "pass" : "warning" });
 	const repaired = repairQjsProgram(source);
 	if (repaired === source && firstCode === 0) {
+		systemView.agentStep("already repaired", { icon: "pass", path: target.path });
 		vscode.window.showInformationMessage(`${target.name} already looks repaired`);
 		return;
 	}
 	await fsys.writeFile(target.path, repaired);
 	bridge.refresh(target.path);
 	await refreshWorkbenchFiles(bridge);
-	systemView.filesystemActivity(`agent edited ${target.name}`);
+	systemView.agentStep(`edit ${target.name}`, { icon: "edit", path: target.path });
 	await openWanixPath(target.path);
 	let secondRun: TaskRunStart | undefined;
-	systemView.filesystemActivity(`agent reran qjs ${target.name}`);
+	systemView.agentStep(`rerun qjs ${target.name}`, { icon: "run" });
 	const secondCode = await runWanixTaskTarget(
 		fsys,
 		bridge,
@@ -572,6 +578,9 @@ async function fixCurrentWanixProgram(
 			waitForExit: true,
 			onTaskStarted: (event) => {
 				secondRun = event;
+				if (event.outputPath) {
+					systemView.agentStep("capture rerun transcript", { icon: "output", path: event.outputPath });
+				}
 			},
 		},
 	);
@@ -579,11 +588,12 @@ async function fixCurrentWanixProgram(
 		await waitForTaskTranscript(fsys, secondRun.outputPath);
 	}
 	if (secondCode !== 0) {
+		systemView.agentStep(`rerun failed ${formatTaskExitCode(secondCode)}`, { icon: "error" });
 		throw new Error(`Agent repair rerun exited ${formatTaskExitCode(secondCode)}`);
 	}
 	const resultPath = agentResultPath(target);
 	const result = await waitForTextFile(fsys, resultPath);
-	systemView.filesystemActivity(`agent verified ${baseName(resultPath)}`);
+	systemView.agentStep(`verify ${baseName(resultPath)}`, { icon: "pass", path: resultPath });
 	await openWanixPath(resultPath);
 	vscode.window.showInformationMessage(`Wanix agent repair wrote ${resultPath}: ${result.trim()}`);
 }
