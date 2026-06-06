@@ -204,6 +204,7 @@ async function previewHttpApp(
 		previewPath: target.previewPath,
 		sourcePath: target.sourcePath,
 		url,
+		label: `/.wanix/app/${target.name}`,
 		artifacts: target.artifacts,
 	});
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {

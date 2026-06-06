@@ -291,6 +291,10 @@ row instead of asking the user to remember which file changed.
 
 ![HTTP counter state artifact](assets/wanix-workbench-browser-dx/39-http-counter-state-artifact.png)
 
+The execution labels are concrete now as well. The `Route Runs` list says
+`/.wanix/app/hello` and `/.wanix/app/counter`, not only the template
+`/.wanix/app/<name>`, so mixed route runs read like a log of what actually ran.
+
 The first-use loop got a small entry point too: `New qjs Script` creates a
 unique `/scratch/qjs-N.js`, opens it, and gives it a tiny program that writes
 both terminal output and `last-run.txt`. New users no longer need to know where
@@ -497,6 +501,9 @@ the route contract grows broader namespace write semantics on purpose.
 The cleanup pass made route-run artifacts generic. Counter state is the first
 use, but the tree can now hang other run outputs under the same execution row
 without adding another route-specific sidebar path.
+
+Route-run labels now use the concrete app path too, so the log distinguishes
+`/.wanix/app/hello` from `/.wanix/app/counter` at a glance.
 
 The scratch-script action is the same philosophy applied to creation. The
 cockpit should not only inspect Wanix; it should help you make the next Wanix

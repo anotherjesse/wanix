@@ -244,17 +244,18 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		return { tasks, terminals };
 	}
 
-	routePreviewed(id: string, preview: { status: number; statusText?: string; previewPath: string; sourcePath?: string; url?: string; artifacts?: RouteRunArtifact[] }): void {
+	routePreviewed(id: string, preview: { status: number; statusText?: string; previewPath: string; sourcePath?: string; url?: string; label?: string; artifacts?: RouteRunArtifact[] }): void {
 		const route = this.routes.find((candidate) => candidate.id === id);
 		if (!route) {
 			return;
 		}
 		route.previewStatus = formatHttpStatus(preview.status, preview.statusText);
 		route.previewPath = preview.previewPath;
+		const label = preview.label || route.label;
 		this.routeRuns.unshift({
 			id: this.nextRouteRunId++,
 			routeId: route.id,
-			label: route.label,
+			label,
 			status: route.previewStatus,
 			url: preview.url,
 			sourcePath: preview.sourcePath,
@@ -262,7 +263,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			artifacts: preview.artifacts,
 		});
 		this.routeRuns = this.routeRuns.slice(0, 8);
-		this.addActivity(`${route.label} route task ${route.previewStatus}`);
+		this.addActivity(`${label} route task ${route.previewStatus}`);
 		this.refresh();
 	}
 
