@@ -91,6 +91,18 @@
         "icon": "$(play)"
       },
       {
+        "command": "workbench.openV86SharedDemo",
+        "title": "Open v86 Shared Files Demo",
+        "category": "Wanix",
+        "icon": "$(vm)"
+      },
+      {
+        "command": "workbench.openDirectV86",
+        "title": "Open direct-v86 VM",
+        "category": "Wanix",
+        "icon": "$(vm-running)"
+      },
+      {
         "command": "workbench.installAgentRepairDemo",
         "title": "Install Agent Repair Demo",
         "category": "Wanix",

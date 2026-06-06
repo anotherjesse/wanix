@@ -127,6 +127,14 @@ sessions, files, transcripts, and service state intact.
 
 ![Wanix clear finished rows](assets/wanix-workbench-browser-dx/33-clear-finished-rows.png)
 
+The Linux/v86 proof now has a cockpit entry point as well. Discovery carries the
+direct-v86 launch route into the workbench, the System view shows a `direct-v86`
+route with boot readiness, and `Open v86 Shared Files Demo` seeds `/shared` with
+a README, `message.txt`, and `from-linux.txt`. The README gives the exact
+workbench -> Linux -> workbench file loop.
+
+![Wanix v86 shared files demo](assets/wanix-workbench-browser-dx/34-v86-shared-files-demo.png)
+
 The next polish pass removed another bit of demo friction: you no longer need
 to hand-copy a WASM fixture into the served root. The Wanix system view has an
 `Open JS and WASM Duet Demo` action. It creates missing starter files:
@@ -447,6 +455,10 @@ The clear-finished action makes the same sidebar usable during a long browser
 session. The OS cockpit should accumulate evidence, not make every stale row
 compete with the running shell.
 
+The v86 shared-files starter is the same principle applied to the Linux proof.
+It does not hide the unprepared-root state; it shows the missing boot markers,
+the direct-v86 URL, and the shared files Linux should read and write.
+
 Persisted transcripts make the output handle a real Wanix file. That matters for
 the agentic repair work too: a person, a script, or an agent can inspect the
 same `/.wanix/tasks/...output.txt` artifact after the run.
@@ -483,33 +495,37 @@ The current loop is:
     opens it.
 18. Edit `duet/producer.js`, run the guided duet without losing the edit, then
     explicitly reset the duet when you want the starter files back.
-19. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
-20. Open
+19. Click `Open v86 Shared Files Demo` to seed `/shared/message.txt` and read
+    the direct-v86 launch and 9P mount instructions.
+20. Open the `direct-v86` route when a prepared rootfs is available, then have
+    Linux read `/shared/message.txt` and write `/shared/from-linux.txt`.
+21. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
+22. Open
     `/.wanix/app/hello?from=browser` to get an HTTP response from a Wanix task.
-21. See the HTTP app route contract in the Wanix sidebar.
-22. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
+23. See the HTTP app route contract in the Wanix sidebar.
+24. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
     `/apps/hello.response.txt` report inside the workbench.
-23. Click the `/.wanix/app/<name>` route row itself to run the same preview from
+25. Click the `/.wanix/app/<name>` route row itself to run the same preview from
     the visible system contract.
-24. Edit `/apps/hello.js`, preview again, and see the changed handler output
+26. Edit `/apps/hello.js`, preview again, and see the changed handler output
     without losing the edit or reopening the report.
-25. Open the HTTP handler source directly, and reset the demo only through the
+27. Open the HTTP handler source directly, and reset the demo only through the
     explicit reset command.
-26. Right-click the route row to preview, open source, copy the route URL, or
+28. Right-click the route row to preview, open source, copy the route URL, or
     intentionally reset the demo handler.
-27. After previewing, read the route row's latest HTTP status and reopen the
+29. After previewing, read the route row's latest HTTP status and reopen the
     saved response report from `Open Latest HTTP App Preview`.
-28. Click `New qjs Script` to create a unique runnable scratch script without
+30. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-29. Run that script, then expand its task row to reopen the source, transcript,
+31. Run that script, then expand its task row to reopen the source, transcript,
     metadata, terminal output, or `#task/<id>` service directory.
-30. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+32. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-31. Click `Clear Finished Rows` when old exited tasks and closed terminals are
+33. Click `Clear Finished Rows` when old exited tasks and closed terminals are
     crowding the sidebar.
-32. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+34. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-33. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
+35. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
     `agent/out/result.txt`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.

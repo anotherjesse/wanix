@@ -109,6 +109,19 @@
             if (discovery.routes?.httpApp) {
               workbenchConfig.httpApp = discovery.routes.httpApp;
             }
+            if (discovery.v86) {
+              const directV86Url = new URL(location.href);
+              directV86Url.search = "";
+              directV86Url.searchParams.set("bundle", "direct-v86");
+              workbenchConfig.v86 = {
+                launchUrl: directV86Url.href,
+                boot: discovery.v86.boot || {},
+                rootfs: discovery.routes?.rootfs || {},
+                p9: discovery.routes?.p9 || {},
+                defaultCmdline: discovery.v86.defaultCmdline,
+                p9Msize: discovery.v86.p9Msize
+              };
+            }
             if (discovery.services?.task && discovery.services?.term) {
               workbenchConfig.ns = {
                 task: discovery.services.task,

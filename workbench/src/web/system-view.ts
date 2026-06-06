@@ -15,6 +15,18 @@ export type WanixSystemConfig = {
 	p9?: {
 		websocket?: string;
 	};
+	v86?: {
+		launchUrl?: string;
+		boot?: {
+			ready?: boolean;
+			missing?: string[];
+		};
+		rootfs?: {
+			status?: string;
+			ready?: boolean;
+			missing?: string[];
+		};
+	};
 	qjsShellUrl?: string;
 }
 
@@ -48,6 +60,8 @@ type RouteRecord = {
 	label: string;
 	description: string;
 	protocol: string;
+	command: vscode.Command;
+	contextValue?: string;
 	previewStatus?: string;
 	previewPath?: string;
 };
@@ -82,6 +96,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private namespace: NamespaceRecord[] = [];
 	private routes: RouteRecord[] = [];
 	private activity: ActivityRecord[] = [];
+	private hasHttpApp = false;
+	private hasV86 = false;
 	private nextActivityId = 1;
 
 	readonly onDidChangeTreeData = this.emitter.event;
@@ -100,9 +116,14 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		if (config.qjsShellUrl) {
 			this.addActivity("qjs shell route discovered");
 		}
+		this.hasHttpApp = Boolean(config.httpApp?.route && config.httpApp.status !== "disabled");
+		this.hasV86 = Boolean(config.v86?.launchUrl);
 		this.routes = routeRecords(config);
-		if (this.routes.length > 0) {
+		if (this.hasHttpApp) {
 			this.addActivity("http app route discovered");
+		}
+		if (this.hasV86) {
+			this.addActivity("direct-v86 route discovered");
 		}
 		this.refresh();
 	}
@@ -223,10 +244,15 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				}, "wanixNamespacePath", { path: entry.path }));
 			case "routes":
 				return this.routes.length > 0
-					? this.routes.map((route) => leaf(`route:${route.id}`, route.label, routeDescription(route), "globe", {
-						command: "workbench.openHttpAppDemo",
-						title: "Preview HTTP App Demo",
-					}, route.previewPath ? "wanixHttpRouteWithPreview" : "wanixHttpRoute", { path: route.previewPath }))
+					? this.routes.map((route) => leaf(
+						`route:${route.id}`,
+						route.label,
+						routeDescription(route),
+						route.id === "direct-v86" ? "vm" : "globe",
+						route.command,
+						route.contextValue || (route.previewPath ? "wanixHttpRouteWithPreview" : "wanixHttpRoute"),
+						{ path: route.previewPath },
+					))
 					: [leaf("routes:empty", "no routes advertised")];
 			case "activity":
 				return this.activity.length > 0
@@ -284,7 +310,13 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			actionLeaf("action:run-duet", "Run JS and WASM Duet Demo", "qjs + wasm", "run-all", "workbench.runDuetDemo"),
 			actionLeaf("action:install-agent-repair", "Install Agent Repair Demo", "agent", "bug", "workbench.installAgentRepairDemo"),
 		];
-		if (this.routes.length > 0) {
+		if (this.hasV86) {
+			items.splice(4, 0,
+				actionLeaf("action:v86-shared", "Open v86 Shared Files Demo", "linux", "vm", "workbench.openV86SharedDemo"),
+				actionLeaf("action:direct-v86", "Open direct-v86 VM", "browser", "vm-running", "workbench.openDirectV86"),
+			);
+		}
+		if (this.hasHttpApp) {
 			items.splice(4, 0,
 				actionLeaf("action:preview-http", "Preview HTTP App Demo", "http", "globe", "workbench.openHttpAppDemo"),
 				actionLeaf("action:open-http-handler", "Open HTTP App Handler", "http", "go-to-file", "workbench.openHttpAppHandler"),
@@ -423,16 +455,34 @@ function categoryIcon(id: CategoryId): vscode.ThemeIcon {
 }
 
 function routeRecords(config: WanixSystemConfig): RouteRecord[] {
+	const routes: RouteRecord[] = [];
 	const route = config.httpApp;
-	if (!route?.route || route.status === "disabled") {
-		return [];
+	if (route?.route && route.status !== "disabled") {
+		routes.push({
+			id: "http-app",
+			label: route.route,
+			description: route.source || route.protocol || "http app",
+			protocol: route.protocol || "wanix-http-app.v1",
+			command: {
+				command: "workbench.openHttpAppDemo",
+				title: "Preview HTTP App Demo",
+			},
+		});
 	}
-	return [{
-		id: "http-app",
-		label: route.route,
-		description: route.source || route.protocol || "http app",
-		protocol: route.protocol || "wanix-http-app.v1",
-	}];
+	if (config.v86?.launchUrl) {
+		routes.push({
+			id: "direct-v86",
+			label: "direct-v86",
+			description: v86RouteDescription(config.v86),
+			protocol: "wanix-direct-v86.v1",
+			contextValue: "wanixDirectV86Route",
+			command: {
+				command: "workbench.openDirectV86",
+				title: "Open direct-v86 VM",
+			},
+		});
+	}
+	return routes;
 }
 
 function routeDescription(route: RouteRecord): string {
@@ -445,6 +495,15 @@ function routeDescription(route: RouteRecord): string {
 function formatHttpStatus(status: number, statusText?: string): string {
 	const suffix = statusText?.trim();
 	return suffix ? `${status} ${suffix}` : String(status);
+}
+
+function v86RouteDescription(v86: NonNullable<WanixSystemConfig["v86"]>): string {
+	if (v86.boot?.ready) {
+		return "boot root ready";
+	}
+	const missing = v86.boot?.missing?.length ? `missing ${v86.boot.missing.join(", ")}` : undefined;
+	const rootfsStatus = v86.rootfs?.status ? `rootfs ${v86.rootfs.status}` : "boot root unprepared";
+	return missing || rootfsStatus;
 }
 
 function namespaceIcon(path: string): string {

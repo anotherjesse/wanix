@@ -7,6 +7,7 @@ import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView } from './system-view.js';
+import { openDirectV86, openV86SharedDemo, type V86SharedConfig } from './v86-shared-demo.js';
 import { ensureWasmStarter, installWasmStarter, WASM_STARTER_OUTPUT_PATH, WASM_STARTER_PATH } from './wasm-starter.js';
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
 //@ts-ignore
@@ -21,6 +22,7 @@ type Config = {
 	qjsTask?: boolean;
 	drivers?: string[];
 	httpApp?: HttpAppRouteConfig;
+	v86?: V86SharedConfig;
 	term?: boolean;
 	raw?: boolean;
 	open?: string;
@@ -184,6 +186,20 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runWasmStarter', async () => {
 			try {
 				await runWasmStarter(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openV86SharedDemo', async () => {
+			try {
+				await openV86SharedDemo(fsys, bridge, config, systemView);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openDirectV86', async () => {
+			try {
+				await openDirectV86(config, systemView);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}

@@ -775,6 +775,23 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
         "{response}"
     );
     assert!(
+        response.contains("const directV86Url = new URL(location.href)"),
+        "{response}"
+    );
+    assert!(
+        response.contains("directV86Url.searchParams.set(\"bundle\", \"direct-v86\")"),
+        "{response}"
+    );
+    assert!(response.contains("workbenchConfig.v86 = {"), "{response}");
+    assert!(
+        response.contains("launchUrl: directV86Url.href"),
+        "{response}"
+    );
+    assert!(
+        response.contains("rootfs: discovery.routes?.rootfs || {}"),
+        "{response}"
+    );
+    assert!(
         response.contains("event.data.port.postMessage({ config: workbenchConfig })"),
         "{response}"
     );
