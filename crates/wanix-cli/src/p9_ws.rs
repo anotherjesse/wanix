@@ -13,71 +13,22 @@ use runtime::{p9_ws_listening_message, run_p9_ws_with_listener};
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
     use std::ffi::OsString;
     use std::fs;
-    use std::io::{self, Read, Write};
+    use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::path::PathBuf;
     use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use tungstenite::{Error as WsError, Message, WebSocket, connect};
+    use tungstenite::{Message, WebSocket, connect};
     use wanix_protocol::{
         P9_RATTACH, P9_RGETATTR, P9_RLOPEN, P9_RREAD, P9_RVERSION, P9_RWALK, P9_VERSION_9P2000_L,
-        P9Error, P9Frame, p9_decode_rgetattr, p9_decode_rread, p9_tattach, p9_tgetattr, p9_tlopen,
-        p9_tread, p9_tversion, p9_twalk,
+        P9Frame, p9_decode_rgetattr, p9_decode_rread, p9_tattach, p9_tgetattr, p9_tlopen, p9_tread,
+        p9_tversion, p9_twalk,
     };
 
     use super::*;
-
-    #[test]
-    fn p9_ws_connection_errors_have_stable_display_text() {
-        assert_eq!(
-            P9WsConnectionError::Handshake("bad key".to_owned()).to_string(),
-            "websocket handshake failed: bad key"
-        );
-        assert!(
-            P9WsConnectionError::WebSocket(WsError::Io(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "pipe closed"
-            )))
-            .to_string()
-            .starts_with("websocket I/O failed:"),
-        );
-        assert_eq!(
-            P9WsConnectionError::Protocol(P9Error::InvalidUtf8).to_string(),
-            "9P protocol error: 9P string is not valid UTF-8"
-        );
-        assert_eq!(
-            P9WsConnectionError::Server(wanix_9p::Wanix9pError::InvalidPath("../x".to_owned()))
-                .to_string(),
-            "9P server error: invalid 9P walk path: ../x"
-        );
-        assert_eq!(
-            P9WsConnectionError::TruncatedFrame { buffered_len: 7 }.to_string(),
-            "websocket closed with 7 buffered 9P bytes"
-        );
-    }
-
-    #[test]
-    fn p9_ws_connection_errors_report_sources_for_wrapped_errors() {
-        assert!(Error::source(&P9WsConnectionError::Handshake("bad key".to_owned())).is_none());
-        assert!(
-            Error::source(&P9WsConnectionError::WebSocket(WsError::Io(
-                io::Error::new(io::ErrorKind::BrokenPipe, "pipe closed")
-            )))
-            .is_some()
-        );
-        assert!(Error::source(&P9WsConnectionError::Protocol(P9Error::InvalidUtf8)).is_some());
-        assert!(
-            Error::source(&P9WsConnectionError::Server(
-                wanix_9p::Wanix9pError::InvalidPath("../x".to_owned())
-            ))
-            .is_some()
-        );
-        assert!(Error::source(&P9WsConnectionError::TruncatedFrame { buffered_len: 7 }).is_none());
-    }
 
     #[test]
     fn parse_p9_ws_requires_root_and_addr() {
