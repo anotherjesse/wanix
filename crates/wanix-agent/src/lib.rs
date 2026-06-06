@@ -102,6 +102,15 @@ impl AgentDevice {
         Ok(())
     }
 
+    /// Resolves a parked approval request for session `id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the session or request does not exist.
+    pub fn resolve(&self, id: &str, request_id: &str, decision: &str) -> FsResult<()> {
+        self.session(id)?.resolve(request_id, decision)
+    }
+
     fn session(&self, id: &str) -> FsResult<Arc<dyn AgentSession>> {
         let state = self.lock_state()?;
         state.sessions.get(id).cloned().ok_or(FsError::NotFound)
@@ -136,6 +145,13 @@ impl FileSystem for AgentDevice {
                 require_read_only(options)?;
                 Ok(Box::new(EventsFile::new(self.session(id)?)))
             }
+            AgentPath::Pending(id) => {
+                require_read_only(options)?;
+                let pending = self.session(id)?.pending();
+                Ok(Box::new(BytesFile::new(
+                    format!("{pending}\n").into_bytes(),
+                )))
+            }
             AgentPath::Prompt(id) => Ok(Box::new(PromptFile::new(self.session(id)?))),
             AgentPath::Ctl(id) => {
                 self.session(id)?;
@@ -152,7 +168,7 @@ impl FileSystem for AgentDevice {
                 self.session(id)?;
                 Ok(directory_metadata())
             }
-            AgentPath::Id(id) | AgentPath::Status(id) => {
+            AgentPath::Id(id) | AgentPath::Status(id) | AgentPath::Pending(id) => {
                 self.session(id)?;
                 Ok(file_metadata(0, modes::READ_ONLY_FILE))
             }
@@ -189,6 +205,7 @@ impl FileSystem for AgentDevice {
                     DirEntry::new("ctl", file_metadata(0, modes::CONTROL_FILE)),
                     DirEntry::new("events", file_metadata(0, modes::STREAM_FILE)),
                     DirEntry::new("id", file_metadata(0, modes::READ_ONLY_FILE)),
+                    DirEntry::new("pending", file_metadata(0, modes::READ_ONLY_FILE)),
                     DirEntry::new("prompt", file_metadata(0, modes::STREAM_FILE)),
                     DirEntry::new("status", file_metadata(0, modes::READ_ONLY_FILE)),
                 ])

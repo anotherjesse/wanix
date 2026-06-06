@@ -15,10 +15,12 @@ pub(crate) enum AgentPath<'a> {
     Prompt(&'a str),
     /// `<id>/events`: read the normalized JSONL event stream.
     Events(&'a str),
-    /// `<id>/ctl`: write control verbs (`close`, `interrupt`).
+    /// `<id>/ctl`: write control verbs (`close`, `approve`, `deny`).
     Ctl(&'a str),
     /// `<id>/status`: read a one-line status snapshot.
     Status(&'a str),
+    /// `<id>/pending`: read open approval requests as a JSON array.
+    Pending(&'a str),
 }
 
 pub(crate) fn parse_path(path: &NormalizedPath) -> FsResult<AgentPath<'_>> {
@@ -36,6 +38,7 @@ pub(crate) fn parse_path(path: &NormalizedPath) -> FsResult<AgentPath<'_>> {
         (id, Some("events"), None) => Ok(AgentPath::Events(id)),
         (id, Some("ctl"), None) => Ok(AgentPath::Ctl(id)),
         (id, Some("status"), None) => Ok(AgentPath::Status(id)),
+        (id, Some("pending"), None) => Ok(AgentPath::Pending(id)),
         _ => Err(FsError::NotFound),
     }
 }

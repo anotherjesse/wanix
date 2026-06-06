@@ -52,6 +52,22 @@ pub trait AgentSession: Send + Sync {
     /// A human-readable one-line status (engine, turn count, state).
     fn status(&self) -> String;
 
+    /// Returns currently-open approval requests as a JSON array (one object per
+    /// request). A powerful action (running a command, editing a file) parks
+    /// here until a human resolves it; the default is none.
+    fn pending(&self) -> String {
+        "[]".to_owned()
+    }
+
+    /// Resolves a parked approval request. `decision` is `approve` or `deny`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when no such request is open.
+    fn resolve(&self, _request_id: &str, _decision: &str) -> FsResult<()> {
+        Err(FsError::NotFound)
+    }
+
     /// Closes the session, ending the event stream and releasing the engine.
     fn close(&self);
 }

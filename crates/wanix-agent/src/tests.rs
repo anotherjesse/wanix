@@ -71,7 +71,10 @@ fn new_allocates_a_session_directory() {
         .iter()
         .map(|entry| entry.name().to_owned())
         .collect();
-    assert_eq!(entries, ["ctl", "events", "id", "prompt", "status"]);
+    assert_eq!(
+        entries,
+        ["ctl", "events", "id", "pending", "prompt", "status"]
+    );
 
     let mut id_file = device.open(&np("1/id"), OpenOptions::read()).unwrap();
     assert_eq!(read_all(&mut id_file), "1\n");
@@ -111,6 +114,44 @@ fn status_reports_turn_count() {
         .open(&np(&format!("{id}/status")), OpenOptions::read())
         .unwrap();
     assert!(read_all(&mut status).contains("turns=1"));
+}
+
+#[test]
+fn powerful_action_is_gated_by_ctl_approve() {
+    let device = device();
+    let id = alloc_session(&device);
+
+    // A prompt that parks an approval instead of completing.
+    let mut prompt = device
+        .open(&np(&format!("{id}/prompt")), write_options())
+        .unwrap();
+    prompt.write(b"approve: delete everything").unwrap();
+
+    // The stream pauses at approval.needed — no turn.completed yet.
+    let mut events = device
+        .open(&np(&format!("{id}/events")), OpenOptions::read())
+        .unwrap();
+    let paused = read_until(&mut events, "approval.needed");
+    assert!(paused.contains("approval.needed"), "{paused}");
+    assert!(!paused.contains("turn.completed"), "{paused}");
+
+    // The request is visible as a file.
+    let mut pending = device
+        .open(&np(&format!("{id}/pending")), OpenOptions::read())
+        .unwrap();
+    let pending = read_all(&mut pending);
+    assert!(pending.contains("delete everything"), "{pending}");
+    assert!(pending.contains("req-1"), "{pending}");
+
+    // Writing the approval to ctl unblocks the turn.
+    let mut ctl = device
+        .open(&np(&format!("{id}/ctl")), write_options())
+        .unwrap();
+    ctl.write(b"approve req-1\n").unwrap();
+
+    let resumed = read_until(&mut events, "turn.completed");
+    assert!(resumed.contains("approved: delete everything"), "{resumed}");
+    assert!(resumed.contains("turn.completed"), "{resumed}");
 }
 
 #[test]

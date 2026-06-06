@@ -163,12 +163,20 @@ impl File for CtlFile {
         if command.is_empty() {
             return Ok(buf.len());
         }
-        if command == "close" {
-            self.device.close(&self.id)?;
-            self.data.clear();
-            return Ok(buf.len());
+        let mut parts = command.split_whitespace();
+        let verb = parts.next().unwrap_or_default();
+        match verb {
+            "close" => self.device.close(&self.id)?,
+            "approve" | "deny" => {
+                let request_id = parts.next().ok_or_else(|| {
+                    FsError::Other("agent ctl: approve/deny require a request id".to_owned())
+                })?;
+                self.device.resolve(&self.id, request_id, verb)?;
+            }
+            _ => return Err(FsError::NotSupported),
         }
-        Err(FsError::NotSupported)
+        self.data.clear();
+        Ok(buf.len())
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
