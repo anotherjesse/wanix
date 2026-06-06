@@ -194,6 +194,13 @@ produced the task and the terminal that captured its output.
 
 ![Task rows expose source and terminal actions](assets/wanix-workbench-browser-dx/20-task-row-context-actions.jpg)
 
+The terminal stream is now mirrored into Wanix too. Direct qjs and wasm runs
+write a transcript under `/.wanix/tasks`, and `Open Task Output` jumps from the
+task row to the saved file. That makes task output inspectable even after focus
+moves away from the terminal.
+
+![Task output transcript opened from the sidebar](assets/wanix-workbench-browser-dx/21-task-output-transcript.jpg)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -311,6 +318,10 @@ The terminal action is the output half of that same idea. Source and output are
 the two handles a developer reaches for while iterating; both now live on the
 task object in the Wanix sidebar.
 
+Persisted transcripts make the output handle a real Wanix file. That matters for
+the agentic repair work too: a person, a script, or an agent can inspect the
+same `/.wanix/tasks/...output.txt` artifact after the run.
+
 ## The Feeling Now
 
 The current loop is:
@@ -345,7 +356,8 @@ The current loop is:
 20. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
 21. Run that script, then click or right-click its task row to reopen the
-    source or focus the terminal output that produced the task.
+    source, open the saved transcript, or focus the terminal output that
+    produced the task.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -357,7 +369,8 @@ The next round should probably focus on making the workbench less demo-only:
   checked-in wasm fixture is available.
 - Make shell-created files refresh more precisely than "refresh the root after activity."
 - Let the sidebar inspect service files directly, not just extension-observed events.
-- Persist task output into inspectable Wanix files, not just live terminals.
+- Add richer task metadata files for argv, cwd, env, and exit alongside output
+  transcripts.
 - Add a reset button for the duet demo's generated files.
 - Add a route detail panel showing latest preview status and output path.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.

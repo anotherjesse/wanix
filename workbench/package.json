@@ -85,6 +85,12 @@
         "icon": "$(go-to-file)"
       },
       {
+        "command": "workbench.openWanixTaskOutput",
+        "title": "Open Task Output",
+        "category": "Wanix",
+        "icon": "$(output)"
+      },
+      {
         "command": "workbench.focusTaskTerminal",
         "title": "Focus Task Terminal",
         "category": "Wanix",
@@ -170,13 +176,18 @@
       "view/item/context": [
         {
           "command": "workbench.openWanixTaskSource",
-          "when": "view == wanix.system && viewItem == wanixTaskWithSource",
+          "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
           "group": "navigation@0"
         },
         {
-          "command": "workbench.focusTaskTerminal",
-          "when": "view == wanix.system && viewItem == wanixTaskWithSource",
+          "command": "workbench.openWanixTaskOutput",
+          "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
           "group": "navigation@1"
+        },
+        {
+          "command": "workbench.focusTaskTerminal",
+          "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
+          "group": "navigation@2"
         },
         {
           "command": "workbench.openHttpAppDemo",

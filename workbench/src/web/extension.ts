@@ -44,6 +44,8 @@ const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = 
 	qjs: { extension: ".js", label: "JavaScript" },
 	wasm: { extension: ".wasm", label: "WASM" },
 };
+const TASK_OUTPUT_DIR = ".wanix/tasks";
+const TASK_OUTPUT_MAX_CHARS = 512 * 1024;
 
 export async function activate(context: vscode.ExtensionContext) {
 	if (typeof navigator !== 'object') {	// do not run under node.js
@@ -157,6 +159,18 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixTaskOutput', async (output?: string | { outputPath?: string }) => {
+			try {
+				const outputPath = taskOutputPath(output);
+				if (!outputPath) {
+					throw new Error("Task output is not available");
+				}
+				await openWanixPath(outputPath);
+				systemView.filesystemActivity(`opened task output ${baseName(outputPath)}`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.focusTaskTerminal', async (task?: string | { taskId?: string }) => {
 			try {
 				const taskId = taskIdFromArgument(task);
@@ -237,6 +251,13 @@ function taskSourcePath(source: string | { sourcePath?: string } | undefined): s
 		return source;
 	}
 	return source?.sourcePath;
+}
+
+function taskOutputPath(output: string | { outputPath?: string } | undefined): string | undefined {
+	if (typeof output === "string") {
+		return output;
+	}
+	return output?.outputPath;
 }
 
 function taskIdFromArgument(task: string | { taskId?: string } | undefined): string | undefined {
@@ -373,6 +394,7 @@ async function createActiveTaskTerminal(
 	if (!taskDriverAdvertised(config, kind)) {
 		throw new Error(`Wanix discovery did not advertise the ${kind} task driver`);
 	}
+	const output = new TaskOutputRecorder(fsys, bridge, systemView, kind, target);
 	return await createTerminal(fsys, {
 		...config,
 		qjsShellUrl: undefined,
@@ -391,21 +413,96 @@ async function createActiveTaskTerminal(
 		terminalLabel: taskTerminalName(kind, target.name),
 		onTaskStarted: (event) => {
 			lifecycle.onStart?.(event.id);
-			systemView.taskStarted(event.id, event.kind, event.label, { sourcePath: target.path });
+			const outputPath = output.start(event.id);
+			systemView.taskStarted(event.id, event.kind, event.label, { sourcePath: target.path, outputPath });
 			revealWanixSystemView();
 		},
 		onTaskExited: (event) => {
 			systemView.taskExited(event.id, event.code);
+			delay(0).then(() => output.finish(event.code)).catch((error) => {
+				console.warn("Wanix task output write failed", error);
+			});
 			lifecycle.onExit?.(event.code);
 			revealWanixSystemView();
 		},
 		onTaskClosed: (event) => {
 			systemView.taskClosed(event.id);
+			delay(0).then(() => output.finish()).catch((error) => {
+				console.warn("Wanix task output write failed", error);
+			});
 			lifecycle.onClose?.();
 		},
+		onTaskOutput: (event) => output.append(event.chunk),
 		onTerminalOpened: (event) => systemView.terminalOpened(event.id, event.label),
 		onTerminalClosed: (event) => systemView.terminalClosed(event.id),
 	});
+}
+
+class TaskOutputRecorder {
+	private chunks: string[] = [];
+	private totalChars = 0;
+	private truncated = false;
+	private saved = false;
+	private outputPath: string | undefined;
+
+	constructor(
+		private readonly fsys: any,
+		private readonly bridge: WanixBridge,
+		private readonly systemView: WanixSystemView,
+		private readonly kind: TaskRunKind,
+		private readonly target: TaskRunTarget,
+	) {}
+
+	start(taskId: string): string {
+		this.outputPath = `${TASK_OUTPUT_DIR}/${taskId}-${this.kind}-${safeOutputFileName(this.target.name)}.output.txt`;
+		return this.outputPath;
+	}
+
+	append(chunk: string): void {
+		if (this.saved || chunk.length === 0) {
+			return;
+		}
+		const remaining = TASK_OUTPUT_MAX_CHARS - this.totalChars;
+		if (remaining <= 0) {
+			this.truncated = true;
+			return;
+		}
+		const next = chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
+		this.chunks.push(next);
+		this.totalChars += next.length;
+		if (next.length < chunk.length) {
+			this.truncated = true;
+		}
+	}
+
+	async finish(exitCode?: number): Promise<void> {
+		if (this.saved || !this.outputPath) {
+			return;
+		}
+		this.saved = true;
+		await this.fsys.makeDirAll(TASK_OUTPUT_DIR);
+		await this.fsys.writeFile(this.outputPath, this.render(exitCode));
+		this.bridge.refresh(`/${TASK_OUTPUT_DIR}`);
+		this.bridge.refresh(`/${this.outputPath}`);
+		this.systemView.filesystemActivity(`wrote task output ${baseName(this.outputPath)}`);
+		await refreshWorkbenchFiles(this.bridge);
+	}
+
+	private render(exitCode?: number): string {
+		const exit = typeof exitCode === "number" ? String(exitCode) : "?";
+		const truncation = this.truncated
+			? `\n[wanix transcript truncated at ${TASK_OUTPUT_MAX_CHARS} chars]\n`
+			: "";
+		return [
+			`task: ${this.kind} ${this.target.name}`,
+			`source: ${absoluteWanixPath(this.target.path)}`,
+			`exit: ${exit}`,
+			"",
+			"--- output ---",
+			this.chunks.join(""),
+			truncation,
+		].join("\n");
+	}
 }
 
 async function taskRunTarget(kind: TaskRunKind, bridge: WanixBridge, resource?: vscode.Uri): Promise<TaskRunTarget> {
@@ -702,6 +799,7 @@ type TerminalOptions = {
 	onTaskStarted?: (event: { id: string; kind: string; label: string }) => void;
 	onTaskExited?: (event: { id: string; code?: number }) => void;
 	onTaskClosed?: (event: { id: string }) => void;
+	onTaskOutput?: (event: { id: string; chunk: string }) => void;
 	onTerminalOpened?: (event: { id: string; label: string }) => void;
 	onTerminalClosed?: (event: { id: string }) => void;
 }
@@ -750,6 +848,10 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 		}
 		options.onTaskClosed?.({ id: taskID });
 	};
+	const emitOutput = (chunk: string) => {
+		writeEmitter.fire(chunk);
+		options.onTaskOutput?.({ id: taskID, chunk });
+	};
 	const closeTerminalResource = () => {
 		(async () => {
 			try {
@@ -792,7 +894,7 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 		}
 		closed = true;
 		const suffix = typeof code === "number" ? ` ${code}` : "";
-		writeEmitter.fire(`\r\n[wanix task exited${suffix}]\r\n`);
+		emitOutput(`\r\n[wanix task exited${suffix}]\r\n`);
 		markTerminalClosed();
 		closeTerminalResource();
 		closeWriter();
@@ -852,7 +954,7 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 							return;
 						}
 						lastOutputAt = Date.now();
-						writeEmitter.fire(dec.decode(value));
+						emitOutput(dec.decode(value));
 					}
 				} catch (error) {
 					if (!closed) {
@@ -946,6 +1048,11 @@ function parentPath(path: string): string {
 function baseName(path: string): string {
 	const parts = splitPath(path);
 	return parts.pop() || path;
+}
+
+function safeOutputFileName(name: string): string {
+	const safe = name.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+	return (safe || "task").slice(0, 80);
 }
 
 function quoteShellArg(arg: string): string {

@@ -28,6 +28,7 @@ type TaskRecord = {
 	status: TaskStatus;
 	exitCode?: number;
 	sourcePath?: string;
+	outputPath?: string;
 };
 
 type TerminalRecord = {
@@ -57,7 +58,7 @@ type CategoryId = "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
-	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string };
+	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string; outputPath?: string };
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "drivers", label: "Drivers" },
@@ -107,8 +108,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		context.subscriptions.push(this);
 	}
 
-	taskStarted(id: string, kind: string, label: string, options: { sourcePath?: string } = {}): void {
-		this.tasks.set(id, { id, kind, label, status: "running", sourcePath: options.sourcePath });
+	taskStarted(id: string, kind: string, label: string, options: { sourcePath?: string; outputPath?: string } = {}): void {
+		this.tasks.set(id, { id, kind, label, status: "running", sourcePath: options.sourcePath, outputPath: options.outputPath });
 		this.addActivity(`${taskDisplayName({ kind, label })} started`);
 		this.refresh();
 	}
@@ -221,10 +222,11 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				title: "Open Task Source",
 				arguments: [task.sourcePath],
 			} : undefined;
-			const contextValue = task.sourcePath ? "wanixTaskWithSource" : "wanixTask";
+			const contextValue = task.sourcePath || task.outputPath ? "wanixTaskWithArtifacts" : "wanixTask";
 			return leaf(`task:${task.id}`, `${task.id} ${taskDisplayName(task)}`, description, taskIcon(task.status), command, contextValue, {
 				taskId: task.id,
 				sourcePath: task.sourcePath,
+				outputPath: task.outputPath,
 			});
 		});
 	}
@@ -260,7 +262,7 @@ function leaf(
 	icon?: string,
 	command?: vscode.Command,
 	contextValue?: string,
-	metadata: { taskId?: string; sourcePath?: string } = {},
+	metadata: { taskId?: string; sourcePath?: string; outputPath?: string } = {},
 ): SystemTreeItem {
 	return {
 		type: "leaf",
@@ -272,6 +274,7 @@ function leaf(
 		contextValue,
 		taskId: metadata.taskId,
 		sourcePath: metadata.sourcePath,
+		outputPath: metadata.outputPath,
 	};
 }
 
