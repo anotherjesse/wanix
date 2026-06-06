@@ -282,6 +282,10 @@ impl ExecServer {
         self.fs.create_dir(&vpath(path)?)
     }
 
+    pub(crate) fn chmod(&self, path: &str, mode: u32) -> FsResult<()> {
+        self.fs.set_permissions(&vpath(path)?, mode)
+    }
+
     pub(crate) fn remove(&self, path: &str) -> FsResult<()> {
         let path = vpath(path)?;
         self.fs

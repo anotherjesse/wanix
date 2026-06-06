@@ -6,7 +6,7 @@
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use flate2::Compression;
@@ -124,9 +124,8 @@ fn load(archive: &Path, dir: &Path) -> Result<String, CliError> {
 }
 
 fn is_safe_relative(path: &Path) -> bool {
-    path.components().all(|component| {
-        matches!(component, Component::Normal(_) | Component::CurDir)
-    })
+    path.components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
 }
 
 /// Content-addressed id of a directory: sha256 over each file's `path\0sha256`,

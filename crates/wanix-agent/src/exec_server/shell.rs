@@ -86,6 +86,15 @@ fn unquote(token: &str) -> &str {
     token.trim_matches('"').trim_matches('\'')
 }
 
+/// Parses a chmod mode: a symbolic `+x` (→ 0o755) or an octal literal.
+fn parse_mode(arg: &str) -> u32 {
+    if arg.contains('+') {
+        0o755
+    } else {
+        u32::from_str_radix(arg, 8).unwrap_or(0o644)
+    }
+}
+
 fn interpret_sequence(server: &ExecServer, source: &str, cwd: &str) -> CompletedProcess {
     let mut stdout = Vec::new();
     for stage in source.split("&&") {
@@ -192,6 +201,20 @@ fn interpret_one(server: &ExecServer, source: &str, cwd: &str) -> CompletedProce
                 .map_err(|e| format!("touch: {e:?}")),
             None => Err("touch: missing file".to_owned()),
         },
+        "chmod" => {
+            let operands: Vec<&str> = args
+                .iter()
+                .filter(|a| !a.starts_with('-'))
+                .copied()
+                .collect();
+            match (operands.first(), operands.get(1)) {
+                (Some(mode), Some(file)) => server
+                    .chmod(&resolve(cwd, file), parse_mode(mode))
+                    .map(|()| Vec::new())
+                    .map_err(|e| format!("chmod: {e:?}")),
+                _ => Err("chmod: usage: chmod MODE FILE".to_owned()),
+            }
+        }
         "true" | ":" => Ok(Vec::new()),
         other => Err(format!("wanix exec-server: unsupported command `{other}`")),
     };

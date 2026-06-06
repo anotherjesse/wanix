@@ -82,6 +82,48 @@ fn read_directory_lists_entries() {
     assert!(entries.iter().any(|entry| entry["fileName"] == "a.txt"));
 }
 
+#[cfg(unix)]
+#[test]
+fn agent_can_author_an_executable_init() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use wanix_fs::{FileSystem, LocalFs};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "wanix-exec-chmod-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    let world = Arc::new(LocalFs::new(&dir).unwrap()) as Arc<dyn FileSystem>;
+    let mut server = ExecServer::new(world);
+
+    // The agent authors a bootable /bin/init and marks it executable — exactly
+    // what a `qemu --root` guest root needs.
+    call(
+        &mut server,
+        "process/start",
+        json!({ "processId": "p1", "argv": ["/bin/sh", "-c", "echo init > /bin/init"], "cwd": "/" }),
+    );
+    call(
+        &mut server,
+        "process/start",
+        json!({ "processId": "p2", "argv": ["/bin/sh", "-c", "chmod 755 /bin/init"], "cwd": "/" }),
+    );
+
+    let mode = std::fs::metadata(dir.join("bin/init"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert!(
+        mode & 0o111 != 0,
+        "init should be executable, mode {mode:o}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn unsupported_command_reports_a_clear_error() {
     let mut server = server();
