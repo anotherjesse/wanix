@@ -6,9 +6,11 @@ use wanix_fs::{FsError, FsResult};
 use wanix_task::Task;
 
 use crate::host_api::qjs_error;
-use crate::runtime_control::{drain_runtime_work, exit_requested};
 use crate::task_context::WanixExitState;
 use crate::task_runtime_attach::set_task_interrupt_handler;
+use event_loop::{drain_event_loop_if_running, finish_eval_with_event_loop_limits};
+
+mod event_loop;
 
 /// A live QuickJS runtime attached to a Wanix task.
 ///
@@ -87,7 +89,13 @@ impl QuickJsTaskRuntime {
         ready_io_turns: usize,
     ) -> FsResult<()> {
         let result = self.runtime.eval_discard(source).map_err(qjs_error);
-        self.finish_eval_with_event_loop_limits(result, event_loop_wait_budget, ready_io_turns)
+        finish_eval_with_event_loop_limits(
+            &mut self.runtime,
+            &self.exit_state,
+            result,
+            event_loop_wait_budget,
+            ready_io_turns,
+        )
     }
 
     /// Evaluates JavaScript as an ES module under this task's Wanix process state.
@@ -118,7 +126,13 @@ impl QuickJsTaskRuntime {
             .runtime
             .eval_module_discard(source, filename)
             .map_err(qjs_error);
-        self.finish_eval_with_event_loop_limits(result, event_loop_wait_budget, ready_io_turns)
+        finish_eval_with_event_loop_limits(
+            &mut self.runtime,
+            &self.exit_state,
+            result,
+            event_loop_wait_budget,
+            ready_io_turns,
+        )
     }
 
     /// Captures the QuickJS VM image as serialized snapshot bytes.
@@ -185,7 +199,7 @@ impl QuickJsTaskRuntime {
     /// Returns a filesystem error when a QuickJS readiness turn fails, unless
     /// the failure is due to a requested Wanix process exit.
     pub fn run_ready_io_turns(&mut self, turns: usize) -> FsResult<()> {
-        self.drain_event_loop_if_running(Duration::ZERO, turns)
+        drain_event_loop_if_running(&mut self.runtime, &self.exit_state, Duration::ZERO, turns)
     }
 
     /// Runs bounded event-loop work for an already evaluated task runtime.
@@ -203,7 +217,12 @@ impl QuickJsTaskRuntime {
         event_loop_wait_budget: Duration,
         ready_io_turns: usize,
     ) -> FsResult<()> {
-        self.drain_event_loop_if_running(event_loop_wait_budget, ready_io_turns)
+        drain_event_loop_if_running(
+            &mut self.runtime,
+            &self.exit_state,
+            event_loop_wait_budget,
+            ready_io_turns,
+        )
     }
 
     /// Returns the requested Wanix process exit code, if JavaScript has exited.
@@ -226,49 +245,5 @@ impl QuickJsTaskRuntime {
     pub fn finish(&self) -> FsResult<()> {
         self.task
             .set_exit(self.exit_state.code()?.unwrap_or(0).to_string())
-    }
-
-    fn finish_eval_with_event_loop_limits(
-        &mut self,
-        result: FsResult<()>,
-        event_loop_wait_budget: Duration,
-        ready_io_turns: usize,
-    ) -> FsResult<()> {
-        match result {
-            Ok(()) => self.drain_event_loop_if_running(event_loop_wait_budget, ready_io_turns),
-            Err(error) => {
-                if self.exit_state.code()?.is_some() {
-                    Ok(())
-                } else {
-                    Err(error)
-                }
-            }
-        }
-    }
-
-    fn drain_event_loop_if_running(
-        &mut self,
-        event_loop_wait_budget: Duration,
-        ready_io_turns: usize,
-    ) -> FsResult<()> {
-        if exit_requested(&Some(self.exit_state.clone()))? {
-            return Ok(());
-        }
-        let result = drain_runtime_work(
-            &mut self.runtime,
-            &Some(self.exit_state.clone()),
-            event_loop_wait_budget,
-            ready_io_turns,
-        );
-        match result {
-            Ok(_) => Ok(()),
-            Err(error) => {
-                if self.exit_state.code()?.is_some() {
-                    Ok(())
-                } else {
-                    Err(error)
-                }
-            }
-        }
     }
 }
