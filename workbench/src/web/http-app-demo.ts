@@ -5,6 +5,7 @@ import { WanixSystemView } from './system-view.js';
 const APP_DIR = "/apps";
 const APP_NAME = "hello";
 const APP_PATH = `${APP_DIR}/${APP_NAME}.js`;
+const APP_PREVIEW_PATH = `${APP_DIR}/${APP_NAME}.response.txt`;
 
 export type HttpAppRouteConfig = {
 	url?: string;
@@ -54,10 +55,20 @@ export async function openHttpAppDemo(
 	systemView: WanixSystemView,
 ): Promise<void> {
 	await installHttpAppDemo(fsys, bridge, systemView, { openHandler: false, notify: false });
-	const url = httpAppDemoUrl(config);
-	systemView.filesystemActivity("http app demo opened");
-	await vscode.env.openExternal(vscode.Uri.parse(url));
-	vscode.window.showInformationMessage("Opened Wanix HTTP app demo");
+	const url = `${httpAppDemoUrl(config)}?from=workbench`;
+	const response = await fetch(url, { cache: "no-store" });
+	const body = await response.text();
+	if (!response.ok) {
+		throw new Error(`Wanix HTTP app returned ${response.status}: ${body}`);
+	}
+	await fsys.writeFile(APP_PREVIEW_PATH, body);
+	bridge.refresh();
+	systemView.filesystemActivity("http app demo previewed");
+	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
+		console.warn("Wanix explorer refresh failed", error);
+	});
+	await openWanixFile(APP_PREVIEW_PATH);
+	vscode.window.showInformationMessage("Previewed Wanix HTTP app response in /apps");
 }
 
 function httpAppDemoUrl(config: HttpAppDemoConfig): string {

@@ -135,6 +135,14 @@ tribal knowledge:
 
 ![HTTP route in the Wanix sidebar](assets/wanix-workbench-browser-dx/11-http-route-sidebar.png)
 
+One more pass made the preview stay inside the cockpit. The globe action now
+installs the handler if needed, fetches the HTTP app route from the workbench,
+writes the response to `/apps/hello.response.txt`, and opens that file in the
+editor. The route still runs through the Rust serve qjs task path; the preview
+just lands the result back in the Wanix namespace.
+
+![HTTP app response previewed in the workbench](assets/wanix-workbench-browser-dx/12-http-app-preview.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -224,6 +232,9 @@ Finally, the route itself is visible in the Wanix system panel. That matters
 because the cockpit should explain the OS shape as you use it: drivers,
 services, namespace, and now served programs.
 
+The preview action closes the browser loop: edit a Wanix handler, run it as an
+HTTP app, and inspect the response without leaving the workbench.
+
 ## The Feeling Now
 
 The current loop is:
@@ -245,6 +256,8 @@ The current loop is:
 13. Open
     `/.wanix/app/hello?from=browser` to get an HTTP response from a Wanix task.
 14. See the HTTP app route contract in the Wanix sidebar.
+15. Click `Preview HTTP App Demo` to fetch the route and open
+    `/apps/hello.response.txt` inside the workbench.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
@@ -257,8 +270,7 @@ The next round should probably focus on making the workbench less demo-only:
 - Let the sidebar inspect service files directly, not just extension-observed events.
 - Add a small run history or output link per task entry.
 - Add a reset button for the duet demo's generated files.
-- Add a split in-workbench HTTP preview that can render the app route without
-  navigating away from the workbench.
+- Add status/body metadata to HTTP app previews instead of only saving the body.
 - Add a tiny welcome state when the root is empty, focused on actions rather than marketing copy.
 
 The important thing is that these can now be incremental. The browser loop is alive.

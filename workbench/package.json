@@ -92,7 +92,7 @@
       },
       {
         "command": "workbench.openHttpAppDemo",
-        "title": "Open HTTP App Demo",
+        "title": "Preview HTTP App Demo",
         "category": "Wanix",
         "icon": "$(globe)"
       }
@@ -122,7 +122,7 @@
           "group": "navigation@2"
         },
         {
-          "command": "workbench.installHttpAppDemo",
+          "command": "workbench.openHttpAppDemo",
           "when": "view == wanix.system",
           "group": "navigation@3"
         }
