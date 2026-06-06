@@ -61,13 +61,13 @@ wanix-fs
 
 wanix-protocol
 wanix-9p -> wanix-fs + wanix-protocol
-wanix-term -> wanix-fs
-wanix-wasi -> wanix-fs + wanix-vfs
+wanix-term -> wanix-fs + wanix-task + wanix-vfs
+wanix-wasi -> wanix-fs + wanix-task + wanix-vfs
 wanix-wasi-host -> wanix-fs + wanix-wasi + Wasmtime
 wanix-module-cache -> Wasmtime
 wanix-qjs-engine -> Wasmtime + QuickJS WASM fixture + wanix-module-cache
-wanix-qjs  -> wanix-task + wanix-wasi + wanix-qjs-engine
-wanix-wasm -> wanix-task + wanix-wasi + wanix-wasi-host + wanix-module-cache
+wanix-qjs  -> wanix-fs + wanix-vfs + wanix-task + wanix-wasi + wanix-qjs-engine + wanix-module-cache
+wanix-wasm -> wanix-fs + wanix-vfs + wanix-task + wanix-wasi + wanix-wasi-host + wanix-module-cache
 wanix-cli  -> runtime crates for orchestration
 ```
 
@@ -245,11 +245,29 @@ more feature work.
 
 ## Queued Follow-ups
 
-- Use `just module-lines` during cleanup passes. Highest-leverage split targets
-  are `wanix-cli/src/serve.rs`, `wanix-cli/src/qjs_term.rs`,
-  `wanix-cli/src/lib.rs`, `wanix-qjs-engine/src/host/fs.rs`,
-  `wanix-9p/src/lib.rs`, and `wanix-wasi/src/ctx.rs`; keep reducing the
-  baseline before adding broad behavior in those areas.
+- Module-line health is currently clean: `tools/module-line-baseline.txt` is
+  empty and every production module is under the 250-line warn limit (the former
+  split targets `serve.rs`, `qjs_term.rs`, `lib.rs`, `host/fs.rs`, `9p/lib.rs`,
+  `wasi/ctx.rs` are all decomposed into sibling submodule directories). Keep
+  running `just module-lines` during cleanup, but the next structural pressure is
+  the serve session/connection boundary and typed discovery/handoff JSON below,
+  not file size.
+- Serve concurrency: `serve/concurrent.rs` spawns a detached worker thread per
+  connection with no cap and busy-polls `accept()` on a fixed sleep in unbounded
+  mode. A proper fix (connection cap + thread accounting) needs a shutdown signal
+  first — there is none anywhere in `serve/` today, so the cap is otherwise
+  untestable and unconditional `JoinHandle` retention would leak handles forever.
+  Do the shutdown signal + cap together as one cycle, before HTTP workers /
+  remote / multi-user.
+- Typed discovery/handoff JSON: discovery (`serve/discovery.rs`), rootfs, qemu,
+  and direct-v86 handoffs are still hand-built `format!` JSON. The driver-list
+  drift is fixed (discovery now derives drivers from the registry), but convert
+  the remaining fragments to typed structs with shape-pinning tests as a cleanup.
+- 9P session/namespace seam: `handle_attach` decodes `uname`/`aname` and discards
+  them; every fid resolves through one shared `P9Server.root`. A per-principal
+  `NamespaceProvider` only lands cleanly alongside per-fid root storage and a
+  first consumer (HTTP-worker or per-user namespaces) — do not add the trait as a
+  no-op seam, since a discarded provider result is a dead abstraction.
 - Continue `qjs-shell` interactivity with true resize wakeups independent of
   stdin handling, persistent foreground child-task terminal ownership,
   cancellation, command execution beyond the current built-ins and synchronous
