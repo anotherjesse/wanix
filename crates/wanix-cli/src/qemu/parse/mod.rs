@@ -136,6 +136,10 @@ mod tests {
             "console=hvc0",
             "--append",
             "single",
+            "--cmdline",
+            "init=/bin/sh",
+            "--qemu-bin",
+            "custom-qemu",
             "--no-kvm",
             "--exec",
         ]))
@@ -146,7 +150,9 @@ mod tests {
         assert_eq!(command.initrd_path, Some(PathBuf::from("/initrd")));
         assert_eq!(command.memory_mb, DEFAULT_MEMORY_MB);
         assert_eq!(command.p9_msize, DEFAULT_P9_MSIZE);
+        assert_eq!(command.cmdline, Some("init=/bin/sh".to_owned()));
         assert_eq!(command.append, ["console=hvc0", "single"]);
+        assert_eq!(command.qemu_bin, "custom-qemu");
         assert!(!command.kvm);
         assert!(command.exec);
         assert_eq!(command.output_format, QemuOutputFormat::Shell);
@@ -165,10 +171,39 @@ mod tests {
                 &["--root", "/guest", "--json", "--exec"][..],
                 "qemu --json cannot be combined with --exec",
             ),
+            (
+                &["--root", "/guest", "--cmdline", "a", "--cmdline", "b"][..],
+                "qemu accepts only one --cmdline",
+            ),
         ];
 
         for (input, expected) in cases {
             let error = parse_qemu_command(&args(input)).unwrap_err();
+            assert_eq!(error.exit_code(), 2);
+            assert!(error.to_string().contains(expected));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_qemu_command_reports_text_option_utf8_boundaries() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let invalid = OsString::from_vec(vec![0xff]);
+        let cases = [
+            ("--cmdline", "qemu --cmdline expects UTF-8"),
+            ("--append", "qemu --append expects UTF-8"),
+            ("--qemu-bin", "qemu --qemu-bin expects UTF-8"),
+        ];
+
+        for (flag, expected) in cases {
+            let args = vec![
+                OsString::from("--root"),
+                OsString::from("/guest"),
+                OsString::from(flag),
+                invalid.clone(),
+            ];
+            let error = parse_qemu_command(&args).unwrap_err();
             assert_eq!(error.exit_code(), 2);
             assert!(error.to_string().contains(expected));
         }

@@ -94,14 +94,9 @@ impl QemuOption {
 
     fn apply_text_value(self, value: &OsString, options: &mut QemuOptions) -> Result<(), CliError> {
         match self.kind {
-            QemuOptionKind::Cmdline => {
-                if options.cmdline.is_some() {
-                    return Err(CliError::usage("qemu accepts only one --cmdline"));
-                }
-                options.cmdline = Some(os_arg_to_string(value, self.label())?);
-            }
-            QemuOptionKind::Append => options.append.push(os_arg_to_string(value, self.label())?),
-            QemuOptionKind::QemuBin => options.qemu_bin = os_arg_to_string(value, self.label())?,
+            QemuOptionKind::Cmdline => set_cmdline_value(value, self.label(), options)?,
+            QemuOptionKind::Append => push_append_value(value, self.label(), options)?,
+            QemuOptionKind::QemuBin => set_qemu_bin_value(value, self.label(), options)?,
             _ => {}
         }
         Ok(())
@@ -141,5 +136,35 @@ fn set_single_path(
         return Err(CliError::usage(duplicate_message));
     }
     *target = Some(PathBuf::from(value));
+    Ok(())
+}
+
+fn set_cmdline_value(
+    value: &OsString,
+    label: &str,
+    options: &mut QemuOptions,
+) -> Result<(), CliError> {
+    if options.cmdline.is_some() {
+        return Err(CliError::usage("qemu accepts only one --cmdline"));
+    }
+    options.cmdline = Some(os_arg_to_string(value, label)?);
+    Ok(())
+}
+
+fn push_append_value(
+    value: &OsString,
+    label: &str,
+    options: &mut QemuOptions,
+) -> Result<(), CliError> {
+    options.append.push(os_arg_to_string(value, label)?);
+    Ok(())
+}
+
+fn set_qemu_bin_value(
+    value: &OsString,
+    label: &str,
+    options: &mut QemuOptions,
+) -> Result<(), CliError> {
+    options.qemu_bin = os_arg_to_string(value, label)?;
     Ok(())
 }
