@@ -160,6 +160,16 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
+	clearFinishedRows(): { tasks: number; terminals: number } {
+		const tasks = removeMapEntries(this.tasks, (task) => task.status !== "running");
+		const terminals = removeMapEntries(this.terminals, (terminal) => terminal.status === "closed");
+		this.addActivity(tasks || terminals
+			? `cleared ${formatClearCount(tasks, "task")} and ${formatClearCount(terminals, "terminal")}`
+			: "no finished rows to clear");
+		this.refresh();
+		return { tasks, terminals };
+	}
+
 	routePreviewed(id: string, preview: { status: number; statusText?: string; previewPath: string }): void {
 		const route = this.routes.find((candidate) => candidate.id === id);
 		if (!route) {
@@ -280,6 +290,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				actionLeaf("action:open-http-handler", "Open HTTP App Handler", "http", "go-to-file", "workbench.openHttpAppHandler"),
 			);
 		}
+		items.push(actionLeaf("action:clear-finished", "Clear Finished Rows", "sidebar", "clear-all", "workbench.clearFinishedSystemRows"));
 		return items;
 	}
 
@@ -362,6 +373,21 @@ function pathDescription(path: string): string {
 	const normalized = path.endsWith("/") && path.length > 1 ? path.slice(0, -1) : path;
 	const slash = normalized.lastIndexOf("/");
 	return slash >= 0 ? normalized.slice(slash + 1) : normalized;
+}
+
+function removeMapEntries<K, V>(map: Map<K, V>, shouldRemove: (value: V) => boolean): number {
+	let removed = 0;
+	for (const [key, value] of map) {
+		if (shouldRemove(value)) {
+			map.delete(key);
+			removed += 1;
+		}
+	}
+	return removed;
+}
+
+function formatClearCount(count: number, noun: string): string {
+	return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function actionLeaf(

@@ -121,6 +121,12 @@ trying to open the `.wasm` binary as text.
 
 ![Wanix task artifact rows](assets/wanix-workbench-browser-dx/32-task-artifact-rows.png)
 
+Repeated demo runs now have a tidy escape hatch too. `Clear Finished Rows`
+removes exited tasks and closed terminals from the sidebar while keeping running
+sessions, files, transcripts, and service state intact.
+
+![Wanix clear finished rows](assets/wanix-workbench-browser-dx/33-clear-finished-rows.png)
+
 The next polish pass removed another bit of demo friction: you no longer need
 to hand-copy a WASM fixture into the served root. The Wanix system view has an
 `Open JS and WASM Duet Demo` action. It creates missing starter files:
@@ -437,6 +443,10 @@ transcript, metadata, terminal, and service directory without depending on a
 right-click menu. For binary WASM, the source link stays out of the way and the
 inspectable artifacts remain visible.
 
+The clear-finished action makes the same sidebar usable during a long browser
+session. The OS cockpit should accumulate evidence, not make every stale row
+compete with the running shell.
+
 Persisted transcripts make the output handle a real Wanix file. That matters for
 the agentic repair work too: a person, a script, or an agent can inspect the
 same `/.wanix/tasks/...output.txt` artifact after the run.
@@ -495,9 +505,11 @@ The current loop is:
     metadata, terminal output, or `#task/<id>` service directory.
 30. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-31. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+31. Click `Clear Finished Rows` when old exited tasks and closed terminals are
+    crowding the sidebar.
+32. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-32. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
+33. Watch the agent-shaped loop read, run, observe, edit, rerun, and verify
     `agent/out/result.txt`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.

@@ -202,6 +202,9 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.clearFinishedSystemRows', () => {
+			systemView.clearFinishedRows();
+		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixTaskSource', async (source?: string | { sourcePath?: string }) => {
 			try {
 				const sourcePath = taskSourcePath(source);
