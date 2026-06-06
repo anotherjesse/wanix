@@ -74,6 +74,13 @@ type RouteRunRecord = {
 	url?: string;
 	sourcePath?: string;
 	previewPath?: string;
+	artifacts?: RouteRunArtifact[];
+};
+
+type RouteRunArtifact = {
+	label: string;
+	path: string;
+	icon?: string;
 };
 
 type ActivityRecord = {
@@ -237,7 +244,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		return { tasks, terminals };
 	}
 
-	routePreviewed(id: string, preview: { status: number; statusText?: string; previewPath: string; sourcePath?: string; url?: string }): void {
+	routePreviewed(id: string, preview: { status: number; statusText?: string; previewPath: string; sourcePath?: string; url?: string; artifacts?: RouteRunArtifact[] }): void {
 		const route = this.routes.find((candidate) => candidate.id === id);
 		if (!route) {
 			return;
@@ -252,6 +259,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			url: preview.url,
 			sourcePath: preview.sourcePath,
 			previewPath: preview.previewPath,
+			artifacts: preview.artifacts,
 		});
 		this.routeRuns = this.routeRuns.slice(0, 8);
 		this.addActivity(`${route.label} route task ${route.previewStatus}`);
@@ -528,6 +536,13 @@ function routeRunArtifactItems(run: RouteRunRecord): SystemTreeItem[] {
 			command: "workbench.openWanixPath",
 			title: "Open Wanix Path",
 			arguments: [run.sourcePath],
+		}));
+	}
+	for (const [index, artifact] of (run.artifacts || []).entries()) {
+		items.push(leaf(`route-run:${run.id}:artifact:${index}`, artifact.label, pathDescription(artifact.path), artifact.icon || "file", {
+			command: "workbench.openWanixPath",
+			title: "Open Wanix Path",
+			arguments: [artifact.path],
 		}));
 	}
 	if (run.url) {

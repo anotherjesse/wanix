@@ -21,6 +21,32 @@ export type HttpAppDemoConfig = {
 	httpApp?: HttpAppRouteConfig;
 };
 
+type HttpAppPreviewTarget = {
+	name: string;
+	sourcePath: string;
+	previewPath: string;
+	message: string;
+	errorLabel: string;
+	artifacts?: Array<{ label: string; path: string; icon?: string }>;
+};
+
+const HELLO_PREVIEW: HttpAppPreviewTarget = {
+	name: APP_NAME,
+	sourcePath: APP_PATH,
+	previewPath: APP_PREVIEW_PATH,
+	message: "Previewed Wanix HTTP app response in /apps",
+	errorLabel: "Wanix HTTP app",
+};
+
+const COUNTER_PREVIEW: HttpAppPreviewTarget = {
+	name: COUNTER_NAME,
+	sourcePath: COUNTER_PATH,
+	previewPath: COUNTER_PREVIEW_PATH,
+	message: "Previewed Wanix HTTP counter response in /apps",
+	errorLabel: "Wanix HTTP counter",
+	artifacts: [{ label: "State File", path: COUNTER_STATE_PATH, icon: "database" }],
+};
+
 const APP_JS = `import * as std from "qjs:std";
 
 const app = std.getenv("WANIX_HTTP_APP");
@@ -136,34 +162,7 @@ export async function openHttpAppDemo(
 	systemView: WanixSystemView,
 ): Promise<void> {
 	await ensureHttpAppDemo(fsys, bridge, systemView);
-	const url = `${httpAppDemoUrl(config)}?from=workbench`;
-	const response = await fetch(url, { cache: "no-store" });
-	const body = await response.text();
-	const preview = httpAppPreviewReport({
-		url,
-		status: response.status,
-		statusText: response.statusText,
-		contentType: response.headers.get("content-type"),
-		body,
-		generatedAt: new Date().toISOString(),
-	});
-	await fsys.writeFile(APP_PREVIEW_PATH, preview);
-	refreshWanixFile(bridge, APP_PREVIEW_PATH);
-	systemView.routePreviewed("http-app", {
-		status: response.status,
-		statusText: response.statusText,
-		previewPath: APP_PREVIEW_PATH,
-		sourcePath: APP_PATH,
-		url,
-	});
-	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
-		console.warn("Wanix explorer refresh failed", error);
-	});
-	await openWanixFile(APP_PREVIEW_PATH);
-	if (!response.ok) {
-		throw new Error(`Wanix HTTP app returned ${response.status}; preview saved to ${APP_PREVIEW_PATH}`);
-	}
-	vscode.window.showInformationMessage("Previewed Wanix HTTP app response in /apps");
+	await previewHttpApp(fsys, bridge, config, systemView, HELLO_PREVIEW);
 }
 
 export async function openHttpCounterDemo(
@@ -173,7 +172,17 @@ export async function openHttpCounterDemo(
 	systemView: WanixSystemView,
 ): Promise<void> {
 	await ensureHttpCounterDemo(fsys, bridge, systemView);
-	const url = `${httpAppDemoUrl(config, COUNTER_NAME)}?from=workbench`;
+	await previewHttpApp(fsys, bridge, config, systemView, COUNTER_PREVIEW);
+}
+
+async function previewHttpApp(
+	fsys: any,
+	bridge: WanixBridge,
+	config: HttpAppDemoConfig,
+	systemView: WanixSystemView,
+	target: HttpAppPreviewTarget,
+): Promise<void> {
+	const url = `${httpAppDemoUrl(config, target.name)}?from=workbench`;
 	const response = await fetch(url, { cache: "no-store" });
 	const body = await response.text();
 	const preview = httpAppPreviewReport({
@@ -184,24 +193,27 @@ export async function openHttpCounterDemo(
 		body,
 		generatedAt: new Date().toISOString(),
 	});
-	await fsys.writeFile(COUNTER_PREVIEW_PATH, preview);
-	refreshWanixFile(bridge, COUNTER_PREVIEW_PATH);
-	refreshWanixFile(bridge, COUNTER_STATE_PATH);
+	await fsys.writeFile(target.previewPath, preview);
+	refreshWanixFile(bridge, target.previewPath);
+	for (const artifact of target.artifacts || []) {
+		refreshWanixFile(bridge, artifact.path);
+	}
 	systemView.routePreviewed("http-app", {
 		status: response.status,
 		statusText: response.statusText,
-		previewPath: COUNTER_PREVIEW_PATH,
-		sourcePath: COUNTER_PATH,
+		previewPath: target.previewPath,
+		sourcePath: target.sourcePath,
 		url,
+		artifacts: target.artifacts,
 	});
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
 	});
-	await openWanixFile(COUNTER_PREVIEW_PATH);
+	await openWanixFile(target.previewPath);
 	if (!response.ok) {
-		throw new Error(`Wanix HTTP counter returned ${response.status}; preview saved to ${COUNTER_PREVIEW_PATH}`);
+		throw new Error(`${target.errorLabel} returned ${response.status}; preview saved to ${target.previewPath}`);
 	}
-	vscode.window.showInformationMessage("Previewed Wanix HTTP counter response in /apps");
+	vscode.window.showInformationMessage(target.message);
 }
 
 function httpAppDemoUrl(config: HttpAppDemoConfig, name = APP_NAME): string {
