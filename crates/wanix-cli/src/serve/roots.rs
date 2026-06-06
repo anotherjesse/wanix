@@ -85,6 +85,21 @@ fn serve_services_root(
     Ok((Arc::new(namespace), driver_kinds))
 }
 
+/// Builds the full `--wanix-services` namespace (host root + #term/#pipe/#kv/
+/// #agent + #task) rooted at `root_path`, for use as an agent's confined world
+/// so the agent operates the Wanix service devices as files.
+///
+/// # Errors
+///
+/// Returns an error when the root or services namespace cannot be built.
+pub(crate) fn services_namespace_for_root(
+    root_path: &Path,
+) -> Result<Arc<dyn FileSystem>, CliError> {
+    let host_root = open_host_p9_root(root_path)?;
+    let (namespace, _kinds) = serve_services_root(host_root)?;
+    Ok(namespace)
+}
+
 fn serve_services_namespace(
     host_root: Arc<dyn FileSystem>,
     table: &TaskTable,

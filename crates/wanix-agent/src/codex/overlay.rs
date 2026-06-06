@@ -64,7 +64,7 @@ pub(super) fn build_codex_overlay(world_root: &str) -> FsResult<PathBuf> {
          [[environments]]\n\
          id = \"wanix\"\n\
          program = {program}\n\
-         args = [\"agent-exec-server\", \"--root\", {root}]\n\
+         args = [\"agent-exec-server\", \"--root\", {root}, \"--services\"]\n\
          cwd = {root}\n\
          initialize_timeout_sec = 60\n",
         program = toml_string(&exe.to_string_lossy()),

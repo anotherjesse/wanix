@@ -21,6 +21,7 @@ use concurrent::serve_concurrent_connections;
 use connection::serve_one_connection;
 use discovery::display_host;
 use roots::ServeRoots;
+pub(crate) use roots::services_namespace_for_root;
 
 const FS9P_BUNDLE: &str = "fs9p";
 const WORKBENCH_FS9P_BUNDLE: &str = "workbench-fs9p";

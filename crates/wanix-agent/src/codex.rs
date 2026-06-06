@@ -36,6 +36,13 @@ fn environments_value(environment: &EnvSpec) -> Value {
     json!([{"environmentId": environment.id, "cwd": environment.cwd}])
 }
 
+/// Tells the agent its filesystem is a Wanix services namespace.
+const WANIX_WORLD_INSTRUCTIONS: &str = "Your filesystem is a Wanix namespace rooted at `/`. \
+Besides ordinary files, these service paths exist (they are not listed by `ls /`): \
+`/#kv/<key>` is a key/value store — write a file to set a key, read it to get the value, \
+list `/#kv` for keys. `/#task`, `/#term`, and `/#pipe` are the Wanix task, terminal, and \
+pipe devices. Operate on all of them with ordinary file reads and writes.";
+
 /// An [`AgentEngine`] that bridges a real `codex app-server` subprocess.
 ///
 /// Each session spawns `codex app-server --listen stdio://`, performs the
@@ -274,6 +281,7 @@ impl AppServerClient {
         let mut params = json!({"cwd": cwd, "approvalPolicy": "never", "sandbox": sandbox});
         if let Some(environment) = environment {
             params["environments"] = environments_value(environment);
+            params["developerInstructions"] = json!(WANIX_WORLD_INSTRUCTIONS);
         }
         let result = self.request("thread/start", params)?;
         result["thread"]["id"]
