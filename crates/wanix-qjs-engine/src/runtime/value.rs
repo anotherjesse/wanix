@@ -1,9 +1,10 @@
 use super::QuickJsRuntime;
-use super::raw_value::{JS_EVAL_TYPE_MODULE, RawJsValue, validate_global_property_name};
+use super::raw_value::{RawJsValue, validate_global_property_name};
 use crate::QuickJsValue;
 use anyhow::{Error, Result, bail};
 use wasmtime::error::Context as _;
 
+mod module_eval;
 mod scalar;
 
 impl QuickJsRuntime {
@@ -83,24 +84,6 @@ impl QuickJsRuntime {
     /// cannot be freed.
     pub fn eval_discard(&mut self, code: &str) -> Result<()> {
         let value = self.eval_raw(code)?;
-        self.free_value(value)
-    }
-
-    /// Evaluates JavaScript as an ES module and discards the resulting value.
-    ///
-    /// Module imports use the Rust-side loader installed with
-    /// [`Self::set_module_loader`] or [`Self::set_module_loader_with_normalizer`].
-    /// `filename` is the module name QuickJS uses for diagnostics and relative
-    /// import resolution.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `filename` is empty or contains a NUL byte, if
-    /// module parsing/evaluation throws, if an import cannot be normalized or
-    /// loaded, or if the resulting QuickJS handle cannot be freed.
-    pub fn eval_module_discard(&mut self, code: &str, filename: &str) -> Result<()> {
-        validate_module_filename(filename)?;
-        let value = self.eval_raw_with_filename_and_flags(code, filename, JS_EVAL_TYPE_MODULE)?;
         self.free_value(value)
     }
 
@@ -222,14 +205,4 @@ impl QuickJsRuntime {
             ),
         }
     }
-}
-
-fn validate_module_filename(filename: &str) -> Result<()> {
-    if filename.is_empty() {
-        bail!("module filename must not be empty");
-    }
-    if filename.as_bytes().contains(&0) {
-        bail!("module filename must not contain NUL bytes");
-    }
-    Ok(())
 }

@@ -2924,4 +2924,44 @@ print("c");
         assert_eq!(read_file(&*stdout, "out"), b"before failure\n");
         assert_eq!(task.exit(), "1");
     }
+
+    #[test]
+    fn task_driver_reports_module_top_level_throw() {
+        let table = TaskTable::new();
+        let runner = runner();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner)))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br#"import * as std from "qjs:std"; print("before failure"); throw new Error("module boom");"#,
+        )
+        .unwrap();
+        let stdout = std::sync::Arc::new(MemFs::new());
+        stdout.write_file("out", b"").unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout
+                .open(
+                    &NormalizedPath::new("out").unwrap(),
+                    OpenOptions::read_write(),
+                )
+                .unwrap(),
+            NormalizedPath::new("out").unwrap(),
+        )
+        .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        let err = table.start(task.id()).unwrap_err();
+
+        assert!(
+            err.to_string().contains("module boom"),
+            "module throw should surface the thrown message: {err}"
+        );
+        assert_eq!(read_file(&*stdout, "out"), b"before failure\n");
+        assert_eq!(task.exit(), "1");
+    }
 }

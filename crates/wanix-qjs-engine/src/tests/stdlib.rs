@@ -689,3 +689,94 @@ fn quickjs_std_import_coexists_with_rust_module_loader() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn module_top_level_throw_is_reported() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    let error = vm
+        .eval_module_discard(r#"throw new Error("boom-module");"#, "throw.mjs")
+        .expect_err("a module top-level throw must surface as an error");
+
+    assert!(
+        error.to_string().contains("boom-module"),
+        "error should contain the thrown message: {error}"
+    );
+    Ok(())
+}
+
+#[test]
+fn module_reference_error_is_reported() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    let error = vm
+        .eval_module_discard("undefinedThing();", "reference.mjs")
+        .expect_err("a module ReferenceError must surface as an error");
+
+    assert!(
+        error.to_string().contains("undefinedThing"),
+        "error should name the undefined reference: {error}"
+    );
+    Ok(())
+}
+
+#[test]
+fn module_import_then_throw_is_reported() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    let error = vm
+        .eval_module_discard(
+            r#"
+            import * as std from "qjs:std";
+            throw new Error("boom-import");
+            "#,
+            "import-throw.mjs",
+        )
+        .expect_err("a throw after an import must surface as an error");
+
+    assert!(
+        error.to_string().contains("boom-import"),
+        "error should contain the thrown message: {error}"
+    );
+    Ok(())
+}
+
+#[test]
+fn clean_module_still_evaluates_ok() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    vm.eval_module_discard(
+        r#"
+        import * as std from "qjs:std";
+        globalThis.ok = 1;
+        "#,
+        "clean.mjs",
+    )?;
+
+    assert_eq!(vm.eval_string("String(ok)")?, "1");
+    Ok(())
+}
+
+#[test]
+fn caught_module_throw_is_not_reported() -> Result<()> {
+    let (engine, module) = quickjs_fixture()?;
+    let mut vm = QuickJsRuntime::create(&engine, &module)?;
+
+    vm.eval_module_discard(
+        r#"
+        try {
+            throw new Error("caught");
+        } catch (error) {
+            globalThis.caught = error.message;
+        }
+        "#,
+        "caught.mjs",
+    )?;
+
+    assert_eq!(vm.eval_string("caught")?, "caught");
+    Ok(())
+}
