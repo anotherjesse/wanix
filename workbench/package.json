@@ -46,8 +46,18 @@
       {
         "command": "workbench.runQjsTask",
         "title": "Run Current JavaScript as qjs Task",
-        "category": "Wanix"
+        "category": "Wanix",
+        "icon": "$(play)"
       }
-    ]
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "workbench.runQjsTask",
+          "when": "resourceScheme == wanix && resourceExtname == .js",
+          "group": "navigation"
+        }
+      ]
+    }
   }
 }

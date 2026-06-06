@@ -36,7 +36,12 @@ export async function activate(context: vscode.ExtensionContext) {
 		config = nextConfig;
 	});
 	const bridge = new WanixBridge(wanix, "");
+	const refreshFiles = () => refreshWorkbenchFiles(bridge);
 	context.subscriptions.push(bridge);
+	rememberWanixEditor();
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
+		rememberWanixEditor(editor);
+	}));
 
 	bridge.ready.then((fsys) => {
 		fsys.logger = (...args: any[]) => {
@@ -46,7 +51,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			context.subscriptions.push(vscode.commands.registerCommand('workbench.createTerminal', async () => {
 				const term = vscode.window.createTerminal({ 
 					name: 'Shell', 
-					pty: config.qjsShellUrl ? createQjsShellTerminal(config) : await createTerminal(fsys, config)
+					pty: config.qjsShellUrl ? createQjsShellTerminal(config, refreshFiles) : await createTerminal(fsys, config, refreshFiles)
 				});
 				term.show();
 				context.subscriptions.push(term);
@@ -74,7 +79,7 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 async function qjsTerminalName(): Promise<string> {
-	const editor = activeWanixEditor();
+	const editor = currentWanixEditor();
 	if (!editor) {
 		return "qjs";
 	}
@@ -88,7 +93,7 @@ async function createActiveQjsTaskTerminal(fsys: any, bridge: WanixBridge, confi
 	if (config.qjsTask === false) {
 		throw new Error("Wanix discovery did not advertise the qjs task driver");
 	}
-	const editor = activeWanixEditor();
+	const editor = currentWanixEditor();
 	if (!editor) {
 		throw new Error("Open a wanix: JavaScript file before running a qjs task");
 	}
@@ -107,15 +112,38 @@ async function createActiveQjsTaskTerminal(fsys: any, bridge: WanixBridge, confi
 			type: "qjs",
 			wd: scriptDir
 		}
+	}, () => refreshWorkbenchFiles(bridge), { keepOpenOnExit: true });
+}
+
+function refreshWorkbenchFiles(bridge: WanixBridge): void {
+	bridge.refresh();
+	Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
+		console.warn("Wanix explorer refresh failed", error);
 	});
 }
 
 function activeWanixEditor(): vscode.TextEditor | undefined {
 	const editor = vscode.window.activeTextEditor;
-	if (editor?.document.uri.scheme === WanixBridge.scheme) {
-		return editor;
+	return isWanixEditor(editor) ? editor : undefined;
+}
+
+let lastWanixEditor: vscode.TextEditor | undefined;
+
+function currentWanixEditor(): vscode.TextEditor | undefined {
+	return activeWanixEditor() || lastWanixEditor;
+}
+
+function rememberWanixEditor(editor = vscode.window.activeTextEditor): void {
+	if (isWanixEditor(editor)) {
+		lastWanixEditor = editor;
 	}
-	return undefined;
+}
+
+function isWanixEditor(editor: vscode.TextEditor | undefined): editor is vscode.TextEditor {
+	if (editor?.document.uri.scheme === WanixBridge.scheme) {
+		return true;
+	}
+	return false;
 }
 
 function createWanixHandle(context: vscode.ExtensionContext, setConfig: (config: Config) => void): Promise<any> {
@@ -175,7 +203,7 @@ function delay(ms: number): Promise<void> {
 const DIRECT_TASK_EXIT_POLL_MS = 100;
 const DIRECT_TASK_EXIT_DRAIN_MS = 100;
 
-function createQjsShellTerminal(config: Config) {
+function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => void) {
 	const writeEmitter = new vscode.EventEmitter<string>();
 	const closeEmitter = new vscode.EventEmitter<number | void>();
 	const dec = new TextDecoder();
@@ -277,6 +305,9 @@ function createQjsShellTerminal(config: Config) {
 		},
 		handleInput: (data: string) => {
 			sendInput(enc.encode(data));
+			if (data.includes('\r') || data.includes('\n')) {
+				notifyFilesystemActivity(onFilesystemActivity);
+			}
 		},
 		setDimensions: (dimensions: vscode.TerminalDimensions) => {
 			sendResize(dimensions);
@@ -284,7 +315,11 @@ function createQjsShellTerminal(config: Config) {
 	};
 }
 
-async function createTerminal(fsys: any, config: Config) {
+type TerminalOptions = {
+	keepOpenOnExit?: boolean;
+}
+
+async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: () => void, options: TerminalOptions = {}) {
 	await fsys.waitFor(config.ns?.task, 30000);
 	const termID = (await fsys.readText(`${config.ns?.term}/new`)).trim();
     const termPath = [config.ns?.term, termID].join("/");
@@ -342,6 +377,17 @@ async function createTerminal(fsys: any, config: Config) {
 		cancelReader();
 		closeEmitter.fire(code);
 	};
+	const finishAndKeepOpen = (code?: number) => {
+		if (closed) {
+			return;
+		}
+		closed = true;
+		const suffix = typeof code === "number" ? ` ${code}` : "";
+		writeEmitter.fire(`\r\n[wanix task exited${suffix}]\r\n`);
+		closeTerminalResource();
+		closeWriter();
+		cancelReader();
+	};
 	const watchTaskExit = async () => {
 		while (!closed) {
 			let exit = "";
@@ -354,7 +400,13 @@ async function createTerminal(fsys: any, config: Config) {
 				while (!closed && Date.now() - lastOutputAt < DIRECT_TASK_EXIT_DRAIN_MS) {
 					await delay(25);
 				}
-				finish(parseTerminalExitCode(exit));
+				notifyFilesystemActivity(onFilesystemActivity);
+				const code = parseTerminalExitCode(exit);
+				if (options.keepOpenOnExit) {
+					finishAndKeepOpen(code);
+				} else {
+					finish(code);
+				}
 				return;
 			}
 			await delay(DIRECT_TASK_EXIT_POLL_MS);
@@ -423,6 +475,7 @@ async function createTerminal(fsys: any, config: Config) {
 				writeEmitter.fire('\r\n');           // echo newline
 				writable.write(enc.encode(buffer+"\n"));
 				buffer = '';
+				notifyFilesystemActivity(onFilesystemActivity);
 			} else if (data === '\x7f') {   // backspace
 				if (buffer.length > 0) {
 					buffer = buffer.slice(0, -1);
@@ -437,6 +490,18 @@ async function createTerminal(fsys: any, config: Config) {
 			sendResize(dimensions);
 		}
 	};
+}
+
+function notifyFilesystemActivity(callback?: () => void): void {
+	if (!callback) {
+		return;
+	}
+	delay(250).then(callback).catch((error) => {
+		console.warn("Wanix filesystem refresh failed", error);
+	});
+	delay(1000).then(callback).catch((error) => {
+		console.warn("Wanix filesystem refresh failed", error);
+	});
 }
 
 function parseTerminalExitCode(value: unknown): number | undefined {

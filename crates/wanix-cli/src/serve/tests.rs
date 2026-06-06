@@ -713,6 +713,51 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
 }
 
 #[test]
+fn serve_once_returns_workbench_assets_outside_served_root() {
+    let root = temp_dir("wanix-cli-serve-workbench-assets");
+    fs::create_dir_all(root.join("workbench/code/out")).unwrap();
+    fs::write(
+        root.join("workbench/code/out/nls.messages.js"),
+        b"not bundled",
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let command = ServeCommand {
+        root_path: root,
+        addr: addr.to_string(),
+        bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+        wanix_services: false,
+        once: true,
+    };
+
+    let handle = thread::spawn(move || {
+        let mut stderr = Vec::new();
+        let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+        (exit_code, stderr)
+    });
+
+    let response = http_request(
+        addr,
+        b"GET /workbench/code/out/nls.messages.js HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    );
+    let (exit_code, _stderr) = handle.join().unwrap();
+
+    assert_eq!(exit_code, 0);
+    let response = String::from_utf8(response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(
+        response.contains("Content-Type: text/javascript; charset=utf-8\r\n"),
+        "{response}"
+    );
+    assert!(!response.ends_with("not bundled"), "{response}");
+    assert!(
+        response.contains("globalThis._VSCODE_NLS_MESSAGES="),
+        "{response}"
+    );
+}
+
+#[test]
 fn serve_once_returns_direct_v86_embedded_asset_over_static_collision() {
     let root = temp_dir("wanix-cli-serve-direct-v86-assets");
     fs::create_dir_all(root.join("v86/bundle")).unwrap();

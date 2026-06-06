@@ -358,6 +358,13 @@ export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider,
 		return p;
 	}
 
+	refresh(path = "/"): void {
+		this._fireSoon({
+			type: FileChangeType.Changed,
+			uri: Uri.parse(`${WanixBridge.scheme}:${normalizeUriPath(path)}`),
+		});
+	}
+
 	dispose() {
 		this.disposable?.dispose();
 	}
