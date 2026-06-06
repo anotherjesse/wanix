@@ -10,6 +10,7 @@ version.workspace = true
 [dependencies]
 wanix-fs = { path = "../wanix-fs" }
 serde_json = "1"
+base64 = "0.22"
 
 [lib]
 name = "wanix_agent"

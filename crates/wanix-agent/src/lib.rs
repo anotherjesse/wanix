@@ -18,12 +18,14 @@ use wanix_fs::{
 
 mod codex;
 mod engine;
+mod exec_server;
 mod fake;
 mod files;
 mod path;
 
 pub use codex::CodexEngine;
 pub use engine::{AgentEngine, AgentSession, EventStream};
+pub use exec_server::ExecServer;
 pub use fake::FakeEngine;
 
 use files::{BytesFile, CtlFile, EventsFile, NewAgentFile, PromptFile, require_read_only};
