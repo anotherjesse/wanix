@@ -38,10 +38,16 @@ export async function activate(context: vscode.ExtensionContext) {
 	});
 	const bridge = new WanixBridge(wanix, "");
 	const refreshFiles = () => refreshWorkbenchFiles(bridge);
+	let activeQjsTaskTerminal: vscode.Terminal | undefined;
 	context.subscriptions.push(bridge);
 	rememberWanixEditor();
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
 		rememberWanixEditor(editor);
+	}));
+	context.subscriptions.push(vscode.window.onDidCloseTerminal((terminal) => {
+		if (terminal === activeQjsTaskTerminal) {
+			activeQjsTaskTerminal = undefined;
+		}
 	}));
 
 	bridge.ready.then((fsys) => {
@@ -67,10 +73,13 @@ export async function activate(context: vscode.ExtensionContext) {
 		});
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runQjsTask', async () => {
 			try {
+				activeQjsTaskTerminal?.dispose();
+				activeQjsTaskTerminal = undefined;
 				const term = vscode.window.createTerminal({
 					name: await qjsTerminalName(),
 					pty: await createActiveQjsTaskTerminal(fsys, bridge, config)
 				});
+				activeQjsTaskTerminal = term;
 				term.show();
 				context.subscriptions.push(term);
 			} catch (error) {
