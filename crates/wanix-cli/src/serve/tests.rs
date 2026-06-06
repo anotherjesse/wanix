@@ -653,6 +653,8 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
         response.contains("const workbenchConfig = { discoveryUrl }"),
         "{response}"
     );
+    assert!(response.contains("const openPath = params.get(\"open\")"));
+    assert!(response.contains("workbenchConfig.open = openPath"));
     assert!(
         response.contains("workbenchConfig.p9 = discovery.routes.p9"),
         "{response}"

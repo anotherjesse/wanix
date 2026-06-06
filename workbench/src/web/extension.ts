@@ -14,6 +14,7 @@ type Config = {
 	qjsTask?: boolean;
 	term?: boolean;
 	raw?: boolean;
+	open?: string;
 	ns?: {
 		task: string;
 		term: string;
@@ -61,6 +62,9 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 			
 		}
+		openConfiguredDocument(config).catch((error: unknown) => {
+			vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+		});
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runQjsTask', async () => {
 			try {
 				const term = vscode.window.createTerminal({
@@ -76,6 +80,32 @@ export async function activate(context: vscode.ExtensionContext) {
 	});
 	
 	console.log('System extension activated');
+}
+
+async function openConfiguredDocument(config: Config): Promise<void> {
+	const uri = configuredOpenUri(config.open);
+	if (!uri) {
+		return;
+	}
+	const document = await vscode.workspace.openTextDocument(uri);
+	await vscode.window.showTextDocument(document, { preview: false });
+	rememberWanixEditor();
+}
+
+function configuredOpenUri(target: string | undefined): vscode.Uri | undefined {
+	const trimmed = target?.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+	if (/^[a-zA-Z][\w+.-]*:/.test(trimmed)) {
+		const uri = vscode.Uri.parse(trimmed);
+		if (uri.scheme !== WanixBridge.scheme) {
+			throw new Error("Wanix workbench open= only supports wanix: paths");
+		}
+		return uri;
+	}
+	const path = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+	return vscode.Uri.from({ scheme: WanixBridge.scheme, path });
 }
 
 async function qjsTerminalName(): Promise<string> {

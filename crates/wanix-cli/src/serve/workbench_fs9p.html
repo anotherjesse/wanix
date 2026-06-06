@@ -95,6 +95,10 @@
         amdRequire(["vs/workbench/workbench.web.main"], async (wb) => {
           try {
             const workbenchConfig = { discoveryUrl };
+            const openPath = params.get("open");
+            if (openPath) {
+              workbenchConfig.open = openPath;
+            }
             if (discovery.routes?.p9?.websocket) {
               workbenchConfig.p9 = discovery.routes.p9;
             }
