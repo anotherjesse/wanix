@@ -253,6 +253,12 @@
         "icon": "$(server-process)"
       },
       {
+        "command": "workbench.newHttpApp",
+        "title": "New HTTP App",
+        "category": "Wanix",
+        "icon": "$(new-file)"
+      },
+      {
         "command": "workbench.openHttpAppCatalog",
         "title": "Open HTTP App Catalog",
         "category": "Wanix",
@@ -363,34 +369,39 @@
           "group": "navigation@11"
         },
         {
-          "command": "workbench.openHttpAppDemo",
+          "command": "workbench.newHttpApp",
           "when": "view == wanix.system",
           "group": "navigation@12"
         },
         {
-          "command": "workbench.openHttpCounterDemo",
+          "command": "workbench.openHttpAppDemo",
           "when": "view == wanix.system",
           "group": "navigation@13"
         },
         {
-          "command": "workbench.openHttpWasmDemo",
+          "command": "workbench.openHttpCounterDemo",
           "when": "view == wanix.system",
           "group": "navigation@14"
         },
         {
-          "command": "workbench.openHttpAppHandler",
+          "command": "workbench.openHttpWasmDemo",
           "when": "view == wanix.system",
           "group": "navigation@15"
         },
         {
-          "command": "workbench.installAgentRepairDemo",
+          "command": "workbench.openHttpAppHandler",
           "when": "view == wanix.system",
           "group": "navigation@16"
         },
         {
-          "command": "workbench.runAgentRepairDemo",
+          "command": "workbench.installAgentRepairDemo",
           "when": "view == wanix.system",
           "group": "navigation@17"
+        },
+        {
+          "command": "workbench.runAgentRepairDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@18"
         }
       ],
       "view/item/context": [

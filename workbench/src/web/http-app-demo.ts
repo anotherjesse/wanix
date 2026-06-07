@@ -269,6 +269,26 @@ export async function openHttpWasmDemo(
 	await previewHttpApp(fsys, bridge, config, systemView, WASM_ROUTE_PREVIEW);
 }
 
+export async function createHttpApp(
+	fsys: any,
+	bridge: WanixBridge,
+	config: HttpAppDemoConfig,
+	systemView: WanixSystemView,
+): Promise<void> {
+	await fsys.makeDirAll(APP_DIR);
+	const name = await nextHttpAppName(fsys);
+	const path = `${APP_DIR}/${name}.js`;
+	await fsys.writeFile(path, starterHttpAppSource(name));
+	refreshWanixFile(bridge, path);
+	await publishHttpAppCatalog(fsys, bridge, config, systemView);
+	systemView.filesystemActivity(`http app ${name} created`, { path });
+	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
+		console.warn("Wanix explorer refresh failed", error);
+	});
+	await openWanixFile(path);
+	vscode.window.showInformationMessage(`Created Wanix HTTP app ${name}`);
+}
+
 export async function openHttpAppCatalog(
 	fsys: any,
 	bridge: WanixBridge,
@@ -510,6 +530,27 @@ function optionalHttpAppUrl(config: HttpAppDemoConfig, name: string): string | u
 	} catch {
 		return undefined;
 	}
+}
+
+async function nextHttpAppName(fsys: any): Promise<string> {
+	for (let index = 1; index < 1000; index += 1) {
+		const name = index === 1 ? "app" : `app-${index}`;
+		if (!await wanixPathExists(fsys, `${APP_DIR}/${name}.js`) && !await wanixPathExists(fsys, `${APP_DIR}/${name}.wasm`)) {
+			return name;
+		}
+	}
+	throw new Error("Could not find a free /apps app name");
+}
+
+function starterHttpAppSource(name: string): string {
+	return `import * as std from "qjs:std";
+
+const app = std.getenv("WANIX_HTTP_APP") || ${JSON.stringify(name)};
+const target = std.getenv("WANIX_HTTP_TARGET") || "/";
+
+std.out.puts("wanix app " + app + "\\n");
+std.out.puts("target=" + target + "\\n");
+`;
 }
 
 function appEntryName(entry: unknown): string | undefined {
