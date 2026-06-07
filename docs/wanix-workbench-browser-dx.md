@@ -647,6 +647,15 @@ your head.
 
 ![Shell archive dossier command links](assets/wanix-workbench-browser-dx/90-shell-archive-dossier-command-links.png)
 
+The command links now have a trust stop. Instead of dispatching directly to
+`Compare`, `Export`, `Import`, or `Restore`, a dossier link calls a small
+allowlisted wrapper command. The wrapper previews the command, reason, archive
+directory, command log, and bundle path, then asks for confirmation before
+running the real archive action. That keeps the fast markdown workflow while
+making the target explicit enough to trust.
+
+![Shell archive command preview](assets/wanix-workbench-browser-dx/91-shell-archive-command-preview.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1274,7 +1283,8 @@ The current loop is:
     with health, evidence links, latest commands, compare state, bundle/import
     state, restore state, and recommended next actions. Use the dossier's
     command links when you want to run those archive-specific actions from the
-    report itself.
+    report itself; each generated command link previews the archive target
+    before dispatching.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1386,8 +1396,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add a small trust/preview affordance for generated command links, so users can
-  see the archive target before launching a command from markdown.
+- Feed archive command-link results back into the dossier, so an action launched
+  from markdown leaves an obvious result breadcrumb.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

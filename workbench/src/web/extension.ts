@@ -127,7 +127,8 @@ type ShellHistoryArchiveDossierAction = {
 	label: string;
 	command: string;
 	reason: string;
-	args?: unknown[];
+	archiveTarget?: ShellHistoryArchiveTarget;
+	openPath?: string;
 };
 
 type ShellHistoryArchiveInfo = {
@@ -519,6 +520,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openShellHistoryArchiveDossier', async (target?: ShellHistoryArchiveTarget) => {
 			try {
 				await openShellHistoryArchiveDossier(fsys, bridge, systemView, target);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.runShellHistoryArchiveDossierAction', async (action?: ShellHistoryArchiveDossierAction) => {
+			try {
+				await runShellHistoryArchiveDossierAction(action);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -1139,6 +1148,96 @@ async function openShellHistoryArchiveDossier(
 	await refreshWanixPaths(bridge, [archive.archiveDir, SHELL_HISTORY_ARCHIVE_DIR, ...reportPaths]);
 	await openWanixPath(archive.dossierMarkdownPath);
 	vscode.window.showInformationMessage(`Opened qjs shell archive dossier: ${archive.name}`);
+}
+
+async function runShellHistoryArchiveDossierAction(action?: ShellHistoryArchiveDossierAction): Promise<void> {
+	const prepared = shellHistoryArchiveDossierPreparedAction(action);
+	const choice = await vscode.window.showWarningMessage(
+		`Run "${prepared.label}"?`,
+		{
+			modal: true,
+			detail: [
+				prepared.reason,
+				"",
+				`Command: ${prepared.command}`,
+				...prepared.previewLines,
+			].join("\n"),
+		},
+		"Run Action",
+	);
+	if (choice !== "Run Action") {
+		return;
+	}
+	await vscode.commands.executeCommand(prepared.command, ...prepared.args);
+}
+
+function shellHistoryArchiveDossierPreparedAction(action?: ShellHistoryArchiveDossierAction): {
+	label: string;
+	command: string;
+	reason: string;
+	args: unknown[];
+	previewLines: string[];
+} {
+	if (!action || typeof action !== "object") {
+		throw new Error("Shell archive dossier action is missing.");
+	}
+	const label = typeof action.label === "string" && action.label.trim() ? action.label.trim() : "Shell archive action";
+	const reason = typeof action.reason === "string" && action.reason.trim() ? action.reason.trim() : "No reason provided.";
+	if (action.command === "workbench.openWanixPath") {
+		const openPath = shellHistoryArchiveDossierOpenPath(action.openPath);
+		return {
+			label,
+			command: action.command,
+			reason,
+			args: [openPath],
+			previewLines: [`Path: ${shellHistoryAbsolutePath(openPath)}`],
+		};
+	}
+	if (!shellHistoryArchiveDossierCommandAllowsTarget(action.command)) {
+		throw new Error(`Shell archive dossier action cannot run command: ${action.command}`);
+	}
+	const target = shellHistoryArchiveDossierValidatedTarget(action.archiveTarget);
+	return {
+		label,
+		command: action.command,
+		reason,
+		args: [target],
+		previewLines: [
+			`Archive: ${shellHistoryAbsolutePath(target.archiveDir || "")}`,
+			`Commands: ${shellHistoryAbsolutePath(target.commandsPath || "")}`,
+			`Bundle: ${shellHistoryAbsolutePath(target.bundleJsonPath || "")}`,
+		],
+	};
+}
+
+function shellHistoryArchiveDossierCommandAllowsTarget(command: unknown): command is string {
+	return command === "workbench.compareShellHistoryArchive"
+		|| command === "workbench.exportShellHistoryArchiveBundle"
+		|| command === "workbench.importShellHistoryArchiveBundle"
+		|| command === "workbench.restoreShellHistoryArchive";
+}
+
+function shellHistoryArchiveDossierValidatedTarget(target?: ShellHistoryArchiveTarget): ShellHistoryArchiveTarget {
+	const archiveDir = shellHistoryArchiveTargetDir(target);
+	if (!archiveDir) {
+		throw new Error("Shell archive dossier action is missing an archive target.");
+	}
+	return {
+		archiveDir,
+		commandsPath: shellHistoryArchiveInventoryPath(target, "commandsPath", `${archiveDir}/commands.jsonl`, archiveDir),
+		bundleJsonPath: shellHistoryArchiveInventoryPath(target, "bundleJsonPath", `${archiveDir}/${SHELL_HISTORY_ARCHIVE_BUNDLE_JSON_NAME}`, archiveDir),
+	};
+}
+
+function shellHistoryArchiveDossierOpenPath(path: unknown): string {
+	if (typeof path !== "string" || path.length === 0) {
+		throw new Error("Shell archive dossier open action is missing a path.");
+	}
+	const relative = shellHistoryRelativePath(path);
+	if (!relative.startsWith(`${SHELL_HISTORY_ARCHIVE_DIR}/`) || relative === SHELL_HISTORY_ARCHIVE_DIR) {
+		throw new Error(`Shell archive dossier open path must stay under ${shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_DIR)}.`);
+	}
+	return relative;
 }
 
 async function hydrateShellArchiveInventory(
@@ -2302,7 +2401,7 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Inspect the archive manifest",
 			command: "workbench.openWanixPath",
 			reason: `manifest metadata is missing at ${shellHistoryAbsolutePath(archive.manifestPath)}`,
-			args: [archive.manifestPath],
+			openPath: archive.manifestPath,
 		});
 	}
 	if (!archive.compareGeneratedAt) {
@@ -2310,14 +2409,14 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Compare with live history",
 			command: "workbench.compareShellHistoryArchive",
 			reason: "no archive-vs-live report exists yet",
-			args: [target],
+			archiveTarget: target,
 		});
 	} else if (archive.compareStale) {
 		actions.push({
 			label: "Refresh archive comparison",
 			command: "workbench.compareShellHistoryArchive",
 			reason: `live history changed after the last comparison${archive.liveLastObservedAt ? ` at ${archive.liveLastObservedAt}` : ""}`,
-			args: [target],
+			archiveTarget: target,
 		});
 	}
 	if (!archive.bundleGeneratedAt) {
@@ -2325,7 +2424,7 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Export a portable bundle",
 			command: "workbench.exportShellHistoryArchiveBundle",
 			reason: "the archive is not yet portable across browser sessions",
-			args: [target],
+			archiveTarget: target,
 		});
 	}
 	if (archive.bundleGeneratedAt && !archive.importGeneratedAt) {
@@ -2333,7 +2432,7 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Import bundle when rehydration is needed",
 			command: "workbench.importShellHistoryArchiveBundle",
 			reason: "bundle.json is available and can recreate the archive evidence files",
-			args: [target],
+			archiveTarget: target,
 		});
 	}
 	if (!archive.wasLastRestored) {
@@ -2341,7 +2440,7 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Restore into live shell history when useful",
 			command: "workbench.restoreShellHistoryArchive",
 			reason: "the archive has not been replayed into the live history artifacts",
-			args: [target],
+			archiveTarget: target,
 		});
 	}
 	if (actions.length === 0) {
@@ -2349,7 +2448,7 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Open the archive index",
 			command: "workbench.openWanixPath",
 			reason: "archive health is clean and the dossier is informational",
-			args: [archive.indexPath],
+			openPath: archive.indexPath,
 		});
 	}
 	return actions;
@@ -2364,7 +2463,7 @@ function shellHistoryArchiveDossierCommandTarget(archive: ShellHistoryArchiveInf
 }
 
 function shellHistoryArchiveDossierActionMarkdown(action: ShellHistoryArchiveDossierAction): string {
-	return `- ${shellHistoryCommandMarkdownLink(action.label, action.command, action.args)}: ${action.reason}`;
+	return `- ${shellHistoryCommandMarkdownLink(action.label, "workbench.runShellHistoryArchiveDossierAction", [action])}: ${action.reason}`;
 }
 
 function shellHistoryCommandMarkdownLink(label: string, command: string, args: unknown[] = []): string {
