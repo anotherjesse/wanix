@@ -112,6 +112,11 @@ type ShellHistoryCompactPick = vscode.QuickPickItem & {
 	ageMs?: number;
 };
 
+type ShellHistoryArchivePick = vscode.QuickPickItem & {
+	archiveDir: string;
+	commandsPath: string;
+};
+
 type ShellHistoryArtifact = {
 	entry: ShellHistoryEntry;
 	index: number;
@@ -150,6 +155,22 @@ type ShellHistoryArchive = {
 	summaryPath: string;
 };
 
+type ShellHistoryComparedEntry = {
+	entry: ShellHistoryEntry;
+	index: number;
+	artifact?: ShellHistoryArtifact;
+};
+
+type ShellHistoryArchiveComparison = {
+	archiveDir: string;
+	archiveEntries: ShellHistoryEntry[];
+	liveEntries: ShellHistoryEntry[];
+	generatedAt: Date;
+	retained: ShellHistoryComparedEntry[];
+	archivedOnly: ShellHistoryComparedEntry[];
+	liveOnly: ShellHistoryComparedEntry[];
+};
+
 const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = {
 	qjs: { extension: ".js", label: "JavaScript" },
 	wasm: { extension: ".wasm", label: "WASM" },
@@ -168,6 +189,8 @@ const SHELL_HISTORY_SELECTED_MD_PATH = ".wanix/qjs-shell/selected.md";
 const SHELL_HISTORY_SUMMARY_MD_PATH = ".wanix/qjs-shell/summary.md";
 const SHELL_HISTORY_COMMANDS_DIR = ".wanix/qjs-shell/commands";
 const SHELL_HISTORY_ARCHIVE_DIR = ".wanix/qjs-shell/archive";
+const SHELL_HISTORY_COMPARE_MD_NAME = "compare-live.md";
+const SHELL_HISTORY_COMPARE_JSON_NAME = "compare-live.json";
 const SHELL_HISTORY_LATEST_MARKDOWN_LIMIT = 12;
 const SYSTEM_JOURNAL_PATH = ".wanix/system-journal.md";
 const SYSTEM_STATE_PATH = ".wanix/system-state.json";
@@ -380,6 +403,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.archiveShellCommandHistory', async () => {
 			try {
 				await archiveShellCommandHistory(fsys, bridge, systemView);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.compareShellHistoryArchive', async () => {
+			try {
+				await compareShellHistoryArchive(fsys, bridge, systemView);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -907,6 +938,40 @@ async function archiveShellCommandHistory(
 	vscode.window.showInformationMessage(`Archived qjs shell history: ${entries.length} commands`);
 }
 
+async function compareShellHistoryArchive(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const picks = await shellHistoryArchivePicks(fsys);
+	if (picks.length === 0) {
+		throw new Error("No qjs shell history archives yet. Use Archive Shell Command History first.");
+	}
+	const pick = await vscode.window.showQuickPick(picks, {
+		placeHolder: "Compare qjs shell history archive with current live history",
+		matchOnDescription: true,
+		matchOnDetail: true,
+	});
+	if (!pick) {
+		return;
+	}
+	const archiveEntries = await readShellHistoryEntries(fsys, pick.commandsPath);
+	const liveEntries = await readShellHistoryEntriesOptional(fsys, SHELL_HISTORY_JSONL_PATH);
+	const generatedAt = new Date();
+	const comparison = shellHistoryArchiveComparison(pick.archiveDir, archiveEntries, liveEntries, generatedAt);
+	const paths = await writeShellHistoryArchiveComparison(fsys, comparison);
+	const comparePath = `${pick.archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`;
+	publishShellCommandHistoryArchiveCompareReport(systemView, pick.archiveDir, paths);
+	systemView.filesystemActivity("shell history archive compared", {
+		description: `${comparison.archivedOnly.length} archived-only, ${comparison.liveOnly.length} live-only`,
+		path: comparePath,
+		paths,
+	});
+	await refreshWanixPaths(bridge, [pick.archiveDir, ...paths]);
+	await openWanixPath(comparePath);
+	vscode.window.showInformationMessage(`Compared qjs shell archive: ${comparison.archivedOnly.length} archived-only, ${comparison.liveOnly.length} live-only`);
+}
+
 async function compactShellCommandHistory(
 	fsys: any,
 	bridge: WanixBridge,
@@ -994,13 +1059,28 @@ async function clearShellCommandHistory(
 	vscode.window.showInformationMessage("Cleared qjs shell command history");
 }
 
-async function readShellHistoryEntries(fsys: any): Promise<ShellHistoryEntry[]> {
+async function readShellHistoryEntries(fsys: any, path = SHELL_HISTORY_JSONL_PATH): Promise<ShellHistoryEntry[]> {
 	let text: string;
 	try {
-		text = await fsys.readText(SHELL_HISTORY_JSONL_PATH);
+		text = await fsys.readText(path);
 	} catch {
-		throw new Error("No qjs shell command history yet. Run a served shell command first.");
+		if (path === SHELL_HISTORY_JSONL_PATH) {
+			throw new Error("No qjs shell command history yet. Run a served shell command first.");
+		}
+		throw new Error(`No qjs shell command history at ${shellHistoryAbsolutePath(path)}.`);
 	}
+	return parseShellHistoryEntries(text);
+}
+
+async function readShellHistoryEntriesOptional(fsys: any, path: string): Promise<ShellHistoryEntry[]> {
+	try {
+		return await readShellHistoryEntries(fsys, path);
+	} catch {
+		return [];
+	}
+}
+
+function parseShellHistoryEntries(text: string): ShellHistoryEntry[] {
 	const entries: ShellHistoryEntry[] = [];
 	for (const rawLine of text.split(/\r?\n/)) {
 		const line = rawLine.trim();
@@ -1017,6 +1097,233 @@ async function readShellHistoryEntries(fsys: any): Promise<ShellHistoryEntry[]> 
 		}
 	}
 	return entries;
+}
+
+async function shellHistoryArchivePicks(fsys: any): Promise<ShellHistoryArchivePick[]> {
+	const names = (await shellHistoryReadDirNames(fsys, SHELL_HISTORY_ARCHIVE_DIR)).reverse();
+	const picks: ShellHistoryArchivePick[] = [];
+	for (const name of names) {
+		const archiveDir = `${SHELL_HISTORY_ARCHIVE_DIR}/${name}`;
+		const commandsPath = `${archiveDir}/commands.jsonl`;
+		const manifest = await shellHistoryReadJson(fsys, `${archiveDir}/manifest.json`);
+		const count = typeof manifest?.commandCount === "number"
+			? manifest.commandCount
+			: (await readShellHistoryEntriesOptional(fsys, commandsPath)).length;
+		if (count === 0) {
+			continue;
+		}
+		const generatedAt = typeof manifest?.generatedAt === "string" ? manifest.generatedAt : name;
+		const firstObserved = typeof manifest?.firstObservedAt === "string" ? manifest.firstObservedAt : undefined;
+		const lastObserved = typeof manifest?.lastObservedAt === "string" ? manifest.lastObservedAt : undefined;
+		picks.push({
+			label: name,
+			description: `${count} commands`,
+			detail: [generatedAt, firstObserved && lastObserved ? `${firstObserved} to ${lastObserved}` : undefined, shellHistoryAbsolutePath(archiveDir)].filter(Boolean).join(" - "),
+			archiveDir,
+			commandsPath,
+		});
+	}
+	return picks;
+}
+
+async function shellHistoryReadDirNames(fsys: any, path: string): Promise<string[]> {
+	let entries: unknown;
+	try {
+		entries = typeof fsys.readDirEntries === "function"
+			? await fsys.readDirEntries(path)
+			: await fsys.readDir(path);
+	} catch {
+		return [];
+	}
+	return serviceEntryNames(entries).filter((name) => name.length > 0);
+}
+
+async function shellHistoryReadJson(fsys: any, path: string): Promise<any | undefined> {
+	try {
+		return JSON.parse(await fsys.readText(path));
+	} catch {
+		return undefined;
+	}
+}
+
+function shellHistoryArchiveComparison(
+	archiveDir: string,
+	archiveEntries: ShellHistoryEntry[],
+	liveEntries: ShellHistoryEntry[],
+	generatedAt: Date,
+): ShellHistoryArchiveComparison {
+	const archiveArtifacts = shellHistoryArtifacts(archiveEntries, `${archiveDir}/commands`);
+	const archiveKeys = shellHistoryOccurrenceKeys(archiveEntries);
+	const liveKeys = shellHistoryOccurrenceKeys(liveEntries);
+	const liveSet = new Set(liveKeys);
+	const archiveSet = new Set(archiveKeys);
+	return {
+		archiveDir,
+		archiveEntries,
+		liveEntries,
+		generatedAt,
+		retained: archiveEntries
+			.map((entry, index) => ({ entry, index: index + 1, artifact: archiveArtifacts[index], key: archiveKeys[index] }))
+			.filter((item) => liveSet.has(item.key)),
+		archivedOnly: archiveEntries
+			.map((entry, index) => ({ entry, index: index + 1, artifact: archiveArtifacts[index], key: archiveKeys[index] }))
+			.filter((item) => !liveSet.has(item.key)),
+		liveOnly: liveEntries
+			.map((entry, index) => ({ entry, index: index + 1, key: liveKeys[index] }))
+			.filter((item) => !archiveSet.has(item.key)),
+	};
+}
+
+function shellHistoryOccurrenceKeys(entries: ShellHistoryEntry[]): string[] {
+	const counts = new Map<string, number>();
+	return entries.map((entry) => {
+		const base = shellHistoryEntryKey(entry);
+		const count = (counts.get(base) || 0) + 1;
+		counts.set(base, count);
+		return `${base}\u0000${count}`;
+	});
+}
+
+function shellHistoryEntryKey(entry: ShellHistoryEntry): string {
+	return JSON.stringify({
+		observedAtUnixMillis: entry.observedAtUnixMillis,
+		taskId: entry.taskId,
+		terminalId: entry.terminalId,
+		cwd: entry.cwd,
+		command: entry.command,
+		outcome: {
+			status: entry.outcome?.status,
+			changed: entry.outcome?.changed,
+			exitCode: entry.outcome?.exitCode,
+			evidence: entry.outcome?.evidence,
+			diagnostic: entry.outcome?.diagnostic,
+		},
+		operation: {
+			kind: entry.operation?.kind,
+			status: entry.operation?.status,
+			source: entry.operation?.source,
+			target: entry.operation?.target,
+			paths: entry.operation?.paths || [],
+		},
+	});
+}
+
+async function writeShellHistoryArchiveComparison(fsys: any, comparison: ShellHistoryArchiveComparison): Promise<string[]> {
+	const markdownPath = `${comparison.archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`;
+	const jsonPath = `${comparison.archiveDir}/${SHELL_HISTORY_COMPARE_JSON_NAME}`;
+	await fsys.writeFile(jsonPath, shellHistoryArchiveComparisonJson(comparison, markdownPath, jsonPath));
+	await fsys.writeFile(markdownPath, shellHistoryArchiveComparisonMarkdown(comparison, markdownPath, jsonPath));
+	return [
+		markdownPath,
+		jsonPath,
+		`${comparison.archiveDir}/index.md`,
+		`${comparison.archiveDir}/manifest.json`,
+		`${comparison.archiveDir}/summary.md`,
+		`${comparison.archiveDir}/commands.jsonl`,
+		`${comparison.archiveDir}/commands`,
+	];
+}
+
+function shellHistoryArchiveComparisonJson(comparison: ShellHistoryArchiveComparison, markdownPath: string, jsonPath: string): string {
+	return `${JSON.stringify({
+		schema: "wanix.qjs-shell.archive-compare.v1",
+		generatedAt: comparison.generatedAt.toISOString(),
+		archiveDir: shellHistoryAbsolutePath(comparison.archiveDir),
+		markdownPath: shellHistoryAbsolutePath(markdownPath),
+		jsonPath: shellHistoryAbsolutePath(jsonPath),
+		archiveCommandCount: comparison.archiveEntries.length,
+		liveCommandCount: comparison.liveEntries.length,
+		retainedInLiveCount: comparison.retained.length,
+		archivedOnlyCount: comparison.archivedOnly.length,
+		liveOnlyCount: comparison.liveOnly.length,
+		archivedOnly: comparison.archivedOnly.map(shellHistoryComparedEntryJson),
+		liveOnly: comparison.liveOnly.map(shellHistoryComparedEntryJson),
+	}, null, 2)}\n`;
+}
+
+function shellHistoryComparedEntryJson(item: ShellHistoryComparedEntry): Record<string, unknown> {
+	return {
+		index: item.index,
+		command: shellHistoryCommand(item.entry),
+		status: shellHistoryStatus(item.entry),
+		observedAt: formatShellHistoryTime(item.entry.observedAtUnixMillis),
+		cwd: item.entry.cwd,
+		target: shellHistoryTarget(item.entry),
+		evidencePath: item.artifact ? shellHistoryAbsolutePath(item.artifact.path) : undefined,
+	};
+}
+
+function shellHistoryArchiveComparisonMarkdown(comparison: ShellHistoryArchiveComparison, markdownPath: string, jsonPath: string): string {
+	return [
+		"# qjs Shell History Archive Compare",
+		"",
+		"Schema: wanix.qjs-shell.archive-compare.v1",
+		`Generated: ${comparison.generatedAt.toISOString()}`,
+		`Archive: ${shellHistoryWanixLink(shellHistoryAbsolutePath(`${comparison.archiveDir}/index.md`), `${comparison.archiveDir}/index.md`)}`,
+		`JSON: ${shellHistoryWanixLink(shellHistoryAbsolutePath(jsonPath), jsonPath)}`,
+		`Markdown: ${shellHistoryAbsolutePath(markdownPath)}`,
+		"",
+		"## Counts",
+		"",
+		`- Archive commands: ${comparison.archiveEntries.length}`,
+		`- Current live commands: ${comparison.liveEntries.length}`,
+		`- Still present in live history: ${comparison.retained.length}`,
+		`- Archived only: ${comparison.archivedOnly.length}`,
+		`- Live only: ${comparison.liveOnly.length}`,
+		"",
+		"## Archived Only",
+		"",
+		...shellHistoryComparedEntryLines(comparison.archivedOnly, "archive"),
+		"",
+		"## Live Only",
+		"",
+		...shellHistoryComparedEntryLines(comparison.liveOnly, "live"),
+		"",
+		"## Archived-Only Outcome Counts",
+		"",
+		...shellHistoryEntryCountLines(comparison.archivedOnly.map((item) => item.entry), shellHistoryStatusKey),
+		"",
+		"## Live-Only Outcome Counts",
+		"",
+		...shellHistoryEntryCountLines(comparison.liveOnly.map((item) => item.entry), shellHistoryStatusKey),
+		"",
+	].join("\n");
+}
+
+function shellHistoryComparedEntryLines(items: ShellHistoryComparedEntry[], source: "archive" | "live", limit = 20): string[] {
+	if (items.length === 0) {
+		return ["- none"];
+	}
+	const lines = items.slice(0, limit).map((item) => {
+		if (source === "archive" && item.artifact) {
+			return `- ${shellHistoryArtifactSummary(item.artifact)}`;
+		}
+		return `- ${shellHistoryEntrySummary(item.entry)}`;
+	});
+	const remaining = items.length - limit;
+	if (remaining > 0) {
+		lines.push(`- ${remaining} more entries in ${source === "archive" ? "archived-only" : "live-only"} set; see JSON for compact details.`);
+	}
+	return lines;
+}
+
+function shellHistoryEntrySummary(entry: ShellHistoryEntry): string {
+	const time = formatShellHistoryTime(entry.observedAtUnixMillis) || "unknown time";
+	const target = shellHistoryTarget(entry);
+	const targetText = target ? ` -> ${shellHistoryWanixLink(target, target)}` : "";
+	return `${time} - ${shellHistoryStatus(entry)} - ${shellHistoryCommand(entry)}${targetText}`;
+}
+
+function shellHistoryEntryCountLines(entries: ShellHistoryEntry[], keyFor: (entry: ShellHistoryEntry) => string): string[] {
+	const counts = new Map<string, number>();
+	for (const entry of entries) {
+		const key = keyFor(entry);
+		counts.set(key, (counts.get(key) || 0) + 1);
+	}
+	const lines = [...counts.entries()]
+		.sort(([leftKey, leftCount], [rightKey, rightCount]) => rightCount - leftCount || leftKey.localeCompare(rightKey))
+		.map(([key, count]) => `- ${key}: ${count}`);
+	return lines.length ? lines : ["- none"];
 }
 
 function shellHistoryCompactPicks(entries: ShellHistoryEntry[], now: number): ShellHistoryCompactPick[] {
@@ -1692,6 +1999,19 @@ function publishShellCommandHistoryArchiveReport(
 		kind: "shell",
 		description: "exported shell audit",
 		icon: "archive",
+		artifacts: paths,
+	});
+}
+
+function publishShellCommandHistoryArchiveCompareReport(
+	systemView: WanixSystemView,
+	archiveDir: string,
+	paths: string[],
+): void {
+	systemView.reportPublished("qjs Shell Archive Compare", `${archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`, {
+		kind: "shell",
+		description: "archive vs live",
+		icon: "diff",
 		artifacts: paths,
 	});
 }

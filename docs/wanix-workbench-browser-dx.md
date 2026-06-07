@@ -537,6 +537,15 @@ session record before compacting or clearing the live cockpit.
 
 ![Shell command history archive export](assets/wanix-workbench-browser-dx/80-shell-history-archive-export.png)
 
+Archives are comparable now too. `Compare Shell History Archive` opens a picker
+over timestamped archive snapshots, reads the archive's copied `commands.jsonl`,
+compares it with the current live history log, and writes `compare-live.md` plus
+`compare-live.json` back into the archive. The markdown report links
+archived-only rows to archive-local evidence, while the JSON gives agents compact
+counts and command pointers after the live log has been compacted.
+
+![Shell command history archive compare](assets/wanix-workbench-browser-dx/81-shell-history-archive-compare.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1141,6 +1150,8 @@ The current loop is:
     `wanix:/...`. Use `Archive Shell Command History` to copy that evidence into
     a timestamped audit directory, then use `Compact Shell Command History` to
     keep the latest count or age window and regenerate the retained live set.
+    Use `Compare Shell History Archive` to write `compare-live.md/json` inside an
+    archive and see what the compacted live log no longer contains.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1252,8 +1263,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add restore/compare tooling for shell-history archives, so a compacted live
-  session can still be diffed against a prior audit snapshot.
+- Add restore/replay tooling for shell-history archives, so a prior audit
+  snapshot can seed a fresh live history view when needed.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

@@ -241,6 +241,12 @@
         "icon": "$(archive)"
       },
       {
+        "command": "workbench.compareShellHistoryArchive",
+        "title": "Compare Shell History Archive",
+        "category": "Wanix",
+        "icon": "$(diff)"
+      },
+      {
         "command": "workbench.compactShellCommandHistory",
         "title": "Compact Shell Command History",
         "category": "Wanix",
