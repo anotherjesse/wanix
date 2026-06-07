@@ -247,6 +247,12 @@
         "icon": "$(list-tree)"
       },
       {
+        "command": "workbench.exportShellHistoryArchiveBundle",
+        "title": "Export Shell Archive Bundle",
+        "category": "Wanix",
+        "icon": "$(package)"
+      },
+      {
         "command": "workbench.compareShellHistoryArchive",
         "title": "Compare Shell History Archive",
         "category": "Wanix",

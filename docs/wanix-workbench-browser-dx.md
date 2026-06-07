@@ -568,6 +568,17 @@ cockpit state with a durable retention trail.
 
 ![Shell archive inventory and retention](assets/wanix-workbench-browser-dx/83-shell-archive-inventory-retention.png)
 
+Archive export is portable now too. `Export Shell Archive Bundle` opens the
+archive picker and writes `bundle.md` plus `bundle.json` inside the selected
+timestamped archive. The markdown is the human index; the JSON is the portable
+payload with archive metadata, paths, byte counts, and the UTF-8 contents of
+the archive's manifest, command log, summaries, compare report if present, and
+per-command evidence files. After export, the archive inventory marks the bundle
+state, so a retained audit trail can leave the browser session as one file
+without losing its evidence links.
+
+![Shell archive bundle export](assets/wanix-workbench-browser-dx/84-shell-archive-bundle-export.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1180,7 +1191,9 @@ The current loop is:
     `Open Shell Archive Inventory` writes an archive ledger at
     `/.wanix/qjs-shell/archive/inventory.md/json`, and `Prune Shell History
     Archives` applies count or age retention with a durable `pruned.md/json`
-    report.
+    report. `Export Shell Archive Bundle` writes portable `bundle.md/json`
+    artifacts inside a chosen archive, including the archive's text files and
+    per-command evidence contents in one JSON payload.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1292,8 +1305,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add archive bundle export/download, so a retained shell-history audit trail
-  can leave the browser session as one portable artifact.
+- Add archive bundle import/rehydration, so a portable shell-history bundle can
+  seed a fresh browser session or restore evidence after archive pruning.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.
