@@ -1820,3 +1820,269 @@ it across QUIC; a new file-shaped service crosses every node the moment it exist
 and now a whole world is one verified, deduplicated hash you can hand to anyone.
 The control plane names; the data plane carries; the namespace is still the
 integration layer. The mesh keeps its promise.
+
+# Slice 6 — cpu: Send the Agent to the Data
+
+Every slice so far moved the *data* to the compute: import a remote namespace at
+`/n/A`, then run a task here against bytes that crawl back over the 9P window. Slice
+6 is the inverse, and the more powerful move. The caller stays put; the **job**
+travels — onto the node that already holds the source tree, runs there against its
+local fast namespace, and reverse-exports the caller's own files so the run can read
+inputs and write outputs *back through the wire*. Exit status and captured output
+return on a separate control stream. This is Plan 9's `cpu(1)`, generalized to the
+open internet, with a default jail.
+
+## What We Built
+
+- **`wanix-cpu` — the synchronous, transport-agnostic cpu core.** A new crate
+  depending on `wanix-fs + wanix-9p-client + wanix-9p + wanix-task + wanix-vfs` and
+  **no network code at all**. It is generic over a `Duplex` (a bidirectional byte
+  stream), so the entire cpu mechanism is exercised over an in-memory pipe or a
+  loopback `TcpStream` with no async and no iroh — exactly the discipline that let
+  the 9P client keep its keystone position. Network is `wanix-mesh`'s job; `wanix-cpu`
+  is the protocol and the launch.
+
+- **The acceptor (`run_job`) — the exact local launch, with a remote world.** Node Y
+  runs `allocate_root` → `task.bind(world, ".", ".")` → configure → `start`,
+  byte-for-byte the local task pattern. The only difference is the *world*: instead of
+  a local `MemFs`, the task is bound against a `wanix_9p_client::RemoteFs` that proxies
+  every `open`/`read`/`write`/`walk` over the **export stream** back into the caller's
+  reverse-exported namespace. The crate never names a concrete runtime — the caller of
+  `run_job` registers `qjs`/`wasm`/`noop` drivers on the `TaskTable` it passes in — so
+  the dependency direction stays honest and a remote job runs *any* Wanix task kind.
+
+- **The caller (`serve_export` + `drive_control`).** The caller runs its *own*
+  `P9Server` over the export stream — it is the 9P **server** for the job, the inverse
+  of every other slice — and drains a small typed `CpuEvent` batch off the control
+  stream. When it reads the terminal `Exit`, it shuts its export half down, which is
+  what lets the reverse server read EOF and stop.
+
+- **`ExportScope` — the default jail.** The reverse export is *not* the caller's whole
+  host root. `ExportScope::new(backing, "work")` re-roots to the job subtree and gates
+  it **read-only by default** (`SubtreeFs` + `Rights`); `.writable()` opts the subtree
+  into read-write so outputs land back; `.grant(GrantedService::new("#kv", …))` mounts
+  explicitly-granted services into the job's world at their `#`-paths. A file outside
+  the subtree is simply *not present* in the exported namespace.
+
+- **`StreamRole` — a 1-byte discriminator, not a positional race.** A job uses two bidi
+  streams (control + export). The caller writes one role byte (`control=0`, `export=1`)
+  as the *first byte* on each, and the acceptor classifies each accepted stream by that
+  byte — never by arrival order.
+
+- **`CpuEvent` — the tiny control wire.** `kind(1) || len(4, LE) || payload`, with
+  `Stdout`/`Stderr`/`Exit`/`Cancel` frames, the payload length bounded by
+  `MAX_EVENT_PAYLOAD` (1 MiB) on decode so a hostile peer cannot force an unbounded
+  allocation. It is deliberately *not* 9P — the control stream carries only out-of-band
+  job lifecycle; the export stream carries the full 9P namespace traffic.
+
+- **The `wanix-mesh` cpu plane and the `wanix cpu` CLI.** `MeshNode::serve_cpu` accepts
+  on ALPN `wanix/cpu/1` behind a grant allowlist; `MeshNode::dial_cpu` is the caller.
+  `wanix-rust cpu --node iroh://PEER -- KIND PROGRAM [ARG…]` binds an ephemeral dialer
+  identity, reverse-exports the local `--cwd` (read-only unless `--write`), runs the job
+  on the data node, and writes its captured stdout/stderr and exit code to the process.
+
+## Why: cpu(1), and "Move the Computation, Not the Data"
+
+Plan 9 had two ways to bridge two machines, and they were duals. `import` pulled a
+remote namespace into yours — the file server's tree appeared under a local mount, and
+your local programs ran against it. `cpu` did the opposite: it logged you into a remote
+CPU server, started a shell *there*, and **reverse-mounted your terminal's namespace
+back onto the remote machine** so the remote shell saw your files, your `/dev`, your
+environment. You typed on your laptop; the compute happened on the fast machine; the
+fast machine's view of "your files" was served back over the same connection from your
+laptop. Compute went to where the cycles (or the data) were, and the namespace followed
+the user, not the host.
+
+Slice 6 is that, line for line:
+
+- **`import` is Slices 1–5.** `RemoteFs` mounted at `/n/A` *is* Plan 9 import; a task
+  bound against it runs here, against there.
+- **`cpu` is this slice.** `run_job` binds the task against a `RemoteFs` whose far end is
+  the **caller's** reverse-exported namespace. The job runs on node Y, but its world is
+  node X's files — exactly cpu's reverse-mounted terminal namespace, only the "terminal"
+  is now a scoped, content-jailed subtree and the transport is QUIC.
+- **The two role-sorted streams are cpu's two channels.** cpu(1) multiplexed the
+  interactive channel and the exported-namespace channel over one connection; here the
+  control `CpuEvent` stream and the export 9P stream are two QUIC bidi streams, sorted by
+  a role byte instead of by cpu's in-band muxing.
+- **"Move the computation to the data" is the honest answer to 9P's WAN chattiness.** A
+  walk+open+read is 3–5 serial round-trips; pulling a large tree through the `msize`
+  window over a NAT is a tax. When chattiness dominates, you stop pulling the data and
+  **send the job to it** — the run touches its files at local-namespace speed and only
+  the small result comes back over the wire. cpu is the structural fix the whole document
+  kept pointing at.
+
+And the through-line holds once more: the job's world is *just a `Namespace`*, its world
+root is *just a bound `FileSystem`*, the export is *just a `P9Server`* — the mesh added a
+direction (server runs on the caller), not a new mechanism.
+
+## The How: Architecture, and the Corrections
+
+The shape of a job, end to end:
+
+1. The caller opens two bidi streams and writes a role byte first on each:
+   `write_role(control, Control)` (`0`), `write_role(export, Export)` (`1`). It builds an
+   `ExportScope` over its `--cwd`, runs `serve_export(scope_root, export_stream)` (its own
+   `P9Server`) on one thread, and `drive_control(control_stream, &mut output)` on another.
+2. The acceptor accepts both streams, reads the leading byte of each, and sorts them with
+   `read_role` — never assuming "the first one is control".
+3. On the export stream the acceptor builds `RemoteFs::connect(export)` and runs
+   `run_job(table, &spec, export, &mut control)`: `allocate_root(kind)`,
+   `task.bind(Arc::new(remote_world), ".", ".")`, apply the spec (argv/env/cwd, mirrored
+   into `#task`), and `table.start(id)`.
+4. After `start` returns, the acceptor reads the task's captured stdout/stderr and exit,
+   chunks them into `CpuEvent::Stdout`/`Stderr` frames, and writes a terminal
+   `CpuEvent::Exit(code)`.
+5. The caller's `drive_control` collects the chunks and returns on `Exit`; it then shuts
+   its export half down, the reverse `P9Server` reads EOF, and the job is done.
+
+Four corrections from the blueprint are load-bearing and are baked in, not hand-waved:
+
+1. **Stream order is first-write, not open order — so a role byte, not a position.** Over
+   QUIC an `open_bi` stream is invisible to the peer's `accept_bi` until its opener writes
+   a first byte. "The first accepted stream is the control stream" is a race; the 1-byte
+   `StreamRole` discriminator (`role.rs`) makes the pairing unambiguous regardless of
+   which stream's first byte lands first.
+
+2. **The reverse export is a scoped, read-only-by-default jail — never the whole host
+   root.** `ExportScope` re-roots to the job subtree via `SubtreeFs` and gates it with
+   `Rights`; the naive "export `services_namespace_for_root`'s whole root with
+   client-controlled symlink following" is a remote-root hole and is *not* what runs. A
+   path outside the subtree is absent from the namespace; a write to a read-only export is
+   denied; `--write` is an explicit opt-in for write-back, and granted services are an
+   explicit allowlist.
+
+3. **Streaming is batch-after-`start`, stated plainly, not faked.** The current task model
+   runs the guest to completion inside `TaskDriver::start` and only *then* has its buffered
+   stdout. So v1 delivers stdout/stderr/exit as a **single batch after `start` returns**,
+   not incrementally. Incremental streaming (a streaming-stdout `File` that pushes frames
+   during eval) is a named, scoped follow-up — the `event.rs` doc says so in so many words.
+
+4. **Cancel stops draining, not the remote computation — documented, not pretended.** The
+   task driver has no abort hook, so a caller-emitted `CpuEvent::Cancel` tells the *caller*
+   side to stop reading the control stream; the guest on node Y still runs to completion.
+   Real remote cancellation = stream teardown, and the limitation is honest in the type's
+   own doc comment.
+
+One subtlety the acceptor gets right: `run_job` returning does **not** close the export.
+`TaskTable::allocate_task` binds the task's own `#task` filesystem back into its namespace,
+making an `Arc` cycle (table → task → namespace → `#task` → table) that no `Drop`/`Weak`
+breaks. So dropping the local `table` drops neither the bound `RemoteFs` world nor its
+export stream — the **caller** owns the export lifetime and closes it after it reads the
+terminal `Exit`. Lifetime is driven by the control protocol, not by Rust drop order.
+
+## Copy-Paste: Input / Output
+
+The full Slice 6 path is proven two ways: the sync core over a real loopback socket (no
+async, no iroh — the real `P9Server`/`RemoteFs` over a real `TcpStream`), and the same
+core over a real QUIC connection between two iroh endpoints. Both run `allocate_root` →
+`bind` → `start` against a reverse-exported world and return the result on the control
+stream. The acceptor's task driver in the tests is a tiny `EchoWorldDriver` that reads its
+program file *through the task namespace* (i.e. through the reverse export) and echoes it
+to stdout — proving the job ran against the caller's files — without pulling a WASI runtime
+into the lower crate. A real `qjs`/`wasm` driver honors the identical observable contract;
+the CLI dialer registers them on the acceptor's table.
+
+```sh
+# --- The sync cpu core over a real loopback TCP socket (no async, no iroh) ---
+# Two TCP loopback pairs stand in for the job's two role-sorted QUIC bidi streams.
+# The caller serves a scoped, read-only `work` export holding build.js + a granted
+# read-only #kv; the acceptor runs a task whose world IS that export, reads the
+# caller's file over the reverse 9P session, and returns its output on control.
+$ cargo test -p wanix-cpu --test cpu_job
+     Running tests/cpu_job.rs (target/debug/deps/cpu_job-ffcef4718a07a8ba)
+
+running 4 tests
+test scoped_export_root_denies_paths_outside_the_subtree ... ok
+test the_exported_world_is_scoped_and_cannot_reach_outside_the_subtree ... ok
+test a_granted_service_imports_into_the_world ... ok
+test cpu_job_runs_against_the_reverse_exported_world ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+The four tests are the demo's invariants, made executable:
+`cpu_job_runs_against_the_reverse_exported_world` — the job reads the caller's
+`work/build.js` *through the reverse export* (the world is the remote namespace) and echoes
+`console.log('built on the data node')` back as stdout, exit 0; `the_exported_world_is_scoped…`
+— reading a `secret.txt` that lives *outside* the `work` subtree fails the job (the jail
+holds); `a_granted_service_imports_into_the_world` — the granted `#kv/config` imports into
+the job's world and reads `region=us`; `scoped_export_root_denies_paths_outside_the_subtree`
+— a direct check that a read-only export denies both an out-of-subtree path and a write-mode
+open.
+
+```sh
+# --- The same cpu core over a real QUIC connection between two iroh endpoints ---
+# Node A (data node) serves ALPN wanix/cpu/1 with node B explicitly allowlisted.
+# Node B dials, reverse-exports its scoped world, and runs the job ON node A.
+$ cargo test -p wanix-mesh --test mesh_cpu
+     Running tests/mesh_cpu.rs (target/debug/deps/mesh_cpu-5710cf20a4dabb05)
+
+running 2 tests
+test an_unallowlisted_peer_cannot_run_a_cpu_job ... ok
+test cpu_job_runs_on_the_remote_node_over_quic ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+```
+
+`cpu_job_runs_on_the_remote_node_over_quic` is the headline `wanix cpu --node <DATA> -- qjs
+build.js` over real QUIC: the task runs on node A, reads node B's reverse-exported
+`work/build.js` over the wire, and the captured stdout (`console.log('cpu ran on the data
+node')`) and exit 0 come back on the control stream. `an_unallowlisted_peer_cannot_run_a_cpu_job`
+is the trust boundary: with node A's allowlist denying everyone, the connect may open but the
+acceptor admits no streams, so the job fails rather than executing — remote code execution stays
+grant-allowlisted, never handed to an arbitrary NodeID.
+
+The caller-side CLI is the demo's exact command surface, `wanix cpu --node <DATA> -- qjs
+build.js`:
+
+```sh
+# The command form: reverse-export DIR read-only by default, run KIND PROGRAM on the
+# data node against it; --write opts the export into read-write so outputs land back.
+$ wanix-rust help | grep -A1 "cpu --node"
+       wanix-rust cpu --node iroh://PEER[?addr=IP:PORT] [--cwd DIR] [--write] [--env KEY=VALUE ...] -- KIND PROGRAM [ARG ...]
+         (Plan 9 cpu over the mesh: reverse-exports DIR read-only by default and runs KIND PROGRAM on the data node against it; --write opts the export into read-write)
+
+# The grammar is enforced: options before `--`, the job command after it, --node required.
+$ wanix-rust cpu --node iroh://peer
+cpu requires `-- KIND PROGRAM [ARG ...]` after its options          # exit 2
+
+$ wanix-rust cpu -- qjs build.js
+cpu requires --node iroh://PEER[?addr=IP:PORT] naming the data node # exit 2
+
+$ wanix-rust cpu --node "not a ticket" -- qjs build.js
+mesh address must start with iroh://: not a ticket                  # exit 2
+```
+
+The over-QUIC `mesh_cpu` test is the live two-node stand-in for a `wanix cpu --node iroh://A
+-- qjs build.js` against a `serve_cpu` data node: the same `run_job`/`serve_export`/
+`drive_control` core runs unchanged over the real iroh transport. Wiring `serve_cpu` into a
+long-running CLI data node (so two shells, not one test, drive it) is the small remaining
+step; the mechanism, the jail, and the wire are all proven here.
+
+## The Plan 9 Lineage, and What's Next
+
+Slice 6 closes the loop the document opened with: Wanix could always *export* a namespace,
+Slices 1–3 let it *import* one and run against it, Slice 4 carried service devices across,
+Slice 5 carried whole worlds by hash — and now the **computation itself travels to the data**,
+the other half of the import/cpu dual that Plan 9 always had and the real internet never made
+workable. A job runs on the node that holds the data, against that node's fast local namespace,
+with the caller's own files reverse-exported back through a scoped, read-only-by-default jail
+and the result returned on a typed control stream. The streams are role-sorted by a byte, not a
+position; the export is a sub-namespace, not the host root; the output is an honest batch, not a
+faked stream; cancel is documented for what it is. `cpu(1)`, over QUIC, with a default jail.
+
+What's next now has both directions of the dual *and* a way for jobs to find each other:
+
+- **Incremental streaming.** A streaming-stdout `File` that pushes `CpuEvent` frames during
+  eval, so a long build's output arrives live rather than as a post-`start` batch — the one
+  named follow-up the batch-honesty correction set up.
+- **The plumber and agents (Slice 7).** A `#plumb` topic bus routes typed events between
+  agents and tools, and the agent layer dispatches a session to a local engine or a
+  `RemoteEngine` proxying to `/n/<node>/#agent`. With import, cpu, and a message bus, an agent
+  on one machine can edit a confined world on another, hand off a task over a topic, and `cpu` a
+  sub-agent onto a third — agents operating a Plan 9 mesh as files, which is where this whole
+  document has been heading.
+
+Import pulled the world to you; cpu sends you to the world; the namespace is still the
+integration layer, and now it travels in both directions.
