@@ -575,12 +575,20 @@ function routeRunArtifactItems(run: RouteRunRecord): SystemTreeItem[] {
 function activityItem(entry: ActivityRecord): SystemTreeItem {
 	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
 	const path = entry.path || paths[paths.length - 1];
+	const hasMultiplePaths = paths.length > 1;
 	const children = paths.length > 1
 		? paths.map((candidate, index) => leaf(
 			`activity:${entry.id}:path:${index}`,
 			candidate,
 			candidate === path ? "open target" : "touched path",
 			candidate === path ? "go-to-file" : "file",
+			candidate === path ? {
+				command: "workbench.openWanixPath",
+				title: "Open Wanix Path",
+				arguments: [candidate],
+			} : undefined,
+			candidate === path ? "wanixActivityPath" : undefined,
+			{ path: candidate },
 		))
 		: undefined;
 	return leaf(
@@ -588,7 +596,7 @@ function activityItem(entry: ActivityRecord): SystemTreeItem {
 		entry.label,
 		path ? pathDescription(path) : undefined,
 		"history",
-		path ? {
+		path && !hasMultiplePaths ? {
 			command: "workbench.openWanixPath",
 			title: "Open Wanix Path",
 			arguments: [path],
