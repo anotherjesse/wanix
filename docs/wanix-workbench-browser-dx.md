@@ -687,6 +687,16 @@ confirmation wrapper.
 
 ![Shell archive action retry](assets/wanix-workbench-browser-dx/94-shell-archive-action-retry.png)
 
+Those retryable outcomes are visible before expansion now. The Shell Archives
+section adds a compact `Retryable Dossier Actions` group whenever one or more
+archives have a last action marked `failed`, `partial`, or `not-generated`.
+Each filtered child opens the action report, exposes the same safe retry row,
+and can jump back to the archive. The ordinary archive row also moves
+`retryable <status>` near the front of its compact description, so the problem
+does not hide behind compare, bundle, restore, or import badges.
+
+![Shell archive retryable filter](assets/wanix-workbench-browser-dx/95-shell-archive-retryable-filter.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1322,6 +1332,9 @@ The current loop is:
     Failed, partial, and not-generated outcomes include a retry command link
     and a `Retry Dossier Action` row that still goes through the same preview
     and confirmation wrapper.
+    The Shell Archives list also adds a compact `Retryable Dossier Actions`
+    group and root-row `retryable <status>` descriptions so those archives are
+    findable without expanding every archive.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1433,9 +1446,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add a compact stale-action filter or badge in the Shell Archives list, so
-  archives with retryable dossier outcomes can be found without expanding each
-  row.
+- Let the retryable archive summary publish a structured report, so future
+  agents can consume the queue without walking the tree UI.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

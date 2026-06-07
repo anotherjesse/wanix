@@ -924,7 +924,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		if (this.shellArchives.length === 0) {
 			return [leaf("shell-archives:empty", "no shell archives indexed yet")];
 		}
-		return this.shellArchives.map((archive) => leaf(
+		const archiveRows = this.shellArchives.map((archive) => leaf(
 			`shell-archive:${archive.name}`,
 			archive.name,
 			shellArchiveDescription(archive),
@@ -943,6 +943,22 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				children: shellArchiveArtifactItems(archive),
 			},
 		));
+		const retryableArchives = this.shellArchives.filter(shellArchiveDossierHasRetryableAction);
+		if (retryableArchives.length === 0) {
+			return archiveRows;
+		}
+		return [
+			leaf(
+				"shell-archives:retryable-dossier-actions",
+				"Retryable Dossier Actions",
+				formatClearCount(retryableArchives.length, "archive"),
+				"warning",
+				undefined,
+				undefined,
+				{ children: retryableArchives.map(shellArchiveRetryableDossierItem) },
+			),
+			...archiveRows,
+		];
 	}
 
 	private dataStoreItems(): SystemTreeItem[] {
@@ -1580,6 +1596,49 @@ function shellArchiveArtifactItems(archive: WanixShellArchiveRecord): SystemTree
 	return items;
 }
 
+function shellArchiveRetryableDossierItem(archive: WanixShellArchiveRecord): SystemTreeItem {
+	const retryAction = shellArchiveDossierRetryAction(archive);
+	return leaf(
+		`shell-archive-retryable:${archive.name}`,
+		archive.name,
+		shellArchiveDossierRetrySummary(archive),
+		"warning",
+		archive.dossierActionMarkdownPath ? {
+			command: "workbench.openWanixPath",
+			title: "Open Dossier Action Result",
+			arguments: [archive.dossierActionMarkdownPath],
+		} : undefined,
+		"wanixShellArchiveArtifact",
+		{
+			path: archive.dossierActionMarkdownPath,
+			archiveDir: archive.archiveDir,
+			commandsPath: archive.commandsPath,
+			bundleJsonPath: archive.bundleJsonPath,
+			children: [
+				...(retryAction ? [
+					leaf(`shell-archive-retryable:${archive.name}:retry`, "Retry Dossier Action", shellArchiveDossierRetryDescription(archive), "debug-rerun", {
+						command: "workbench.runShellHistoryArchiveDossierAction",
+						title: "Retry Dossier Action",
+						arguments: [retryAction],
+					}, "wanixShellArchiveAction", shellArchiveTarget(archive)),
+				] : []),
+				...(archive.dossierActionMarkdownPath ? [
+					leaf(`shell-archive-retryable:${archive.name}:report`, "Dossier Action Result", pathDescription(archive.dossierActionMarkdownPath), shellArchiveDossierActionIcon(archive), {
+						command: "workbench.openWanixPath",
+						title: "Open Dossier Action Result",
+						arguments: [archive.dossierActionMarkdownPath],
+					}, "wanixShellArchiveArtifact", { path: archive.dossierActionMarkdownPath }),
+				] : []),
+				leaf(`shell-archive-retryable:${archive.name}:archive`, "Archive Row", shellArchiveDescription(archive), shellArchiveIcon(archive), {
+					command: "workbench.openWanixPath",
+					title: "Open Shell Archive",
+					arguments: [archive.indexPath],
+				}, "wanixShellArchiveArtifact", { path: archive.indexPath, archiveDir: archive.archiveDir, commandsPath: archive.commandsPath, bundleJsonPath: archive.bundleJsonPath }),
+			],
+		},
+	);
+}
+
 function archiveActionLeaf(
 	archive: WanixShellArchiveRecord,
 	id: string,
@@ -1695,9 +1754,15 @@ function reportDescription(entry: ReportRecord): string {
 
 function shellArchiveDescription(archive: WanixShellArchiveRecord): string {
 	const range = [archive.firstObservedAt, archive.lastObservedAt].filter((part): part is string => Boolean(part)).join(" to ");
-	const state = shellArchiveBadges(archive).map((badge) => badge.label).slice(0, 4).join(" · ");
+	const retry = shellArchiveDossierRetryBadge(archive);
+	const state = shellArchiveBadges(archive)
+		.map((badge) => badge.label)
+		.filter((label) => label !== retry)
+		.slice(0, retry ? 3 : 4)
+		.join(" · ");
 	return [
 		`${archive.commandCount} commands`,
+		retry,
 		range || archive.generatedAt,
 		state || undefined,
 	].filter((part): part is string => Boolean(part)).join(" · ");
@@ -1789,6 +1854,24 @@ function shellArchiveDossierActionIcon(archive: WanixShellArchiveRecord): string
 		return "pass";
 	}
 	return "notebook";
+}
+
+function shellArchiveDossierHasRetryableAction(archive: WanixShellArchiveRecord): boolean {
+	return shellArchiveDossierActionNeedsRetry(archive.dossierActionStatus);
+}
+
+function shellArchiveDossierRetryBadge(archive: WanixShellArchiveRecord): string | undefined {
+	return shellArchiveDossierHasRetryableAction(archive)
+		? `retryable ${archive.dossierActionStatus}`
+		: undefined;
+}
+
+function shellArchiveDossierRetrySummary(archive: WanixShellArchiveRecord): string {
+	return [
+		shellArchiveDossierRetryBadge(archive),
+		archive.dossierActionLabel,
+		archive.dossierActionGeneratedAt,
+	].filter((part): part is string => Boolean(part)).join(" · ");
 }
 
 function shellArchiveDossierRetryAction(archive: WanixShellArchiveRecord): object | undefined {
