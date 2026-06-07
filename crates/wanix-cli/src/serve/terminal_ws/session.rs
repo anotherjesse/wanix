@@ -41,6 +41,7 @@ impl TerminalWebSocketSession {
         let (shell, initial_output) = QjsShellSession::start_in_cwd(root_path, cwd)
             .map_err(ServeConnectionError::Terminal)?;
         let mut session = Self { socket, shell };
+        session.send_session()?;
         session.send_output(initial_output)?;
         Ok(session)
     }
@@ -147,6 +148,12 @@ impl TerminalWebSocketSession {
         self.socket.send(Message::binary(output)).map_err(ws_error)
     }
 
+    fn send_session(&mut self) -> Result<(), ServeConnectionError> {
+        self.socket
+            .send(Message::text(shell_session_message(&self.shell)))
+            .map_err(ws_error)
+    }
+
     fn send_pong(&mut self, bytes: Bytes) -> Result<(), ServeConnectionError> {
         self.socket.send(Message::Pong(bytes)).map_err(ws_error)
     }
@@ -158,6 +165,16 @@ impl TerminalWebSocketSession {
             )))
             .map_err(ws_error)
     }
+}
+
+fn shell_session_message(shell: &QjsShellSession) -> String {
+    format!(
+        "{{\"type\":\"session\",\"protocol\":\"wanix-qjs-shell.v1\",\
+         \"taskId\":{},\"terminalId\":{},\"cwd\":{}}}",
+        json_string(&shell.task_id()),
+        json_string(shell.terminal_id()),
+        json_string(shell.cwd().as_str()),
+    )
 }
 
 enum TerminalWebSocketEvent {
@@ -199,4 +216,25 @@ fn is_terminal_websocket_idle_tick(error: &WsError) -> bool {
 
 fn ws_error(error: WsError) -> ServeConnectionError {
     ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error))
+}
+
+fn json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(escaped, "\\u{:04x}", ch as u32);
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped.push('"');
+    escaped
 }

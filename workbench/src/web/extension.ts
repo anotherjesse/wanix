@@ -166,7 +166,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		if (config.qjsShellUrl || config.shell) {
 			context.subscriptions.push(vscode.commands.registerCommand('workbench.createTerminal', async () => {
 				if (config.qjsShellUrl) {
-					systemView.terminalOpened("shell", "Shell");
+					const shellCwd = config.shell?.wd || ".";
+					systemView.filesystemActivity(`shell opened in ${displayWanixPath(shellCwd)}`, { path: shellCwd });
 				}
 				const term = vscode.window.createTerminal({ 
 					name: 'Shell', 
@@ -2061,6 +2062,7 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: (activity
 	let opened = false;
 	let closed = false;
 	let shellTaskId: string | undefined;
+	let shellTerminalId: string | undefined;
 	const shellInput = newShellInputState(config);
 	const pending: Uint8Array[] = [];
 	let pendingResize: vscode.TerminalDimensions | undefined;
@@ -2084,7 +2086,7 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: (activity
 				systemView?.taskClosed(shellTaskId);
 			}
 		}
-		systemView?.terminalClosed("shell");
+		systemView?.terminalClosed(shellTerminalId || "shell");
 		closeEmitter.fire(code);
 	};
 	const sendInput = (bytes: Uint8Array) => {
@@ -2133,6 +2135,9 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: (activity
 				if (typeof event.data === "string") {
 					try {
 						const message = JSON.parse(event.data);
+						if (handleQjsShellSessionMessage(message)) {
+							return;
+						}
 						if (message.type === "error") {
 							writeEmitter.fire(`\r\n${message.message}\r\n`);
 						} else if (message.type === "exit") {
@@ -2183,6 +2188,46 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: (activity
 			sendResize(dimensions);
 		}
 	};
+
+	function handleQjsShellSessionMessage(message: unknown): boolean {
+		if (!isQjsShellSessionMessage(message)) {
+			return false;
+		}
+		shellInput.cwd = resolveWanixPath(".", message.cwd);
+		if (!shellTaskId) {
+			shellTaskId = message.taskId;
+			systemView?.taskStarted(shellTaskId, "shell", "shell");
+		}
+		if (!shellTerminalId) {
+			shellTerminalId = message.terminalId;
+			systemView?.terminalOpened(shellTerminalId, "Shell");
+		}
+		systemView?.filesystemActivity(`shell session ${message.taskId} ready`, { path: `#task/${message.taskId}` });
+		return true;
+	}
+}
+
+type QjsShellSessionMessage = {
+	type: "session";
+	protocol: "wanix-qjs-shell.v1";
+	taskId: string;
+	terminalId: string;
+	cwd: string;
+};
+
+function isQjsShellSessionMessage(message: unknown): message is QjsShellSessionMessage {
+	if (!message || typeof message !== "object") {
+		return false;
+	}
+	const candidate = message as Record<string, unknown>;
+	return candidate.type === "session"
+		&& candidate.protocol === "wanix-qjs-shell.v1"
+		&& typeof candidate.taskId === "string"
+		&& candidate.taskId.length > 0
+		&& typeof candidate.terminalId === "string"
+		&& candidate.terminalId.length > 0
+		&& typeof candidate.cwd === "string"
+		&& candidate.cwd.length > 0;
 }
 
 type TerminalOptions = {

@@ -167,6 +167,7 @@ fn serve_qjs_shell_route_json(roots: &ServeRoots, websocket_url: &str) -> String
              \"cwdQuery\":\"cwd\",\"defaultCwd\":\".\",\
              \"resize\":[\"{{\\\"type\\\":\\\"resize\\\",\\\"columns\\\":COLS,\\\"rows\\\":ROWS}}\",\
              \"resize COLS ROWS\"],\
+             \"sessionMessage\":\"{{\\\"type\\\":\\\"session\\\",\\\"protocol\\\":\\\"wanix-qjs-shell.v1\\\",\\\"taskId\\\":\\\"ID\\\",\\\"terminalId\\\":\\\"ID\\\",\\\"cwd\\\":\\\"PATH\\\"}}\",\
              \"exitMessage\":\"{{\\\"type\\\":\\\"exit\\\",\\\"code\\\":N}}\",\
              \"terminalLifecycle\":\"owned-resource-closed-on-session-close\"}}",
             json_string(websocket_url)

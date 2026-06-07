@@ -107,6 +107,18 @@ impl QjsShellSession {
         Ok(self.runtime.exit_code()?)
     }
 
+    pub(crate) fn task_id(&self) -> String {
+        self.task.id().get().to_string()
+    }
+
+    pub(crate) fn cwd(&self) -> NormalizedPath {
+        self.task.dir()
+    }
+
+    pub(crate) fn terminal_id(&self) -> &str {
+        &self.terminal_id
+    }
+
     #[cfg(test)]
     pub(crate) fn terminal_for_test(&self) -> Arc<TermDevice> {
         Arc::clone(&self.terminal)

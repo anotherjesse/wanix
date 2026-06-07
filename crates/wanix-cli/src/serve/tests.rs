@@ -1411,6 +1411,10 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
         "{\"type\":\"resize\",\"columns\":COLS,\"rows\":ROWS}"
     );
     assert_eq!(qjs_shell["resize"][1], "resize COLS ROWS");
+    assert_eq!(
+        qjs_shell["sessionMessage"],
+        "{\"type\":\"session\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\"}"
+    );
     assert_eq!(qjs_shell["exitMessage"], "{\"type\":\"exit\",\"code\":N}");
     assert_eq!(
         qjs_shell["terminalLifecycle"],
@@ -2260,8 +2264,20 @@ std.exit(6);
             .set_read_timeout(Some(Duration::from_secs(60)))
             .unwrap();
     }
-    let initial = socket.read().unwrap();
-    match initial {
+    let session = socket.read().unwrap();
+    match session {
+        Message::Text(text) => {
+            let session_json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(session_json["type"], "session");
+            assert_eq!(session_json["protocol"], "wanix-qjs-shell.v1");
+            assert_eq!(session_json["taskId"], "1");
+            assert_eq!(session_json["terminalId"], "1");
+            assert_eq!(session_json["cwd"], "app");
+        }
+        other => panic!("expected initial shell session message, got {other:?}"),
+    }
+    let initial_output = socket.read().unwrap();
+    match initial_output {
         Message::Binary(bytes) => assert_eq!(bytes.as_ref(), b"shell task: 1\r\n$ "),
         other => panic!("expected initial terminal output, got {other:?}"),
     }
