@@ -579,6 +579,16 @@ without losing its evidence links.
 
 ![Shell archive bundle export](assets/wanix-workbench-browser-dx/84-shell-archive-bundle-export.png)
 
+The portable bundle has a way back in. `Import Shell Archive Bundle` looks for
+an open `bundle.json` editor first, then for exported bundles already present in
+archive directories. Import validates that every bundled file belongs under
+`/.wanix/qjs-shell/archive/<id>/`, rewrites the archive evidence files, writes
+`imported.md` and `imported.json`, and refreshes the archive inventory. This
+makes pruning less scary: a saved bundle can rehydrate the audit trail without
+rerunning shell commands or depending on the original directory tree.
+
+![Shell archive bundle import](assets/wanix-workbench-browser-dx/85-shell-archive-bundle-import.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1193,7 +1203,9 @@ The current loop is:
     Archives` applies count or age retention with a durable `pruned.md/json`
     report. `Export Shell Archive Bundle` writes portable `bundle.md/json`
     artifacts inside a chosen archive, including the archive's text files and
-    per-command evidence contents in one JSON payload.
+    per-command evidence contents in one JSON payload. `Import Shell Archive
+    Bundle` can read an open `bundle.json` editor or an existing archive bundle,
+    rehydrate the archive files, and write `imported.md/json`.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1305,8 +1317,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add archive bundle import/rehydration, so a portable shell-history bundle can
-  seed a fresh browser session or restore evidence after archive pruning.
+- Add a first-class shell-history archive/bundle explorer, so inventory rows can
+  directly trigger compare, restore, export, import, and prune actions.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

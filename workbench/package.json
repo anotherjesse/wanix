@@ -253,6 +253,12 @@
         "icon": "$(package)"
       },
       {
+        "command": "workbench.importShellHistoryArchiveBundle",
+        "title": "Import Shell Archive Bundle",
+        "category": "Wanix",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "workbench.compareShellHistoryArchive",
         "title": "Compare Shell History Archive",
         "category": "Wanix",
