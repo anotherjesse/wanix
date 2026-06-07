@@ -345,6 +345,9 @@ export async function activate(context: vscode.ExtensionContext) {
 		);
 		systemView.configure(config);
 		context.subscriptions.push(startWanixServiceStatePolling(fsys, config, systemView));
+		void hydrateShellArchiveInventory(fsys, bridge, systemView).catch((error) => {
+			console.warn("failed to hydrate shell archive inventory", error);
+		});
 		sharedWatcher = new WanixSharedDirectoryWatcher(fsys, bridge, systemView);
 		context.subscriptions.push(sharedWatcher);
 		if (config.v86?.launchUrl) {
@@ -1083,6 +1086,26 @@ async function openShellHistoryArchiveInventory(
 	vscode.window.showInformationMessage(`Opened qjs shell archive inventory: ${inventory.archives.length} archives`);
 }
 
+async function hydrateShellArchiveInventory(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const persisted = await shellHistoryPersistedArchiveInfos(fsys);
+	const scanned = await shellHistoryArchiveInfos(fsys);
+	const archives = scanned.length > 0 ? scanned : persisted;
+	if (archives.length === 0) {
+		return;
+	}
+	const generatedAt = new Date();
+	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt, archives);
+	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	if (scanned.length > 0) {
+		const paths = await writeShellHistoryArchiveInventory(fsys, inventory);
+		await refreshWanixPaths(bridge, [SHELL_HISTORY_ARCHIVE_DIR, ...paths]);
+	}
+}
+
 async function exportShellHistoryArchiveBundle(
 	fsys: any,
 	bridge: WanixBridge,
@@ -1628,6 +1651,79 @@ async function shellHistoryArchiveInfos(fsys: any, lastRestoredArchiveDir?: stri
 		});
 	}
 	return archives.sort((left, right) => shellHistoryArchiveSortMillis(right) - shellHistoryArchiveSortMillis(left) || right.name.localeCompare(left.name));
+}
+
+async function shellHistoryPersistedArchiveInfos(fsys: any): Promise<ShellHistoryArchiveInfo[]> {
+	const value = await shellHistoryReadJson(fsys, SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH);
+	if (!value || value.schema !== "wanix.qjs-shell.archive-inventory.v1" || !Array.isArray(value.archives)) {
+		return [];
+	}
+	const archives: ShellHistoryArchiveInfo[] = [];
+	for (const archive of value.archives) {
+		const parsed = shellHistoryArchiveInfoFromInventoryJson(archive);
+		if (parsed) {
+			archives.push(parsed);
+		}
+	}
+	return archives.sort((left, right) => shellHistoryArchiveSortMillis(right) - shellHistoryArchiveSortMillis(left) || right.name.localeCompare(left.name));
+}
+
+function shellHistoryArchiveInfoFromInventoryJson(source: any): ShellHistoryArchiveInfo | undefined {
+	if (!source || typeof source !== "object") {
+		return undefined;
+	}
+	const rawArchiveDir = typeof source.archiveDir === "string"
+		? source.archiveDir
+		: typeof source.indexPath === "string"
+			? source.indexPath.replace(/\/index\.md$/, "")
+			: "";
+	const archiveDir = shellHistoryRelativePath(rawArchiveDir);
+	if (!archiveDir.startsWith(`${SHELL_HISTORY_ARCHIVE_DIR}/`) || archiveDir === SHELL_HISTORY_ARCHIVE_DIR) {
+		return undefined;
+	}
+	const commandCount = typeof source.commandCount === "number" ? source.commandCount : 0;
+	if (commandCount <= 0) {
+		return undefined;
+	}
+	const name = typeof source.name === "string" && source.name
+		? source.name
+		: archiveDir.split("/").pop() || "archive";
+	const generatedAt = typeof source.generatedAt === "string" ? source.generatedAt : name;
+	const generatedAtUnixMillis = typeof source.generatedAtUnixMillis === "number"
+		? source.generatedAtUnixMillis
+		: shellHistoryArchiveIdUnixMillis(name) ?? Date.parse(generatedAt);
+	return {
+		name,
+		archiveDir,
+		commandsPath: shellHistoryArchiveInventoryPath(source, "commandsPath", `${archiveDir}/commands.jsonl`, archiveDir),
+		indexPath: shellHistoryArchiveInventoryPath(source, "indexPath", `${archiveDir}/index.md`, archiveDir),
+		manifestPath: shellHistoryArchiveInventoryPath(source, "manifestPath", `${archiveDir}/manifest.json`, archiveDir),
+		summaryPath: shellHistoryArchiveInventoryPath(source, "summaryPath", `${archiveDir}/summary.md`, archiveDir),
+		latestMarkdownPath: shellHistoryArchiveInventoryPath(source, "latestMarkdownPath", `${archiveDir}/latest.md`, archiveDir),
+		generatedAt,
+		generatedAtUnixMillis: Number.isFinite(generatedAtUnixMillis) ? generatedAtUnixMillis : undefined,
+		commandCount,
+		firstObservedAt: typeof source.firstObservedAt === "string" ? source.firstObservedAt : undefined,
+		lastObservedAt: typeof source.lastObservedAt === "string" ? source.lastObservedAt : undefined,
+		compareMarkdownPath: shellHistoryArchiveInventoryPath(source, "compareMarkdownPath", `${archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`, archiveDir),
+		compareJsonPath: shellHistoryArchiveInventoryPath(source, "compareJsonPath", `${archiveDir}/${SHELL_HISTORY_COMPARE_JSON_NAME}`, archiveDir),
+		compareGeneratedAt: typeof source.compareGeneratedAt === "string" ? source.compareGeneratedAt : undefined,
+		archivedOnlyCount: typeof source.archivedOnlyCount === "number" ? source.archivedOnlyCount : undefined,
+		liveOnlyCount: typeof source.liveOnlyCount === "number" ? source.liveOnlyCount : undefined,
+		wasLastRestored: source.wasLastRestored === true,
+		bundleMarkdownPath: shellHistoryArchiveInventoryPath(source, "bundleMarkdownPath", `${archiveDir}/${SHELL_HISTORY_ARCHIVE_BUNDLE_MD_NAME}`, archiveDir),
+		bundleJsonPath: shellHistoryArchiveInventoryPath(source, "bundleJsonPath", `${archiveDir}/${SHELL_HISTORY_ARCHIVE_BUNDLE_JSON_NAME}`, archiveDir),
+		bundleGeneratedAt: typeof source.bundleGeneratedAt === "string" ? source.bundleGeneratedAt : undefined,
+		bundleFileCount: typeof source.bundleFileCount === "number" ? source.bundleFileCount : undefined,
+		importMarkdownPath: shellHistoryArchiveInventoryPath(source, "importMarkdownPath", `${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_MD_NAME}`, archiveDir),
+		importJsonPath: shellHistoryArchiveInventoryPath(source, "importJsonPath", `${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_JSON_NAME}`, archiveDir),
+		importGeneratedAt: typeof source.importGeneratedAt === "string" ? source.importGeneratedAt : undefined,
+	};
+}
+
+function shellHistoryArchiveInventoryPath(source: any, key: string, fallback: string, archiveDir: string): string {
+	const path = shellHistoryRelativePath(typeof source?.[key] === "string" ? source[key] : fallback);
+	return path.startsWith(`${archiveDir}/`) ? path : fallback;
 }
 
 async function shellHistoryLastRestoredArchiveDir(fsys: any): Promise<string | undefined> {

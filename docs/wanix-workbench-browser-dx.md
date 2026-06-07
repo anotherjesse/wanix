@@ -601,6 +601,17 @@ navigate from OS state to archive evidence to a concrete action.
 
 ![Shell archive explorer](assets/wanix-workbench-browser-dx/86-shell-archive-explorer.png)
 
+Reloads keep that surface alive now. When the workbench starts, it reads the
+persisted `/.wanix/qjs-shell/archive/inventory.json`, prefers a fresh scan of
+archive directories when those files are available, and publishes `Shell
+Archives` before the user runs an inventory command. That means retained
+archive rows are not a memory of the last UI session; they are Wanix state that
+can reappear from files. The startup pass also refreshes
+`/.wanix/system-state.json#shellArchives`, so future agents can discover the
+same retained audit trail after a browser reload.
+
+![Shell archive reload persistence](assets/wanix-workbench-browser-dx/87-shell-archive-reload-persistence.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1220,7 +1231,8 @@ The current loop is:
     rehydrate the archive files, and write `imported.md/json`. Expand
     `Shell Archives` in the System view to operate on a specific archive row:
     open evidence, compare, export/import bundle, restore, or prune that
-    timestamped archive.
+    timestamped archive. Reload the workbench and the section hydrates from
+    `inventory.json` without needing to run the inventory command first.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1332,9 +1344,9 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Let the shell archive explorer persist its latest inventory across workbench
-  reloads, so retained archive rows appear before the user runs an inventory
-  command in a fresh browser session.
+- Add archive health/staleness badges, so the explorer can show missing bundle,
+  missing manifest, stale compare, and restorable/importable state directly on
+  archive rows.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.
