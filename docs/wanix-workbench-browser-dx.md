@@ -493,6 +493,15 @@ a terminal, while the command history becomes a Wanix artifact.
 
 ![Shell command history artifact](assets/wanix-workbench-browser-dx/75-shell-command-history-artifact.png)
 
+The history is searchable from the cockpit now. `Search Shell Command History`
+reads `commands.jsonl`, opens a filterable picker over recent commands, and
+writes the chosen record to `/.wanix/qjs-shell/selected.md` so the exact command,
+outcome, terminal snippet, operation, and raw JSON are visible in the editor.
+There is also a guarded `Clear Shell Command History` action for long-lived
+browser sessions where the generated history should start fresh.
+
+![Shell command history search controls](assets/wanix-workbench-browser-dx/76-shell-history-search-controls.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1088,7 +1097,9 @@ The current loop is:
     reported together. The failed row says `recorded by shell` because its
     outcome came from the shell's hidden command record, not browser parsing.
     Then click `Open Shell Command History` to inspect the durable
-    `/.wanix/qjs-shell/latest.md` artifact produced from those same records.
+    `/.wanix/qjs-shell/latest.md` artifact produced from those same records, or
+    use `Search Shell Command History` to filter the append log and open a
+    focused `/.wanix/qjs-shell/selected.md` selection artifact.
 17. Click a changed Activity row to reopen the Wanix file it touched.
 18. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1200,9 +1211,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add filters/search and per-session retention controls for
-  `/.wanix/qjs-shell/commands.jsonl`, so long-lived browser sessions stay easy
-  to inspect.
+- Add richer shell history grouping by terminal, task, cwd, and time range now
+  that the first search and guarded clear controls exist.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

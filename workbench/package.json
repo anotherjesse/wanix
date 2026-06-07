@@ -217,6 +217,24 @@
         "icon": "$(database)"
       },
       {
+        "command": "workbench.openShellCommandHistory",
+        "title": "Open Shell Command History",
+        "category": "Wanix",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "workbench.searchShellCommandHistory",
+        "title": "Search Shell Command History",
+        "category": "Wanix",
+        "icon": "$(search)"
+      },
+      {
+        "command": "workbench.clearShellCommandHistory",
+        "title": "Clear Shell Command History",
+        "category": "Wanix",
+        "icon": "$(trash)"
+      },
+      {
         "command": "workbench.openSystemJournal",
         "title": "Open System Journal",
         "category": "Wanix",

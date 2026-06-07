@@ -78,6 +78,34 @@ type FilesystemActivity = {
 	paths?: string[];
 };
 
+type ShellHistoryEntry = {
+	schema?: string;
+	observedAtUnixMillis?: number;
+	taskId?: string;
+	terminalId?: string;
+	cwd?: string;
+	command?: string;
+	outcome?: {
+		status?: string;
+		changed?: boolean;
+		evidence?: string;
+		diagnostic?: string;
+		exitCode?: number;
+		terminalOutput?: string;
+	};
+	operation?: {
+		kind?: string;
+		status?: string;
+		source?: string;
+		target?: string;
+		paths?: string[];
+	};
+};
+
+type ShellHistoryPick = vscode.QuickPickItem & {
+	entry: ShellHistoryEntry;
+};
+
 const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = {
 	qjs: { extension: ".js", label: "JavaScript" },
 	wasm: { extension: ".wasm", label: "WASM" },
@@ -92,6 +120,7 @@ const DATA_STORE_INDEX_JSON_PATH = ".wanix/data-stores.json";
 const SHELL_HISTORY_JSONL_PATH = ".wanix/qjs-shell/commands.jsonl";
 const SHELL_HISTORY_JSON_PATH = ".wanix/qjs-shell/latest.json";
 const SHELL_HISTORY_MD_PATH = ".wanix/qjs-shell/latest.md";
+const SHELL_HISTORY_SELECTED_MD_PATH = ".wanix/qjs-shell/selected.md";
 const SYSTEM_JOURNAL_PATH = ".wanix/system-journal.md";
 const SYSTEM_STATE_PATH = ".wanix/system-state.json";
 const SERVICE_STATE_POLL_MS = 1000;
@@ -279,6 +308,22 @@ export async function activate(context: vscode.ExtensionContext) {
 				await openShellCommandHistory(fsys, bridge, systemView);
 				revealWanixSystemView();
 				vscode.window.showInformationMessage(`Opened qjs shell command history`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.searchShellCommandHistory', async () => {
+			try {
+				await searchShellCommandHistory(fsys, bridge, systemView);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.clearShellCommandHistory', async () => {
+			try {
+				await clearShellCommandHistory(fsys, bridge, systemView);
+				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -707,6 +752,211 @@ async function openShellCommandHistory(
 	await openWanixPath(openPath);
 }
 
+async function searchShellCommandHistory(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const entries = await readShellHistoryEntries(fsys);
+	if (entries.length === 0) {
+		throw new Error("No qjs shell command history entries yet. Run a served shell command first.");
+	}
+	const picks = shellHistoryPicks(entries);
+	const pick = await vscode.window.showQuickPick(picks, {
+		placeHolder: "Search qjs shell command history",
+		matchOnDescription: true,
+		matchOnDetail: true,
+	});
+	if (!pick) {
+		return;
+	}
+	await fsys.makeDirAll(parentPath(SHELL_HISTORY_SELECTED_MD_PATH));
+	await fsys.writeFile(SHELL_HISTORY_SELECTED_MD_PATH, shellHistorySelectionMarkdown(pick.entry));
+	const paths = await existingShellHistoryPaths(fsys);
+	const reportPaths = paths.includes(SHELL_HISTORY_SELECTED_MD_PATH) ? paths : [SHELL_HISTORY_SELECTED_MD_PATH, ...paths];
+	const reportOpenPath = reportPaths.includes(SHELL_HISTORY_MD_PATH) ? SHELL_HISTORY_MD_PATH : SHELL_HISTORY_SELECTED_MD_PATH;
+	publishShellCommandHistoryReportFromPaths(systemView, reportPaths, reportOpenPath);
+	systemView.filesystemActivity("shell history selection opened", {
+		description: shellHistoryStatus(pick.entry),
+		path: SHELL_HISTORY_SELECTED_MD_PATH,
+		paths: reportPaths,
+	});
+	await refreshWanixPaths(bridge, reportPaths);
+	await openWanixPath(SHELL_HISTORY_SELECTED_MD_PATH);
+}
+
+async function clearShellCommandHistory(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const choice = await vscode.window.showWarningMessage(
+		"Clear generated qjs shell command history artifacts?",
+		{ modal: true },
+		"Clear History",
+	);
+	if (choice !== "Clear History") {
+		return;
+	}
+	const paths = [
+		SHELL_HISTORY_SELECTED_MD_PATH,
+		SHELL_HISTORY_MD_PATH,
+		SHELL_HISTORY_JSON_PATH,
+		SHELL_HISTORY_JSONL_PATH,
+	];
+	for (const path of paths) {
+		try {
+			await fsys.remove(path);
+		} catch {
+			// Missing history artifacts are harmless during a clear operation.
+		}
+	}
+	systemView.filesystemActivity("shell command history cleared", {
+		path: ".wanix/qjs-shell",
+		paths,
+	});
+	await refreshWanixPaths(bridge, [".wanix/qjs-shell", ...paths]);
+	vscode.window.showInformationMessage("Cleared qjs shell command history");
+}
+
+async function readShellHistoryEntries(fsys: any): Promise<ShellHistoryEntry[]> {
+	let text: string;
+	try {
+		text = await fsys.readText(SHELL_HISTORY_JSONL_PATH);
+	} catch {
+		throw new Error("No qjs shell command history yet. Run a served shell command first.");
+	}
+	const entries: ShellHistoryEntry[] = [];
+	for (const rawLine of text.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) {
+			continue;
+		}
+		try {
+			const value = JSON.parse(line);
+			if (isShellHistoryEntry(value)) {
+				entries.push(value);
+			}
+		} catch {
+			// Keep the browser picker useful even if one append record is malformed.
+		}
+	}
+	return entries;
+}
+
+function isShellHistoryEntry(value: unknown): value is ShellHistoryEntry {
+	if (!value || typeof value !== "object") {
+		return false;
+	}
+	const candidate = value as ShellHistoryEntry;
+	return typeof candidate.command === "string" || typeof candidate.cwd === "string" || !!candidate.outcome || !!candidate.operation;
+}
+
+function shellHistoryPicks(entries: ShellHistoryEntry[]): ShellHistoryPick[] {
+	return [...entries].reverse().map((entry) => ({
+		label: shellHistoryCommand(entry),
+		description: shellHistoryDescription(entry),
+		detail: shellHistoryDetail(entry),
+		entry,
+	}));
+}
+
+function shellHistoryCommand(entry: ShellHistoryEntry): string {
+	const command = entry.command?.trim();
+	return command || "(empty command)";
+}
+
+function shellHistoryDescription(entry: ShellHistoryEntry): string {
+	const parts = [shellHistoryStatus(entry)];
+	if (entry.cwd) {
+		parts.push(entry.cwd);
+	}
+	const target = shellHistoryTarget(entry);
+	if (target) {
+		parts.push(target);
+	}
+	return parts.filter(Boolean).join(" - ");
+}
+
+function shellHistoryStatus(entry: ShellHistoryEntry): string {
+	const status = entry.outcome?.status || entry.operation?.status || "observed";
+	const changed = typeof entry.outcome?.changed === "boolean"
+		? (entry.outcome.changed ? "changed" : "unchanged")
+		: undefined;
+	const exitCode = typeof entry.outcome?.exitCode === "number" ? `exit ${entry.outcome.exitCode}` : undefined;
+	return [status, changed, exitCode].filter(Boolean).join(" / ");
+}
+
+function shellHistoryTarget(entry: ShellHistoryEntry): string | undefined {
+	return entry.operation?.target || entry.operation?.source || entry.operation?.paths?.[0];
+}
+
+function shellHistoryDetail(entry: ShellHistoryEntry): string {
+	return entry.outcome?.diagnostic
+		|| entry.outcome?.terminalOutput
+		|| entry.outcome?.evidence
+		|| entry.operation?.kind
+		|| formatShellHistoryTime(entry.observedAtUnixMillis)
+		|| "";
+}
+
+function shellHistorySelectionMarkdown(entry: ShellHistoryEntry): string {
+	const lines = [
+		"# qjs Shell History Selection",
+		"",
+		`Schema: wanix.qjs-shell.selection.v1`,
+		`Command: ${shellHistoryCommand(entry)}`,
+		`Status: ${shellHistoryStatus(entry)}`,
+	];
+	const observedAt = formatShellHistoryTime(entry.observedAtUnixMillis);
+	if (observedAt) {
+		lines.push(`Observed: ${observedAt}`);
+	}
+	if (entry.cwd) {
+		lines.push(`Cwd: ${entry.cwd}`);
+	}
+	if (entry.taskId) {
+		lines.push(`Task: ${entry.taskId}`);
+	}
+	if (entry.terminalId) {
+		lines.push(`Terminal: ${entry.terminalId}`);
+	}
+	lines.push("", "## Outcome");
+	lines.push(`Evidence: ${entry.outcome?.evidence || "unknown"}`);
+	lines.push(`Diagnostic: ${entry.outcome?.diagnostic || ""}`);
+	if (entry.outcome?.terminalOutput) {
+		lines.push("", "### Terminal Output", "```text", entry.outcome.terminalOutput.trimEnd(), "```");
+	}
+	lines.push("", "## Operation");
+	lines.push(`Kind: ${entry.operation?.kind || ""}`);
+	lines.push(`Status: ${entry.operation?.status || ""}`);
+	if (entry.operation?.source) {
+		lines.push(`Source: ${entry.operation.source}`);
+	}
+	if (entry.operation?.target) {
+		lines.push(`Target: ${entry.operation.target}`);
+	}
+	if (entry.operation?.paths?.length) {
+		lines.push("Paths:");
+		for (const path of entry.operation.paths) {
+			lines.push(`- ${path}`);
+		}
+	}
+	lines.push("", "## Raw JSON", "```json", JSON.stringify(entry, null, 2), "```", "");
+	return lines.join("\n");
+}
+
+function formatShellHistoryTime(value: unknown): string | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return undefined;
+	}
+	const date = new Date(value);
+	if (!Number.isFinite(date.valueOf())) {
+		return undefined;
+	}
+	return date.toISOString();
+}
+
 async function publishShellCommandHistoryReport(
 	fsys: any,
 	systemView: WanixSystemView,
@@ -733,7 +983,7 @@ function publishShellCommandHistoryReportFromPaths(
 }
 
 async function existingShellHistoryPaths(fsys: any): Promise<string[]> {
-	const paths = [SHELL_HISTORY_MD_PATH, SHELL_HISTORY_JSON_PATH, SHELL_HISTORY_JSONL_PATH];
+	const paths = [SHELL_HISTORY_SELECTED_MD_PATH, SHELL_HISTORY_MD_PATH, SHELL_HISTORY_JSON_PATH, SHELL_HISTORY_JSONL_PATH];
 	const existing: string[] = [];
 	for (const path of paths) {
 		try {
