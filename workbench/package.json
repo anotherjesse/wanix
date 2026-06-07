@@ -247,6 +247,12 @@
         "icon": "$(diff)"
       },
       {
+        "command": "workbench.restoreShellHistoryArchive",
+        "title": "Restore Shell History Archive",
+        "category": "Wanix",
+        "icon": "$(history)"
+      },
+      {
         "command": "workbench.compactShellCommandHistory",
         "title": "Compact Shell Command History",
         "category": "Wanix",
