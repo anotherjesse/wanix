@@ -9,13 +9,15 @@ use crate::p9_ws::P9WsConnectionError;
 use crate::qjs_term::QjsShellSession;
 
 use super::super::connection::ServeConnectionError;
+use super::command_record::{ShellCommandRecord, strip_shell_command_records};
 use super::message::parse_terminal_resize_message;
 use super::protocol::{shell_exit_message, shell_mutation_message, shell_session_message};
 use super::root_changes::RootChangeTracker;
 use super::shell_activity::{
-    ShellCommandObservation, ShellInputActivityTracker, ShellMutationOperation,
-    operations_for_changed_paths, operations_without_changed_paths,
+    ShellInputActivityTracker, ShellMutationOperation, operations_for_changed_paths,
+    operations_without_changed_paths,
 };
+use super::shell_observation::{ShellCommandObservation, ShellCommandObservations};
 
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
 const SHELL_OPERATION_DIAGNOSTIC_MAX_CHARS: usize = 240;
@@ -48,8 +50,9 @@ impl TerminalWebSocketSession {
                 QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS,
             )))
             .map_err(ServeConnectionError::Io)?;
-        let (shell, initial_output) = QjsShellSession::start_in_cwd(root_path, cwd)
-            .map_err(ServeConnectionError::Terminal)?;
+        let (shell, initial_output) =
+            QjsShellSession::start_in_cwd_with_command_records(root_path, cwd, true)
+                .map_err(ServeConnectionError::Terminal)?;
         let changes = RootChangeTracker::new(root_path).map_err(ServeConnectionError::Io)?;
         let mut session = Self {
             socket,
@@ -123,14 +126,15 @@ impl TerminalWebSocketSession {
             .shell
             .input(input)
             .map_err(ServeConnectionError::Terminal)?;
-        let observation = if input_contains_line_boundary(input) {
-            shell_command_observation(input, &output)
+        let (output, records) = strip_shell_command_records(output);
+        let observations = if input_contains_line_boundary(input) {
+            shell_command_observations(input, &output, records)
         } else {
-            ShellCommandObservation::default()
+            ShellCommandObservations::default()
         };
         self.send_output(output)?;
         if input_contains_line_boundary(input) {
-            self.send_mutations(&operations, &observation)?;
+            self.send_mutations(&operations, &observations)?;
             self.input.sync_cwd(&self.shell.cwd());
         }
         Ok(())
@@ -169,6 +173,7 @@ impl TerminalWebSocketSession {
     }
 
     fn send_output(&mut self, output: Vec<u8>) -> Result<(), ServeConnectionError> {
+        let (output, _records) = strip_shell_command_records(output);
         if output.is_empty() {
             return Ok(());
         }
@@ -184,16 +189,16 @@ impl TerminalWebSocketSession {
     fn send_mutations(
         &mut self,
         operations: &[ShellMutationOperation],
-        observation: &ShellCommandObservation,
+        observations: &ShellCommandObservations,
     ) -> Result<(), ServeConnectionError> {
         let paths = self
             .changes
             .take_changed_paths()
             .map_err(ServeConnectionError::Io)?;
         let operations = if paths.is_empty() {
-            operations_without_changed_paths(operations, observation)
+            operations_without_changed_paths(operations, observations)
         } else {
-            operations_for_changed_paths(operations, &paths, observation)
+            operations_for_changed_paths(operations, &paths, observations)
         };
         if paths.is_empty() && operations.is_empty() {
             return Ok(());
@@ -263,9 +268,19 @@ fn input_contains_line_boundary(input: &[u8]) -> bool {
     input.iter().any(|byte| matches!(byte, b'\n' | b'\r'))
 }
 
-fn shell_command_observation(input: &[u8], output: &[u8]) -> ShellCommandObservation {
+fn shell_command_observations(
+    input: &[u8],
+    output: &[u8],
+    records: Vec<ShellCommandRecord>,
+) -> ShellCommandObservations {
+    ShellCommandObservations::new(records, shell_command_fallback_observation(input, output))
+}
+
+fn shell_command_fallback_observation(input: &[u8], output: &[u8]) -> ShellCommandObservation {
     let lines = shell_command_output_lines(input, output);
     ShellCommandObservation {
+        command: None,
+        evidence: None,
         diagnostic: shell_command_diagnostic(&lines),
         exit_code: shell_command_exit_code(&lines),
         terminal_output: shell_command_terminal_output(&lines),

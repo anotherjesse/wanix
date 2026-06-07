@@ -1417,11 +1417,11 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     );
     assert_eq!(
         qjs_shell["mutationMessage"],
-        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"],\"operations\":[{\"kind\":\"write\",\"command\":\"write /path data\",\"status\":\"changed\",\"target\":\"/path\",\"terminalOutput\":\"wrote /path\",\"outcome\":{\"status\":\"ok\",\"changed\":true,\"terminalOutput\":\"wrote /path\"},\"paths\":[\"/path\"]}]}"
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"],\"operations\":[{\"kind\":\"write\",\"command\":\"write /path data\",\"status\":\"changed\",\"target\":\"/path\",\"evidence\":\"qjs-shell-command-record\",\"terminalOutput\":\"wrote /path\",\"outcome\":{\"status\":\"ok\",\"changed\":true,\"evidence\":\"qjs-shell-command-record\",\"terminalOutput\":\"wrote /path\"},\"paths\":[\"/path\"]}]}"
     );
     assert_eq!(
         qjs_shell["unchangedOperationMessage"],
-        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"command\":\"rm missing\",\"status\":\"unchanged\",\"target\":\"/missing\",\"diagnostic\":\"rm: missing: errno -44\",\"terminalOutput\":\"rm: missing: errno -44\",\"outcome\":{\"status\":\"error\",\"changed\":false,\"diagnostic\":\"rm: missing: errno -44\",\"terminalOutput\":\"rm: missing: errno -44\"},\"paths\":[]}]}"
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"command\":\"rm missing\",\"status\":\"unchanged\",\"target\":\"/missing\",\"evidence\":\"qjs-shell-command-record\",\"diagnostic\":\"rm: missing: errno -44\",\"terminalOutput\":\"rm: missing: errno -44\",\"outcome\":{\"status\":\"error\",\"changed\":false,\"diagnostic\":\"rm: missing: errno -44\",\"evidence\":\"qjs-shell-command-record\",\"terminalOutput\":\"rm: missing: errno -44\"},\"paths\":[]}]}"
     );
     assert_eq!(qjs_shell["exitMessage"], "{\"type\":\"exit\",\"code\":N}");
     assert_eq!(
@@ -2351,9 +2351,11 @@ std.exit(6);
             assert_eq!(operation["command"], "write observed.txt observed from ws");
             assert_eq!(operation["status"], "changed");
             assert_eq!(operation["target"], "/app/observed.txt");
+            assert_eq!(operation["evidence"], "qjs-shell-command-record");
             assert_eq!(operation["terminalOutput"], "wrote observed.txt");
             assert_eq!(operation["outcome"]["status"], "ok");
             assert_eq!(operation["outcome"]["changed"], true);
+            assert_eq!(operation["outcome"]["evidence"], "qjs-shell-command-record");
             assert_eq!(operation["outcome"]["terminalOutput"], "wrote observed.txt");
             assert_eq!(
                 qjs_shell_operation_paths(operation),
@@ -2387,6 +2389,7 @@ std.exit(6);
             assert_eq!(operation["command"], "rm definitely-missing.txt");
             assert_eq!(operation["status"], "unchanged");
             assert_eq!(operation["target"], "/app/definitely-missing.txt");
+            assert_eq!(operation["evidence"], "qjs-shell-command-record");
             assert_eq!(
                 operation["diagnostic"],
                 "rm: definitely-missing.txt: errno -44"
@@ -2397,6 +2400,7 @@ std.exit(6);
             );
             assert_eq!(operation["outcome"]["status"], "error");
             assert_eq!(operation["outcome"]["changed"], false);
+            assert_eq!(operation["outcome"]["evidence"], "qjs-shell-command-record");
             assert_eq!(
                 operation["outcome"]["diagnostic"],
                 "rm: definitely-missing.txt: errno -44"
@@ -2467,6 +2471,8 @@ std.exit(6);
                             && operation["exitCode"] == 6
                             && operation["outcome"]["status"] == "error"
                             && operation["outcome"]["changed"] == true
+                            && operation["evidence"] == "qjs-shell-command-record"
+                            && operation["outcome"]["evidence"] == "qjs-shell-command-record"
                             && operation["outcome"]["exitCode"] == 6
                             && operation["terminalOutput"]
                                 .as_str()

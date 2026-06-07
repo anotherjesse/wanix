@@ -105,6 +105,7 @@ type ActivityRecord = {
 	id: number;
 	label: string;
 	description?: string;
+	evidence?: string;
 	path?: string;
 	paths?: string[];
 };
@@ -300,7 +301,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
-	filesystemActivity(label = "filesystem activity", options: { description?: string; path?: string; paths?: string[] } = {}): void {
+	filesystemActivity(label = "filesystem activity", options: { description?: string; evidence?: string; path?: string; paths?: string[] } = {}): void {
 		this.addActivity(label, options);
 		this.refresh();
 	}
@@ -986,14 +987,15 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		return items;
 	}
 
-	private addActivity(label: string, options: { description?: string; path?: string; paths?: string[] } = {}): void {
+	private addActivity(label: string, options: { description?: string; evidence?: string; path?: string; paths?: string[] } = {}): void {
 		const paths = uniquePaths(options.paths || (options.path ? [options.path] : []));
 		const path = options.path || paths[paths.length - 1];
 		const description = options.description;
-		if (this.activity[0]?.label === label && this.activity[0].description === description && samePaths(this.activity[0].paths, paths) && this.activity[0].path === path) {
+		const evidence = options.evidence;
+		if (this.activity[0]?.label === label && this.activity[0].description === description && this.activity[0].evidence === evidence && samePaths(this.activity[0].paths, paths) && this.activity[0].path === path) {
 			return;
 		}
-		this.activity.unshift({ id: this.nextActivityId++, label, description, path, paths });
+		this.activity.unshift({ id: this.nextActivityId++, label, description, evidence, path, paths });
 		this.activity = this.activity.slice(0, 12);
 	}
 
@@ -1378,7 +1380,8 @@ function activityItem(entry: ActivityRecord): SystemTreeItem {
 	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
 	const path = entry.path || paths[paths.length - 1];
 	const hasMultiplePaths = paths.length > 1;
-	const children = paths.length > 1
+	const children: SystemTreeItem[] = [
+		...(paths.length > 1
 		? paths.map((candidate, index) => leaf(
 			`activity:${entry.id}:path:${index}`,
 			candidate,
@@ -1392,7 +1395,11 @@ function activityItem(entry: ActivityRecord): SystemTreeItem {
 			candidate === path ? "wanixActivityPath" : undefined,
 			{ path: candidate },
 		))
-		: undefined;
+		: []),
+		...(entry.evidence
+			? [leaf(`activity:${entry.id}:evidence`, "Evidence", entry.evidence, "verified")]
+			: []),
+	];
 	return leaf(
 		`activity:${entry.id}`,
 		entry.label,
@@ -1404,7 +1411,7 @@ function activityItem(entry: ActivityRecord): SystemTreeItem {
 			arguments: [path],
 		} : undefined,
 		path ? "wanixActivityPath" : undefined,
-		{ path, children },
+		{ path, children: children.length > 0 ? children : undefined },
 	);
 }
 
@@ -1684,6 +1691,7 @@ function activitySnapshot(entry: ActivityRecord): object {
 		id: entry.id,
 		label: entry.label,
 		description: entry.description,
+		evidence: entry.evidence,
 		path: entry.path ? displayJournalPath(entry.path) : undefined,
 		paths: paths.map(displayJournalPath),
 	};
@@ -1693,8 +1701,9 @@ function activityJournalLines(entry: ActivityRecord): string[] {
 	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
 	return [
 		`- ${entry.label}${entry.description ? ` - ${entry.description}` : ""}`,
+		entry.evidence ? `  - evidence: ${entry.evidence}` : undefined,
 		...paths.map((path) => `  - ${displayJournalPath(path)}`),
-	];
+	].filter((line): line is string => line !== undefined);
 }
 
 function displayJournalPath(path: string): string {

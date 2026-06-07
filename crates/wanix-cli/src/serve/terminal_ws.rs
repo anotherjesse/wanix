@@ -1,9 +1,11 @@
+mod command_record;
 mod message;
 mod protocol;
 mod request;
 mod root_changes;
 mod session;
 mod shell_activity;
+mod shell_observation;
 
 #[cfg(test)]
 pub(super) use message::parse_terminal_resize_message;

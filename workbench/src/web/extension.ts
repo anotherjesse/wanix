@@ -73,6 +73,7 @@ type AgentTraceStep = {
 type FilesystemActivity = {
 	label?: string;
 	description?: string;
+	evidence?: string;
 	openPath?: string;
 	paths?: string[];
 };
@@ -111,6 +112,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			await refreshWanixPaths(bridge, activity.paths);
 			systemView.filesystemActivity(activity.label || "filesystem refreshed", {
 				description: activity.description,
+				evidence: activity.evidence,
 				path: activity.openPath,
 				paths: activity.paths,
 			});
@@ -127,6 +129,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		const activity = bridgeMutationActivity(mutation);
 		systemView.filesystemActivity(activity.label, {
 			description: activity.description,
+			evidence: activity.evidence,
 			path: activity.openPath,
 			paths: activity.paths,
 		});
@@ -2368,6 +2371,7 @@ type QjsShellMutationOperation = {
 	status?: string;
 	source?: string;
 	target?: string;
+	evidence?: string;
 	diagnostic?: string;
 	exitCode?: number;
 	terminalOutput?: string;
@@ -2378,6 +2382,7 @@ type QjsShellMutationOperation = {
 type QjsShellCommandOutcome = {
 	status?: string;
 	changed?: boolean;
+	evidence?: string;
 	diagnostic?: string;
 	exitCode?: number;
 	terminalOutput?: string;
@@ -2413,6 +2418,7 @@ function isQjsShellMutationOperation(operation: unknown): operation is QjsShellM
 		&& (candidate.status === undefined || typeof candidate.status === "string")
 		&& (candidate.source === undefined || typeof candidate.source === "string")
 		&& (candidate.target === undefined || typeof candidate.target === "string")
+		&& (candidate.evidence === undefined || typeof candidate.evidence === "string")
 		&& (candidate.diagnostic === undefined || typeof candidate.diagnostic === "string")
 		&& (candidate.exitCode === undefined || typeof candidate.exitCode === "number")
 		&& (candidate.terminalOutput === undefined || typeof candidate.terminalOutput === "string")
@@ -2428,6 +2434,7 @@ function isQjsShellCommandOutcome(outcome: unknown): outcome is QjsShellCommandO
 	const candidate = outcome as Record<string, unknown>;
 	return (candidate.status === undefined || typeof candidate.status === "string")
 		&& (candidate.changed === undefined || typeof candidate.changed === "boolean")
+		&& (candidate.evidence === undefined || typeof candidate.evidence === "string")
 		&& (candidate.diagnostic === undefined || typeof candidate.diagnostic === "string")
 		&& (candidate.exitCode === undefined || typeof candidate.exitCode === "number")
 		&& (candidate.terminalOutput === undefined || typeof candidate.terminalOutput === "string");
@@ -2454,12 +2461,14 @@ function shellOperationActivity(operation: QjsShellMutationOperation): Filesyste
 	const unique = uniqueShellPaths(operation.paths);
 	const target = operation.target && !operation.target.startsWith("#") ? operation.target : undefined;
 	const source = operation.source && !operation.source.startsWith("#") ? operation.source : undefined;
+	const evidence = operation.outcome?.evidence || operation.evidence;
 	if (unique.length === 0) {
 		if (operation.status === "unchanged" && (target || source)) {
 			const openPath = shellOperationNoChangeOpenPath(operation.kind, source, target);
 			return {
 				label: shellOperationLabel(operation.kind, source, target, unique, operation.status),
 				description: shellOperationDescription(operation),
+				evidence,
 				openPath,
 				paths: [openPath],
 			};
@@ -2468,7 +2477,7 @@ function shellOperationActivity(operation: QjsShellMutationOperation): Filesyste
 	}
 	const openPath = shellOperationOpenPath(operation.kind, source, target, unique);
 	const label = shellOperationLabel(operation.kind, source, target, unique, operation.status);
-	return { label, description: shellOperationDescription(operation), openPath, paths: unique };
+	return { label, description: shellOperationDescription(operation), evidence, openPath, paths: unique };
 }
 
 function shellOperationDescription(operation: QjsShellMutationOperation): string | undefined {
@@ -2477,19 +2486,28 @@ function shellOperationDescription(operation: QjsShellMutationOperation): string
 	const exitCode = operation.outcome?.exitCode ?? operation.exitCode;
 	const terminalOutput = operation.outcome?.terminalOutput || operation.terminalOutput;
 	const command = operation.command;
+	const evidence = shellEvidenceDescription(operation.outcome?.evidence || operation.evidence);
 	const exit = typeof exitCode === "number" ? `exit ${exitCode}` : undefined;
 	const detail = diagnostic || exit || terminalOutput;
 	if (diagnostic && status && status !== "ok") {
-		return command ? `${status}: ${diagnostic} · ${command}` : `${status}: ${diagnostic}`;
+		return shellDescriptionParts(`${status}: ${diagnostic}`, command, evidence);
 	}
 	if (diagnostic) {
-		return command ? `${diagnostic} · ${command}` : diagnostic;
+		return shellDescriptionParts(diagnostic, command, evidence);
 	}
 	if (status && status !== "ok") {
 		const prefix = detail ? `${status}: ${detail}` : status;
-		return command ? `${prefix} · ${command}` : prefix;
+		return shellDescriptionParts(prefix, command, evidence);
 	}
 	return command && operation.status !== "changed" ? command : undefined;
+}
+
+function shellEvidenceDescription(evidence: string | undefined): string | undefined {
+	return evidence === "qjs-shell-command-record" ? "recorded by shell" : evidence;
+}
+
+function shellDescriptionParts(...parts: (string | undefined)[]): string {
+	return parts.filter((part): part is string => Boolean(part)).join(" · ");
 }
 
 function shellOperationOpenPath(kind: string, source: string | undefined, target: string | undefined, paths: string[]): string {

@@ -54,6 +54,9 @@ fn shell_operation_json(operation: &ShellMutationOperation) -> String {
     if let Some(target) = &operation.target {
         fields.push(format!("\"target\":{}", json_string(target)));
     }
+    if let Some(evidence) = &operation.evidence {
+        fields.push(format!("\"evidence\":{}", json_string(evidence)));
+    }
     if let Some(diagnostic) = &operation.diagnostic {
         fields.push(format!("\"diagnostic\":{}", json_string(diagnostic)));
     }
@@ -91,6 +94,9 @@ fn shell_operation_outcome_json(operation: &ShellMutationOperation) -> String {
     ];
     if let Some(diagnostic) = &operation.diagnostic {
         fields.push(format!("\"diagnostic\":{}", json_string(diagnostic)));
+    }
+    if let Some(evidence) = &operation.evidence {
+        fields.push(format!("\"evidence\":{}", json_string(evidence)));
     }
     if let Some(exit_code) = operation.exit_code {
         fields.push(format!("\"exitCode\":{exit_code}"));

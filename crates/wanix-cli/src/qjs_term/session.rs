@@ -35,14 +35,23 @@ impl QjsShellSession {
         Self::start_in_cwd(root_path, &NormalizedPath::new(".")?)
     }
 
+    #[cfg(test)]
     pub(crate) fn start_in_cwd(
         root_path: &Path,
         cwd: &NormalizedPath,
     ) -> Result<(Self, Vec<u8>), CliError> {
+        Self::start_in_cwd_with_command_records(root_path, cwd, false)
+    }
+
+    pub(crate) fn start_in_cwd_with_command_records(
+        root_path: &Path,
+        cwd: &NormalizedPath,
+        command_records: bool,
+    ) -> Result<(Self, Vec<u8>), CliError> {
         let runner = quickjs_runner()?;
         let task = prepare_shell_task(&runner, root_path)?;
         let terminal = attach_task_terminal(&task, None)?;
-        configure_shell_task(&task)?;
+        configure_shell_task(&task, command_records)?;
         let runtime = start_shell_runtime(&runner, &task, cwd)?;
         let initial_output = drain_terminal_output_bytes(&terminal.device, &terminal.id)?;
         Ok((Self::new(task, terminal, runtime), initial_output))
@@ -195,15 +204,13 @@ fn bind_shell_source(task: &Task) -> Result<(), CliError> {
     Ok(())
 }
 
-fn configure_shell_task(task: &Task) -> Result<(), CliError> {
+fn configure_shell_task(task: &Task, command_records: bool) -> Result<(), CliError> {
     let runtime_cwd = NormalizedPath::new(".")?;
-    configure_qjs_task(
-        task,
-        QJS_SHELL_SCRIPT_SENTINEL,
-        &[],
-        &["WANIX_QJS_SHELL_RAW=1".to_owned()],
-        &runtime_cwd,
-    )
+    let mut env = vec!["WANIX_QJS_SHELL_RAW=1".to_owned()];
+    if command_records {
+        env.push("WANIX_QJS_SHELL_COMMAND_RECORD=osc".to_owned());
+    }
+    configure_qjs_task(task, QJS_SHELL_SCRIPT_SENTINEL, &[], &env, &runtime_cwd)
 }
 
 fn start_shell_runtime(

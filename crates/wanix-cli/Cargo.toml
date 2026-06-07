@@ -11,6 +11,7 @@ version.workspace = true
 flate2 = "1"
 libc = "0.2"
 rustix = { version = "1.1.4", features = ["event", "fs", "termios"] }
+serde_json = "1"
 tar = "0.4"
 tungstenite = "0.29.0"
 wanix-9p = { path = "../wanix-9p" }
@@ -24,7 +25,6 @@ wanix-wasi = { path = "../wanix-wasi" }
 wanix-wasm = { path = "../wanix-wasm" }
 
 [dev-dependencies]
-serde_json = "1"
 wat = "1"
 
 [[bin]]

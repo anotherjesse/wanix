@@ -11,12 +11,89 @@ let terminalSize = "";
 let lastStatus = 0;
 const rawInput = std.getenv("WANIX_QJS_SHELL_RAW") === "1";
 const termId = std.getenv("WANIX_TERM_ID") || "1";
+const commandRecordMode = std.getenv("WANIX_QJS_SHELL_COMMAND_RECORD") || "";
 let cwd = normalizeNamespacePath(std.loadFile("#task/self/dir").trim() || ".");
+let activeCommandRecord = null;
 
 function prompt() {
   if (running) {
+    emitCommandRecord();
     std.out.puts("$ ");
   }
+}
+
+function beginCommandRecord(command, words) {
+  if (commandRecordMode !== "osc") {
+    return;
+  }
+  activeCommandRecord = {
+    schema: "wanix.qjs-shell.command.v1",
+    command,
+    kind: words[0] || command,
+    status: "ok",
+    exitCode: 0,
+    outputLines: []
+  };
+}
+
+function clearCommandRecord() {
+  activeCommandRecord = null;
+}
+
+function commandOutput(text) {
+  std.out.puts(text);
+  if (!activeCommandRecord) {
+    return;
+  }
+  for (const line of text.replace(/\r/g, "").split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed) {
+      activeCommandRecord.outputLines.push(trimmed);
+    }
+  }
+}
+
+function commandDiagnostic(text) {
+  commandOutput(text);
+  if (!activeCommandRecord) {
+    return;
+  }
+  activeCommandRecord.status = "error";
+  const lines = text.replace(/\r/g, "").split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length > 0) {
+    activeCommandRecord.diagnostic = lines[lines.length - 1];
+  }
+}
+
+function commandExitCode(code) {
+  if (!activeCommandRecord) {
+    return;
+  }
+  activeCommandRecord.exitCode = code;
+  if (code !== 0) {
+    activeCommandRecord.status = "error";
+  }
+}
+
+function emitCommandRecord() {
+  if (commandRecordMode !== "osc" || !activeCommandRecord) {
+    return;
+  }
+  const record = {
+    schema: activeCommandRecord.schema,
+    command: activeCommandRecord.command,
+    kind: activeCommandRecord.kind,
+    status: activeCommandRecord.status,
+    exitCode: activeCommandRecord.exitCode
+  };
+  if (activeCommandRecord.diagnostic) {
+    record.diagnostic = activeCommandRecord.diagnostic;
+  }
+  if (activeCommandRecord.outputLines.length > 0) {
+    record.terminalOutput = activeCommandRecord.outputLines.join("\n").slice(0, 320);
+  }
+  activeCommandRecord = null;
+  std.out.puts("\x1b]777;wanix-qjs-shell-command;" + JSON.stringify(record) + "\x07");
 }
 
 function bytesFromString(text) {
@@ -440,40 +517,40 @@ function runCat(words) {
 
 function runWrite(words) {
   if (words.length < 3) {
-    std.out.puts("write: usage: write PATH TEXT...\n");
+    commandDiagnostic("write: usage: write PATH TEXT...\n");
     prompt();
     return;
   }
   const path = resolveShellPath(words[1]);
   if (path[0] === "#") {
-    std.out.puts("write: " + words[1] + ": service paths are read by command-specific helpers\n");
+    commandDiagnostic("write: " + words[1] + ": service paths are read by command-specific helpers\n");
     prompt();
     return;
   }
   const count = writeText(path, words.slice(2).join(" ") + "\n");
   if (count < 0) {
-    std.out.puts("write: " + words[1] + ": errno " + count + "\n");
+    commandDiagnostic("write: " + words[1] + ": errno " + count + "\n");
   } else {
-    std.out.puts("wrote " + words[1] + "\n");
+    commandOutput("wrote " + words[1] + "\n");
   }
   prompt();
 }
 
 function runMkdir(words) {
   if (words.length < 2) {
-    std.out.puts("mkdir: missing path\n");
+    commandDiagnostic("mkdir: missing path\n");
     prompt();
     return;
   }
   for (const requested of words.slice(1)) {
     const path = resolveShellPath(requested);
     if (path[0] === "#") {
-      std.out.puts("mkdir: " + requested + ": service paths are not namespace directories\n");
+      commandDiagnostic("mkdir: " + requested + ": service paths are not namespace directories\n");
       continue;
     }
     const result = os.mkdir(path, 0o777);
     if (result !== 0) {
-      std.out.puts("mkdir: " + requested + ": errno " + result + "\n");
+      commandDiagnostic("mkdir: " + requested + ": errno " + result + "\n");
     }
   }
   prompt();
@@ -481,19 +558,19 @@ function runMkdir(words) {
 
 function runRm(words) {
   if (words.length < 2) {
-    std.out.puts("rm: missing path\n");
+    commandDiagnostic("rm: missing path\n");
     prompt();
     return;
   }
   for (const requested of words.slice(1)) {
     const path = resolveShellPath(requested);
     if (path[0] === "#") {
-      std.out.puts("rm: " + requested + ": service paths are not removed by shell commands\n");
+      commandDiagnostic("rm: " + requested + ": service paths are not removed by shell commands\n");
       continue;
     }
     const result = os.remove(path);
     if (result !== 0) {
-      std.out.puts("rm: " + requested + ": errno " + result + "\n");
+      commandDiagnostic("rm: " + requested + ": errno " + result + "\n");
     }
   }
   prompt();
@@ -501,28 +578,28 @@ function runRm(words) {
 
 function runRmdir(words) {
   if (words.length < 2) {
-    std.out.puts("rmdir: missing path\n");
+    commandDiagnostic("rmdir: missing path\n");
     prompt();
     return;
   }
   for (const requested of words.slice(1)) {
     const path = resolveShellPath(requested);
     if (path[0] === "#") {
-      std.out.puts("rmdir: " + requested + ": service paths are not namespace directories\n");
+      commandDiagnostic("rmdir: " + requested + ": service paths are not namespace directories\n");
       continue;
     }
     const result = visibleEntries(path);
     if (result.err !== undefined) {
-      std.out.puts("rmdir: " + requested + ": not a directory\n");
+      commandDiagnostic("rmdir: " + requested + ": not a directory\n");
       continue;
     }
     if (result.entries.length > 0) {
-      std.out.puts("rmdir: " + requested + ": directory not empty\n");
+      commandDiagnostic("rmdir: " + requested + ": directory not empty\n");
       continue;
     }
     const removeResult = os.remove(path);
     if (removeResult !== 0) {
-      std.out.puts("rmdir: " + requested + ": errno " + removeResult + "\n");
+      commandDiagnostic("rmdir: " + requested + ": errno " + removeResult + "\n");
     }
   }
   prompt();
@@ -530,69 +607,69 @@ function runRmdir(words) {
 
 function runMv(words) {
   if (words.length !== 3) {
-    std.out.puts("mv: usage: mv OLD NEW\n");
+    commandDiagnostic("mv: usage: mv OLD NEW\n");
     prompt();
     return;
   }
   const oldPath = resolveShellPath(words[1]);
   const newPath = resolveShellPath(words[2]);
   if (oldPath[0] === "#" || newPath[0] === "#") {
-    std.out.puts("mv: service paths are not renamed by shell commands\n");
+    commandDiagnostic("mv: service paths are not renamed by shell commands\n");
     prompt();
     return;
   }
   const result = os.rename(oldPath, newPath);
   if (result !== 0) {
-    std.out.puts("mv: " + words[1] + ": errno " + result + "\n");
+    commandDiagnostic("mv: " + words[1] + ": errno " + result + "\n");
   }
   prompt();
 }
 
 function runCp(words) {
   if (words.length !== 3) {
-    std.out.puts("cp: usage: cp SOURCE DEST\n");
+    commandDiagnostic("cp: usage: cp SOURCE DEST\n");
     prompt();
     return;
   }
   const source = resolveShellPath(words[1]);
   const destination = resolveShellPath(words[2]);
   if (destination[0] === "#") {
-    std.out.puts("cp: " + words[2] + ": service paths are not written by shell commands\n");
+    commandDiagnostic("cp: " + words[2] + ": service paths are not written by shell commands\n");
     prompt();
     return;
   }
   try {
     const text = std.loadFile(source);
     if (text === null || text === undefined) {
-      std.out.puts("cp: " + words[1] + ": not found\n");
+      commandDiagnostic("cp: " + words[1] + ": not found\n");
       prompt();
       return;
     }
     const count = writeText(destination, text);
     if (count < 0) {
-      std.out.puts("cp: " + words[2] + ": errno " + count + "\n");
+      commandDiagnostic("cp: " + words[2] + ": errno " + count + "\n");
     }
   } catch (error) {
-    std.out.puts("cp: " + words[1] + ": " + error.message + "\n");
+    commandDiagnostic("cp: " + words[1] + ": " + error.message + "\n");
   }
   prompt();
 }
 
 function runLn(words) {
   if (words.length !== 4 || words[1] !== "-s") {
-    std.out.puts("ln: usage: ln -s TARGET LINK\n");
+    commandDiagnostic("ln: usage: ln -s TARGET LINK\n");
     prompt();
     return;
   }
   const linkPath = resolveShellPath(words[3]);
   if (linkPath[0] === "#") {
-    std.out.puts("ln: " + words[3] + ": service paths are not written by shell commands\n");
+    commandDiagnostic("ln: " + words[3] + ": service paths are not written by shell commands\n");
     prompt();
     return;
   }
   const result = os.symlink(words[2], linkPath);
   if (result !== 0) {
-    std.out.puts("ln: " + words[3] + ": errno " + result + "\n");
+    commandDiagnostic("ln: " + words[3] + ": errno " + result + "\n");
   }
   prompt();
 }
@@ -658,19 +735,19 @@ function runStatCommand(words, followFinalSymlink) {
 
 function runQjs(words) {
   if (words.length < 2) {
-    std.out.puts("qjs: usage: qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]\n");
+    commandDiagnostic("qjs: usage: qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]\n");
     prompt();
     return;
   }
   const launch = parseQjsLaunch(words);
   if (launch.error) {
-    std.out.puts(launch.error + "\n");
+    commandDiagnostic(launch.error + "\n");
     prompt();
     return;
   }
   const scriptPath = resolveShellPath(launch.script);
   if (scriptPath[0] === "#") {
-    std.out.puts("qjs: " + launch.script + ": service paths are not executable scripts\n");
+    commandDiagnostic("qjs: " + launch.script + ": service paths are not executable scripts\n");
     prompt();
     return;
   }
@@ -711,12 +788,14 @@ function runQjs(words) {
     if (!Number.isFinite(lastStatus)) {
       lastStatus = 1;
     }
+    commandExitCode(lastStatus);
     if (lastStatus !== 0) {
-      std.out.puts("qjs exit " + exit + "\n");
+      commandOutput("qjs exit " + exit + "\n");
     }
   } catch (error) {
     lastStatus = 1;
-    std.out.puts("qjs: " + error.message + "\n");
+    commandExitCode(lastStatus);
+    commandDiagnostic("qjs: " + error.message + "\n");
   }
   prompt();
 }
@@ -729,12 +808,15 @@ function runCommand(line) {
   }
   const parsed = parseWords(trimmed);
   if (parsed.error) {
-    std.out.puts(parsed.error + "\n");
+    beginCommandRecord(trimmed, [trimmed.split(/\s+/)[0] || trimmed]);
+    commandDiagnostic(parsed.error + "\n");
     prompt();
     return;
   }
   const words = parsed.words;
+  beginCommandRecord(trimmed, words);
   if (trimmed === "exit") {
+    clearCommandRecord();
     running = false;
     os.setReadHandler(0, null);
     if (winchFd >= 0) {
@@ -844,7 +926,7 @@ function runCommand(line) {
   }
   if (trimmed.startsWith("later ")) {
     const message = trimmed.slice(6);
-    std.out.puts("scheduled\n");
+    commandOutput("scheduled\n");
     os.setTimeout(() => {
       if (!running) {
         return;
@@ -855,7 +937,7 @@ function runCommand(line) {
     }, 1);
     return;
   }
-  std.out.puts("unknown: " + trimmed + "\n");
+  commandDiagnostic("unknown: " + trimmed + "\n");
   prompt();
 }
 
