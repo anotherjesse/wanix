@@ -2831,6 +2831,7 @@ function shellHistoryArchiveDossierActionStatusDefaultDetail(status: ShellHistor
 }
 
 function shellHistoryArchiveDossierActionResultObject(result: ShellHistoryArchiveDossierActionResult): Record<string, unknown> {
+	const retryAction = shellHistoryArchiveDossierActionRetryAction(result);
 	return {
 		label: result.label,
 		command: result.command,
@@ -2848,6 +2849,8 @@ function shellHistoryArchiveDossierActionResultObject(result: ShellHistoryArchiv
 		resultJsonChanged: result.resultJsonChanged,
 		commandError: result.commandError,
 		previewLines: result.previewLines,
+		retryRecommended: retryAction !== undefined,
+		retryAction,
 	};
 }
 
@@ -2891,6 +2894,10 @@ function shellHistoryArchiveDossierActionResultLines(result: ShellHistoryArchive
 	if (result.resultJsonPath) {
 		lines.push(`- Expected result JSON: ${shellHistoryWanixLink(shellHistoryAbsolutePath(result.resultJsonPath), result.resultJsonPath)}${shellHistoryArchiveDossierGeneratedSuffix(result.resultJsonGenerated, result.resultJsonChanged)}`);
 	}
+	const retryAction = shellHistoryArchiveDossierActionRetryAction(result);
+	if (retryAction) {
+		lines.push(`- Retry: ${shellHistoryCommandMarkdownLink("Run the action again", "workbench.runShellHistoryArchiveDossierAction", [retryAction])}`);
+	}
 	return lines;
 }
 
@@ -2905,6 +2912,39 @@ function shellHistoryArchiveDossierGeneratedSuffix(generated?: boolean, changed?
 		return " (unchanged)";
 	}
 	return "";
+}
+
+function shellHistoryArchiveDossierActionRetryAction(result: ShellHistoryArchiveDossierActionResult): ShellHistoryArchiveDossierAction | undefined {
+	if (!shellHistoryArchiveDossierActionNeedsRetry(result.status)) {
+		return undefined;
+	}
+	const reason = `Previous dossier action was ${result.status}: ${result.statusDetail}`;
+	if (result.command === "workbench.openWanixPath" && result.openPath) {
+		return {
+			label: `Retry ${result.label}`,
+			command: result.command,
+			reason,
+			openPath: result.openPath,
+		};
+	}
+	if (!shellHistoryArchiveDossierCommandAllowsTarget(result.command)) {
+		return undefined;
+	}
+	const archiveDir = shellHistoryRelativePath(result.archiveDir);
+	return {
+		label: `Retry ${result.label}`,
+		command: result.command,
+		reason,
+		archiveTarget: {
+			archiveDir,
+			commandsPath: `${archiveDir}/commands.jsonl`,
+			bundleJsonPath: `${archiveDir}/${SHELL_HISTORY_ARCHIVE_BUNDLE_JSON_NAME}`,
+		},
+	};
+}
+
+function shellHistoryArchiveDossierActionNeedsRetry(status: ShellHistoryArchiveDossierActionStatus | string | undefined): boolean {
+	return status === "failed" || status === "not-generated" || status === "partial";
 }
 
 function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchiveInfo): ShellHistoryArchiveDossierAction[] {

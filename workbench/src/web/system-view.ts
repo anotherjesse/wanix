@@ -1506,6 +1506,16 @@ function shellArchiveArtifactItems(archive: WanixShellArchiveRecord): SystemTree
 			}, "wanixShellArchiveArtifact", { path: archive.dossierActionMarkdownPath }),
 		);
 	}
+	const retryAction = shellArchiveDossierRetryAction(archive);
+	if (retryAction) {
+		items.push(
+			leaf(`shell-archive:${archive.name}:dossier-action-retry`, "Retry Dossier Action", shellArchiveDossierRetryDescription(archive), "debug-rerun", {
+				command: "workbench.runShellHistoryArchiveDossierAction",
+				title: "Retry Dossier Action",
+				arguments: [retryAction],
+			}, "wanixShellArchiveAction", shellArchiveTarget(archive)),
+		);
+	}
 	if (archive.dossierActionGeneratedAt && archive.dossierActionJsonPath) {
 		items.push(
 			leaf(`shell-archive:${archive.name}:dossier-action-json`, "Dossier Action JSON", pathDescription(archive.dossierActionJsonPath), "json", {
@@ -1779,6 +1789,39 @@ function shellArchiveDossierActionIcon(archive: WanixShellArchiveRecord): string
 		return "pass";
 	}
 	return "notebook";
+}
+
+function shellArchiveDossierRetryAction(archive: WanixShellArchiveRecord): object | undefined {
+	if (!shellArchiveDossierActionNeedsRetry(archive.dossierActionStatus) || !archive.dossierActionCommand) {
+		return undefined;
+	}
+	if (!shellArchiveDossierActionCanTargetArchive(archive.dossierActionCommand)) {
+		return undefined;
+	}
+	return {
+		label: `Retry ${archive.dossierActionLabel || "dossier action"}`,
+		command: archive.dossierActionCommand,
+		reason: shellArchiveDossierRetryDescription(archive),
+		archiveTarget: shellArchiveTarget(archive),
+	};
+}
+
+function shellArchiveDossierRetryDescription(archive: WanixShellArchiveRecord): string {
+	const status = archive.dossierActionStatus || "recorded";
+	return archive.dossierActionStatusDetail
+		? `previous action ${status}: ${archive.dossierActionStatusDetail}`
+		: `previous action ${status}`;
+}
+
+function shellArchiveDossierActionNeedsRetry(status: string | undefined): boolean {
+	return status === "failed" || status === "not-generated" || status === "partial";
+}
+
+function shellArchiveDossierActionCanTargetArchive(command: string): boolean {
+	return command === "workbench.compareShellHistoryArchive"
+		|| command === "workbench.exportShellHistoryArchiveBundle"
+		|| command === "workbench.importShellHistoryArchiveBundle"
+		|| command === "workbench.restoreShellHistoryArchive";
 }
 
 function dataStoreDescription(entry: DataStoreRecord): string {

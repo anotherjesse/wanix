@@ -678,6 +678,15 @@ System view child row, Activity, and `system-state.json`.
 
 ![Shell archive action status](assets/wanix-workbench-browser-dx/93-shell-archive-action-status.png)
 
+Bad outcomes now have a next move. When a dossier action records `failed`,
+`partial`, or `not-generated`, the action report includes a `Run the action
+again` command link, and the System view adds a `Retry Dossier Action` child
+under the archive. The retry is not a hidden bypass: it reconstructs the same
+archive-targeted action object and sends it back through the same preview and
+confirmation wrapper.
+
+![Shell archive action retry](assets/wanix-workbench-browser-dx/94-shell-archive-action-retry.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1310,6 +1319,9 @@ The current loop is:
     dossier with a `Last Dossier Action` breadcrumb after the action launches.
     The breadcrumb now records whether the expected report was generated,
     updated, unchanged, missing, partially changed, opened, or failed.
+    Failed, partial, and not-generated outcomes include a retry command link
+    and a `Retry Dossier Action` row that still goes through the same preview
+    and confirmation wrapper.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1421,9 +1433,9 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add a re-run/repair affordance for `not-generated` or `failed` dossier
-  actions, so a cancelled restore or broken archive action has an obvious next
-  move.
+- Add a compact stale-action filter or badge in the Shell Archives list, so
+  archives with retryable dossier outcomes can be found without expanding each
+  row.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.
