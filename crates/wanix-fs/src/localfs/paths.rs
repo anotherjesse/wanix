@@ -16,6 +16,29 @@ impl LocalFs {
         }
     }
 
+    /// Verifies that `path` resolves (through host symlinks) inside the host
+    /// directory named by `prefix`.
+    ///
+    /// `prefix` is a subtree-relative path in this filesystem's own space; the
+    /// confinement target is the canonical host directory `root/prefix`. A
+    /// missing `path` is treated as in-bounds (the caller's own operation will
+    /// surface the `NotFound`), so a broken-but-in-prefix symlink does not read
+    /// as an escape.
+    pub(super) fn confine_path_to_prefix(
+        &self,
+        prefix: &NormalizedPath,
+        path: &NormalizedPath,
+    ) -> FsResult<()> {
+        let prefix_host = self.raw_host_path(prefix);
+        let prefix_resolved = fs::canonicalize(&prefix_host).map_err(map_io_error)?;
+        match fs::canonicalize(self.raw_host_path(path)) {
+            Ok(resolved) if resolved.starts_with(&prefix_resolved) => Ok(()),
+            Ok(_) => Err(FsError::PermissionDenied),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(map_io_error(error)),
+        }
+    }
+
     pub(super) fn host_path_for_open(
         &self,
         path: &NormalizedPath,

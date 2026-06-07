@@ -178,6 +178,32 @@ pub trait FileSystem: Send + Sync {
         self.metadata(path)
     }
 
+    /// Confirms that `path`, after this filesystem's own symbolic-link
+    /// resolution, still lies within the subtree rooted at `prefix`.
+    ///
+    /// This is the confinement hook a re-rooting export (`SubtreeFs`) consults
+    /// before following symlinks: re-rooting only rewrites the path *string*, so
+    /// a filesystem that resolves symlinks against a shared backing store (such
+    /// as a host directory) could otherwise satisfy an in-prefix path whose link
+    /// target escapes the prefix while staying inside the backing root. A
+    /// filesystem that stores symlink targets opaquely and never resolves them
+    /// as backing paths (`MemFs`) cannot suffer that escape, so the default is a
+    /// no-op `Ok(())`. Host-backed filesystems override this to canonicalize and
+    /// reject targets outside `prefix`.
+    ///
+    /// `prefix` and `path` are both interpreted in this filesystem's own
+    /// coordinate space, where `prefix` is an ancestor of `path` (or equal to
+    /// it). A missing `path` is not an escape; callers perform the real
+    /// operation afterward and surface its own `NotFound`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError::PermissionDenied`] when `path` resolves outside the
+    /// subtree rooted at `prefix`.
+    fn confine_to_prefix(&self, _prefix: &NormalizedPath, _path: &NormalizedPath) -> FsResult<()> {
+        Ok(())
+    }
+
     /// Returns directory entries for `path`.
     ///
     /// # Errors

@@ -1,6 +1,6 @@
 [package]
-name = "wanix-9p"
-description = "9P server adapters backed by Rust Wanix filesystems."
+name = "wanix-id"
+description = "Node identity (ed25519) and default-deny capability grants for the Rust-native Wanix mesh."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -9,15 +9,13 @@ version.workspace = true
 
 [dependencies]
 wanix-fs = { path = "../wanix-fs" }
-wanix-id = { path = "../wanix-id" }
-wanix-protocol = { path = "../wanix-protocol" }
+wanix-vfs = { path = "../wanix-vfs" }
+ed25519-dalek = "2.1"
+getrandom = "0.3"
 
 [lib]
-name = "wanix_9p"
+name = "wanix_id"
 path = "src/lib.rs"
-
-[dev-dependencies]
-wanix-vfs = { path = "../wanix-vfs" }
 
 [lints]
 workspace = true

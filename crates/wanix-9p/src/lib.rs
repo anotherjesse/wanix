@@ -28,6 +28,7 @@ use wanix_protocol::{
 
 pub use error::Wanix9pError;
 pub use transport::{P9TransportError, P9TransportStats};
+pub use wanix_id::{AttachPolicy, Authorization, Grant, GrantTable, GrantTablePolicy, PeerId};
 
 pub(crate) use error::{EBADF, EINVAL, EISDIR, ENOSYS, EOPNOTSUPP, errno_for_fs};
 pub(crate) use wanix_protocol::{
@@ -69,9 +70,21 @@ const P9_SETATTR_UNSUPPORTED_MASK: u32 = P9_SETATTR_CTIME;
 const P9_LOCK_TYPE_UNLOCK: u8 = wanix_protocol::P9_LOCK_TYPE_UNLOCK;
 const P9_LOCK_STATUS_OK: u8 = wanix_protocol::P9_LOCK_STATUS_OK;
 
+/// The verified peer and attach policy consulted at `Tattach`.
+///
+/// When a server carries an [`AttachContext`], each attach is authorized by
+/// `policy.evaluate(peer, aname)`; the returned scoped root replaces the
+/// default root for the rest of the connection. Servers built with
+/// [`P9Server::new`] carry none, and behave exactly as before.
+pub(crate) struct AttachContext {
+    peer: PeerId,
+    policy: Arc<dyn AttachPolicy>,
+}
+
 /// Small in-process 9P2000.L server backed by one Wanix filesystem root.
 pub struct P9Server {
     root: Arc<dyn FileSystem>,
+    attach: Option<AttachContext>,
     fids: BTreeMap<u32, FidEntry>,
     owners: BTreeMap<NormalizedPath, P9OwnerAttrs>,
     msize: u32,
@@ -93,10 +106,42 @@ struct P9OwnerAttrs {
 
 impl P9Server {
     /// Creates a server around `root` using [`DEFAULT_MAX_MSIZE`].
+    ///
+    /// The server carries no attach policy, so every `Tattach` installs `root`
+    /// directly. This is the unchanged, pre-mesh behavior.
     #[must_use]
     pub fn new(root: Arc<dyn FileSystem>) -> Self {
         Self {
             root,
+            attach: None,
+            fids: BTreeMap::new(),
+            owners: BTreeMap::new(),
+            msize: DEFAULT_MAX_MSIZE,
+            max_msize: DEFAULT_MAX_MSIZE,
+            google_version: 0,
+        }
+    }
+
+    /// Creates a server for a verified `peer` whose attach is authorized by
+    /// `policy`.
+    ///
+    /// `default_root` is used only until the first authorized `Tattach`; on a
+    /// successful attach the policy-scoped root replaces it for the rest of the
+    /// connection. When `policy.evaluate(peer, aname)` returns `None`, the
+    /// attach is denied with `EACCES` and no fid is bound (default-deny).
+    ///
+    /// This is the v1 single-attach simplification: the most recent authorized
+    /// attach defines the connection's root. Per-fid root scoping for multiple
+    /// concurrent attaches is a deferred fid-namespace change.
+    #[must_use]
+    pub fn with_policy(
+        default_root: Arc<dyn FileSystem>,
+        peer: PeerId,
+        policy: Arc<dyn AttachPolicy>,
+    ) -> Self {
+        Self {
+            root: default_root,
+            attach: Some(AttachContext { peer, policy }),
             fids: BTreeMap::new(),
             owners: BTreeMap::new(),
             msize: DEFAULT_MAX_MSIZE,

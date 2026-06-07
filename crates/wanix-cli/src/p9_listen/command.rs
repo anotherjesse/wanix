@@ -1,6 +1,9 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use wanix_9p::PeerId;
+
+use super::grant::{GrantSpec, parse_peer};
 use crate::{CliError, command_args::named_arg};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8,6 +11,11 @@ pub(crate) struct P9ListenCommand {
     pub(in crate::p9_listen) root_path: PathBuf,
     pub(in crate::p9_listen) addr: String,
     pub(in crate::p9_listen) once: bool,
+    /// The explicitly supplied verified peer identity, present only when the
+    /// connection should be authorized through a default-deny grant table.
+    pub(in crate::p9_listen) peer: Option<PeerId>,
+    /// Capability grants for `peer`, scoped to `root_path` at attach time.
+    pub(in crate::p9_listen) grants: Vec<GrantSpec>,
 }
 
 pub(crate) fn parse_p9_listen_command(args: &[OsString]) -> Result<P9ListenCommand, CliError> {
@@ -61,6 +69,8 @@ struct P9ListenCommandParts {
     root_path: Option<PathBuf>,
     addr: Option<String>,
     once: bool,
+    peer: Option<PeerId>,
+    grants: Vec<GrantSpec>,
 }
 
 impl P9ListenCommandParts {
@@ -80,6 +90,18 @@ impl P9ListenCommandParts {
                     return Err(CliError::usage("p9-listen accepts only one --addr"));
                 }
                 self.addr = Some(value.to_string_lossy().into_owned());
+                Ok(())
+            }
+            P9ListenValueOption::Peer => {
+                if self.peer.is_some() {
+                    return Err(CliError::usage("p9-listen accepts only one --peer"));
+                }
+                self.peer = Some(parse_peer(&value.to_string_lossy())?);
+                Ok(())
+            }
+            P9ListenValueOption::Grant => {
+                self.grants
+                    .push(GrantSpec::parse(&value.to_string_lossy())?);
                 Ok(())
             }
         }
@@ -104,10 +126,17 @@ impl P9ListenCommandParts {
         let addr = self
             .addr
             .ok_or_else(|| CliError::usage("p9-listen requires --addr HOST:PORT"))?;
+        if !self.grants.is_empty() && self.peer.is_none() {
+            return Err(CliError::usage(
+                "p9-listen --grant requires --peer HEX to name the authorized peer",
+            ));
+        }
         Ok(P9ListenCommand {
             root_path,
             addr,
             once: self.once,
+            peer: self.peer,
+            grants: self.grants,
         })
     }
 }
@@ -129,6 +158,8 @@ impl P9ListenArg {
 const P9_LISTEN_VALUE_OPTIONS: &[(&str, P9ListenValueOption)] = &[
     ("--root", P9ListenValueOption::Root),
     ("--addr", P9ListenValueOption::Addr),
+    ("--peer", P9ListenValueOption::Peer),
+    ("--grant", P9ListenValueOption::Grant),
 ];
 
 const P9_LISTEN_FLAG_OPTIONS: &[(&str, P9ListenFlagOption)] =
@@ -138,6 +169,8 @@ const P9_LISTEN_FLAG_OPTIONS: &[(&str, P9ListenFlagOption)] =
 enum P9ListenValueOption {
     Root,
     Addr,
+    Peer,
+    Grant,
 }
 
 impl P9ListenValueOption {
@@ -145,6 +178,8 @@ impl P9ListenValueOption {
         match self {
             Self::Root => "p9-listen --root",
             Self::Addr => "p9-listen --addr",
+            Self::Peer => "p9-listen --peer",
+            Self::Grant => "p9-listen --grant",
         }
     }
 
@@ -152,6 +187,8 @@ impl P9ListenValueOption {
         match self {
             Self::Root => "DIR",
             Self::Addr => "HOST:PORT",
+            Self::Peer => "HEX",
+            Self::Grant => "ANAME:PREFIX:RIGHTS",
         }
     }
 }
@@ -198,6 +235,43 @@ mod tests {
         assert_eq!(command.root_path, PathBuf::from("."));
         assert_eq!(command.addr, "127.0.0.1:0");
         assert!(command.once);
+    }
+
+    #[test]
+    fn parse_p9_listen_accepts_peer_and_repeated_grants() {
+        let command = parse_p9_listen_command(&[
+            OsString::from("--root"),
+            OsString::from("."),
+            OsString::from("--addr"),
+            OsString::from("127.0.0.1:0"),
+            OsString::from("--peer"),
+            OsString::from("ab".repeat(32)),
+            OsString::from("--grant"),
+            OsString::from("projects/foo:projects/foo:rw"),
+            OsString::from("--grant"),
+            OsString::from("docs:docs:ro"),
+        ])
+        .unwrap();
+
+        assert!(command.peer.is_some());
+        assert_eq!(command.grants.len(), 2);
+    }
+
+    #[test]
+    fn parse_p9_listen_rejects_grant_without_peer() {
+        let error = parse_p9_listen_command(&[
+            OsString::from("--root"),
+            OsString::from("."),
+            OsString::from("--addr"),
+            OsString::from("127.0.0.1:0"),
+            OsString::from("--grant"),
+            OsString::from("docs:docs:ro"),
+        ])
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("--grant requires --peer"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ use wanix_protocol::{
     p9_rversion,
 };
 
+use crate::error::EACCES;
 use crate::{
     EBADF, ENOSYS, EOPNOTSUPP, FidEntry, P9_LOCK_STATUS_OK, P9_LOCK_TYPE_UNLOCK, P9Server,
     Wanix9pError, errno_for_fs, fs_stat,
@@ -29,6 +30,9 @@ impl P9Server {
 
     pub(super) fn handle_attach(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let attach = p9_decode_tattach(frame)?;
+        if !self.install_attach_root(&attach.aname) {
+            return Ok(p9_rlerror(frame.tag(), EACCES));
+        }
         let path = root_path()?;
         let qid = match self.qid_for_path(&path) {
             Ok(qid) => qid,
@@ -43,6 +47,25 @@ impl P9Server {
             },
         );
         Ok(p9_rattach(frame.tag(), qid))
+    }
+
+    /// Installs the root for an attach to `aname`.
+    ///
+    /// With no attach policy the default root is kept (unchanged behavior). With
+    /// a policy, the verified peer plus `aname` are authorized; a match installs
+    /// the scoped root and returns `true`, while a denial leaves the root
+    /// untouched and returns `false` so the caller replies with `EACCES`.
+    fn install_attach_root(&mut self, aname: &str) -> bool {
+        let Some(context) = self.attach.as_ref() else {
+            return true;
+        };
+        match context.policy.evaluate(context.peer, aname) {
+            Some(authorization) => {
+                self.root = authorization.root;
+                true
+            }
+            None => false,
+        }
     }
 
     pub(super) fn handle_auth(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {

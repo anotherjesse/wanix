@@ -1,4 +1,5 @@
 mod command;
+mod grant;
 mod runtime;
 
 pub(super) use command::{P9ListenCommand, parse_p9_listen_command};
@@ -30,6 +31,8 @@ mod tests {
             root_path: PathBuf::from("."),
             addr: "127.0.0.1:bad-port".to_owned(),
             once: true,
+            peer: None,
+            grants: Vec::new(),
         };
         let mut stderr = Vec::new();
 
@@ -64,6 +67,8 @@ mod tests {
             root_path: root.clone(),
             addr: addr.to_string(),
             once: true,
+            peer: None,
+            grants: Vec::new(),
         };
 
         let handle = thread::spawn(move || {

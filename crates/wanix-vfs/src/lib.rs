@@ -17,12 +17,14 @@ mod mutation;
 mod path;
 mod readdir;
 mod resolution;
+mod subtree;
 
 #[cfg(test)]
 mod tests;
 
 use binding::BindTarget;
 pub use binding::{BindOptions, BindPosition, Binding};
+pub use subtree::{Rights, SubtreeFs};
 
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix namespace binding";

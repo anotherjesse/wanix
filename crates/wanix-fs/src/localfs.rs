@@ -91,6 +91,10 @@ impl FileSystem for LocalFs {
         self.read_host_dir(path)
     }
 
+    fn confine_to_prefix(&self, prefix: &NormalizedPath, path: &NormalizedPath) -> FsResult<()> {
+        self.confine_path_to_prefix(prefix, path)
+    }
+
     fn read_link(&self, path: &NormalizedPath) -> FsResult<Vec<u8>> {
         let host_path = self.host_path_for_final_component_operation(path)?;
         let metadata = fs::symlink_metadata(&host_path).map_err(map_io_error)?;
