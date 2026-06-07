@@ -117,6 +117,30 @@ impl MeshNode {
         self.runtime.handle().clone()
     }
 
+    /// Returns a clone of the node's [`Endpoint`].
+    ///
+    /// The endpoint is shared by every plane: the 9P [`Router`], the blob
+    /// downloader, and any directly opened bi-stream all ride this one
+    /// identity-bound endpoint, which is what lets the data plane and control
+    /// plane share a peer.
+    #[must_use]
+    pub fn endpoint(&self) -> Endpoint {
+        self.endpoint.clone()
+    }
+
+    /// Builds an in-memory content-addressed store ([`crate::IrohCasStore`]) over
+    /// this node's endpoint and runtime, fetching missing blobs from `peers`.
+    ///
+    /// `peers` are full provider tickets ([`EndpointAddr`]); pass the
+    /// [`Self::ticket`] of each node whose blobs this store should fetch. The
+    /// store shares the node's identity-bound endpoint, so blobs it serves and
+    /// fetches travel the same QUIC path as 9P. Register its blobs protocol with
+    /// [`Self::serve_with_blobs`] to make this node a provider.
+    #[must_use]
+    pub fn cas_store(&self, peers: Vec<EndpointAddr>) -> crate::IrohCasStore {
+        crate::IrohCasStore::memory(self.endpoint.clone(), self.runtime.handle().clone(), peers)
+    }
+
     /// Returns the node's dialable [`EndpointAddr`] ticket: its id plus the
     /// direct addresses and relay it currently knows.
     ///
@@ -148,16 +172,41 @@ impl MeshNode {
     /// The spawned [`Router`] is held by the node; dropping the node shuts it
     /// down. Serving and dialing share the one endpoint and identity.
     pub fn serve(&mut self, config: ServeConfig) {
-        let handler = P9ProtocolHandler::new(
-            config.with_deadline(self.deadline),
-            self.runtime.handle().clone(),
-        );
+        let handler = self.p9_handler(config);
         let router = self.runtime.block_on(async {
             Router::builder(self.endpoint.clone())
                 .accept(crate::WANIX_9P_ALPN, handler)
                 .spawn()
         });
         self.router = Some(router);
+    }
+
+    /// Starts serving 9P (`config`) on [`crate::WANIX_9P_ALPN`] *and* the blob
+    /// data plane (`cas`) on [`crate::BLOBS_ALPN`] from one shared [`Router`].
+    ///
+    /// This is the blueprint's "one endpoint, one identity, two planes": the
+    /// control plane (9P walk/stat/mutation) and the data plane (BLAKE3 bulk
+    /// blobs) accept on the same endpoint, so a peer reaches both over a single
+    /// QUIC path. The spawned router advertises both ALPNs (iroh's
+    /// `Router::spawn` sets the endpoint ALPNs from its accepted handlers).
+    pub fn serve_with_blobs(&mut self, config: ServeConfig, cas: &crate::IrohCasStore) {
+        let handler = self.p9_handler(config);
+        let blobs = crate::blobs_protocol(cas);
+        let router = self.runtime.block_on(async {
+            Router::builder(self.endpoint.clone())
+                .accept(crate::WANIX_9P_ALPN, handler)
+                .accept(crate::BLOBS_ALPN, blobs)
+                .spawn()
+        });
+        self.router = Some(router);
+    }
+
+    /// Builds the deadline-bound 9P protocol handler for `config`.
+    fn p9_handler(&self, config: ServeConfig) -> P9ProtocolHandler {
+        P9ProtocolHandler::new(
+            config.with_deadline(self.deadline),
+            self.runtime.handle().clone(),
+        )
     }
 
     /// Returns a [`MeshDialer`] over this node's endpoint and runtime.

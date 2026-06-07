@@ -14,6 +14,12 @@ pub(crate) const EISDIR: u32 = 21;
 pub(crate) const EINVAL: u32 = 22;
 pub(crate) const ENOSYS: u32 = 38;
 pub(crate) const ENOTEMPTY: u32 = 39;
+/// The named extended attribute does not exist (Linux `ENODATA`).
+///
+/// Returned by `Txattrwalk` for a `cas.hash` probe on a file that has no
+/// content-addressed hash to offer (small file, mid-write, or a filesystem with
+/// no blob backing), so a CAS-aware client cleanly falls back to `Tread`.
+pub(crate) const ENODATA: u32 = 61;
 pub(crate) const EOPNOTSUPP: u32 = 95;
 
 /// Error returned when a request is too malformed to turn into a 9P reply.

@@ -30,7 +30,7 @@ pub use error::Wanix9pError;
 pub use transport::{P9TransportError, P9TransportStats};
 pub use wanix_id::{AttachPolicy, Authorization, Grant, GrantTable, GrantTablePolicy, PeerId};
 
-pub(crate) use error::{EBADF, EINVAL, EISDIR, ENOSYS, EOPNOTSUPP, errno_for_fs};
+pub(crate) use error::{EBADF, EINVAL, EISDIR, ENODATA, ENOSYS, EOPNOTSUPP, errno_for_fs};
 pub(crate) use wanix_protocol::{
     O_ACCMODE, O_APPEND, O_CREAT, O_TRUNC, RLOPEN_OVERHEAD, RREAD_HEADER_LEN, RREADDIR_HEADER_LEN,
 };
@@ -267,20 +267,20 @@ mod tests {
         P9_RGETATTR, P9_RGETLOCK, P9_RLCREATE, P9_RLERROR, P9_RLINK, P9_RLOCK, P9_RLOPEN,
         P9_RMKDIR, P9_RREAD, P9_RREADDIR, P9_RREADLINK, P9_RREMOVE, P9_RRENAME, P9_RRENAMEAT,
         P9_RSETATTR, P9_RSTATFS, P9_RSYMLINK, P9_RUNLINKAT, P9_RVERSION, P9_RWALK, P9_RWALKGETATTR,
-        P9_RWRITE, P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME, P9_SETATTR_MTIME,
-        P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS, P9_SETATTR_SIZE,
-        P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_1, P9_VERSION_9P2000_L_GOOGLE_2,
-        P9DirEntry, P9Lock, P9SetAttr, p9_decode_rflush, p9_decode_rflushf, p9_decode_rfsync,
-        p9_decode_rgetattr, p9_decode_rgetlock, p9_decode_rlcreate, p9_decode_rlerror,
-        p9_decode_rlink, p9_decode_rlock, p9_decode_rlopen, p9_decode_rmkdir, p9_decode_rread,
-        p9_decode_rreaddir, p9_decode_rreadlink, p9_decode_rremove, p9_decode_rrename,
-        p9_decode_rsetattr, p9_decode_rstatfs, p9_decode_rsymlink, p9_decode_rversion,
-        p9_decode_rwalk, p9_decode_rwalkgetattr, p9_decode_rwrite, p9_dir_entry_encoded_len,
-        p9_tattach, p9_tauth, p9_tclunk, p9_tflush, p9_tflushf, p9_tfsync, p9_tgetattr,
-        p9_tgetlock, p9_tlcreate, p9_tlink, p9_tlock, p9_tlopen, p9_tmkdir, p9_tmknod, p9_tread,
-        p9_treaddir, p9_treadlink, p9_tremove, p9_trename, p9_trenameat, p9_tsetattr, p9_tstatfs,
-        p9_tsymlink, p9_tunlinkat, p9_tversion, p9_twalk, p9_twalkgetattr, p9_twrite,
-        p9_txattrcreate, p9_txattrwalk,
+        P9_RWRITE, P9_RXATTRWALK, P9_SETATTR_ATIME, P9_SETATTR_ATIME_NOT_SYSTEM_TIME,
+        P9_SETATTR_MTIME, P9_SETATTR_MTIME_NOT_SYSTEM_TIME, P9_SETATTR_PERMISSIONS,
+        P9_SETATTR_SIZE, P9_VERSION_9P2000_L, P9_VERSION_9P2000_L_GOOGLE_1,
+        P9_VERSION_9P2000_L_GOOGLE_2, P9DirEntry, P9Lock, P9SetAttr, p9_decode_rflush,
+        p9_decode_rflushf, p9_decode_rfsync, p9_decode_rgetattr, p9_decode_rgetlock,
+        p9_decode_rlcreate, p9_decode_rlerror, p9_decode_rlink, p9_decode_rlock, p9_decode_rlopen,
+        p9_decode_rmkdir, p9_decode_rread, p9_decode_rreaddir, p9_decode_rreadlink,
+        p9_decode_rremove, p9_decode_rrename, p9_decode_rsetattr, p9_decode_rstatfs,
+        p9_decode_rsymlink, p9_decode_rversion, p9_decode_rwalk, p9_decode_rwalkgetattr,
+        p9_decode_rwrite, p9_decode_rxattrwalk, p9_dir_entry_encoded_len, p9_tattach, p9_tauth,
+        p9_tclunk, p9_tflush, p9_tflushf, p9_tfsync, p9_tgetattr, p9_tgetlock, p9_tlcreate,
+        p9_tlink, p9_tlock, p9_tlopen, p9_tmkdir, p9_tmknod, p9_tread, p9_treaddir, p9_treadlink,
+        p9_tremove, p9_trename, p9_trenameat, p9_tsetattr, p9_tstatfs, p9_tsymlink, p9_tunlinkat,
+        p9_tversion, p9_twalk, p9_twalkgetattr, p9_twrite, p9_txattrcreate, p9_txattrwalk,
     };
 
     use super::*;
@@ -1853,5 +1853,85 @@ mod tests {
         let path = std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    /// A filesystem with one file `big` that advertises a fixed content hash
+    /// (the control/data-split offload key) and one file `small` that does not.
+    #[derive(Debug)]
+    struct HashFs {
+        hash: wanix_fs::ContentHash,
+    }
+
+    impl FileSystem for HashFs {
+        fn open(&self, path: &NormalizedPath, _options: OpenOptions) -> FsResult<Box<dyn File>> {
+            match path.as_str() {
+                "big" | "small" => Ok(Box::new(StreamFile {
+                    queue: Arc::new(Mutex::new(VecDeque::new())),
+                })),
+                _ => Err(FsError::NotFound),
+            }
+        }
+
+        fn metadata(&self, path: &NormalizedPath) -> FsResult<Metadata> {
+            match path.as_str() {
+                "." => Ok(Metadata::new(FileType::Directory, 0, 0o755)),
+                "big" => Ok(Metadata::new(FileType::File, 1 << 20, 0o644)),
+                "small" => Ok(Metadata::new(FileType::File, 4, 0o644)),
+                _ => Err(FsError::NotFound),
+            }
+        }
+
+        fn content_hash(&self, path: &NormalizedPath) -> FsResult<Option<wanix_fs::ContentHash>> {
+            // Only the large file offers a blob hash; the small one falls back to
+            // a plain `Tread` (the device returns `Ok(None)`).
+            Ok((path.as_str() == "big").then_some(self.hash))
+        }
+
+        fn read_dir(&self, _path: &NormalizedPath) -> FsResult<Vec<DirEntry>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn cas_hash_xattr_surfaces_the_content_hash_over_the_wire() {
+        let hash = wanix_fs::ContentHash::from_bytes([0x7c; 32]);
+        let root: Arc<dyn FileSystem> = Arc::new(HashFs { hash });
+        let mut server = P9Server::new(root);
+
+        attach_root(&mut server);
+        // Walk to the large file, then Txattrwalk("cas.hash") onto a fresh fid.
+        walk(&mut server, 1, 2, &["big"]);
+        let response = server
+            .handle_frame(&p9_txattrwalk(10, 2, 3, "cas.hash").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RXATTRWALK);
+        // The advertised size is exactly the 64 hex characters of the hash.
+        let size = p9_decode_rxattrwalk(&response).unwrap();
+        assert_eq!(size, 64);
+
+        // Reading the xattr fid returns the hex hash — the value crossed the wire
+        // as a genuine synthetic file, not as appended Rgetattr bytes.
+        let read = server.handle_frame(&p9_tread(11, 3, 0, 128)).unwrap();
+        assert_eq!(read.message_type(), P9_RREAD);
+        let bytes = p9_decode_rread(&read).unwrap();
+        assert_eq!(String::from_utf8(bytes).unwrap(), hash.to_hex());
+    }
+
+    #[test]
+    fn cas_hash_xattr_is_enodata_when_no_hash_is_offered() {
+        let hash = wanix_fs::ContentHash::from_bytes([0x7c; 32]);
+        let root: Arc<dyn FileSystem> = Arc::new(HashFs { hash });
+        let mut server = P9Server::new(root);
+
+        attach_root(&mut server);
+        // The small file offers no hash: the attribute does not exist (ENODATA),
+        // so a CAS-aware client falls back to a plain `Tread`.
+        walk(&mut server, 1, 2, &["small"]);
+        let response = server
+            .handle_frame(&p9_txattrwalk(10, 2, 3, "cas.hash").unwrap())
+            .unwrap();
+        assert_eq!(response.message_type(), P9_RLERROR);
+        assert_eq!(p9_decode_rlerror(&response).unwrap().ecode, ENODATA);
+        assert!(!server.fids.contains_key(&3));
     }
 }

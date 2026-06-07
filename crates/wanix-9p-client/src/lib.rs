@@ -24,6 +24,7 @@
 //! - Append is delegated to the server via `O_APPEND`, never raced client-side.
 
 mod attr;
+mod cas;
 mod conn;
 mod error;
 mod fid;

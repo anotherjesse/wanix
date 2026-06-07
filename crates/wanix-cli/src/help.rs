@@ -47,7 +47,7 @@ pub(super) const USAGE: &str = concat!(
     "       wanix-rust rootfs --archive FILE.tgz --out DIR [--json]\n",
     "       wanix-rust new (--js NAME | --rust NAME) [--dir DIR]\n",
     "       wanix-rust agent [--fake] [--cwd DIR] [--world DIR] <prompt>\n",
-    "       wanix-rust capsule (save DIR FILE.wcap | load FILE.wcap DIR)\n",
+    "       wanix-rust capsule (save DIR | load CAPSULE_ID DIR) [--store DIR]\n",
     "       wanix-rust qemu --root DIR [--kernel PATH] [--initrd PATH] [--cmdline TEXT] [--append TEXT ...] ",
     "[--qemu-bin PATH] [--memory-mb N] ",
     "[--mount-tag TAG] [--security-model MODEL] [--p9-msize N] ",

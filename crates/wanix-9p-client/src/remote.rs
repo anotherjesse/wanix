@@ -193,6 +193,20 @@ impl RemoteFs {
         Ok((guard, iounit))
     }
 
+    /// Learns `path`'s content hash over the wire via the `cas.hash` xattr.
+    ///
+    /// This is the client half of the control/data split: when the server's
+    /// filesystem content-addresses a file, the hash crosses as a synthetic
+    /// xattr read, and a CAS-aware caller fetches the blob from the data plane
+    /// instead of looping `Tread`. A file with no offloadable hash returns
+    /// `Ok(None)` (the server replied `ENODATA`), so the caller reads inline.
+    pub(crate) fn content_hash_impl(
+        &self,
+        path: &NormalizedPath,
+    ) -> ClientResult<Option<wanix_fs::ContentHash>> {
+        crate::cas::content_hash_for(&self.conn, path)
+    }
+
     /// Reports whether the file behind `fid` is a regular file via `Tgetattr`.
     fn fid_is_regular(&self, fid: u32) -> ClientResult<bool> {
         let mut held = lock(&self.conn)?;
@@ -243,5 +257,9 @@ impl wanix_fs::FileSystem for RemoteFs {
 
     fn read_link(&self, path: &NormalizedPath) -> FsResult<Vec<u8>> {
         Ok(ops::read_link(self, path)?)
+    }
+
+    fn content_hash(&self, path: &NormalizedPath) -> FsResult<Option<wanix_fs::ContentHash>> {
+        Ok(self.content_hash_impl(path)?)
     }
 }

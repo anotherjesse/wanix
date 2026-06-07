@@ -1216,6 +1216,40 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
 }
 
 #[test]
+fn serve_wanix_services_binds_cas_data_plane_device() {
+    // The `#cas` data-plane device is bound into the served namespace alongside
+    // `#term`/`#task`/`#kv`, so a direct 9P client can probe blob presence as an
+    // ordinary file. A `have/<hash>` probe against the (locally absent) blob is
+    // hermetic: it reads `0\n` without writing anything to the on-disk store.
+    let root = temp_dir("wanix-cli-serve-cas-device");
+    let roots = ServeRoots::new(&root, "127.0.0.1:7655".parse().unwrap(), None, true).unwrap();
+
+    let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
+    let response = server
+        .handle_frame(&p9_tattach(1, 1, 0xffff_ffff, "cas", "", 0).unwrap())
+        .unwrap();
+    assert_eq!(response.message_type(), P9_RATTACH);
+
+    // A 64-hex hash that is certainly not in a fresh store.
+    let absent = "0".repeat(64);
+    let response = server
+        .handle_frame(&p9_twalk(2, 1, 2, &["#cas", "have", &absent]).unwrap())
+        .unwrap();
+    assert_eq!(response.message_type(), P9_RWALK);
+    assert_eq!(p9_decode_rwalk(&response).unwrap().len(), 3);
+    assert_eq!(
+        server
+            .handle_frame(&p9_tlopen(3, 2, 0))
+            .unwrap()
+            .message_type(),
+        P9_RLOPEN
+    );
+    let response = server.handle_frame(&p9_tread(4, 2, 0, 8)).unwrap();
+    assert_eq!(response.message_type(), P9_RREAD);
+    assert_eq!(p9_decode_rread(&response).unwrap(), b"0\n");
+}
+
+#[test]
 fn discovery_services_advertises_every_registered_driver() {
     // Drift guard: the advertised drivers must derive from the task-driver
     // registry, not a hand-maintained literal. Previously discovery hardcoded

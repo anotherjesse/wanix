@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use wanix_agent::{AgentDevice, FakeEngine};
+use wanix_cas::{CasDevice, LocalCasStore};
 use wanix_fs::{FileSystem, LocalFs};
 use wanix_kv::KvDevice;
 use wanix_pipe::PipeDevice;
@@ -127,6 +128,17 @@ fn bind_host_and_terminal(
         Arc::new(KvDevice::new()),
         ".",
         "#kv",
+        BindOptions::default(),
+    )?;
+    // `#cas` is the data plane as files: `#cas/<hash>` reads a blob,
+    // `#cas/ingest` is write-then-read-hash, `#cas/have/<hash>` probes presence.
+    // Like `#kv` it is just a `FileSystem`, so it imports across the mesh for
+    // free (`/n/A/#cas/...`). It is backed by the owner-private on-disk store, so
+    // blobs an agent ingests here persist and dedup against capsules.
+    namespace.bind(
+        Arc::new(CasDevice::new(Arc::new(LocalCasStore::open_default()))),
+        ".",
+        "#cas",
         BindOptions::default(),
     )?;
     // Served #agent uses the deterministic fake engine: the real codex bridge is

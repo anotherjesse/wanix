@@ -53,6 +53,7 @@
 //! a per-user default location instead — a weaker guarantee.
 
 mod dir;
+mod store;
 mod trust;
 
 use std::path::Path;
@@ -61,6 +62,7 @@ use anyhow::Result;
 use wasmtime::{Engine, Module};
 
 pub use dir::owner_private_cache_dir;
+pub use store::AuditedBlobDir;
 
 /// Artifact filename (no directory) for one wasm build.
 ///

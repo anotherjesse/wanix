@@ -17,6 +17,7 @@ tungstenite = "0.29.0"
 wanix-9p = { path = "../wanix-9p" }
 wanix-9p-client = { path = "../wanix-9p-client" }
 wanix-agent = { path = "../wanix-agent" }
+wanix-cas = { path = "../wanix-cas" }
 wanix-fs = { path = "../wanix-fs" }
 wanix-id = { path = "../wanix-id" }
 wanix-kv = { path = "../wanix-kv" }

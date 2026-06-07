@@ -1,14 +1,24 @@
-use wanix_fs::NormalizedPath;
+use wanix_fs::{File, FileType, FsResult, Metadata, NormalizedPath};
 use wanix_protocol::{
     P9Attr, P9AttrBody, P9Frame, P9Qid, p9_decode_tgetattr, p9_decode_treadlink, p9_decode_twalk,
     p9_decode_twalkgetattr, p9_decode_txattrcreate, p9_decode_txattrwalk, p9_rgetattr, p9_rlerror,
-    p9_rreadlink, p9_rwalk, p9_rwalkgetattr,
+    p9_rreadlink, p9_rwalk, p9_rwalkgetattr, p9_rxattrwalk,
 };
 
 use crate::attrs::attr_for_metadata;
 use crate::path::join_walk_component;
 use crate::session::P9_GOOGLE_TWALKGETATTR_VERSION;
-use crate::{EBADF, EINVAL, EOPNOTSUPP, FidEntry, P9Server, Wanix9pError, errno_for_fs};
+use crate::{EBADF, EINVAL, ENODATA, EOPNOTSUPP, FidEntry, P9Server, Wanix9pError, errno_for_fs};
+
+/// The single extended-attribute name this server synthesizes: the BLAKE3
+/// content hash a CAS-aware client uses to offload bulk reads to the blob plane.
+///
+/// A `Txattrwalk` for this name walks to a read-only fid serving the 64
+/// lowercase-hex characters of [`wanix_fs::FileSystem::content_hash`]; any other
+/// name, or a file with no hash, yields `ENODATA`. This is the blueprint's
+/// "genuine synthetic `File` serving 64 hex bytes" — the hash rides the wire as
+/// a real xattr read, never as bytes appended to a fixed-shape `Rgetattr`.
+pub(crate) const CAS_HASH_XATTR: &str = "cas.hash";
 
 mod readdir;
 
@@ -159,11 +169,37 @@ impl P9Server {
 
     pub(super) fn handle_xattrwalk(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
         let xattr = p9_decode_txattrwalk(frame)?;
-        if self.fids.contains_key(&xattr.fid) {
-            Ok(p9_rlerror(frame.tag(), EOPNOTSUPP))
-        } else {
-            Ok(p9_rlerror(frame.tag(), EBADF))
+        let Some(path) = self.fids.get(&xattr.fid).map(|entry| entry.path.clone()) else {
+            return Ok(p9_rlerror(frame.tag(), EBADF));
+        };
+        // The only attribute this server synthesizes is `cas.hash`: the BLAKE3
+        // content address that lets a CAS-aware client skip the `Tread` loop and
+        // fetch the blob from the data plane. Anything else is unsupported.
+        if xattr.name != CAS_HASH_XATTR {
+            return Ok(p9_rlerror(frame.tag(), EOPNOTSUPP));
         }
+        let hash = match self.root.content_hash(&path) {
+            // `Ok(None)` means "resolvable but not content-addressed" (small,
+            // mid-write, or no blob backing): the attribute simply does not
+            // exist, so the client falls back to a plain `Tread`.
+            Ok(None) => return Ok(p9_rlerror(frame.tag(), ENODATA)),
+            Ok(Some(hash)) => hash,
+            Err(error) => return Ok(p9_rlerror(frame.tag(), errno_for_fs(&error))),
+        };
+        // The new fid is bound to the path *and* pre-opened with a synthetic
+        // reader over the 64 hex bytes, so the client reads the value with a
+        // single `Tread` and no separate `Tlopen` (matching xattr semantics).
+        let hex = hash.to_hex().into_bytes();
+        let size = hex.len() as u64;
+        self.fids.insert(
+            xattr.newfid,
+            FidEntry {
+                path,
+                file: Some(Box::new(XattrValueFile::new(hex))),
+                append: false,
+            },
+        );
+        Ok(p9_rxattrwalk(frame.tag(), size))
     }
 
     pub(super) fn handle_xattrcreate(&mut self, frame: &P9Frame) -> Result<P9Frame, Wanix9pError> {
@@ -173,5 +209,43 @@ impl P9Server {
         } else {
             Ok(p9_rlerror(frame.tag(), EBADF))
         }
+    }
+}
+
+/// A read-only, in-memory [`File`] serving a fixed xattr value (the hex content
+/// hash). It is pre-installed on the `Txattrwalk` fid so the value reads with a
+/// single `Tread`; a follow-up read returns end-of-file.
+struct XattrValueFile {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
+impl XattrValueFile {
+    fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes, offset: 0 }
+    }
+}
+
+impl File for XattrValueFile {
+    fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
+        // A streaming reader: each read advances an internal cursor, so a second
+        // read past the value returns 0 (EOF). The value is at most 64 bytes.
+        let remaining = self.bytes.len().saturating_sub(self.offset);
+        let len = remaining.min(buf.len());
+        buf[..len].copy_from_slice(&self.bytes[self.offset..self.offset + len]);
+        self.offset += len;
+        Ok(len)
+    }
+
+    fn is_seekable(&self) -> bool {
+        false
+    }
+
+    fn metadata(&self) -> FsResult<Metadata> {
+        Ok(Metadata::new(
+            FileType::File,
+            self.bytes.len() as u64,
+            0o444,
+        ))
     }
 }

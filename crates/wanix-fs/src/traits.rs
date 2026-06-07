@@ -1,4 +1,4 @@
-use crate::{DirEntry, FsError, FsResult, Metadata, NormalizedPath};
+use crate::{ContentHash, DirEntry, FsError, FsResult, Metadata, NormalizedPath};
 
 /// How path metadata should treat a final symbolic link component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +176,32 @@ pub trait FileSystem: Send + Sync {
         _lookup: MetadataLookup,
     ) -> FsResult<Metadata> {
         self.metadata(path)
+    }
+
+    /// Returns the content hash of the file at `path` when this filesystem can
+    /// offer its bytes through the content-addressed data plane.
+    ///
+    /// This is the *only* hook by which the 9P control plane offloads bulk file
+    /// bytes to the blob plane: a CAS-aware client that learns a hash for a
+    /// large file fetches the (BLAKE3-verified) blob peer-to-peer instead of
+    /// crawling the bytes through the `msize`-bounded `Tread` window. The
+    /// default is `Ok(None)` — most filesystems have no blob backing, and a
+    /// `None` simply means "read this file the ordinary way." A filesystem that
+    /// content-addresses its files (a `CasFs` decorator) overrides this to
+    /// return the current hash, and must return `None` whenever the file is open
+    /// for write so a client never fetches a stale or torn snapshot.
+    ///
+    /// The hash is carried to the client out of band (an `xattr`-style synthetic
+    /// file or a versioned protocol field), never as bytes appended to an
+    /// existing fixed-shape 9P response, because this codebase's `Rgetattr`
+    /// decoder rejects trailing bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when `path` cannot be resolved at all;
+    /// "resolvable but not content-addressed" is `Ok(None)`, not an error.
+    fn content_hash(&self, _path: &NormalizedPath) -> FsResult<Option<ContentHash>> {
+        Ok(None)
     }
 
     /// Confirms that `path`, after this filesystem's own symbolic-link

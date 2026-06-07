@@ -30,6 +30,7 @@
 //! a peer attaches is a [`wanix_vfs::SubtreeFs`] chosen by the
 //! [`wanix_id::AttachPolicy`].
 
+mod cas;
 mod dialer;
 mod duplex;
 mod error;
@@ -37,6 +38,7 @@ mod handler;
 mod identity;
 mod node;
 
+pub use cas::{IrohCasStore, blob_hash, blobs_protocol, content_hash};
 pub use dialer::MeshDialer;
 pub use duplex::{BlockingDuplex, BlockingReader, BlockingWriter};
 pub use error::{MeshError, MeshResult};
@@ -48,6 +50,9 @@ pub use node::{DEFAULT_OP_DEADLINE, MeshNode};
 pub use iroh::EndpointAddr;
 /// Re-export of iroh's verified endpoint identity (an ed25519 public key).
 pub use iroh::EndpointId;
+/// Re-export of the iroh-blobs ALPN, the data-plane wire contract registered on
+/// the shared [`MeshNode`] [`Router`](iroh::protocol::Router) endpoint.
+pub use iroh_blobs::ALPN as BLOBS_ALPN;
 
 /// The ALPN protocol identifier for the Wanix 9P control plane over QUIC.
 ///

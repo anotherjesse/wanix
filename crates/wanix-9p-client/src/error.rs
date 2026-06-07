@@ -27,6 +27,12 @@ pub const EISDIR: u32 = 21;
 pub const EINVAL: u32 = 22;
 /// Linux `ENOTEMPTY`: directory not empty.
 pub const ENOTEMPTY: u32 = 39;
+/// Linux `ENODATA`: the named extended attribute does not exist.
+///
+/// A `Txattrwalk("cas.hash")` returns this when the file offers no
+/// content-addressed hash, signalling the client to fall back to a plain
+/// `Tread` loop rather than offloading to the blob plane.
+pub const ENODATA: u32 = 61;
 /// Linux `ENOSYS`: function not implemented.
 pub const ENOSYS: u32 = 95;
 
