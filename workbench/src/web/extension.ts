@@ -2369,6 +2369,8 @@ type QjsShellMutationOperation = {
 	source?: string;
 	target?: string;
 	diagnostic?: string;
+	exitCode?: number;
+	terminalOutput?: string;
 	outcome?: QjsShellCommandOutcome;
 	paths: string[];
 };
@@ -2378,6 +2380,7 @@ type QjsShellCommandOutcome = {
 	changed?: boolean;
 	diagnostic?: string;
 	exitCode?: number;
+	terminalOutput?: string;
 };
 
 function isQjsShellMutationMessage(message: unknown): message is QjsShellMutationMessage {
@@ -2411,6 +2414,8 @@ function isQjsShellMutationOperation(operation: unknown): operation is QjsShellM
 		&& (candidate.source === undefined || typeof candidate.source === "string")
 		&& (candidate.target === undefined || typeof candidate.target === "string")
 		&& (candidate.diagnostic === undefined || typeof candidate.diagnostic === "string")
+		&& (candidate.exitCode === undefined || typeof candidate.exitCode === "number")
+		&& (candidate.terminalOutput === undefined || typeof candidate.terminalOutput === "string")
 		&& (candidate.outcome === undefined || isQjsShellCommandOutcome(candidate.outcome))
 		&& Array.isArray(candidate.paths)
 		&& candidate.paths.every((path) => typeof path === "string" && path.length > 0);
@@ -2424,7 +2429,8 @@ function isQjsShellCommandOutcome(outcome: unknown): outcome is QjsShellCommandO
 	return (candidate.status === undefined || typeof candidate.status === "string")
 		&& (candidate.changed === undefined || typeof candidate.changed === "boolean")
 		&& (candidate.diagnostic === undefined || typeof candidate.diagnostic === "string")
-		&& (candidate.exitCode === undefined || typeof candidate.exitCode === "number");
+		&& (candidate.exitCode === undefined || typeof candidate.exitCode === "number")
+		&& (candidate.terminalOutput === undefined || typeof candidate.terminalOutput === "string");
 }
 
 function shellMutationActivity(message: QjsShellMutationMessage): FilesystemActivity | undefined {
@@ -2468,7 +2474,11 @@ function shellOperationActivity(operation: QjsShellMutationOperation): Filesyste
 function shellOperationDescription(operation: QjsShellMutationOperation): string | undefined {
 	const diagnostic = operation.outcome?.diagnostic || operation.diagnostic;
 	const status = operation.outcome?.status;
+	const exitCode = operation.outcome?.exitCode ?? operation.exitCode;
+	const terminalOutput = operation.outcome?.terminalOutput || operation.terminalOutput;
 	const command = operation.command;
+	const exit = typeof exitCode === "number" ? `exit ${exitCode}` : undefined;
+	const detail = diagnostic || exit || terminalOutput;
 	if (diagnostic && status && status !== "ok") {
 		return command ? `${status}: ${diagnostic} · ${command}` : `${status}: ${diagnostic}`;
 	}
@@ -2476,7 +2486,8 @@ function shellOperationDescription(operation: QjsShellMutationOperation): string
 		return command ? `${diagnostic} · ${command}` : diagnostic;
 	}
 	if (status && status !== "ok") {
-		return command ? `${status} · ${command}` : status;
+		const prefix = detail ? `${status}: ${detail}` : status;
+		return command ? `${prefix} · ${command}` : prefix;
 	}
 	return command && operation.status !== "changed" ? command : undefined;
 }

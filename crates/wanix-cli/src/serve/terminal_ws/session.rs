@@ -13,12 +13,13 @@ use super::message::parse_terminal_resize_message;
 use super::protocol::{shell_exit_message, shell_mutation_message, shell_session_message};
 use super::root_changes::RootChangeTracker;
 use super::shell_activity::{
-    ShellInputActivityTracker, ShellMutationOperation, operations_for_changed_paths,
-    operations_without_changed_paths,
+    ShellCommandObservation, ShellInputActivityTracker, ShellMutationOperation,
+    operations_for_changed_paths, operations_without_changed_paths,
 };
 
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
 const SHELL_OPERATION_DIAGNOSTIC_MAX_CHARS: usize = 240;
+const SHELL_OPERATION_OUTPUT_MAX_CHARS: usize = 320;
 
 pub(in crate::serve) fn serve_terminal_websocket_connection(
     root_path: &Path,
@@ -122,14 +123,14 @@ impl TerminalWebSocketSession {
             .shell
             .input(input)
             .map_err(ServeConnectionError::Terminal)?;
-        let diagnostic = if input_contains_line_boundary(input) {
-            shell_operation_diagnostic(input, &output)
+        let observation = if input_contains_line_boundary(input) {
+            shell_command_observation(input, &output)
         } else {
-            None
+            ShellCommandObservation::default()
         };
         self.send_output(output)?;
         if input_contains_line_boundary(input) {
-            self.send_mutations(&operations, diagnostic.as_deref())?;
+            self.send_mutations(&operations, &observation)?;
             self.input.sync_cwd(&self.shell.cwd());
         }
         Ok(())
@@ -183,16 +184,16 @@ impl TerminalWebSocketSession {
     fn send_mutations(
         &mut self,
         operations: &[ShellMutationOperation],
-        diagnostic: Option<&str>,
+        observation: &ShellCommandObservation,
     ) -> Result<(), ServeConnectionError> {
         let paths = self
             .changes
             .take_changed_paths()
             .map_err(ServeConnectionError::Io)?;
         let operations = if paths.is_empty() {
-            operations_without_changed_paths(operations, diagnostic)
+            operations_without_changed_paths(operations, observation)
         } else {
-            operations_for_changed_paths(operations, &paths)
+            operations_for_changed_paths(operations, &paths, observation)
         };
         if paths.is_empty() && operations.is_empty() {
             return Ok(());
@@ -262,7 +263,16 @@ fn input_contains_line_boundary(input: &[u8]) -> bool {
     input.iter().any(|byte| matches!(byte, b'\n' | b'\r'))
 }
 
-fn shell_operation_diagnostic(input: &[u8], output: &[u8]) -> Option<String> {
+fn shell_command_observation(input: &[u8], output: &[u8]) -> ShellCommandObservation {
+    let lines = shell_command_output_lines(input, output);
+    ShellCommandObservation {
+        diagnostic: shell_command_diagnostic(&lines),
+        exit_code: shell_command_exit_code(&lines),
+        terminal_output: shell_command_terminal_output(&lines),
+    }
+}
+
+fn shell_command_output_lines(input: &[u8], output: &[u8]) -> Vec<String> {
     let echoed_lines = String::from_utf8_lossy(input)
         .replace('\r', "\n")
         .lines()
@@ -271,24 +281,60 @@ fn shell_operation_diagnostic(input: &[u8], output: &[u8]) -> Option<String> {
         .map(str::to_owned)
         .collect::<Vec<_>>();
     let output = String::from_utf8_lossy(output).replace('\r', "\n");
-    let mut candidate = None;
-    for line in output
+    output
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-    {
-        if line == "$" || echoed_lines.iter().any(|echoed| echoed == line) {
-            continue;
-        }
-        candidate = Some(truncate_shell_diagnostic(line));
-    }
-    candidate
+        .filter(|line| *line != "$" && !echoed_lines.iter().any(|echoed| echoed == line))
+        .map(str::to_owned)
+        .collect()
 }
 
-fn truncate_shell_diagnostic(value: &str) -> String {
+fn shell_command_exit_code(lines: &[String]) -> Option<i32> {
+    lines.iter().rev().find_map(|line| {
+        line.strip_prefix("qjs exit ")
+            .and_then(|value| value.trim().parse::<i32>().ok())
+    })
+}
+
+fn shell_command_diagnostic(lines: &[String]) -> Option<String> {
+    lines.iter().rev().find_map(|line| {
+        is_shell_diagnostic_line(line)
+            .then(|| truncate_shell_text(line, SHELL_OPERATION_DIAGNOSTIC_MAX_CHARS))
+    })
+}
+
+fn is_shell_diagnostic_line(line: &str) -> bool {
+    line.contains(": ")
+        && [
+            "errno",
+            "not found",
+            "missing",
+            "usage",
+            "invalid",
+            "failed",
+            "directory not empty",
+            "not a directory",
+            "service paths",
+        ]
+        .iter()
+        .any(|needle| line.contains(needle))
+}
+
+fn shell_command_terminal_output(lines: &[String]) -> Option<String> {
+    if lines.is_empty() {
+        return None;
+    }
+    Some(truncate_shell_text(
+        &lines.join("\n"),
+        SHELL_OPERATION_OUTPUT_MAX_CHARS,
+    ))
+}
+
+fn truncate_shell_text(value: &str, max_chars: usize) -> String {
     let mut truncated = String::new();
     for (index, ch) in value.chars().enumerate() {
-        if index == SHELL_OPERATION_DIAGNOSTIC_MAX_CHARS {
+        if index == max_chars {
             truncated.push_str("...");
             return truncated;
         }

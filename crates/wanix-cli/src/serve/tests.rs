@@ -1417,11 +1417,11 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     );
     assert_eq!(
         qjs_shell["mutationMessage"],
-        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"],\"operations\":[{\"kind\":\"write\",\"command\":\"write /path data\",\"status\":\"changed\",\"target\":\"/path\",\"outcome\":{\"status\":\"ok\",\"changed\":true},\"paths\":[\"/path\"]}]}"
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"],\"operations\":[{\"kind\":\"write\",\"command\":\"write /path data\",\"status\":\"changed\",\"target\":\"/path\",\"terminalOutput\":\"wrote /path\",\"outcome\":{\"status\":\"ok\",\"changed\":true,\"terminalOutput\":\"wrote /path\"},\"paths\":[\"/path\"]}]}"
     );
     assert_eq!(
         qjs_shell["unchangedOperationMessage"],
-        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"command\":\"rm missing\",\"status\":\"unchanged\",\"target\":\"/missing\",\"diagnostic\":\"rm: missing: errno -44\",\"outcome\":{\"status\":\"error\",\"changed\":false,\"diagnostic\":\"rm: missing: errno -44\"},\"paths\":[]}]}"
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"command\":\"rm missing\",\"status\":\"unchanged\",\"target\":\"/missing\",\"diagnostic\":\"rm: missing: errno -44\",\"terminalOutput\":\"rm: missing: errno -44\",\"outcome\":{\"status\":\"error\",\"changed\":false,\"diagnostic\":\"rm: missing: errno -44\",\"terminalOutput\":\"rm: missing: errno -44\"},\"paths\":[]}]}"
     );
     assert_eq!(qjs_shell["exitMessage"], "{\"type\":\"exit\",\"code\":N}");
     assert_eq!(
@@ -2351,8 +2351,10 @@ std.exit(6);
             assert_eq!(operation["command"], "write observed.txt observed from ws");
             assert_eq!(operation["status"], "changed");
             assert_eq!(operation["target"], "/app/observed.txt");
+            assert_eq!(operation["terminalOutput"], "wrote observed.txt");
             assert_eq!(operation["outcome"]["status"], "ok");
             assert_eq!(operation["outcome"]["changed"], true);
+            assert_eq!(operation["outcome"]["terminalOutput"], "wrote observed.txt");
             assert_eq!(
                 qjs_shell_operation_paths(operation),
                 vec!["/app/observed.txt".to_owned()]
@@ -2389,10 +2391,18 @@ std.exit(6);
                 operation["diagnostic"],
                 "rm: definitely-missing.txt: errno -44"
             );
+            assert_eq!(
+                operation["terminalOutput"],
+                "rm: definitely-missing.txt: errno -44"
+            );
             assert_eq!(operation["outcome"]["status"], "error");
             assert_eq!(operation["outcome"]["changed"], false);
             assert_eq!(
                 operation["outcome"]["diagnostic"],
+                "rm: definitely-missing.txt: errno -44"
+            );
+            assert_eq!(
+                operation["outcome"]["terminalOutput"],
                 "rm: definitely-missing.txt: errno -44"
             );
             assert!(qjs_shell_operation_paths(operation).is_empty());
@@ -2454,6 +2464,13 @@ std.exit(6);
                 && mutation["operations"].as_array().is_some_and(|operations| {
                     operations.iter().any(|operation| {
                         operation["kind"] == "redirect"
+                            && operation["exitCode"] == 6
+                            && operation["outcome"]["status"] == "error"
+                            && operation["outcome"]["changed"] == true
+                            && operation["outcome"]["exitCode"] == 6
+                            && operation["terminalOutput"]
+                                .as_str()
+                                .is_some_and(|output| output.contains("qjs exit 6"))
                             && qjs_shell_operation_paths(operation)
                                 == vec![
                                     "/app/child-out.txt".to_owned(),

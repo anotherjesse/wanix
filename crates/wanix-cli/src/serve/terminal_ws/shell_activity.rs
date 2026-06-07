@@ -6,9 +6,18 @@ pub(in crate::serve) struct ShellMutationOperation {
     pub(in crate::serve) command: String,
     pub(in crate::serve) status: String,
     pub(in crate::serve) diagnostic: Option<String>,
+    pub(in crate::serve) exit_code: Option<i32>,
+    pub(in crate::serve) terminal_output: Option<String>,
     pub(in crate::serve) source: Option<String>,
     pub(in crate::serve) target: Option<String>,
     pub(in crate::serve) paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(in crate::serve) struct ShellCommandObservation {
+    pub(in crate::serve) diagnostic: Option<String>,
+    pub(in crate::serve) exit_code: Option<i32>,
+    pub(in crate::serve) terminal_output: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +131,8 @@ impl ShellInputActivityTracker {
                 command: command_text,
                 status: "changed".to_owned(),
                 diagnostic: None,
+                exit_code: None,
+                terminal_output: None,
                 source: None,
                 target: redirected.last().cloned(),
                 paths: unique_paths(redirected),
@@ -134,28 +145,38 @@ impl ShellInputActivityTracker {
 pub(in crate::serve) fn operations_for_changed_paths(
     operations: &[ShellMutationOperation],
     changed_paths: &[String],
+    observation: &ShellCommandObservation,
 ) -> Vec<ShellMutationOperation> {
     operations
         .iter()
         .filter(|operation| operation_intersects_changed_paths(operation, changed_paths))
         .cloned()
+        .map(|operation| operation.with_observation(observation))
         .collect()
 }
 
 pub(in crate::serve) fn operations_without_changed_paths(
     operations: &[ShellMutationOperation],
-    diagnostic: Option<&str>,
+    observation: &ShellCommandObservation,
 ) -> Vec<ShellMutationOperation> {
-    let diagnostic = diagnostic.map(str::to_owned);
     operations
         .iter()
         .map(|operation| ShellMutationOperation {
             status: "unchanged".to_owned(),
-            diagnostic: diagnostic.clone(),
             paths: Vec::new(),
             ..operation.clone()
         })
+        .map(|operation| operation.with_observation(observation))
         .collect()
+}
+
+impl ShellMutationOperation {
+    fn with_observation(mut self, observation: &ShellCommandObservation) -> Self {
+        self.diagnostic = observation.diagnostic.clone();
+        self.exit_code = observation.exit_code;
+        self.terminal_output = observation.terminal_output.clone();
+        self
+    }
 }
 
 fn operation_intersects_changed_paths(
@@ -187,6 +208,8 @@ fn operation(
         command: command.to_owned(),
         status: "changed".to_owned(),
         diagnostic: None,
+        exit_code: None,
+        terminal_output: None,
         source,
         target,
         paths: unique_paths(paths),
@@ -300,8 +323,8 @@ mod tests {
     use wanix_fs::NormalizedPath;
 
     use super::{
-        ShellInputActivityTracker, operations_for_changed_paths, operations_without_changed_paths,
-        resolve_wanix_path, shell_words,
+        ShellCommandObservation, ShellInputActivityTracker, operations_for_changed_paths,
+        operations_without_changed_paths, resolve_wanix_path, shell_words,
     };
 
     #[test]
@@ -349,6 +372,7 @@ mod tests {
         let filtered = operations_for_changed_paths(
             &operations,
             &["/app/out.txt".to_owned(), "/app/err.txt".to_owned()],
+            &ShellCommandObservation::default(),
         );
 
         assert_eq!(filtered.len(), 1);
@@ -361,8 +385,14 @@ mod tests {
     fn marks_operations_without_changed_paths_as_unchanged() {
         let mut tracker = ShellInputActivityTracker::new(&NormalizedPath::new("app").unwrap());
         let operations = tracker.observe_input(b"rm missing.txt\n");
-        let unchanged =
-            operations_without_changed_paths(&operations, Some("rm: missing.txt: errno -44"));
+        let unchanged = operations_without_changed_paths(
+            &operations,
+            &ShellCommandObservation {
+                diagnostic: Some("rm: missing.txt: errno -44".to_owned()),
+                terminal_output: Some("rm: missing.txt: errno -44".to_owned()),
+                ..ShellCommandObservation::default()
+            },
+        );
 
         assert_eq!(unchanged.len(), 1);
         assert_eq!(unchanged[0].kind, "rm");
@@ -372,7 +402,31 @@ mod tests {
             unchanged[0].diagnostic.as_deref(),
             Some("rm: missing.txt: errno -44")
         );
+        assert_eq!(
+            unchanged[0].terminal_output.as_deref(),
+            Some("rm: missing.txt: errno -44")
+        );
         assert_eq!(unchanged[0].target.as_deref(), Some("/app/missing.txt"));
         assert!(unchanged[0].paths.is_empty());
+    }
+
+    #[test]
+    fn attaches_observations_to_changed_operations() {
+        let mut tracker = ShellInputActivityTracker::new(&NormalizedPath::new("app").unwrap());
+        let operations = tracker.observe_input(b"qjs child.js > out.txt 2> err.txt\n");
+        let filtered = operations_for_changed_paths(
+            &operations,
+            &["/app/out.txt".to_owned(), "/app/err.txt".to_owned()],
+            &ShellCommandObservation {
+                exit_code: Some(6),
+                terminal_output: Some("qjs exit 6".to_owned()),
+                ..ShellCommandObservation::default()
+            },
+        );
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].status, "changed");
+        assert_eq!(filtered[0].exit_code, Some(6));
+        assert_eq!(filtered[0].terminal_output.as_deref(), Some("qjs exit 6"));
     }
 }

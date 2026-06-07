@@ -57,6 +57,15 @@ fn shell_operation_json(operation: &ShellMutationOperation) -> String {
     if let Some(diagnostic) = &operation.diagnostic {
         fields.push(format!("\"diagnostic\":{}", json_string(diagnostic)));
     }
+    if let Some(exit_code) = operation.exit_code {
+        fields.push(format!("\"exitCode\":{exit_code}"));
+    }
+    if let Some(terminal_output) = &operation.terminal_output {
+        fields.push(format!(
+            "\"terminalOutput\":{}",
+            json_string(terminal_output)
+        ));
+    }
     fields.push(format!(
         "\"outcome\":{}",
         shell_operation_outcome_json(operation)
@@ -83,14 +92,23 @@ fn shell_operation_outcome_json(operation: &ShellMutationOperation) -> String {
     if let Some(diagnostic) = &operation.diagnostic {
         fields.push(format!("\"diagnostic\":{}", json_string(diagnostic)));
     }
+    if let Some(exit_code) = operation.exit_code {
+        fields.push(format!("\"exitCode\":{exit_code}"));
+    }
+    if let Some(terminal_output) = &operation.terminal_output {
+        fields.push(format!(
+            "\"terminalOutput\":{}",
+            json_string(terminal_output)
+        ));
+    }
     format!("{{{}}}", fields.join(","))
 }
 
 fn shell_operation_outcome_status(operation: &ShellMutationOperation) -> &'static str {
-    if operation.status == "changed" {
-        "ok"
-    } else if operation.diagnostic.is_some() {
+    if operation.diagnostic.is_some() || operation.exit_code.is_some_and(|code| code != 0) {
         "error"
+    } else if operation.status == "changed" {
+        "ok"
     } else {
         "unchanged"
     }
