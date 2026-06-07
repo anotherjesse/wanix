@@ -5,7 +5,7 @@ import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairQjsProgram } from './a
 import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
 import { COCKPIT_SELF_CHECK_JSON_PATH, COCKPIT_SELF_CHECK_MD_PATH, COCKPIT_SELF_CHECK_PROBE_PATH, runCockpitSelfCheck } from './cockpit-self-check.js';
 import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
-import { copyHttpAppUrl, createHttpApp, installHttpAppDemo, openHttpAppCatalog, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, previewHttpCatalogApp, publishHttpAppDataStores, publishHttpAppsToSystemView, type HttpAppCatalogTarget, type HttpAppRouteConfig } from './http-app-demo.js';
+import { copyHttpAppUrl, createHttpApp, installHttpAppDemo, openHttpAppCatalog, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, previewHttpAppPath, previewHttpCatalogApp, publishHttpAppDataStores, publishHttpAppsToSystemView, type HttpAppCatalogTarget, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView, type WanixServiceTask, type WanixServiceTerminal } from './system-view.js';
@@ -455,6 +455,22 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.newHttpApp', async () => {
 			try {
 				await createHttpApp(fsys, bridge, config, systemView);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.previewCurrentHttpApp', async (resource?: vscode.Uri) => {
+			try {
+				const uri = commandWanixUri(resource) || currentWanixEditor()?.document.uri;
+				if (!uri) {
+					throw new Error("Open an /apps HTTP handler before previewing the current app");
+				}
+				if (uri.scheme !== WanixBridge.scheme) {
+					throw new Error("Preview Current HTTP App expects a wanix: file");
+				}
+				await saveOpenDocument(uri, "HTTP app");
+				await previewHttpAppPath(fsys, bridge, config, systemView, bridge.normalizePath(uri.path));
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -1703,7 +1719,7 @@ function commandWanixUri(resource: vscode.Uri | undefined): vscode.Uri | undefin
 	return undefined;
 }
 
-async function saveOpenDocument(uri: vscode.Uri, kind: TaskRunKind): Promise<void> {
+async function saveOpenDocument(uri: vscode.Uri, kind: string): Promise<void> {
 	const document = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === uri.toString());
 	if (document?.isDirty && !(await document.save())) {
 		throw new Error(`Save ${baseName(uri.path)} before running it as a ${kind} task`);

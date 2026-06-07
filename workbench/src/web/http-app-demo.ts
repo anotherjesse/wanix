@@ -349,6 +349,25 @@ export async function previewHttpCatalogApp(
 	});
 }
 
+export async function previewHttpAppPath(
+	fsys: any,
+	bridge: WanixBridge,
+	config: HttpAppDemoConfig,
+	systemView: WanixSystemView,
+	path: string,
+): Promise<void> {
+	const sourcePath = await resolveHttpAppSourcePath(fsys, path);
+	const name = appNameFromPath(sourcePath);
+	await previewHttpApp(fsys, bridge, config, systemView, {
+		name,
+		sourcePath,
+		previewPath: httpAppPreviewPath(name),
+		message: `Previewed Wanix HTTP app ${name}`,
+		errorLabel: `Wanix HTTP app ${name}`,
+	});
+	await publishHttpAppCatalog(fsys, bridge, config, systemView);
+}
+
 async function previewHttpApp(
 	fsys: any,
 	bridge: WanixBridge,
@@ -474,6 +493,25 @@ async function resolveHttpAppTarget(
 	throw new Error("No HTTP app handler is available for this route");
 }
 
+async function resolveHttpAppSourcePath(fsys: any, path: string): Promise<string> {
+	const normalized = absoluteWanixPath(path);
+	if (isHttpAppSourcePath(normalized)) {
+		return normalized;
+	}
+	const previewName = appPreviewNameFromPath(normalized);
+	if (previewName) {
+		const jsPath = `${APP_DIR}/${previewName}.js`;
+		if (await wanixPathExists(fsys, jsPath)) {
+			return jsPath;
+		}
+		const wasmPath = `${APP_DIR}/${previewName}.wasm`;
+		if (await wanixPathExists(fsys, wasmPath)) {
+			return wasmPath;
+		}
+	}
+	throw new Error("Open an /apps/<name>.js or /apps/<name>.wasm handler before previewing the current HTTP app");
+}
+
 function httpAppCatalogEntry(config: HttpAppDemoConfig, name: string, runtime: HttpAppRuntime, sourcePath: string, previewPath?: string): HttpAppCatalogEntry {
 	return {
 		name,
@@ -573,8 +611,17 @@ function appNameFromPath(path: string): string {
 	return basename.replace(/\.(js|wasm)$/i, "");
 }
 
+function appPreviewNameFromPath(path: string): string | undefined {
+	const match = /^\/apps\/([^/]+)\.response\.txt$/i.exec(path);
+	return match?.[1];
+}
+
 function httpAppPreviewPath(name: string): string {
 	return `${APP_DIR}/${name}.response.txt`;
+}
+
+function isHttpAppSourcePath(path: string): boolean {
+	return /^\/apps\/[^/]+\.(js|wasm)$/i.test(path);
 }
 
 function httpAppRuntimeForFilename(name: string): HttpAppRuntime | undefined {
@@ -607,6 +654,11 @@ async function wanixPathExists(fsys: any, path: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
+}
+
+function absoluteWanixPath(path: string): string {
+	const trimmed = path.trim();
+	return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
 function base64Bytes(value: string): Uint8Array {
