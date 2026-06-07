@@ -612,6 +612,17 @@ same retained audit trail after a browser reload.
 
 ![Shell archive reload persistence](assets/wanix-workbench-browser-dx/87-shell-archive-reload-persistence.png)
 
+The rows now have health too. The explorer derives badges from the archive
+metadata and current live history: missing manifest, not compared, stale
+compare, missing bundle, importable, restorable, last restored, and imported.
+Those badges appear in the sidebar row, the archive's `Health` child, the
+markdown inventory, and the structured `health.badges` array in
+`inventory.json` plus `system-state.json`. The practical effect is small but
+important: a person or future agent can tell whether to compare, export,
+restore, or repair an archive without opening every report by hand.
+
+![Shell archive health badges](assets/wanix-workbench-browser-dx/88-shell-archive-health-badges.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1232,7 +1243,9 @@ The current loop is:
     `Shell Archives` in the System view to operate on a specific archive row:
     open evidence, compare, export/import bundle, restore, or prune that
     timestamped archive. Reload the workbench and the section hydrates from
-    `inventory.json` without needing to run the inventory command first.
+    `inventory.json` without needing to run the inventory command first. Use
+    each archive row's health badges to spot missing manifests, stale compare
+    reports, missing bundles, importable bundles, and restorable snapshots.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1344,9 +1357,9 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add archive health/staleness badges, so the explorer can show missing bundle,
-  missing manifest, stale compare, and restorable/importable state directly on
-  archive rows.
+- Add a shell archive detail dashboard that opens one archive as a compact
+  markdown/JSON dossier with health, evidence links, latest commands, compare
+  state, bundle/import state, and recommended next actions.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

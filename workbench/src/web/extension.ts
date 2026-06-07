@@ -129,6 +129,7 @@ type ShellHistoryArchiveInfo = {
 	commandsPath: string;
 	indexPath: string;
 	manifestPath: string;
+	manifestPresent?: boolean;
 	summaryPath: string;
 	latestMarkdownPath: string;
 	generatedAt: string;
@@ -139,6 +140,8 @@ type ShellHistoryArchiveInfo = {
 	compareMarkdownPath: string;
 	compareJsonPath: string;
 	compareGeneratedAt?: string;
+	compareStale?: boolean;
+	liveLastObservedAt?: string;
 	archivedOnlyCount?: number;
 	liveOnlyCount?: number;
 	wasLastRestored?: boolean;
@@ -1598,6 +1601,8 @@ async function shellHistoryArchiveInventory(
 
 async function shellHistoryArchiveInfos(fsys: any, lastRestoredArchiveDir?: string): Promise<ShellHistoryArchiveInfo[]> {
 	const names = await shellHistoryReadDirNames(fsys, SHELL_HISTORY_ARCHIVE_DIR);
+	const liveLastObservedMillis = shellHistoryLastObservedMillis(await readShellHistoryEntriesOptional(fsys, SHELL_HISTORY_JSONL_PATH));
+	const liveLastObservedAt = formatShellHistoryTime(liveLastObservedMillis);
 	const archives: ShellHistoryArchiveInfo[] = [];
 	for (const name of names) {
 		const archiveDir = `${SHELL_HISTORY_ARCHIVE_DIR}/${name.replace(/\/$/, "")}`;
@@ -1612,6 +1617,8 @@ async function shellHistoryArchiveInfos(fsys: any, lastRestoredArchiveDir?: stri
 		}
 		const compareJsonPath = `${archiveDir}/${SHELL_HISTORY_COMPARE_JSON_NAME}`;
 		const compare = await shellHistoryReadJson(fsys, compareJsonPath);
+		const compareGeneratedAt = typeof compare?.generatedAt === "string" ? compare.generatedAt : undefined;
+		const compareGeneratedAtMillis = compareGeneratedAt ? Date.parse(compareGeneratedAt) : NaN;
 		const bundleJsonPath = `${archiveDir}/${SHELL_HISTORY_ARCHIVE_BUNDLE_JSON_NAME}`;
 		const bundle = await shellHistoryReadJson(fsys, bundleJsonPath);
 		const importJsonPath = `${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_JSON_NAME}`;
@@ -1626,6 +1633,7 @@ async function shellHistoryArchiveInfos(fsys: any, lastRestoredArchiveDir?: stri
 			commandsPath,
 			indexPath: `${archiveDir}/index.md`,
 			manifestPath,
+			manifestPresent: manifest !== undefined,
 			summaryPath: `${archiveDir}/summary.md`,
 			latestMarkdownPath: `${archiveDir}/latest.md`,
 			generatedAt,
@@ -1635,7 +1643,12 @@ async function shellHistoryArchiveInfos(fsys: any, lastRestoredArchiveDir?: stri
 			lastObservedAt: typeof manifest?.lastObservedAt === "string" ? manifest.lastObservedAt : undefined,
 			compareMarkdownPath: `${archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`,
 			compareJsonPath,
-			compareGeneratedAt: typeof compare?.generatedAt === "string" ? compare.generatedAt : undefined,
+			compareGeneratedAt,
+			compareStale: compareGeneratedAt !== undefined
+				&& liveLastObservedMillis !== undefined
+				&& Number.isFinite(compareGeneratedAtMillis)
+				&& compareGeneratedAtMillis < liveLastObservedMillis,
+			liveLastObservedAt,
 			archivedOnlyCount: typeof compare?.archivedOnlyCount === "number" ? compare.archivedOnlyCount : undefined,
 			liveOnlyCount: typeof compare?.liveOnlyCount === "number" ? compare.liveOnlyCount : undefined,
 			wasLastRestored: lastRestoredArchiveDir
@@ -1698,6 +1711,7 @@ function shellHistoryArchiveInfoFromInventoryJson(source: any): ShellHistoryArch
 		commandsPath: shellHistoryArchiveInventoryPath(source, "commandsPath", `${archiveDir}/commands.jsonl`, archiveDir),
 		indexPath: shellHistoryArchiveInventoryPath(source, "indexPath", `${archiveDir}/index.md`, archiveDir),
 		manifestPath: shellHistoryArchiveInventoryPath(source, "manifestPath", `${archiveDir}/manifest.json`, archiveDir),
+		manifestPresent: source.manifestPresent !== false,
 		summaryPath: shellHistoryArchiveInventoryPath(source, "summaryPath", `${archiveDir}/summary.md`, archiveDir),
 		latestMarkdownPath: shellHistoryArchiveInventoryPath(source, "latestMarkdownPath", `${archiveDir}/latest.md`, archiveDir),
 		generatedAt,
@@ -1708,6 +1722,8 @@ function shellHistoryArchiveInfoFromInventoryJson(source: any): ShellHistoryArch
 		compareMarkdownPath: shellHistoryArchiveInventoryPath(source, "compareMarkdownPath", `${archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`, archiveDir),
 		compareJsonPath: shellHistoryArchiveInventoryPath(source, "compareJsonPath", `${archiveDir}/${SHELL_HISTORY_COMPARE_JSON_NAME}`, archiveDir),
 		compareGeneratedAt: typeof source.compareGeneratedAt === "string" ? source.compareGeneratedAt : undefined,
+		compareStale: source.compareStale === true,
+		liveLastObservedAt: typeof source.liveLastObservedAt === "string" ? source.liveLastObservedAt : undefined,
 		archivedOnlyCount: typeof source.archivedOnlyCount === "number" ? source.archivedOnlyCount : undefined,
 		liveOnlyCount: typeof source.liveOnlyCount === "number" ? source.liveOnlyCount : undefined,
 		wasLastRestored: source.wasLastRestored === true,
@@ -1764,13 +1780,17 @@ function shellHistoryArchiveInfoJson(archive: ShellHistoryArchiveInfo): Record<s
 		commandCount: archive.commandCount,
 		firstObservedAt: archive.firstObservedAt,
 		lastObservedAt: archive.lastObservedAt,
+		health: shellHistoryArchiveHealthJson(archive),
 		indexPath: shellHistoryAbsolutePath(archive.indexPath),
 		manifestPath: shellHistoryAbsolutePath(archive.manifestPath),
+		manifestPresent: archive.manifestPresent !== false,
 		commandsPath: shellHistoryAbsolutePath(archive.commandsPath),
 		summaryPath: shellHistoryAbsolutePath(archive.summaryPath),
 		latestMarkdownPath: shellHistoryAbsolutePath(archive.latestMarkdownPath),
 		compared: archive.compareGeneratedAt !== undefined,
 		compareGeneratedAt: archive.compareGeneratedAt,
+		compareStale: archive.compareStale === true,
+		liveLastObservedAt: archive.liveLastObservedAt,
 		compareMarkdownPath: shellHistoryAbsolutePath(archive.compareMarkdownPath),
 		compareJsonPath: shellHistoryAbsolutePath(archive.compareJsonPath),
 		archivedOnlyCount: archive.archivedOnlyCount,
@@ -1786,6 +1806,46 @@ function shellHistoryArchiveInfoJson(archive: ShellHistoryArchiveInfo): Record<s
 		importMarkdownPath: shellHistoryAbsolutePath(archive.importMarkdownPath),
 		importJsonPath: shellHistoryAbsolutePath(archive.importJsonPath),
 	};
+}
+
+function shellHistoryArchiveHealthJson(archive: ShellHistoryArchiveInfo): Record<string, unknown> {
+	const badges = shellHistoryArchiveHealthBadges(archive);
+	return {
+		status: badges.some((badge) => badge.kind === "warning") ? "warn" : "ok",
+		badges,
+	};
+}
+
+function shellHistoryArchiveHealthBadges(archive: ShellHistoryArchiveInfo): Array<{ label: string; kind: string; detail?: string }> {
+	const badges: Array<{ label: string; kind: string; detail?: string }> = [];
+	if (archive.manifestPresent === false) {
+		badges.push({ label: "missing manifest", kind: "warning", detail: shellHistoryAbsolutePath(archive.manifestPath) });
+	}
+	if (archive.compareGeneratedAt) {
+		badges.push({
+			label: archive.compareStale ? "stale compare" : "compared",
+			kind: archive.compareStale ? "warning" : "ok",
+			detail: archive.compareStale && archive.liveLastObservedAt
+				? `live history changed at ${archive.liveLastObservedAt}`
+				: archive.compareGeneratedAt,
+		});
+	} else {
+		badges.push({ label: "not compared", kind: "warning", detail: shellHistoryAbsolutePath(archive.compareMarkdownPath) });
+	}
+	if (archive.bundleGeneratedAt) {
+		badges.push({ label: "importable", kind: "ok", detail: shellHistoryAbsolutePath(archive.bundleJsonPath) });
+	} else {
+		badges.push({ label: "missing bundle", kind: "warning", detail: shellHistoryAbsolutePath(archive.bundleJsonPath) });
+	}
+	if (archive.wasLastRestored) {
+		badges.push({ label: "last restored", kind: "ok" });
+	} else {
+		badges.push({ label: "restorable", kind: "info", detail: shellHistoryAbsolutePath(archive.commandsPath) });
+	}
+	if (archive.importGeneratedAt) {
+		badges.push({ label: "imported", kind: "ok", detail: archive.importGeneratedAt });
+	}
+	return badges;
 }
 
 function shellHistoryArchiveInventoryMarkdown(inventory: ShellHistoryArchiveInventory): string {
@@ -1819,14 +1879,15 @@ function shellHistoryArchiveInventoryRows(archives: ShellHistoryArchiveInfo[]): 
 		return ["No shell history archives yet. Use `Archive Shell Command History` first."];
 	}
 	const rows = [
-		"| Archive | Commands | Range | Compare | Bundle | Import | Restore |",
-		"| --- | ---: | --- | --- | --- | --- | --- |",
+		"| Archive | Commands | Health | Range | Compare | Bundle | Import | Restore |",
+		"| --- | ---: | --- | --- | --- | --- | --- | --- |",
 	];
 	for (const archive of archives) {
 		const archiveLink = shellHistoryWanixLink(archive.name, archive.indexPath);
+		const health = shellHistoryArchiveHealthBadges(archive).map((badge) => badge.label).join(", ");
 		const range = [archive.firstObservedAt, archive.lastObservedAt].filter(Boolean).join(" to ") || archive.generatedAt;
 		const compare = archive.compareGeneratedAt
-			? `${shellHistoryWanixLink("compared", archive.compareMarkdownPath)} (${archive.archivedOnlyCount ?? "?"} archived-only, ${archive.liveOnlyCount ?? "?"} live-only)`
+			? `${shellHistoryWanixLink(archive.compareStale ? "stale compare" : "compared", archive.compareMarkdownPath)} (${archive.archivedOnlyCount ?? "?"} archived-only, ${archive.liveOnlyCount ?? "?"} live-only)`
 			: "not compared";
 		const bundle = archive.bundleGeneratedAt
 			? `${shellHistoryWanixLink("bundle", archive.bundleMarkdownPath)} (${archive.bundleFileCount ?? "?"} files)`
@@ -1835,7 +1896,7 @@ function shellHistoryArchiveInventoryRows(archives: ShellHistoryArchiveInfo[]): 
 			? shellHistoryWanixLink("imported", archive.importMarkdownPath)
 			: "";
 		const restore = archive.wasLastRestored ? "last restored" : "";
-		rows.push(`| ${archiveLink} | ${archive.commandCount} | ${range} | ${compare} | ${bundle} | ${imported} | ${restore} |`);
+		rows.push(`| ${archiveLink} | ${archive.commandCount} | ${health} | ${range} | ${compare} | ${bundle} | ${imported} | ${restore} |`);
 	}
 	return rows;
 }
@@ -1958,6 +2019,7 @@ function shellHistoryArchiveInfoFromBundleJson(value: any): ShellHistoryArchiveI
 		commandsPath: shellHistoryRelativePath(source.commandsPath || `${archiveDir}/commands.jsonl`),
 		indexPath: shellHistoryRelativePath(source.indexPath || `${archiveDir}/index.md`),
 		manifestPath: shellHistoryRelativePath(source.manifestPath || `${archiveDir}/manifest.json`),
+		manifestPresent: source.manifestPresent !== false,
 		summaryPath: shellHistoryRelativePath(source.summaryPath || `${archiveDir}/summary.md`),
 		latestMarkdownPath: shellHistoryRelativePath(source.latestMarkdownPath || `${archiveDir}/latest.md`),
 		generatedAt: typeof source.generatedAt === "string" ? source.generatedAt : bundleGeneratedAt || name,
@@ -1968,6 +2030,8 @@ function shellHistoryArchiveInfoFromBundleJson(value: any): ShellHistoryArchiveI
 		compareMarkdownPath: shellHistoryRelativePath(source.compareMarkdownPath || `${archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`),
 		compareJsonPath: shellHistoryRelativePath(source.compareJsonPath || `${archiveDir}/${SHELL_HISTORY_COMPARE_JSON_NAME}`),
 		compareGeneratedAt: typeof source.compareGeneratedAt === "string" ? source.compareGeneratedAt : undefined,
+		compareStale: source.compareStale === true,
+		liveLastObservedAt: typeof source.liveLastObservedAt === "string" ? source.liveLastObservedAt : undefined,
 		archivedOnlyCount: typeof source.archivedOnlyCount === "number" ? source.archivedOnlyCount : undefined,
 		liveOnlyCount: typeof source.liveOnlyCount === "number" ? source.liveOnlyCount : undefined,
 		wasLastRestored: source.wasLastRestored === true,
@@ -3245,6 +3309,13 @@ function shellHistoryObservedRange(entries: ShellHistoryEntry[], edge: "first" |
 		.sort((left, right) => left - right);
 	const value = edge === "first" ? observed[0] : observed[observed.length - 1];
 	return formatShellHistoryTime(value);
+}
+
+function shellHistoryLastObservedMillis(entries: ShellHistoryEntry[]): number | undefined {
+	const observed = entries
+		.map(shellHistoryObservedMillis)
+		.filter((value): value is number => value !== undefined);
+	return observed.length > 0 ? Math.max(...observed) : undefined;
 }
 
 function shellHistoryObservedMillis(entry: ShellHistoryEntry): number | undefined {

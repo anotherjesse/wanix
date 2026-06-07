@@ -171,6 +171,7 @@ export type WanixShellArchiveRecord = {
 	commandsPath: string;
 	indexPath: string;
 	manifestPath: string;
+	manifestPresent?: boolean;
 	summaryPath: string;
 	latestMarkdownPath: string;
 	generatedAt: string;
@@ -180,6 +181,8 @@ export type WanixShellArchiveRecord = {
 	compareMarkdownPath: string;
 	compareJsonPath: string;
 	compareGeneratedAt?: string;
+	compareStale?: boolean;
+	liveLastObservedAt?: string;
 	archivedOnlyCount?: number;
 	liveOnlyCount?: number;
 	wasLastRestored?: boolean;
@@ -915,7 +918,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			`shell-archive:${archive.name}`,
 			archive.name,
 			shellArchiveDescription(archive),
-			"archive",
+			shellArchiveIcon(archive),
 			{
 				command: "workbench.openWanixPath",
 				title: "Open Shell Archive",
@@ -1436,6 +1439,11 @@ function reportArtifactItems(entry: ReportRecord): SystemTreeItem[] {
 
 function shellArchiveArtifactItems(archive: WanixShellArchiveRecord): SystemTreeItem[] {
 	const items: SystemTreeItem[] = [
+		leaf(`shell-archive:${archive.name}:health`, "Health", shellArchiveHealthDescription(archive), shellArchiveHasWarning(archive) ? "warning" : "pass", undefined, undefined, {
+			archiveDir: archive.archiveDir,
+			commandsPath: archive.commandsPath,
+			bundleJsonPath: archive.bundleJsonPath,
+		}),
 		leaf(`shell-archive:${archive.name}:index`, "Archive Index", pathDescription(archive.indexPath), "notebook", {
 			command: "workbench.openWanixPath",
 			title: "Open Shell Archive Index",
@@ -1634,12 +1642,7 @@ function reportDescription(entry: ReportRecord): string {
 
 function shellArchiveDescription(archive: WanixShellArchiveRecord): string {
 	const range = [archive.firstObservedAt, archive.lastObservedAt].filter((part): part is string => Boolean(part)).join(" to ");
-	const state = [
-		archive.compareGeneratedAt ? "compared" : undefined,
-		archive.bundleGeneratedAt ? "bundled" : undefined,
-		archive.importGeneratedAt ? "imported" : undefined,
-		archive.wasLastRestored ? "last restored" : undefined,
-	].filter((part): part is string => Boolean(part)).join(" · ");
+	const state = shellArchiveBadges(archive).map((badge) => badge.label).slice(0, 4).join(" · ");
 	return [
 		`${archive.commandCount} commands`,
 		range || archive.generatedAt,
@@ -1647,9 +1650,58 @@ function shellArchiveDescription(archive: WanixShellArchiveRecord): string {
 	].filter((part): part is string => Boolean(part)).join(" · ");
 }
 
+function shellArchiveHealthDescription(archive: WanixShellArchiveRecord): string {
+	return shellArchiveBadges(archive).map((badge) => badge.label).join(" · ");
+}
+
+function shellArchiveIcon(archive: WanixShellArchiveRecord): string {
+	return shellArchiveHasWarning(archive) ? "warning" : "archive";
+}
+
+function shellArchiveHasWarning(archive: WanixShellArchiveRecord): boolean {
+	return shellArchiveBadges(archive).some((badge) => badge.kind === "warning");
+}
+
+function shellArchiveBadges(archive: WanixShellArchiveRecord): Array<{ label: string; kind: "ok" | "warning" | "info"; detail?: string }> {
+	const badges: Array<{ label: string; kind: "ok" | "warning" | "info"; detail?: string }> = [];
+	if (archive.manifestPresent === false) {
+		badges.push({ label: "missing manifest", kind: "warning", detail: archive.manifestPath });
+	}
+	if (archive.compareGeneratedAt) {
+		badges.push({
+			label: archive.compareStale ? "stale compare" : "compared",
+			kind: archive.compareStale ? "warning" : "ok",
+			detail: archive.compareStale && archive.liveLastObservedAt
+				? `live history changed at ${archive.liveLastObservedAt}`
+				: archive.compareGeneratedAt,
+		});
+	} else {
+		badges.push({ label: "not compared", kind: "warning", detail: archive.compareMarkdownPath });
+	}
+	if (archive.bundleGeneratedAt) {
+		badges.push({ label: "importable", kind: "ok", detail: archive.bundleJsonPath });
+	} else {
+		badges.push({ label: "missing bundle", kind: "warning", detail: archive.bundleJsonPath });
+	}
+	if (archive.wasLastRestored) {
+		badges.push({ label: "last restored", kind: "ok" });
+	} else {
+		badges.push({ label: "restorable", kind: "info", detail: archive.commandsPath });
+	}
+	if (archive.importGeneratedAt) {
+		badges.push({ label: "imported", kind: "ok", detail: archive.importGeneratedAt });
+	}
+	return badges;
+}
+
 function shellArchiveCompareDescription(archive: WanixShellArchiveRecord): string {
 	const counts = `${archive.archivedOnlyCount ?? "?"} archived-only, ${archive.liveOnlyCount ?? "?"} live-only`;
-	return archive.compareGeneratedAt ? `${counts} · ${archive.compareGeneratedAt}` : counts;
+	if (!archive.compareGeneratedAt) {
+		return counts;
+	}
+	return archive.compareStale
+		? `${counts} · stale since ${archive.liveLastObservedAt || "live history changed"}`
+		: `${counts} · ${archive.compareGeneratedAt}`;
 }
 
 function shellArchiveBundleDescription(archive: WanixShellArchiveRecord): string {
@@ -1848,13 +1900,20 @@ function shellArchiveSnapshot(archive: WanixShellArchiveRecord): object {
 		generatedAt: archive.generatedAt,
 		firstObservedAt: archive.firstObservedAt,
 		lastObservedAt: archive.lastObservedAt,
+		health: {
+			status: shellArchiveHasWarning(archive) ? "warn" : "ok",
+			badges: shellArchiveBadges(archive),
+		},
 		indexPath: displayJournalPath(archive.indexPath),
 		manifestPath: displayJournalPath(archive.manifestPath),
+		manifestPresent: archive.manifestPresent !== false,
 		commandsPath: displayJournalPath(archive.commandsPath),
 		summaryPath: displayJournalPath(archive.summaryPath),
 		latestMarkdownPath: displayJournalPath(archive.latestMarkdownPath),
 		compared: archive.compareGeneratedAt !== undefined,
 		compareGeneratedAt: archive.compareGeneratedAt,
+		compareStale: archive.compareStale === true,
+		liveLastObservedAt: archive.liveLastObservedAt,
 		compareMarkdownPath: displayJournalPath(archive.compareMarkdownPath),
 		compareJsonPath: displayJournalPath(archive.compareJsonPath),
 		archivedOnlyCount: archive.archivedOnlyCount,
@@ -1875,6 +1934,7 @@ function shellArchiveSnapshot(archive: WanixShellArchiveRecord): object {
 function shellArchiveJournalLines(archive: WanixShellArchiveRecord): string[] {
 	return [
 		`- ${archive.name} - ${shellArchiveDescription(archive)}`,
+		`  - health: ${shellArchiveHealthDescription(archive)}`,
 		`  - index: ${displayJournalPath(archive.indexPath)}`,
 		`  - commands: ${displayJournalPath(archive.commandsPath)}`,
 		archive.compareGeneratedAt ? `  - compare: ${displayJournalPath(archive.compareMarkdownPath)} (${shellArchiveCompareDescription(archive)})` : undefined,
