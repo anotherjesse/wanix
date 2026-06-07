@@ -89,6 +89,9 @@ const COCKPIT_REPORT_INDEX_MD_PATH = ".wanix/cockpit-reports.md";
 const COCKPIT_REPORT_INDEX_JSON_PATH = ".wanix/cockpit-reports.json";
 const DATA_STORE_INDEX_MD_PATH = ".wanix/data-stores.md";
 const DATA_STORE_INDEX_JSON_PATH = ".wanix/data-stores.json";
+const SHELL_HISTORY_JSONL_PATH = ".wanix/qjs-shell/commands.jsonl";
+const SHELL_HISTORY_JSON_PATH = ".wanix/qjs-shell/latest.json";
+const SHELL_HISTORY_MD_PATH = ".wanix/qjs-shell/latest.md";
 const SYSTEM_JOURNAL_PATH = ".wanix/system-journal.md";
 const SYSTEM_STATE_PATH = ".wanix/system-state.json";
 const SERVICE_STATE_POLL_MS = 1000;
@@ -267,6 +270,15 @@ export async function activate(context: vscode.ExtensionContext) {
 				await openWanixPath(DATA_STORE_INDEX_MD_PATH);
 				revealWanixSystemView();
 				vscode.window.showInformationMessage(`Opened Wanix data store index`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openShellCommandHistory', async () => {
+			try {
+				await openShellCommandHistory(fsys, bridge, systemView);
+				revealWanixSystemView();
+				vscode.window.showInformationMessage(`Opened qjs shell command history`);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -659,6 +671,7 @@ async function publishCockpitReportInventory(
 ): Promise<void> {
 	const generatedAt = new Date();
 	await fsys.makeDirAll(".wanix");
+	await publishShellCommandHistoryReport(fsys, systemView);
 	systemView.reportPublished("Cockpit Report Index", COCKPIT_REPORT_INDEX_MD_PATH, {
 		kind: "manifest",
 		description: "live report inventory",
@@ -676,6 +689,61 @@ async function publishCockpitReportInventory(
 		jsonPath: COCKPIT_REPORT_INDEX_JSON_PATH,
 	}));
 	await refreshWanixPaths(bridge, [COCKPIT_REPORT_INDEX_MD_PATH, COCKPIT_REPORT_INDEX_JSON_PATH]);
+}
+
+async function openShellCommandHistory(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const paths = await existingShellHistoryPaths(fsys);
+	if (paths.length === 0) {
+		throw new Error("No qjs shell command history yet. Run a served shell command first.");
+	}
+	const openPath = paths.includes(SHELL_HISTORY_MD_PATH) ? SHELL_HISTORY_MD_PATH : paths[0];
+	publishShellCommandHistoryReportFromPaths(systemView, paths, openPath);
+	systemView.filesystemActivity("shell command history opened", { path: openPath, paths });
+	await refreshWanixPaths(bridge, paths);
+	await openWanixPath(openPath);
+}
+
+async function publishShellCommandHistoryReport(
+	fsys: any,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const paths = await existingShellHistoryPaths(fsys);
+	if (paths.length === 0) {
+		return;
+	}
+	const openPath = paths.includes(SHELL_HISTORY_MD_PATH) ? SHELL_HISTORY_MD_PATH : paths[0];
+	publishShellCommandHistoryReportFromPaths(systemView, paths, openPath);
+}
+
+function publishShellCommandHistoryReportFromPaths(
+	systemView: WanixSystemView,
+	paths: string[],
+	openPath: string,
+): void {
+	systemView.reportPublished("qjs Shell Command History", openPath, {
+		kind: "shell",
+		description: "served shell outcomes",
+		icon: "terminal",
+		artifacts: paths,
+	});
+}
+
+async function existingShellHistoryPaths(fsys: any): Promise<string[]> {
+	const paths = [SHELL_HISTORY_MD_PATH, SHELL_HISTORY_JSON_PATH, SHELL_HISTORY_JSONL_PATH];
+	const existing: string[] = [];
+	for (const path of paths) {
+		try {
+			await fsys.stat(path);
+			existing.push(path);
+		} catch {
+			// The history appears only after a served qjs-shell command has completed.
+		}
+	}
+	return existing;
 }
 
 async function publishDataStoreInventory(
@@ -2363,6 +2431,7 @@ type QjsShellMutationMessage = {
 	cwd: string;
 	paths: string[];
 	operations?: QjsShellMutationOperation[];
+	historyPaths?: string[];
 };
 
 type QjsShellMutationOperation = {
@@ -2404,7 +2473,9 @@ function isQjsShellMutationMessage(message: unknown): message is QjsShellMutatio
 		&& Array.isArray(candidate.paths)
 		&& candidate.paths.every((path) => typeof path === "string" && path.length > 0)
 		&& (candidate.operations === undefined
-			|| (Array.isArray(candidate.operations) && candidate.operations.every(isQjsShellMutationOperation)));
+			|| (Array.isArray(candidate.operations) && candidate.operations.every(isQjsShellMutationOperation)))
+		&& (candidate.historyPaths === undefined
+			|| (Array.isArray(candidate.historyPaths) && candidate.historyPaths.every((path) => typeof path === "string" && path.length > 0)));
 }
 
 function isQjsShellMutationOperation(operation: unknown): operation is QjsShellMutationOperation {
@@ -2441,20 +2512,35 @@ function isQjsShellCommandOutcome(outcome: unknown): outcome is QjsShellCommandO
 }
 
 function shellMutationActivity(message: QjsShellMutationMessage): FilesystemActivity | undefined {
+	const historyPaths = uniqueShellPaths(message.historyPaths || []);
 	const operation = message.operations?.find((operation) => operation.paths.length > 0)
 		|| message.operations?.[0];
 	if (operation) {
-		return shellOperationActivity(operation);
+		return withShellHistoryPaths(shellOperationActivity(operation), historyPaths);
 	}
 	const unique = uniqueShellPaths(message.paths);
 	if (unique.length === 0) {
-		return undefined;
+		if (historyPaths.length === 0) {
+			return undefined;
+		}
+		const openPath = historyPaths[historyPaths.length - 1];
+		return { label: "shell command history updated", openPath, paths: historyPaths };
 	}
 	const openPath = unique[unique.length - 1];
 	const label = unique.length === 1
 		? `shell changed ${displayWanixPath(openPath)}`
 		: `shell changed ${unique.length} paths`;
-	return { label, openPath, paths: unique };
+	return withShellHistoryPaths({ label, openPath, paths: unique }, historyPaths);
+}
+
+function withShellHistoryPaths(activity: FilesystemActivity | undefined, historyPaths: string[]): FilesystemActivity | undefined {
+	if (!activity || historyPaths.length === 0) {
+		return activity;
+	}
+	return {
+		...activity,
+		paths: uniqueShellPaths([...(activity.paths || []), ...historyPaths]),
+	};
 }
 
 function shellOperationActivity(operation: QjsShellMutationOperation): FilesystemActivity | undefined {

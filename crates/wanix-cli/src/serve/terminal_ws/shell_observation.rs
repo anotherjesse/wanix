@@ -48,6 +48,10 @@ impl ShellCommandObservations {
             .find(|record| record.command.as_deref() == Some(command))
             .cloned()
     }
+
+    pub(in crate::serve) fn recorded_commands(&self) -> &[ShellCommandObservation] {
+        &self.records
+    }
 }
 
 impl ShellCommandObservation {

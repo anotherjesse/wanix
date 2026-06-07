@@ -17,6 +17,7 @@ use super::shell_activity::{
     ShellInputActivityTracker, ShellMutationOperation, operations_for_changed_paths,
     operations_without_changed_paths,
 };
+use super::shell_history::ShellHistoryWriter;
 use super::shell_observation::{ShellCommandObservation, ShellCommandObservations};
 
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
@@ -36,6 +37,7 @@ struct TerminalWebSocketSession {
     shell: QjsShellSession,
     changes: RootChangeTracker,
     input: ShellInputActivityTracker,
+    history: ShellHistoryWriter,
 }
 
 impl TerminalWebSocketSession {
@@ -59,6 +61,7 @@ impl TerminalWebSocketSession {
             input: ShellInputActivityTracker::new(cwd),
             shell,
             changes,
+            history: ShellHistoryWriter::new(root_path),
         };
         session.send_session()?;
         session.send_output(initial_output)?;
@@ -173,7 +176,11 @@ impl TerminalWebSocketSession {
     }
 
     fn send_output(&mut self, output: Vec<u8>) -> Result<(), ServeConnectionError> {
-        let (output, _records) = strip_shell_command_records(output);
+        let (output, records) = strip_shell_command_records(output);
+        self.write_record_history(
+            &ShellCommandObservations::new(records, ShellCommandObservation::default()),
+            &[],
+        )?;
         if output.is_empty() {
             return Ok(());
         }
@@ -200,6 +207,7 @@ impl TerminalWebSocketSession {
         } else {
             operations_for_changed_paths(operations, &paths, observations)
         };
+        let history_paths = self.write_record_history(observations, &operations)?;
         if paths.is_empty() && operations.is_empty() {
             return Ok(());
         }
@@ -208,8 +216,26 @@ impl TerminalWebSocketSession {
                 &self.shell,
                 &paths,
                 &operations,
+                &history_paths,
             )))
             .map_err(ws_error)
+    }
+
+    fn write_record_history(
+        &mut self,
+        observations: &ShellCommandObservations,
+        operations: &[ShellMutationOperation],
+    ) -> Result<Vec<String>, ServeConnectionError> {
+        let paths = self
+            .history
+            .write_from_shell(&self.shell, observations.recorded_commands(), operations)
+            .map_err(ServeConnectionError::Io)?;
+        if !paths.is_empty() {
+            self.changes
+                .take_changed_paths()
+                .map_err(ServeConnectionError::Io)?;
+        }
+        Ok(paths)
     }
 
     fn send_pong(&mut self, bytes: Bytes) -> Result<(), ServeConnectionError> {

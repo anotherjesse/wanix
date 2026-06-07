@@ -43,6 +43,13 @@ const AGENT_TOOLS: AgentTool[] = [
 		wanixSurface: ["#task/<id>/exit", "#task/<id>/kind", ".wanix/tasks/<id>-*.metadata.json"],
 	},
 	{
+		name: "readShellHistory",
+		description: "Read served qjs-shell command outcomes without subscribing to terminal bytes.",
+		input: {},
+		output: { commands: "append-only command history and latest shell outcome batch" },
+		wanixSurface: [".wanix/qjs-shell/commands.jsonl", ".wanix/qjs-shell/latest.json", ".wanix/qjs-shell/latest.md"],
+	},
+	{
 		name: "diffFiles",
 		description: "Show a before/after source edit in the workbench diff view.",
 		input: { beforePath: "snapshot before edit", afterPath: "snapshot after edit" },

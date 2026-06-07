@@ -16,16 +16,22 @@ pub(super) fn shell_mutation_message(
     shell: &QjsShellSession,
     paths: &[String],
     operations: &[ShellMutationOperation],
+    history_paths: &[String],
 ) -> String {
     let operations = operations
         .iter()
         .map(shell_operation_json)
         .collect::<Vec<_>>()
         .join(",");
+    let history_paths_json = history_paths
+        .iter()
+        .map(|path| json_string(path))
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
         "{{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\
          \"taskId\":{},\"terminalId\":{},\"cwd\":{},\"paths\":[{}],\
-         \"operations\":[{}]}}",
+         \"operations\":[{}],\"historyPaths\":[{}]}}",
         json_string(&shell.task_id()),
         json_string(shell.terminal_id()),
         json_string(shell.cwd().as_str()),
@@ -35,6 +41,7 @@ pub(super) fn shell_mutation_message(
             .collect::<Vec<_>>()
             .join(","),
         operations,
+        history_paths_json,
     )
 }
 

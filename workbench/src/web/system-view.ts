@@ -960,6 +960,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			actionLeaf("action:prepare-cockpit", "Prepare Cockpit Reports", "make ready", "check-all", "workbench.prepareCockpitReports"),
 			actionLeaf("action:open-reports", "Open Report Inventory", "reports", "notebook", "workbench.openCockpitReports"),
 			actionLeaf("action:open-data-stores", "Open Data Store Index", "state", "database", "workbench.openDataStoreInventory"),
+			actionLeaf("action:open-shell-history", "Open Shell Command History", "shell", "terminal", "workbench.openShellCommandHistory"),
 			actionLeaf("action:system-journal", "Open System Journal", "snapshot", "notebook", "workbench.openSystemJournal"),
 			actionLeaf("action:agent-tools", "Open Agent Tool Contract", "agent tools", "symbol-method", "workbench.openAgentToolContract"),
 			actionLeaf("action:install-agent-repair", "Install Agent Repair Demo", "agent", "bug", "workbench.installAgentRepairDemo"),
@@ -1379,7 +1380,6 @@ function dataStoreArtifactItems(entry: DataStoreRecord): SystemTreeItem[] {
 function activityItem(entry: ActivityRecord): SystemTreeItem {
 	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
 	const path = entry.path || paths[paths.length - 1];
-	const hasMultiplePaths = paths.length > 1;
 	const children: SystemTreeItem[] = [
 		...(paths.length > 1
 		? paths.map((candidate, index) => leaf(
@@ -1405,7 +1405,7 @@ function activityItem(entry: ActivityRecord): SystemTreeItem {
 		entry.label,
 		entry.description || (path ? pathDescription(path) : undefined),
 		"history",
-		path && !hasMultiplePaths ? {
+		path ? {
 			command: "workbench.openWanixPath",
 			title: "Open Wanix Path",
 			arguments: [path],

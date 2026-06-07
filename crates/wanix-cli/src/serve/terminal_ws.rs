@@ -5,6 +5,7 @@ mod request;
 mod root_changes;
 mod session;
 mod shell_activity;
+pub(in crate::serve) mod shell_history;
 mod shell_observation;
 
 #[cfg(test)]

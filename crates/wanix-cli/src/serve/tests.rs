@@ -1407,6 +1407,22 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     assert_eq!(qjs_shell["cwdQuery"], "cwd");
     assert_eq!(qjs_shell["defaultCwd"], ".");
     assert_eq!(
+        qjs_shell["commandHistory"]["schema"],
+        "wanix.qjs-shell.command-history.v1"
+    );
+    assert_eq!(
+        qjs_shell["commandHistory"]["jsonl"],
+        "/.wanix/qjs-shell/commands.jsonl"
+    );
+    assert_eq!(
+        qjs_shell["commandHistory"]["latestJson"],
+        "/.wanix/qjs-shell/latest.json"
+    );
+    assert_eq!(
+        qjs_shell["commandHistory"]["latestMarkdown"],
+        "/.wanix/qjs-shell/latest.md"
+    );
+    assert_eq!(
         qjs_shell["resize"][0],
         "{\"type\":\"resize\",\"columns\":COLS,\"rows\":ROWS}"
     );
@@ -1417,11 +1433,11 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     );
     assert_eq!(
         qjs_shell["mutationMessage"],
-        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"],\"operations\":[{\"kind\":\"write\",\"command\":\"write /path data\",\"status\":\"changed\",\"target\":\"/path\",\"evidence\":\"qjs-shell-command-record\",\"terminalOutput\":\"wrote /path\",\"outcome\":{\"status\":\"ok\",\"changed\":true,\"evidence\":\"qjs-shell-command-record\",\"terminalOutput\":\"wrote /path\"},\"paths\":[\"/path\"]}]}"
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"],\"operations\":[{\"kind\":\"write\",\"command\":\"write /path data\",\"status\":\"changed\",\"target\":\"/path\",\"evidence\":\"qjs-shell-command-record\",\"terminalOutput\":\"wrote /path\",\"outcome\":{\"status\":\"ok\",\"changed\":true,\"evidence\":\"qjs-shell-command-record\",\"terminalOutput\":\"wrote /path\"},\"paths\":[\"/path\"]}],\"historyPaths\":[\"/.wanix/qjs-shell/commands.jsonl\",\"/.wanix/qjs-shell/latest.json\",\"/.wanix/qjs-shell/latest.md\"]}"
     );
     assert_eq!(
         qjs_shell["unchangedOperationMessage"],
-        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"command\":\"rm missing\",\"status\":\"unchanged\",\"target\":\"/missing\",\"evidence\":\"qjs-shell-command-record\",\"diagnostic\":\"rm: missing: errno -44\",\"terminalOutput\":\"rm: missing: errno -44\",\"outcome\":{\"status\":\"error\",\"changed\":false,\"diagnostic\":\"rm: missing: errno -44\",\"evidence\":\"qjs-shell-command-record\",\"terminalOutput\":\"rm: missing: errno -44\"},\"paths\":[]}]}"
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"command\":\"rm missing\",\"status\":\"unchanged\",\"target\":\"/missing\",\"evidence\":\"qjs-shell-command-record\",\"diagnostic\":\"rm: missing: errno -44\",\"terminalOutput\":\"rm: missing: errno -44\",\"outcome\":{\"status\":\"error\",\"changed\":false,\"diagnostic\":\"rm: missing: errno -44\",\"evidence\":\"qjs-shell-command-record\",\"terminalOutput\":\"rm: missing: errno -44\"},\"paths\":[]}],\"historyPaths\":[\"/.wanix/qjs-shell/commands.jsonl\",\"/.wanix/qjs-shell/latest.json\",\"/.wanix/qjs-shell/latest.md\"]}"
     );
     assert_eq!(qjs_shell["exitMessage"], "{\"type\":\"exit\",\"code\":N}");
     assert_eq!(
@@ -2192,6 +2208,7 @@ fn serve_once_exports_symlink_readlink_over_direct_9p() {
 #[test]
 fn serve_once_exports_qjs_shell_terminal_websocket() {
     let root = temp_dir("wanix-cli-serve-qjs-shell-ws");
+    let root_path = root.clone();
     fs::create_dir(root.join("app")).unwrap();
     fs::write(root.join("app").join("inside.txt"), b"inside app\n").unwrap();
     fs::write(
@@ -2358,6 +2375,14 @@ std.exit(6);
             assert_eq!(operation["outcome"]["evidence"], "qjs-shell-command-record");
             assert_eq!(operation["outcome"]["terminalOutput"], "wrote observed.txt");
             assert_eq!(
+                qjs_shell_history_paths(&mutation_json),
+                vec![
+                    "/.wanix/qjs-shell/commands.jsonl".to_owned(),
+                    "/.wanix/qjs-shell/latest.json".to_owned(),
+                    "/.wanix/qjs-shell/latest.md".to_owned(),
+                ]
+            );
+            assert_eq!(
                 qjs_shell_operation_paths(operation),
                 vec!["/app/observed.txt".to_owned()]
             );
@@ -2408,6 +2433,14 @@ std.exit(6);
             assert_eq!(
                 operation["outcome"]["terminalOutput"],
                 "rm: definitely-missing.txt: errno -44"
+            );
+            assert_eq!(
+                qjs_shell_history_paths(&mutation_json),
+                vec![
+                    "/.wanix/qjs-shell/commands.jsonl".to_owned(),
+                    "/.wanix/qjs-shell/latest.json".to_owned(),
+                    "/.wanix/qjs-shell/latest.md".to_owned(),
+                ]
             );
             assert!(qjs_shell_operation_paths(operation).is_empty());
         }
@@ -2465,6 +2498,12 @@ std.exit(6);
             let paths = qjs_shell_mutation_paths(mutation);
             paths.contains(&"/app/child-out.txt".to_owned())
                 && paths.contains(&"/app/child-err.txt".to_owned())
+                && qjs_shell_history_paths(mutation)
+                    == vec![
+                        "/.wanix/qjs-shell/commands.jsonl".to_owned(),
+                        "/.wanix/qjs-shell/latest.json".to_owned(),
+                        "/.wanix/qjs-shell/latest.md".to_owned(),
+                    ]
                 && mutation["operations"].as_array().is_some_and(|operations| {
                     operations.iter().any(|operation| {
                         operation["kind"] == "redirect"
@@ -2487,6 +2526,17 @@ std.exit(6);
         }),
         "{mutations:?}"
     );
+    let history_jsonl = fs::read_to_string(root_path.join(".wanix/qjs-shell/commands.jsonl"))
+        .expect("qjs shell command history jsonl exists");
+    assert!(history_jsonl.contains("\"command\":\"write observed.txt observed from ws\""));
+    assert!(history_jsonl.contains("\"command\":\"rm definitely-missing.txt\""));
+    assert!(history_jsonl.contains(
+        "\"command\":\"qjs ../child.js from ws < inside.txt > child-out.txt 2> child-err.txt\""
+    ));
+    let latest_markdown = fs::read_to_string(root_path.join(".wanix/qjs-shell/latest.md"))
+        .expect("qjs shell latest markdown exists");
+    assert!(latest_markdown.contains("# Wanix qjs Shell Command History"));
+    assert!(latest_markdown.contains("qjs-shell-command-record"));
 }
 
 fn qjs_shell_mutation_paths(message: &serde_json::Value) -> Vec<String> {
@@ -2497,6 +2547,19 @@ fn qjs_shell_mutation_paths(message: &serde_json::Value) -> Vec<String> {
         .map(|path| {
             path.as_str()
                 .unwrap_or_else(|| panic!("non-string mutation path: {message}"))
+                .to_owned()
+        })
+        .collect()
+}
+
+fn qjs_shell_history_paths(message: &serde_json::Value) -> Vec<String> {
+    message["historyPaths"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing qjs shell history paths: {message}"))
+        .iter()
+        .map(|path| {
+            path.as_str()
+                .unwrap_or_else(|| panic!("non-string history path: {message}"))
                 .to_owned()
         })
         .collect()

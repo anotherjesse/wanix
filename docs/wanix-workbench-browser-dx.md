@@ -481,6 +481,18 @@ result was `recorded by shell`.
 
 ![Shell command-record evidence](assets/wanix-workbench-browser-dx/74-shell-command-record-evidence.png)
 
+The record is durable now too. Each served qjs-shell command writes
+`/.wanix/qjs-shell/commands.jsonl`, `/.wanix/qjs-shell/latest.json`, and
+`/.wanix/qjs-shell/latest.md`. Mutation frames carry those paths as
+`historyPaths`, the System view has an `Open Shell Command History` action, and
+the report inventory includes the shell history once it exists.
+
+That matters for agents: they can inspect recent shell outcomes without
+subscribing to terminal bytes or scraping Activity labels. The terminal remains
+a terminal, while the command history becomes a Wanix artifact.
+
+![Shell command history artifact](assets/wanix-workbench-browser-dx/75-shell-command-history-artifact.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -972,6 +984,9 @@ browser qjs-shell sessions emit a hidden structured command record, Rust strips
 it from the visible terminal stream, matches it by command text, and marks the
 operation with `evidence: qjs-shell-command-record`. Mixed batches can now show
 both changed operations and failed no-change operations in one frame.
+The follow-up pass persists the same command records under
+`/.wanix/qjs-shell`, advertises the paths in discovery and mutation frames, and
+adds the workbench action/report hook that opens the latest Markdown view.
 
 The newest slice gives the cockpit a way to diagnose itself before anyone asks
 an agent to build on top of it. `Run Cockpit Self Check` verifies the advertised
@@ -1072,6 +1087,8 @@ The current loop is:
     `rm browser-missing.txt` and see changed and failed no-change operations
     reported together. The failed row says `recorded by shell` because its
     outcome came from the shell's hidden command record, not browser parsing.
+    Then click `Open Shell Command History` to inspect the durable
+    `/.wanix/qjs-shell/latest.md` artifact produced from those same records.
 17. Click a changed Activity row to reopen the Wanix file it touched.
 18. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1183,9 +1200,9 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Promote the hidden qjs-shell command records into an inspectable Wanix service
-  artifact, so agents can read recent shell outcomes without subscribing to the
-  terminal websocket.
+- Add filters/search and per-session retention controls for
+  `/.wanix/qjs-shell/commands.jsonl`, so long-lived browser sessions stay easy
+  to inspect.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

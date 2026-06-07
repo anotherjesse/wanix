@@ -14,6 +14,9 @@ use super::direct_v86::{
 use super::http::app::app_route_json;
 use super::http::{HttpStatus, StaticResponse};
 use super::terminal_ws::QJS_SHELL_WEBSOCKET_PATH;
+use super::terminal_ws::shell_history::{
+    SHELL_HISTORY_COMMANDS_PATH, SHELL_HISTORY_LATEST_JSON_PATH, SHELL_HISTORY_LATEST_MD_PATH,
+};
 
 mod host;
 pub(super) use host::display_host;
@@ -165,14 +168,19 @@ fn serve_qjs_shell_route_json(roots: &ServeRoots, websocket_url: &str) -> String
             "{{\"websocket\":{},\"protocol\":\"wanix-qjs-shell.v1\",\
              \"mode\":\"raw-bytes\",\"status\":\"available\",\
              \"cwdQuery\":\"cwd\",\"defaultCwd\":\".\",\
+             \"commandHistory\":{{\"schema\":\"wanix.qjs-shell.command-history.v1\",\
+             \"jsonl\":{},\"latestJson\":{},\"latestMarkdown\":{}}},\
              \"resize\":[\"{{\\\"type\\\":\\\"resize\\\",\\\"columns\\\":COLS,\\\"rows\\\":ROWS}}\",\
              \"resize COLS ROWS\"],\
              \"sessionMessage\":\"{{\\\"type\\\":\\\"session\\\",\\\"protocol\\\":\\\"wanix-qjs-shell.v1\\\",\\\"taskId\\\":\\\"ID\\\",\\\"terminalId\\\":\\\"ID\\\",\\\"cwd\\\":\\\"PATH\\\"}}\",\
-             \"mutationMessage\":\"{{\\\"type\\\":\\\"mutation\\\",\\\"protocol\\\":\\\"wanix-qjs-shell.v1\\\",\\\"taskId\\\":\\\"ID\\\",\\\"terminalId\\\":\\\"ID\\\",\\\"cwd\\\":\\\"PATH\\\",\\\"paths\\\":[\\\"/path\\\"],\\\"operations\\\":[{{\\\"kind\\\":\\\"write\\\",\\\"command\\\":\\\"write /path data\\\",\\\"status\\\":\\\"changed\\\",\\\"target\\\":\\\"/path\\\",\\\"evidence\\\":\\\"qjs-shell-command-record\\\",\\\"terminalOutput\\\":\\\"wrote /path\\\",\\\"outcome\\\":{{\\\"status\\\":\\\"ok\\\",\\\"changed\\\":true,\\\"evidence\\\":\\\"qjs-shell-command-record\\\",\\\"terminalOutput\\\":\\\"wrote /path\\\"}},\\\"paths\\\":[\\\"/path\\\"]}}]}}\",\
-             \"unchangedOperationMessage\":\"{{\\\"type\\\":\\\"mutation\\\",\\\"protocol\\\":\\\"wanix-qjs-shell.v1\\\",\\\"taskId\\\":\\\"ID\\\",\\\"terminalId\\\":\\\"ID\\\",\\\"cwd\\\":\\\"PATH\\\",\\\"paths\\\":[],\\\"operations\\\":[{{\\\"kind\\\":\\\"rm\\\",\\\"command\\\":\\\"rm missing\\\",\\\"status\\\":\\\"unchanged\\\",\\\"target\\\":\\\"/missing\\\",\\\"evidence\\\":\\\"qjs-shell-command-record\\\",\\\"diagnostic\\\":\\\"rm: missing: errno -44\\\",\\\"terminalOutput\\\":\\\"rm: missing: errno -44\\\",\\\"outcome\\\":{{\\\"status\\\":\\\"error\\\",\\\"changed\\\":false,\\\"diagnostic\\\":\\\"rm: missing: errno -44\\\",\\\"evidence\\\":\\\"qjs-shell-command-record\\\",\\\"terminalOutput\\\":\\\"rm: missing: errno -44\\\"}},\\\"paths\\\":[]}}]}}\",\
+             \"mutationMessage\":\"{{\\\"type\\\":\\\"mutation\\\",\\\"protocol\\\":\\\"wanix-qjs-shell.v1\\\",\\\"taskId\\\":\\\"ID\\\",\\\"terminalId\\\":\\\"ID\\\",\\\"cwd\\\":\\\"PATH\\\",\\\"paths\\\":[\\\"/path\\\"],\\\"operations\\\":[{{\\\"kind\\\":\\\"write\\\",\\\"command\\\":\\\"write /path data\\\",\\\"status\\\":\\\"changed\\\",\\\"target\\\":\\\"/path\\\",\\\"evidence\\\":\\\"qjs-shell-command-record\\\",\\\"terminalOutput\\\":\\\"wrote /path\\\",\\\"outcome\\\":{{\\\"status\\\":\\\"ok\\\",\\\"changed\\\":true,\\\"evidence\\\":\\\"qjs-shell-command-record\\\",\\\"terminalOutput\\\":\\\"wrote /path\\\"}},\\\"paths\\\":[\\\"/path\\\"]}}],\\\"historyPaths\\\":[\\\"/.wanix/qjs-shell/commands.jsonl\\\",\\\"/.wanix/qjs-shell/latest.json\\\",\\\"/.wanix/qjs-shell/latest.md\\\"]}}\",\
+             \"unchangedOperationMessage\":\"{{\\\"type\\\":\\\"mutation\\\",\\\"protocol\\\":\\\"wanix-qjs-shell.v1\\\",\\\"taskId\\\":\\\"ID\\\",\\\"terminalId\\\":\\\"ID\\\",\\\"cwd\\\":\\\"PATH\\\",\\\"paths\\\":[],\\\"operations\\\":[{{\\\"kind\\\":\\\"rm\\\",\\\"command\\\":\\\"rm missing\\\",\\\"status\\\":\\\"unchanged\\\",\\\"target\\\":\\\"/missing\\\",\\\"evidence\\\":\\\"qjs-shell-command-record\\\",\\\"diagnostic\\\":\\\"rm: missing: errno -44\\\",\\\"terminalOutput\\\":\\\"rm: missing: errno -44\\\",\\\"outcome\\\":{{\\\"status\\\":\\\"error\\\",\\\"changed\\\":false,\\\"diagnostic\\\":\\\"rm: missing: errno -44\\\",\\\"evidence\\\":\\\"qjs-shell-command-record\\\",\\\"terminalOutput\\\":\\\"rm: missing: errno -44\\\"}},\\\"paths\\\":[]}}],\\\"historyPaths\\\":[\\\"/.wanix/qjs-shell/commands.jsonl\\\",\\\"/.wanix/qjs-shell/latest.json\\\",\\\"/.wanix/qjs-shell/latest.md\\\"]}}\",\
              \"exitMessage\":\"{{\\\"type\\\":\\\"exit\\\",\\\"code\\\":N}}\",\
              \"terminalLifecycle\":\"owned-resource-closed-on-session-close\"}}",
-            json_string(websocket_url)
+            json_string(websocket_url),
+            json_string(SHELL_HISTORY_COMMANDS_PATH),
+            json_string(SHELL_HISTORY_LATEST_JSON_PATH),
+            json_string(SHELL_HISTORY_LATEST_MD_PATH),
         )
     } else {
         "{\"status\":\"disabled\"}".to_owned()
