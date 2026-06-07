@@ -4,17 +4,12 @@ import { openAgentToolContract, writeAgentToolContract } from './agent-tool-cont
 import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairViaAgent } from './agent-repair-demo.js';
 import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
 import { COCKPIT_SELF_CHECK_JSON_PATH, COCKPIT_SELF_CHECK_MD_PATH, COCKPIT_SELF_CHECK_PROBE_PATH, runCockpitSelfCheck } from './cockpit-self-check.js';
+import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView, type WanixServiceTask, type WanixServiceTerminal } from './system-view.js';
 import { ensureWasmStarter, installWasmStarter, WASM_STARTER_OUTPUT_PATH, WASM_STARTER_PATH } from './wasm-starter.js';
 
-// STUB: duet-demo not yet ported — see docs/integration/plan.md
-const DUET_OUTPUT_PATH = "";
-type DuetDemoStep = { kind: "qjs" | "wasm"; path: string; label: string };
-const DUET_DEMO_STEPS: DuetDemoStep[] = [];
-async function installDuetDemo(..._args: any[]): Promise<any> { return undefined; }
-async function resetDuetDemo(..._args: any[]): Promise<any> { return undefined; }
 
 // STUB: http-app-demo not yet ported — see docs/integration/plan.md
 type HttpAppRouteConfig = { url?: string; status?: string };
