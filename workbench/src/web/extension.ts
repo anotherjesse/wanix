@@ -72,6 +72,7 @@ type AgentTraceStep = {
 
 type FilesystemActivity = {
 	label?: string;
+	description?: string;
 	openPath?: string;
 	paths?: string[];
 };
@@ -109,6 +110,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		if (activity?.paths?.length) {
 			await refreshWanixPaths(bridge, activity.paths);
 			systemView.filesystemActivity(activity.label || "filesystem refreshed", {
+				description: activity.description,
 				path: activity.openPath,
 				paths: activity.paths,
 			});
@@ -124,6 +126,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(bridge.onDidWanixMutation((mutation) => {
 		const activity = bridgeMutationActivity(mutation);
 		systemView.filesystemActivity(activity.label, {
+			description: activity.description,
 			path: activity.openPath,
 			paths: activity.paths,
 		});
@@ -749,7 +752,7 @@ function wanixDiffTarget(target: { beforePath?: string; afterPath?: string } | u
 	};
 }
 
-function bridgeMutationActivity(mutation: WanixBridgeMutation): Required<FilesystemActivity> {
+function bridgeMutationActivity(mutation: WanixBridgeMutation): FilesystemActivity & { label: string; openPath: string; paths: string[] } {
 	const paths = mutation.paths;
 	const openPath = mutation.openPath || paths[paths.length - 1] || "/";
 	const primary = paths[0] || openPath;
@@ -2364,6 +2367,7 @@ type QjsShellMutationOperation = {
 	status?: string;
 	source?: string;
 	target?: string;
+	diagnostic?: string;
 	paths: string[];
 };
 
@@ -2396,6 +2400,7 @@ function isQjsShellMutationOperation(operation: unknown): operation is QjsShellM
 		&& (candidate.status === undefined || typeof candidate.status === "string")
 		&& (candidate.source === undefined || typeof candidate.source === "string")
 		&& (candidate.target === undefined || typeof candidate.target === "string")
+		&& (candidate.diagnostic === undefined || typeof candidate.diagnostic === "string")
 		&& Array.isArray(candidate.paths)
 		&& candidate.paths.every((path) => typeof path === "string" && path.length > 0);
 }
@@ -2426,6 +2431,7 @@ function shellOperationActivity(operation: QjsShellMutationOperation): Filesyste
 			const openPath = shellOperationNoChangeOpenPath(operation.kind, source, target);
 			return {
 				label: shellOperationLabel(operation.kind, source, target, unique, operation.status),
+				description: operation.diagnostic,
 				openPath,
 				paths: [openPath],
 			};
@@ -2434,7 +2440,7 @@ function shellOperationActivity(operation: QjsShellMutationOperation): Filesyste
 	}
 	const openPath = shellOperationOpenPath(operation.kind, source, target, unique);
 	const label = shellOperationLabel(operation.kind, source, target, unique, operation.status);
-	return { label, openPath, paths: unique };
+	return { label, description: operation.diagnostic, openPath, paths: unique };
 }
 
 function shellOperationOpenPath(kind: string, source: string | undefined, target: string | undefined, paths: string[]): string {

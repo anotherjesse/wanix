@@ -4,6 +4,7 @@ use wanix_fs::NormalizedPath;
 pub(in crate::serve) struct ShellMutationOperation {
     pub(in crate::serve) kind: String,
     pub(in crate::serve) status: String,
+    pub(in crate::serve) diagnostic: Option<String>,
     pub(in crate::serve) source: Option<String>,
     pub(in crate::serve) target: Option<String>,
     pub(in crate::serve) paths: Vec<String>,
@@ -113,6 +114,7 @@ impl ShellInputActivityTracker {
             _ if !redirected.is_empty() => Some(ShellMutationOperation {
                 kind: "redirect".to_owned(),
                 status: "changed".to_owned(),
+                diagnostic: None,
                 source: None,
                 target: redirected.last().cloned(),
                 paths: unique_paths(redirected),
@@ -135,11 +137,14 @@ pub(in crate::serve) fn operations_for_changed_paths(
 
 pub(in crate::serve) fn operations_without_changed_paths(
     operations: &[ShellMutationOperation],
+    diagnostic: Option<&str>,
 ) -> Vec<ShellMutationOperation> {
+    let diagnostic = diagnostic.map(str::to_owned);
     operations
         .iter()
         .map(|operation| ShellMutationOperation {
             status: "unchanged".to_owned(),
+            diagnostic: diagnostic.clone(),
             paths: Vec::new(),
             ..operation.clone()
         })
@@ -168,6 +173,7 @@ fn operation(kind: &str, source: Option<String>, target: Option<String>) -> Shel
     ShellMutationOperation {
         kind: kind.to_owned(),
         status: "changed".to_owned(),
+        diagnostic: None,
         source,
         target,
         paths: unique_paths(paths),
@@ -339,11 +345,16 @@ mod tests {
     fn marks_operations_without_changed_paths_as_unchanged() {
         let mut tracker = ShellInputActivityTracker::new(&NormalizedPath::new("app").unwrap());
         let operations = tracker.observe_input(b"rm missing.txt\n");
-        let unchanged = operations_without_changed_paths(&operations);
+        let unchanged =
+            operations_without_changed_paths(&operations, Some("rm: missing.txt: errno -44"));
 
         assert_eq!(unchanged.len(), 1);
         assert_eq!(unchanged[0].kind, "rm");
         assert_eq!(unchanged[0].status, "unchanged");
+        assert_eq!(
+            unchanged[0].diagnostic.as_deref(),
+            Some("rm: missing.txt: errno -44")
+        );
         assert_eq!(unchanged[0].target.as_deref(), Some("/app/missing.txt"));
         assert!(unchanged[0].paths.is_empty());
     }

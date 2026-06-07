@@ -442,6 +442,15 @@ the frame still points at the attempted target for debugging.
 
 ![Shell no-change operation frame](assets/wanix-workbench-browser-dx/70-shell-unchanged-operation.png)
 
+The newest pass threads the observed shell error into that same operation. A
+failed `rm definitely-missing.txt` now carries `diagnostic:
+rm: definitely-missing.txt: errno -44`, and the Activity row shows that detail
+without making the main label noisy. That matters because "no change" is not
+the same as "nothing happened": the attempted operation is still system
+activity, and now it has a reason attached.
+
+![Shell no-change diagnostic in Activity](assets/wanix-workbench-browser-dx/71-shell-unchanged-diagnostic.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -919,6 +928,9 @@ that trust boundary back to the browser.
 The no-change operation frame closes the other side of that loop: the browser
 can show a failed or unchanged shell action as explicit system activity while
 keeping `paths` reserved for files Rust actually observed changing.
+The diagnostic field keeps that explicit miss useful for people and agents:
+the cockpit can record why the operation did not change the namespace without
+loosening the meaning of `paths`.
 
 The newest slice gives the cockpit a way to diagnose itself before anyone asks
 an agent to build on top of it. `Run Cockpit Self Check` verifies the advertised
@@ -1008,8 +1020,8 @@ The current loop is:
 13. Run another served-shell write and see the row use operation metadata, such
     as `shell write /opmade.txt`, rather than a generic changed-path label.
 14. Try `rm absent.txt` in the served qjs-shell and see the no-change operation
-    frame report `status: unchanged` with `paths: []`, so the cockpit can say
-    the attempted mutation did not change the namespace.
+    frame report `status: unchanged` with `paths: []` and a `diagnostic`, so the
+    cockpit can say the attempted mutation did not change the namespace and why.
 15. Click a changed Activity row to reopen the Wanix file it touched.
 16. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1121,8 +1133,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Extend no-change operation frames with richer failure details, such as the
-  shell error text or exit status when the command exposes one.
+- Extend qjs-shell diagnostics toward structured command outcomes when the
+  shell exposes exit status, stderr/stdout channels, or richer built-in errors.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

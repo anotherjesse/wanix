@@ -17,6 +17,7 @@ use super::shell_activity::{
 };
 
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
+const SHELL_OPERATION_DIAGNOSTIC_MAX_CHARS: usize = 240;
 
 pub(in crate::serve) fn serve_terminal_websocket_connection(
     root_path: &Path,
@@ -120,9 +121,14 @@ impl TerminalWebSocketSession {
             .shell
             .input(input)
             .map_err(ServeConnectionError::Terminal)?;
+        let diagnostic = if input_contains_line_boundary(input) {
+            shell_operation_diagnostic(input, &output)
+        } else {
+            None
+        };
         self.send_output(output)?;
         if input_contains_line_boundary(input) {
-            self.send_mutations(&operations)?;
+            self.send_mutations(&operations, diagnostic.as_deref())?;
             self.input.sync_cwd(&self.shell.cwd());
         }
         Ok(())
@@ -176,13 +182,14 @@ impl TerminalWebSocketSession {
     fn send_mutations(
         &mut self,
         operations: &[ShellMutationOperation],
+        diagnostic: Option<&str>,
     ) -> Result<(), ServeConnectionError> {
         let paths = self
             .changes
             .take_changed_paths()
             .map_err(ServeConnectionError::Io)?;
         let operations = if paths.is_empty() {
-            operations_without_changed_paths(operations)
+            operations_without_changed_paths(operations, diagnostic)
         } else {
             operations_for_changed_paths(operations, &paths)
         };
@@ -258,6 +265,9 @@ fn shell_operation_json(operation: &ShellMutationOperation) -> String {
     if let Some(target) = &operation.target {
         fields.push(format!("\"target\":{}", json_string(target)));
     }
+    if let Some(diagnostic) = &operation.diagnostic {
+        fields.push(format!("\"diagnostic\":{}", json_string(diagnostic)));
+    }
     fields.push(format!(
         "\"paths\":[{}]",
         operation
@@ -313,6 +323,41 @@ fn ws_error(error: WsError) -> ServeConnectionError {
 
 fn input_contains_line_boundary(input: &[u8]) -> bool {
     input.iter().any(|byte| matches!(byte, b'\n' | b'\r'))
+}
+
+fn shell_operation_diagnostic(input: &[u8], output: &[u8]) -> Option<String> {
+    let echoed_lines = String::from_utf8_lossy(input)
+        .replace('\r', "\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let output = String::from_utf8_lossy(output).replace('\r', "\n");
+    let mut candidate = None;
+    for line in output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if line == "$" || echoed_lines.iter().any(|echoed| echoed == line) {
+            continue;
+        }
+        candidate = Some(truncate_shell_diagnostic(line));
+    }
+    candidate
+}
+
+fn truncate_shell_diagnostic(value: &str) -> String {
+    let mut truncated = String::new();
+    for (index, ch) in value.chars().enumerate() {
+        if index == SHELL_OPERATION_DIAGNOSTIC_MAX_CHARS {
+            truncated.push_str("...");
+            return truncated;
+        }
+        truncated.push(ch);
+    }
+    truncated
 }
 
 fn json_string(value: &str) -> String {

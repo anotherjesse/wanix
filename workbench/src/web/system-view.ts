@@ -104,6 +104,7 @@ type RouteRunArtifact = {
 type ActivityRecord = {
 	id: number;
 	label: string;
+	description?: string;
 	path?: string;
 	paths?: string[];
 };
@@ -299,7 +300,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
-	filesystemActivity(label = "filesystem activity", options: { path?: string; paths?: string[] } = {}): void {
+	filesystemActivity(label = "filesystem activity", options: { description?: string; path?: string; paths?: string[] } = {}): void {
 		this.addActivity(label, options);
 		this.refresh();
 	}
@@ -985,13 +986,14 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		return items;
 	}
 
-	private addActivity(label: string, options: { path?: string; paths?: string[] } = {}): void {
+	private addActivity(label: string, options: { description?: string; path?: string; paths?: string[] } = {}): void {
 		const paths = uniquePaths(options.paths || (options.path ? [options.path] : []));
 		const path = options.path || paths[paths.length - 1];
-		if (this.activity[0]?.label === label && samePaths(this.activity[0].paths, paths) && this.activity[0].path === path) {
+		const description = options.description;
+		if (this.activity[0]?.label === label && this.activity[0].description === description && samePaths(this.activity[0].paths, paths) && this.activity[0].path === path) {
 			return;
 		}
-		this.activity.unshift({ id: this.nextActivityId++, label, path, paths });
+		this.activity.unshift({ id: this.nextActivityId++, label, description, path, paths });
 		this.activity = this.activity.slice(0, 12);
 	}
 
@@ -1394,7 +1396,7 @@ function activityItem(entry: ActivityRecord): SystemTreeItem {
 	return leaf(
 		`activity:${entry.id}`,
 		entry.label,
-		path ? pathDescription(path) : undefined,
+		entry.description || (path ? pathDescription(path) : undefined),
 		"history",
 		path && !hasMultiplePaths ? {
 			command: "workbench.openWanixPath",
@@ -1681,6 +1683,7 @@ function activitySnapshot(entry: ActivityRecord): object {
 	return {
 		id: entry.id,
 		label: entry.label,
+		description: entry.description,
 		path: entry.path ? displayJournalPath(entry.path) : undefined,
 		paths: paths.map(displayJournalPath),
 	};
@@ -1689,7 +1692,7 @@ function activitySnapshot(entry: ActivityRecord): object {
 function activityJournalLines(entry: ActivityRecord): string[] {
 	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
 	return [
-		`- ${entry.label}`,
+		`- ${entry.label}${entry.description ? ` - ${entry.description}` : ""}`,
 		...paths.map((path) => `  - ${displayJournalPath(path)}`),
 	];
 }

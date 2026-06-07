@@ -1421,7 +1421,7 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     );
     assert_eq!(
         qjs_shell["unchangedOperationMessage"],
-        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"status\":\"unchanged\",\"target\":\"/missing\",\"paths\":[]}]}"
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"status\":\"unchanged\",\"target\":\"/missing\",\"diagnostic\":\"rm: missing: errno -44\",\"paths\":[]}]}"
     );
     assert_eq!(qjs_shell["exitMessage"], "{\"type\":\"exit\",\"code\":N}");
     assert_eq!(
@@ -2381,6 +2381,10 @@ std.exit(6);
             assert_eq!(operation["kind"], "rm");
             assert_eq!(operation["status"], "unchanged");
             assert_eq!(operation["target"], "/app/definitely-missing.txt");
+            assert_eq!(
+                operation["diagnostic"],
+                "rm: definitely-missing.txt: errno -44"
+            );
             assert!(qjs_shell_operation_paths(operation).is_empty());
         }
         other => panic!("expected no-change shell operation message, got {other:?}"),
