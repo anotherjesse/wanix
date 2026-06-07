@@ -199,6 +199,12 @@
         "icon": "$(server-process)"
       },
       {
+        "command": "workbench.openHttpWasmDemo",
+        "title": "Preview HTTP WASM Demo",
+        "category": "Wanix",
+        "icon": "$(server-process)"
+      },
+      {
         "command": "workbench.openHttpAppPreview",
         "title": "Open Latest HTTP App Preview",
         "category": "Wanix",
@@ -271,14 +277,19 @@
           "group": "navigation@7"
         },
         {
-          "command": "workbench.openHttpAppHandler",
+          "command": "workbench.openHttpWasmDemo",
           "when": "view == wanix.system",
           "group": "navigation@8"
         },
         {
-          "command": "workbench.installAgentRepairDemo",
+          "command": "workbench.openHttpAppHandler",
           "when": "view == wanix.system",
           "group": "navigation@9"
+        },
+        {
+          "command": "workbench.installAgentRepairDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@10"
         }
       ],
       "view/item/context": [
@@ -348,14 +359,19 @@
           "group": "navigation@2"
         },
         {
-          "command": "workbench.openHttpAppHandler",
+          "command": "workbench.openHttpWasmDemo",
           "when": "view == wanix.system && (viewItem == wanixHttpRoute || viewItem == wanixHttpRouteWithPreview)",
           "group": "navigation@3"
         },
         {
-          "command": "workbench.copyHttpAppUrl",
+          "command": "workbench.openHttpAppHandler",
           "when": "view == wanix.system && (viewItem == wanixHttpRoute || viewItem == wanixHttpRouteWithPreview)",
           "group": "navigation@4"
+        },
+        {
+          "command": "workbench.copyHttpAppUrl",
+          "when": "view == wanix.system && (viewItem == wanixHttpRoute || viewItem == wanixHttpRouteWithPreview)",
+          "group": "navigation@5"
         },
         {
           "command": "workbench.installHttpAppDemo",

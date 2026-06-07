@@ -1080,6 +1080,7 @@ dependencies = [
  "wanix-vfs",
  "wanix-wasi",
  "wanix-wasm",
+ "wat",
 ]
 
 [[package]]

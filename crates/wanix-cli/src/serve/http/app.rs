@@ -37,7 +37,7 @@ pub(in crate::serve) fn app_route_json(roots: &ServeRoots, http_url: &str) -> St
         format!(
             "{{\"url\":{},\"protocol\":\"wanix-http-app.v1\",\
              \"status\":\"available\",\"method\":\"GET\",\
-             \"route\":\"/.wanix/app/<name>\",\"source\":\"apps/<name>.js\",\
+             \"route\":\"/.wanix/app/<name>\",\"source\":\"apps/<name>.js|apps/<name>.wasm\",\
              \"response\":\"stdout\",\"scope\":\"loopback\"}}",
             crate::json::json_string(http_url)
         )
@@ -64,7 +64,7 @@ fn app_response(
             "wanix app routes are available only to loopback clients",
         );
     }
-    match run_qjs_app(roots.p9_root.as_ref(), name, request) {
+    match run_app(roots.p9_root.as_ref(), name, request) {
         Ok(run) => app_trace_headers(
             StaticResponse {
                 status: HttpStatus::Ok,
@@ -76,9 +76,9 @@ fn app_response(
             &run.stdout_path,
             &run.stderr_path,
         ),
-        Err(AppError::MissingScript(path)) => StaticResponse::plain(
+        Err(AppError::MissingProgram(path)) => StaticResponse::plain(
             HttpStatus::NotFound,
-            &format!("wanix app script {path} was not found"),
+            &format!("wanix app program {path} was not found"),
         ),
         Err(AppError::TaskExit(task_exit)) => app_trace_headers(
             StaticResponse::plain(
@@ -101,20 +101,18 @@ fn app_response(
     }
 }
 
-fn run_qjs_app(fs: &dyn FileSystem, name: &str, request: &[u8]) -> Result<AppRun, AppError> {
-    let source_script = app_script(name);
-    require_script_file(fs, &source_script)?;
+fn run_app(fs: &dyn FileSystem, name: &str, request: &[u8]) -> Result<AppRun, AppError> {
+    let program = app_program(fs, name)?;
     prepare_trace_dir(fs)?;
 
-    let task_id = read_text(fs, "#task/new/qjs")?.trim().to_owned();
+    let task_id = read_text(fs, program.task_new_path())?.trim().to_owned();
     let stdout_path = format!("{APP_TRACE_DIR}/{task_id}.out");
     let stderr_path = format!("{APP_TRACE_DIR}/{task_id}.err");
     truncate_file(fs, &stdout_path)?;
     truncate_file(fs, &stderr_path)?;
 
     let target = request_target(request).unwrap_or("/.wanix/app").to_owned();
-    let script = format!("{name}.js");
-    let cmd = quote_cmd_argv([script.as_str(), target.as_str()]);
+    let cmd = quote_cmd_argv([program.file_name.as_str(), target.as_str()]);
     let task_path = format!("#task/{task_id}");
     write_service_text(fs, &format!("{task_path}/cmd"), &format!("{cmd}\n"))?;
     write_service_text(
@@ -177,6 +175,26 @@ fn rooted_trace_path(path: &str) -> String {
     }
 }
 
+#[derive(Copy, Clone)]
+enum AppProgramKind {
+    Qjs,
+    Wasm,
+}
+
+struct AppProgram {
+    file_name: String,
+    kind: AppProgramKind,
+}
+
+impl AppProgram {
+    fn task_new_path(&self) -> &'static str {
+        match self.kind {
+            AppProgramKind::Qjs => "#task/new/qjs",
+            AppProgramKind::Wasm => "#task/new/wasm",
+        }
+    }
+}
+
 fn app_name(relative_path: &Path) -> Option<Result<String, HttpStatus>> {
     let mut components = relative_path.components();
     match components.next() {
@@ -212,20 +230,37 @@ fn valid_route_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-fn app_script(name: &str) -> String {
-    format!("{APP_SOURCE_DIR}/{name}.js")
+fn app_program(fs: &dyn FileSystem, name: &str) -> Result<AppProgram, AppError> {
+    let candidates = [
+        (AppProgramKind::Qjs, app_program_path(name, "js")),
+        (AppProgramKind::Wasm, app_program_path(name, "wasm")),
+    ];
+    for (kind, path) in candidates {
+        if app_program_exists(fs, &path)? {
+            return Ok(AppProgram {
+                file_name: path
+                    .rsplit_once('/')
+                    .map_or_else(|| path.clone(), |(_, file_name)| file_name.to_owned()),
+                kind,
+            });
+        }
+    }
+    Err(AppError::MissingProgram(format!(
+        "{APP_SOURCE_DIR}/{name}.js or {APP_SOURCE_DIR}/{name}.wasm"
+    )))
 }
 
-fn require_script_file(fs: &dyn FileSystem, path: &str) -> Result<(), AppError> {
+fn app_program_path(name: &str, extension: &str) -> String {
+    format!("{APP_SOURCE_DIR}/{name}.{extension}")
+}
+
+fn app_program_exists(fs: &dyn FileSystem, path: &str) -> Result<bool, AppError> {
     let metadata = match fs.metadata(&normalized(path)?) {
         Ok(metadata) => metadata,
-        Err(FsError::NotFound) => return Err(AppError::MissingScript(path.to_owned())),
+        Err(FsError::NotFound) => return Ok(false),
         Err(error) => return Err(AppError::Fs(error)),
     };
-    if metadata.file_type() != FileType::File {
-        return Err(AppError::MissingScript(path.to_owned()));
-    }
-    Ok(())
+    Ok(metadata.file_type() == FileType::File)
 }
 
 fn prepare_trace_dir(fs: &dyn FileSystem) -> FsResult<()> {
@@ -238,7 +273,7 @@ fn http_env(name: &str, target: &str) -> String {
 }
 
 enum AppError {
-    MissingScript(String),
+    MissingProgram(String),
     TaskExit(Box<AppTaskExit>),
     Fs(FsError),
 }

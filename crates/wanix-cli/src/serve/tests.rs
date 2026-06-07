@@ -33,6 +33,22 @@ const ENOSYS: u32 = 38;
 const P9_O_WRONLY: u32 = 0o1;
 const P9_O_RDWR: u32 = 0o2;
 const EOPNOTSUPP: u32 = 95;
+const WASM_HTTP_APP_WAT: &str = r#"
+(module
+  (import "wasi_snapshot_preview1" "fd_write"
+    (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 8) "wasm route ok\n")
+  (func $_start (export "_start")
+    (i32.store (i32.const 0) (i32.const 8))
+    (i32.store (i32.const 4) (i32.const 14))
+    (drop
+      (call $fd_write
+        (i32.const 1)
+        (i32.const 0)
+        (i32.const 1)
+        (i32.const 24)))))
+"#;
 
 #[test]
 fn parse_serve_uses_go_like_defaults_and_options() {
@@ -259,6 +275,65 @@ std.writeFile("ran.txt", "ran " + target);
     assert!(
         root.join(".wanix/http/2.out").exists(),
         "route stdout trace should be visible in the served filesystem"
+    );
+}
+
+#[test]
+fn serve_once_runs_wasm_http_app_route() {
+    let root = temp_dir("wanix-cli-serve-http-wasm-app");
+    fs::create_dir_all(root.join("apps")).unwrap();
+    fs::write(
+        root.join("apps/hello.wasm"),
+        wat::parse_str(WASM_HTTP_APP_WAT).unwrap(),
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let command = ServeCommand {
+        root_path: root.clone(),
+        addr: addr.to_string(),
+        bundle: None,
+        wanix_services: true,
+        once: true,
+    };
+
+    let handle = thread::spawn(move || {
+        let mut stderr = Vec::new();
+        let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+        (exit_code, stderr)
+    });
+
+    let response = http_request(
+        addr,
+        b"GET /.wanix/app/hello?from=wasm HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    );
+    let (exit_code, _stderr) = handle.join().unwrap();
+
+    assert_eq!(exit_code, 0);
+    let (headers, body) = http_response_parts(&response);
+    assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+    assert!(
+        headers.contains("Content-Type: text/plain; charset=utf-8\r\n"),
+        "{headers}"
+    );
+    assert!(headers.contains("X-Wanix-Task-Id: 2\r\n"), "{headers}");
+    assert!(
+        headers.contains("X-Wanix-Stdout-Path: /.wanix/http/2.out\r\n"),
+        "{headers}"
+    );
+    assert!(
+        headers.contains("X-Wanix-Stderr-Path: /.wanix/http/2.err\r\n"),
+        "{headers}"
+    );
+    assert_eq!(body, b"wasm route ok\n");
+    assert_eq!(
+        fs::read(root.join(".wanix/http/2.out")).unwrap(),
+        b"wasm route ok\n",
+        "route stdout trace should capture the wasm task output"
+    );
+    assert!(
+        root.join(".wanix/http/2.err").exists(),
+        "route stderr trace should be visible in the served filesystem"
     );
 }
 
@@ -1346,7 +1421,7 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     assert_eq!(http_app["protocol"], "wanix-http-app.v1");
     assert_eq!(http_app["status"], "available");
     assert_eq!(http_app["route"], "/.wanix/app/<name>");
-    assert_eq!(http_app["source"], "apps/<name>.js");
+    assert_eq!(http_app["source"], "apps/<name>.js|apps/<name>.wasm");
     assert_eq!(http_app["response"], "stdout");
     assert_eq!(http_app["scope"], "loopback");
 

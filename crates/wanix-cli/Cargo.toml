@@ -25,6 +25,7 @@ wanix-wasm = { path = "../wanix-wasm" }
 
 [dev-dependencies]
 serde_json = "1"
+wat = "1"
 
 [[bin]]
 name = "wanix-rust"

@@ -319,6 +319,16 @@ server log.
 
 ![HTTP route task trace artifacts](assets/wanix-workbench-browser-dx/40-http-route-trace-artifacts.png)
 
+HTTP app routes are no longer only qjs-shaped. The Rust route runner now looks
+for `apps/<name>.js` first and then `apps/<name>.wasm`, starts the matching
+Wanix task kind, binds stdout/stderr to the same `/.wanix/http` trace files, and
+returns stdout as the response. The workbench has a `Preview HTTP WASM Demo`
+action that installs a tiny WASI module at `/apps/wasm.wasm`, calls
+`/.wanix/app/wasm?from=workbench`, and opens the response report. In the
+sidebar, that same request appears as both a route run and a `wasm` task.
+
+![HTTP WASM route run](assets/wanix-workbench-browser-dx/50-http-wasm-route-run.png)
+
 Using that screenshot exposed another small annoyance: the run was useful, but
 buried below every other live-system section. The cockpit now puts `Routes` and
 `Route Runs` directly under `Actions`, and tree rows have stable IDs plus
@@ -558,7 +568,8 @@ fills in missing starter files but does not overwrite local edits. Reset is a
 separate command, and it owns clearing the generated shared input/output.
 
 The HTTP-app route is the first app-platform proof. It is deliberately local
-and narrow: `/.wanix/app/<name>` maps to `apps/<name>.js`, requires
+and narrow: `/.wanix/app/<name>` maps to `apps/<name>.js` or
+`apps/<name>.wasm`, requires
 `--wanix-services`, rejects non-loopback clients, binds stdout and stderr to
 `.wanix/http/<task>.out` and `.wanix/http/<task>.err`, and returns stdout as
 `text/plain`. Discovery advertises the contract as `wanix-http-app.v1`.
@@ -728,6 +739,8 @@ The current loop is:
     explicit reset command.
 32. Right-click the route row to preview, open source, copy the route URL, or
     intentionally reset the demo handler.
+33. Click `Preview HTTP WASM Demo` to install `/apps/wasm.wasm`, run it through
+    `/.wanix/app/wasm`, and inspect the route response plus wasm task trace.
 33. After previewing, read the route row's latest HTTP status and reopen the
     saved response report from `Open Latest HTTP App Preview`.
 34. Expand `Route Runs` to see the previewed HTTP route execution and reopen

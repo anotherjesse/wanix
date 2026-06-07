@@ -10,6 +10,10 @@ const COUNTER_NAME = "counter";
 const COUNTER_PATH = `${APP_DIR}/${COUNTER_NAME}.js`;
 const COUNTER_PREVIEW_PATH = `${APP_DIR}/${COUNTER_NAME}.response.txt`;
 const COUNTER_STATE_PATH = `${APP_DIR}/${COUNTER_NAME}.count.txt`;
+const WASM_ROUTE_NAME = "wasm";
+const WASM_ROUTE_PATH = `${APP_DIR}/${WASM_ROUTE_NAME}.wasm`;
+const WASM_ROUTE_PREVIEW_PATH = `${APP_DIR}/${WASM_ROUTE_NAME}.response.txt`;
+const WASM_ROUTE_BYTES_BASE64 = "AGFzbQEAAAABDAJgBH9/f38Bf2AAAAIjARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAADAgEBBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAEKHQEbAEEAQQg2AgBBBEEONgIAQQFBAEEBQRgQABoLCxQBAEEICw53YXNtIHJvdXRlIG9rCg==";
 
 export type HttpAppRouteConfig = {
 	url?: string;
@@ -51,6 +55,14 @@ const COUNTER_PREVIEW: HttpAppPreviewTarget = {
 	message: "Previewed Wanix HTTP counter response in /apps",
 	errorLabel: "Wanix HTTP counter",
 	artifacts: [{ label: "State File", path: COUNTER_STATE_PATH, icon: "database" }],
+};
+
+const WASM_ROUTE_PREVIEW: HttpAppPreviewTarget = {
+	name: WASM_ROUTE_NAME,
+	sourcePath: WASM_ROUTE_PATH,
+	previewPath: WASM_ROUTE_PREVIEW_PATH,
+	message: "Previewed Wanix HTTP WASM response in /apps",
+	errorLabel: "Wanix HTTP WASM app",
 };
 
 const APP_JS = `import * as std from "qjs:std";
@@ -141,6 +153,20 @@ async function ensureHttpCounterDemo(
 	}
 }
 
+async function ensureHttpWasmDemo(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	await fsys.makeDirAll(APP_DIR);
+	if (await wanixPathExists(fsys, WASM_ROUTE_PATH)) {
+		return;
+	}
+	await fsys.writeFile(WASM_ROUTE_PATH, base64Bytes(WASM_ROUTE_BYTES_BASE64));
+	refreshWanixFile(bridge, WASM_ROUTE_PATH);
+	systemView.filesystemActivity("http wasm demo installed");
+}
+
 export async function openHttpAppHandler(
 	fsys: any,
 	bridge: WanixBridge,
@@ -179,6 +205,16 @@ export async function openHttpCounterDemo(
 ): Promise<void> {
 	await ensureHttpCounterDemo(fsys, bridge, systemView);
 	await previewHttpApp(fsys, bridge, config, systemView, COUNTER_PREVIEW);
+}
+
+export async function openHttpWasmDemo(
+	fsys: any,
+	bridge: WanixBridge,
+	config: HttpAppDemoConfig,
+	systemView: WanixSystemView,
+): Promise<void> {
+	await ensureHttpWasmDemo(fsys, bridge, systemView);
+	await previewHttpApp(fsys, bridge, config, systemView, WASM_ROUTE_PREVIEW);
 }
 
 async function previewHttpApp(
@@ -249,6 +285,15 @@ async function wanixPathExists(fsys: any, path: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
+}
+
+function base64Bytes(value: string): Uint8Array {
+	const binary = atob(value);
+	const bytes = new Uint8Array(binary.length);
+	for (let index = 0; index < binary.length; index += 1) {
+		bytes[index] = binary.charCodeAt(index);
+	}
+	return bytes;
 }
 
 function httpAppTrace(response: Response): HttpAppTrace {
