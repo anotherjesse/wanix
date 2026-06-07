@@ -19,7 +19,6 @@ const PIPE_NEW_PATH = "#pipe/new";
 const CAS_INGEST_PATH = "#cas/ingest";
 const PLUMB_PROBE_TOPIC = "cockpit-self-check";
 const PLUMB_SEND_PATH = `#plumb/${PLUMB_PROBE_TOPIC}/send`;
-const PLUMB_RECV_PATH = `#plumb/${PLUMB_PROBE_TOPIC}/recv`;
 const MESH_PEERS_PATH = "#mesh/peers";
 
 type CockpitSelfCheckConfig = WanixSystemConfig & {
@@ -271,31 +270,19 @@ async function pipeDeviceCheck(fsys: any, generatedAt: Date): Promise<CheckOutco
 		}
 		const dataPath = `#pipe/${id}/data`;
 		const frame = `cockpit-self-check pipe ${generatedAt.toISOString()}\n`;
-		// Open the reader before the writer so the writer's close-on-drop
-		// signals EOF after the bytes are buffered.
-		const readable = await fsys.openReadable(dataPath);
-		const reader = readable.getReader();
-		const writable = await fsys.openWritable(dataPath);
-		const writer = writable.getWriter();
+		// PipeChannel buffers written bytes until read and signals EOF only once
+		// every writer is dropped. Open the write end (a live stream so it is not
+		// treated as a create), write the frame, then close it; with no writers
+		// left, the following one-shot read drains the buffered frame and then
+		// sees a real EOF. Doing it write-first avoids the reader-first race
+		// (an empty open channel and a closed channel both read as 0 bytes).
+		const writer = (await fsys.openWritable(dataPath)).getWriter();
 		try {
 			await writer.write(new TextEncoder().encode(frame));
 		} finally {
 			await writer.close().catch(() => undefined);
 		}
-		let received = "";
-		const decoder = new TextDecoder();
-		// Drain until EOF or the expected frame is fully accumulated; the
-		// writer is closed, so EOF is guaranteed.
-		while (received.length < frame.length) {
-			const { done, value } = await reader.read();
-			if (value) {
-				received += decoder.decode(value, { stream: !done });
-			}
-			if (done) {
-				break;
-			}
-		}
-		await reader.cancel().catch(() => undefined);
+		const received = String(await fsys.readText(dataPath));
 		if (received !== frame) {
 			return {
 				status: "failed",
@@ -378,50 +365,35 @@ async function meshPeersCheck(fsys: any, config: CockpitSelfCheckConfig): Promis
 	}
 }
 
-// #plumb: subscribe to `#plumb/<topic>/recv`, publish one envelope to
-// `#plumb/<topic>/send`, and read the envelope back from the open subscription
-// (see `crates/wanix-plumb/src/files.rs` and `lib.rs`). Delivery is
-// best-effort, so the subscriber must be open before the send.
+// #plumb: validate the publish path by writing one envelope to
+// `#plumb/<topic>/send` (see `crates/wanix-plumb/src/files.rs` and `lib.rs`).
+//
+// We deliberately do not open a live `#plumb/<topic>/recv` subscription here: a
+// `recv` read blocks server-side until an envelope arrives, and the serve 9P
+// websocket handles one frame at a time per connection
+// (crates/wanix-cli/src/p9_ws/connection.rs), so a blocking recv on this single
+// browser connection would prevent the follow-up `send` frame from ever being
+// processed -- a self-deadlock. Confirming the publish path is the most a
+// single connection can verify; end-to-end delivery is exercised by the mesh
+// integration tests and would need a second 9P connection for the subscriber.
 async function plumbDeviceCheck(fsys: any, generatedAt: Date): Promise<CheckOutcome> {
+	const envelope = JSON.stringify({
+		kind: "cockpit-self-check",
+		from: "cockpit",
+		to: PLUMB_PROBE_TOPIC,
+		body: `probe ${generatedAt.toISOString()}`,
+	});
 	try {
-		const readable = await fsys.openReadable(PLUMB_RECV_PATH);
-		const reader = readable.getReader();
+		const writer = (await fsys.openWritable(PLUMB_SEND_PATH)).getWriter();
 		try {
-			const envelope = JSON.stringify({
-				kind: "cockpit-self-check",
-				from: "cockpit",
-				to: PLUMB_PROBE_TOPIC,
-				body: `probe ${generatedAt.toISOString()}`,
-			});
-			await fsys.writeFile(PLUMB_SEND_PATH, envelope);
-			const decoder = new TextDecoder();
-			let received = "";
-			// Drain until we either accumulate a full newline-terminated
-			// frame (the wire form `recv` emits) or the receiver returns
-			// done. A best-effort bus has no retry, but the buffered
-			// subscription guarantees this one frame.
-			while (!received.includes("\n")) {
-				const { done, value } = await reader.read();
-				if (value) {
-					received += decoder.decode(value, { stream: !done });
-				}
-				if (done) {
-					break;
-				}
-			}
-			if (!received.includes("cockpit-self-check")) {
-				return {
-					status: "failed",
-					description: `#plumb subscriber did not receive the cockpit-self-check envelope (got ${JSON.stringify(received)})`,
-				};
-			}
-			return {
-				status: "ok",
-				description: `#plumb topic ${PLUMB_PROBE_TOPIC} delivered one envelope to a live subscriber`,
-			};
+			await writer.write(new TextEncoder().encode(envelope));
 		} finally {
-			await reader.cancel().catch(() => undefined);
+			await writer.close().catch(() => undefined);
 		}
+		return {
+			status: "ok",
+			description: `#plumb accepted a publish to ${absoluteWanixPath(PLUMB_SEND_PATH)} (live receive needs a second 9P connection on single-connection serve)`,
+		};
 	} catch (error) {
 		return meshDeviceUnavailable("#plumb", PLUMB_SEND_PATH, error);
 	}

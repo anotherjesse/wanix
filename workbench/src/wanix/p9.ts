@@ -3,6 +3,7 @@ import {
 	MODE_DIR,
 	MODE_FILE,
 	O_RDONLY,
+	O_WRONLY,
 	O_RDWR,
 	O_TRUNC,
 	P9_TLCREATE,
@@ -418,7 +419,11 @@ export class WanixP9Handle {
 
 	private async openLiveWritable(name: string): Promise<WritableStream<Uint8Array>> {
 		const fid = await this.session.walkPath(name);
-		await this.session.open(fid, O_RDWR);
+		// Open the write end only. Plan 9 pipe (#pipe) and plumber (#plumb) ends
+		// are strictly unidirectional and reject O_RDWR; #term tolerates a
+		// write-only open, so O_WRONLY is the safe common mode for every live
+		// writable stream.
+		await this.session.open(fid, O_WRONLY);
 		const session = this.session;
 		return new WritableStream<Uint8Array>({
 			async write(chunk) {
@@ -442,9 +447,27 @@ function preferredProtocol(route: WanixP9Route): string | undefined {
 	return route.protocol;
 }
 
+// Service files whose reads/writes must use the streaming 9P path (walk + open
+// the existing fid, then read/write at offset 0) rather than the one-shot
+// readFile/writeFile helpers. The one-shot write path issues a create, which
+// these allocator-owned files reject, and the one-shot read path drains to EOF,
+// which would block on a live subscription. Covers #term streams, #pipe byte
+// channels, #plumb publish/subscribe, and the #agent event stream.
 function isLiveServiceStream(name: string): boolean {
 	const normalized = normalizePath(name);
-	return normalized.startsWith("/#term/");
+	if (normalized.startsWith("/#term/")) {
+		return true;
+	}
+	if (normalized.startsWith("/#pipe/") && normalized.endsWith("/data")) {
+		return true;
+	}
+	if (normalized.startsWith("/#plumb/") && (normalized.endsWith("/send") || normalized.endsWith("/recv"))) {
+		return true;
+	}
+	if (normalized.startsWith("/#agent/") && normalized.endsWith("/events")) {
+		return true;
+	}
+	return false;
 }
 
 function isSameOrNestedPath(parent: string, candidate: string): boolean {

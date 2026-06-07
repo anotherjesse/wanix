@@ -108,6 +108,7 @@
                 term: discovery.services.term,
                 devices: discovery.services.devices || []
               };
+              workbenchConfig.drivers = discovery.services.drivers || [];
               workbenchConfig.qjsTask = discovery.services.drivers?.includes("qjs") || false;
               workbenchConfig.shell = {
                 cmd: params.get("cmd") || "",

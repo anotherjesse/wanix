@@ -29,6 +29,7 @@ export const DT_DIR = 4;
 export const DT_LNK = 10;
 export const AT_REMOVEDIR = 0x200;
 export const O_RDONLY = 0;
+export const O_WRONLY = 0o1;
 export const O_RDWR = 0o2;
 export const O_TRUNC = 0o1000;
 export const MODE_FILE = 0o100664;
