@@ -428,3 +428,47 @@ runtime-unverified — exercising them against the live devices is the next step
    `shared_vfs_differential` test and may just need re-wiring.
 3. Then Slice 8 (`--bundle cockpit` rename + retire the `workbench/code/` vendor
    dependency).
+
+## Update 2026-06-07: cockpit features wired to the mesh devices — **working**
+
+Each cockpit feature below was made to actually drive the cpu mesh/agent
+devices over direct 9P and verified end-to-end in headless Chromium (and via
+curl for the HTTP route). Committed as focused slices.
+
+1. **service-inspector** — the Namespace tree now lists every bound service
+   device (discovery `services.devices`, sourced from
+   `roots::INSPECTABLE_SERVICE_DEVICES`); opening one renders the live
+   directory over 9P with allocator/metadata/stream annotations. Verified:
+   `#kv` (empty), `#agent` (`new`→allocator), `#cas` (`have/` + `ingest`).
+   Screenshots: `inspect-kv.png`, `inspect-agent.png`.
+
+2. **agent-repair-demo** — `repairViaAgent` opens a `#agent` session, submits
+   the patch plan as an `approve:` prompt, polls `pending`, resolves via `ctl`,
+   then applies the approved patch. Verified: one click fixes
+   `/agent/broken.js`, `result.txt` reads "FIXED BY WANIX AGENT", and the
+   report logs the `#agent` session/approval. Screenshot: `agent-repair.png`.
+
+3. **cockpit-self-check** — drivers now flow through to the config; `#pipe` and
+   `#plumb` no longer hang (bridge live-stream fix + `O_WRONLY` write ends).
+   Verified: the check completes and writes `/.wanix/cockpit-check.{md,json}`;
+   drivers/services/shell/report-storage and `#agent`/`#kv`/`#pipe`/`#cas`/
+   `#plumb` pass. Screenshot: `self-check.png`.
+
+4. **duet** — un-stubbed; qjs producer → wasm transform → qjs verify on one
+   shared FS. Verified: `shared/out.txt` = "rust-wasm saw: hello from qjs
+   duet". Screenshot: `duet.png`.
+
+5. **http-app + #kv** — restored the Rust `/.wanix/app/<name>` route, made
+   `#kv` (and the other `#` devices) reachable from WASI guests, and rebacked
+   the counter demo on `#kv/http-counter`. Verified: curl + cockpit increment
+   one shared counter; "HTTP Counter State" indexed as a data store.
+   Screenshot: `http-counter.png`.
+
+Build status: `cargo check --workspace` clean; `cargo test -p wanix-cli --lib
+serve` 76 pass; `cargo test -p wanix-wasi` 59 pass; `npm run compile-web`
+clean.
+
+Still stubbed (documented `// STUB:` in extension.ts): `v86-shared-demo`.
+Known constraint: `#plumb` live receive needs a second 9P connection (the
+single-connection serve handles one frame at a time), so the self-check probes
+the publish path only.
