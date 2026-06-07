@@ -1,6 +1,6 @@
 
 import * as vscode from 'vscode';
-import { installAgentRepairDemo, repairQjsProgram } from './agent-repair-demo.js';
+import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairQjsProgram } from './agent-repair-demo.js';
 import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
 import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
 import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, type HttpAppRouteConfig } from './http-app-demo.js';
@@ -255,6 +255,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.installAgentRepairDemo', async () => {
 			try {
 				await installAgentRepairDemo(fsys, bridge, systemView);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.runAgentRepairDemo', async () => {
+			try {
+				await runAgentRepairDemo(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context);
+				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -904,6 +912,41 @@ async function fixCurrentWanixProgram(
 	context: vscode.ExtensionContext,
 ): Promise<void> {
 	const target = await taskRunTarget("qjs", bridge);
+	await repairWanixProgramTarget(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, target, context);
+}
+
+async function runAgentRepairDemo(
+	fsys: any,
+	bridge: WanixBridge,
+	config: Config,
+	systemView: WanixSystemView,
+	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	taskTerminals: Map<string, vscode.Terminal>,
+	context: vscode.ExtensionContext,
+): Promise<void> {
+	await installAgentRepairDemo(fsys, bridge, systemView);
+	await repairWanixProgramTarget(
+		fsys,
+		bridge,
+		config,
+		systemView,
+		activeTaskTerminals,
+		taskTerminals,
+		taskRunTargetFromPath(bridge, "qjs", AGENT_BROKEN_PATH),
+		context,
+	);
+}
+
+async function repairWanixProgramTarget(
+	fsys: any,
+	bridge: WanixBridge,
+	config: Config,
+	systemView: WanixSystemView,
+	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	taskTerminals: Map<string, vscode.Terminal>,
+	target: TaskRunTarget,
+	context: vscode.ExtensionContext,
+): Promise<void> {
 	const trace: AgentTraceStep[] = [];
 	const startedAt = new Date();
 	let reportPath: string | undefined;

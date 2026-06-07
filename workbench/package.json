@@ -109,6 +109,12 @@
         "icon": "$(bug)"
       },
       {
+        "command": "workbench.runAgentRepairDemo",
+        "title": "Run Agent Repair Demo",
+        "category": "Wanix",
+        "icon": "$(tools)"
+      },
+      {
         "command": "workbench.fixCurrentWanixProgram",
         "title": "Fix Current Wanix Program",
         "category": "Wanix",
@@ -290,6 +296,11 @@
           "command": "workbench.installAgentRepairDemo",
           "when": "view == wanix.system",
           "group": "navigation@10"
+        },
+        {
+          "command": "workbench.runAgentRepairDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@11"
         }
       ],
       "view/item/context": [

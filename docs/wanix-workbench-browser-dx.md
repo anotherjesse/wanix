@@ -447,6 +447,14 @@ the editor title bar alone.
 
 ![Wanix agent repair report](assets/wanix-workbench-browser-dx/51-agent-repair-report.png)
 
+The demo path is now one click. `Run Agent Repair Demo` installs the broken
+program and immediately repairs `/agent/broken.js` as an explicit target, so an
+empty workbench can show the whole agent loop without relying on the active
+editor. `Fix Current Wanix Program` stays next to it for the more general case:
+repair the qjs file the user is already looking at.
+
+![One-click Wanix agent repair demo](assets/wanix-workbench-browser-dx/52-one-click-agent-repair.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -697,6 +705,11 @@ The repair report makes that loop durable. It is useful today for humans
 reviewing what happened, and it gives the future Codex app-server backend a
 stable artifact shape to fill in without changing the browser story.
 
+The one-click action matters for demos because it removes the last bit of
+coordination: no command palette, no title-bar hunting, no active-editor
+assumption. The system view can bootstrap the broken program, operate it, and
+leave the report behind.
+
 ## The Feeling Now
 
 The current loop is:
@@ -776,8 +789,8 @@ The current loop is:
     output, exit, and transcript capture state.
 43. Click `Clear Finished Rows` when old exited tasks and closed terminals are
     crowding the sidebar.
-44. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
-    `/agent/broken.js`.
+44. Click `Run Agent Repair Demo` to install `/agent/broken.js`, run it, repair
+    it, rerun it, and open the generated report.
 45. Watch the `Agent` section list the repair loop: read, run, observe, edit,
     rerun, capture transcripts, and verify `agent/out/result.txt`.
 46. Click an Agent row with an artifact to reopen the source, transcript, or
@@ -788,8 +801,8 @@ The current loop is:
     `/agent/out/broken.repair-report.md` to inspect the complete repair trace:
     operation list, task ids, transcript paths, snapshots, result, and status.
 49. Use the System action row `Fix Current Wanix Program` when the current
-    editor is a qjs file; the repair no longer depends on spotting the editor
-    title icon.
+    editor is a qjs file and you want to apply the same repair contract outside
+    the canned demo.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 
