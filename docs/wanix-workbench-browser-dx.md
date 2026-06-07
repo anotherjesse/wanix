@@ -528,6 +528,15 @@ deliberate retention workflow.
 
 ![Shell command history compaction controls](assets/wanix-workbench-browser-dx/79-shell-history-compaction-controls.png)
 
+Compaction now has an audit-friendly partner. `Archive Shell Command History`
+creates a timestamped directory under `/.wanix/qjs-shell/archive/` with
+`index.md`, `manifest.json`, copied `commands.jsonl`, `latest.md`,
+`latest.json`, `summary.md`, and archive-local `commands/*.md` evidence files.
+The archive is independent of the live history surface, so users can export the
+session record before compacting or clearing the live cockpit.
+
+![Shell command history archive export](assets/wanix-workbench-browser-dx/80-shell-history-archive-export.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1129,8 +1138,9 @@ The current loop is:
 17. Click `Open Shell History Summary` to generate the grouped
     `/.wanix/qjs-shell/summary.md` session view. Command rows link to
     `/.wanix/qjs-shell/commands/<n>.md`, and touched paths link back to
-    `wanix:/...`. Then use `Compact Shell Command History` to keep the latest
-    count or age window and regenerate the retained evidence set.
+    `wanix:/...`. Use `Archive Shell Command History` to copy that evidence into
+    a timestamped audit directory, then use `Compact Shell Command History` to
+    keep the latest count or age window and regenerate the retained live set.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1242,8 +1252,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add an explicit shell-history export/archive action before compaction when a
-  session needs an audit artifact outside the live `.wanix/qjs-shell` surface.
+- Add restore/compare tooling for shell-history archives, so a compacted live
+  session can still be diffed against a prior audit snapshot.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.
