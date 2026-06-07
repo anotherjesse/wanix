@@ -308,6 +308,13 @@ system object and the execution log are back in view with much less hunting.
 
 ![Route runs moved near the top](assets/wanix-workbench-browser-dx/41-route-runs-near-top.png)
 
+The sidebar now stays there after the preview too. `Preview HTTP App Demo` and
+`Preview HTTP Counter Demo` still open the saved response report in the editor,
+but the left pane returns to Wanix System instead of Explorer, so the new route
+run is visible at the same time as the response body.
+
+![HTTP preview keeps Wanix focus](assets/wanix-workbench-browser-dx/42-http-preview-keeps-wanix-focus.png)
+
 The execution labels are concrete now as well. The `Route Runs` list says
 `/.wanix/app/hello` and `/.wanix/app/counter`, not only the template
 `/.wanix/app/<name>`, so mixed route runs read like a log of what actually ran.
@@ -529,6 +536,10 @@ The System view order now keeps route work close to the actions that create it:
 terminal, and namespace row. Stable tree item IDs and explicit tooltips also
 make refreshes and truncated rows less slippery.
 
+HTTP preview commands now restore focus to the Wanix System view after opening
+the response report. That keeps the editor output and the live execution log on
+screen together instead of sending the user back through the Explorer tab.
+
 Route-run labels now use the concrete app path too, so the log distinguishes
 `/.wanix/app/hello` from `/.wanix/app/counter` at a glance.
 
@@ -621,21 +632,23 @@ The current loop is:
     the exact HTTP execution that produced the response.
 34. Notice that `Routes` and `Route Runs` stay near the top of the System view,
     and hover truncated rows to see their full backing paths.
-35. Click `New qjs Script` to create a unique runnable scratch script without
+35. Run either HTTP preview action again and see the response report open while
+    the sidebar stays on Wanix System.
+36. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-36. Run that script, then expand its task row to reopen the source, transcript,
+37. Run that script, then expand its task row to reopen the source, transcript,
     metadata, terminal output, or `#task/<id>` service directory.
-37. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+38. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-38. Click `Clear Finished Rows` when old exited tasks and closed terminals are
+39. Click `Clear Finished Rows` when old exited tasks and closed terminals are
     crowding the sidebar.
-39. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+40. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-40. Watch the `Agent` section list the repair loop: read, run, observe, edit,
+41. Watch the `Agent` section list the repair loop: read, run, observe, edit,
     rerun, capture transcripts, and verify `agent/out/result.txt`.
-41. Click an Agent row with an artifact to reopen the source, transcript, or
+42. Click an Agent row with an artifact to reopen the source, transcript, or
     result file from the same system panel.
-42. Click `diff broken.js` to reopen the before/after repair diff from
+43. Click `diff broken.js` to reopen the before/after repair diff from
     `/agent/out`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.

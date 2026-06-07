@@ -306,6 +306,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openHttpAppDemo', async () => {
 			try {
 				await openHttpAppDemo(fsys, bridge, config, systemView);
+				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -313,6 +314,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openHttpCounterDemo', async () => {
 			try {
 				await openHttpCounterDemo(fsys, bridge, config, systemView);
+				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
