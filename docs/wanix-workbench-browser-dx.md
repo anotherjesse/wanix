@@ -472,13 +472,22 @@ runs, not just after the report opens.
 ![Live Wanix tour section](assets/wanix-workbench-browser-dx/54-live-tour-section.png)
 
 The system panel can write its own state now as well. `Open System Journal`
-generates `/.wanix/system-journal.md`, refreshes the namespace, opens the
-markdown file, and records the write in Activity. It captures drivers,
+generates `/.wanix/system-journal.md` for people and
+`/.wanix/system-state.json` for agents/tools, refreshes the namespace, opens the
+markdown file, and records both writes in Activity. It captures drivers,
 namespace roots, observed tasks, terminals, routes, route runs, tour state,
-agent steps, and recent activity. That gives people and future agents a normal
-Wanix artifact to read instead of scraping transient UI state.
+agent steps, and recent activity. That gives people and future agents normal
+Wanix artifacts to read instead of scraping transient UI state.
 
 ![Wanix system journal](assets/wanix-workbench-browser-dx/55-system-journal.png)
+
+The JSON sidecar uses the explicit `wanix.system-state.v1` schema. It carries
+the same cockpit model as structured data: driver names, namespace entries,
+task status, service paths, route previews, route-run artifacts, tour steps,
+agent steps, and recent activity. The Activity rows make both files reopenable
+from the sidebar.
+
+![Wanix system state JSON](assets/wanix-workbench-browser-dx/56-system-state-json.png)
 
 ## Why These Fixes Matter
 
@@ -742,8 +751,8 @@ system prove itself in one pass, then leaves a report that tells people where to
 inspect the actual files, task transcripts, route traces, and agent artifacts.
 The live Tour section keeps those same steps visible in the system panel, with
 artifact children that open directly into the Wanix namespace.
-The system journal makes the current cockpit state inspectable through the same
-file model, which is the shape agents can build on later.
+The system journal and JSON sidecar make the current cockpit state inspectable
+through the same file model, which is the shape agents can build on later.
 
 ## The Feeling Now
 
@@ -756,8 +765,8 @@ The current loop is:
    and `/.wanix/cockpit-tour.md`.
 4. Expand `Tour` to inspect each completed step and open the exact artifacts it
    created.
-5. Click `Open System Journal` to write and open
-   `/.wanix/system-journal.md` from the live sidebar state.
+5. Click `Open System Journal` to write `/.wanix/system-journal.md` and
+   `/.wanix/system-state.json` from the live sidebar state.
 6. Edit or create a file in `wanix:/`.
 7. Create a file from the shell, for example
    `write shellmade hello from shell activity`, and see Explorer plus Activity

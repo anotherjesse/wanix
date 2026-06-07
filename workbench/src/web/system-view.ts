@@ -362,13 +362,14 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
-	systemJournalMarkdown(options: { generatedAt?: Date; path?: string } = {}): string {
+	systemJournalMarkdown(options: { generatedAt?: Date; path?: string; statePath?: string } = {}): string {
 		const generatedAt = options.generatedAt || new Date();
 		return [
 			"# Wanix System Journal",
 			"",
 			`Generated: ${generatedAt.toISOString()}`,
 			options.path ? `Path: ${displayJournalPath(options.path)}` : undefined,
+			options.statePath ? `State JSON: ${displayJournalPath(options.statePath)}` : undefined,
 			"",
 			"## Drivers",
 			...journalList(this.drivers.map((driver) => `- ${driver}`)),
@@ -402,6 +403,33 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			...journalList(this.activity.flatMap(activityJournalLines)),
 			"",
 		].filter((line): line is string => line !== undefined).join("\n");
+	}
+
+	systemStateJson(options: { generatedAt?: Date; journalPath?: string; statePath?: string } = {}): string {
+		const generatedAt = options.generatedAt || new Date();
+		const state = {
+			schema: "wanix.system-state.v1",
+			generatedAt: generatedAt.toISOString(),
+			journalPath: options.journalPath ? displayJournalPath(options.journalPath) : undefined,
+			statePath: options.statePath ? displayJournalPath(options.statePath) : undefined,
+			drivers: [...this.drivers],
+			namespace: this.namespace.map((entry) => ({
+				path: displayJournalPath(entry.path),
+				label: entry.label,
+			})),
+			tasks: [...this.tasks.values()]
+				.sort((left, right) => Number(left.id) - Number(right.id))
+				.map(taskSnapshot),
+			terminals: [...this.terminals.values()]
+				.sort((left, right) => Number(left.id) - Number(right.id))
+				.map(terminalSnapshot),
+			routes: this.routes.map(routeSnapshot),
+			routeRuns: this.routeRuns.map(routeRunSnapshot),
+			tour: this.tour.map(tourSnapshot),
+			agent: this.agent.map(agentSnapshot),
+			activity: this.activity.map(activitySnapshot),
+		};
+		return `${JSON.stringify(state, null, 2)}\n`;
 	}
 
 	getTreeItem(element: SystemTreeItem): vscode.TreeItem {
@@ -935,6 +963,21 @@ function journalList(lines: string[]): string[] {
 	return lines.length > 0 ? lines : ["- none"];
 }
 
+function taskSnapshot(task: TaskRecord): object {
+	return {
+		id: task.id,
+		kind: task.kind,
+		label: task.label,
+		status: task.status,
+		exitCode: task.exitCode,
+		sourcePath: task.sourcePath ? displayJournalPath(task.sourcePath) : undefined,
+		outputPath: task.outputPath ? displayJournalPath(task.outputPath) : undefined,
+		metadataPath: task.metadataPath ? displayJournalPath(task.metadataPath) : undefined,
+		serviceObserved: Boolean(task.serviceObserved),
+		servicePath: `#task/${task.id}`,
+	};
+}
+
 function taskJournalLines(task: TaskRecord): string[] {
 	const status = task.status === "exited" ? `exited ${formatExitCode(task.exitCode)}` : task.status;
 	return [
@@ -946,9 +989,30 @@ function taskJournalLines(task: TaskRecord): string[] {
 	].filter((line): line is string => line !== undefined);
 }
 
+function terminalSnapshot(terminal: TerminalRecord): object {
+	return {
+		id: terminal.id,
+		label: terminal.label,
+		status: terminal.status,
+		serviceObserved: Boolean(terminal.serviceObserved),
+		servicePath: terminal.id === "shell" ? undefined : `#term/${terminal.id}`,
+	};
+}
+
 function terminalJournalLine(terminal: TerminalRecord): string {
 	const label = terminal.id === "shell" ? terminal.label : `${terminal.id} ${terminal.label}`;
 	return `- ${label} - ${terminal.status}${terminal.serviceObserved ? " (#term observed)" : ""}`;
+}
+
+function routeSnapshot(route: RouteRecord): object {
+	return {
+		id: route.id,
+		label: route.label,
+		description: routeDescription(route),
+		protocol: route.protocol,
+		previewStatus: route.previewStatus,
+		previewPath: route.previewPath ? displayJournalPath(route.previewPath) : undefined,
+	};
 }
 
 function routeJournalLines(route: RouteRecord): string[] {
@@ -957,6 +1021,23 @@ function routeJournalLines(route: RouteRecord): string[] {
 		`  - protocol: ${route.protocol}`,
 		route.previewPath ? `  - latest preview: ${displayJournalPath(route.previewPath)}` : undefined,
 	].filter((line): line is string => line !== undefined);
+}
+
+function routeRunSnapshot(run: RouteRunRecord): object {
+	return {
+		id: run.id,
+		routeId: run.routeId,
+		label: run.label,
+		status: run.status,
+		url: run.url,
+		sourcePath: run.sourcePath ? displayJournalPath(run.sourcePath) : undefined,
+		previewPath: run.previewPath ? displayJournalPath(run.previewPath) : undefined,
+		artifacts: (run.artifacts || []).map((artifact) => ({
+			label: artifact.label,
+			path: displayJournalPath(artifact.path),
+			icon: artifact.icon,
+		})),
+	};
 }
 
 function routeRunJournalLines(run: RouteRunRecord): string[] {
@@ -969,12 +1050,35 @@ function routeRunJournalLines(run: RouteRunRecord): string[] {
 	].filter((line): line is string => line !== undefined);
 }
 
+function tourSnapshot(entry: TourRecord): object {
+	return {
+		id: entry.id,
+		label: entry.label,
+		status: entry.status,
+		description: entry.description,
+		error: entry.error,
+		path: entry.path ? displayJournalPath(entry.path) : undefined,
+		artifacts: uniquePaths(entry.artifacts).map(displayJournalPath),
+	};
+}
+
 function tourJournalLines(entry: TourRecord): string[] {
 	return [
 		`- ${entry.label} - ${tourDescription(entry)}`,
 		entry.path ? `  - path: ${displayJournalPath(entry.path)}` : undefined,
 		...uniquePaths(entry.artifacts).map((path) => `  - artifact: ${displayJournalPath(path)}`),
 	].filter((line): line is string => line !== undefined);
+}
+
+function agentSnapshot(entry: AgentRecord): object {
+	return {
+		id: entry.id,
+		label: entry.label,
+		description: entry.description,
+		path: entry.path ? displayJournalPath(entry.path) : undefined,
+		beforePath: entry.beforePath ? displayJournalPath(entry.beforePath) : undefined,
+		afterPath: entry.afterPath ? displayJournalPath(entry.afterPath) : undefined,
+	};
 }
 
 function agentJournalLines(entry: AgentRecord): string[] {
@@ -984,6 +1088,16 @@ function agentJournalLines(entry: AgentRecord): string[] {
 		entry.beforePath ? `  - before: ${displayJournalPath(entry.beforePath)}` : undefined,
 		entry.afterPath ? `  - after: ${displayJournalPath(entry.afterPath)}` : undefined,
 	].filter((line): line is string => line !== undefined);
+}
+
+function activitySnapshot(entry: ActivityRecord): object {
+	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
+	return {
+		id: entry.id,
+		label: entry.label,
+		path: entry.path ? displayJournalPath(entry.path) : undefined,
+		paths: paths.map(displayJournalPath),
+	};
 }
 
 function activityJournalLines(entry: ActivityRecord): string[] {

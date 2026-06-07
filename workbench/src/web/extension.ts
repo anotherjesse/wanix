@@ -82,6 +82,7 @@ const TASK_OUTPUT_DIR = ".wanix/tasks";
 const TASK_OUTPUT_MAX_CHARS = 512 * 1024;
 const COCKPIT_TOUR_REPORT_PATH = ".wanix/cockpit-tour.md";
 const SYSTEM_JOURNAL_PATH = ".wanix/system-journal.md";
+const SYSTEM_STATE_PATH = ".wanix/system-state.json";
 const SERVICE_STATE_POLL_MS = 1000;
 const SHARED_DIRECTORY_POLL_MS = 1500;
 
@@ -482,12 +483,20 @@ async function openWanixPathOrReveal(
 
 async function openSystemJournal(fsys: any, bridge: WanixBridge, systemView: WanixSystemView): Promise<void> {
 	await fsys.makeDirAll(".wanix");
+	const generatedAt = new Date();
+	systemView.filesystemActivity("system state written", { path: SYSTEM_STATE_PATH });
 	systemView.filesystemActivity("system journal written", { path: SYSTEM_JOURNAL_PATH });
 	await fsys.writeFile(SYSTEM_JOURNAL_PATH, systemView.systemJournalMarkdown({
-		generatedAt: new Date(),
+		generatedAt,
 		path: SYSTEM_JOURNAL_PATH,
+		statePath: SYSTEM_STATE_PATH,
 	}));
-	await refreshWanixPaths(bridge, [SYSTEM_JOURNAL_PATH]);
+	await fsys.writeFile(SYSTEM_STATE_PATH, systemView.systemStateJson({
+		generatedAt,
+		journalPath: SYSTEM_JOURNAL_PATH,
+		statePath: SYSTEM_STATE_PATH,
+	}));
+	await refreshWanixPaths(bridge, [SYSTEM_JOURNAL_PATH, SYSTEM_STATE_PATH]);
 	await openWanixPath(SYSTEM_JOURNAL_PATH);
 	vscode.window.showInformationMessage("Opened Wanix system journal");
 }
