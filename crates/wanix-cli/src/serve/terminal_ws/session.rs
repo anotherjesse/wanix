@@ -11,6 +11,9 @@ use crate::qjs_term::QjsShellSession;
 use super::super::connection::ServeConnectionError;
 use super::message::parse_terminal_resize_message;
 use super::root_changes::RootChangeTracker;
+use super::shell_activity::{
+    ShellInputActivityTracker, ShellMutationOperation, operations_for_changed_paths,
+};
 
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
 
@@ -26,6 +29,7 @@ struct TerminalWebSocketSession {
     socket: WebSocket<TcpStream>,
     shell: QjsShellSession,
     changes: RootChangeTracker,
+    input: ShellInputActivityTracker,
 }
 
 impl TerminalWebSocketSession {
@@ -45,6 +49,7 @@ impl TerminalWebSocketSession {
         let changes = RootChangeTracker::new(root_path).map_err(ServeConnectionError::Io)?;
         let mut session = Self {
             socket,
+            input: ShellInputActivityTracker::new(cwd),
             shell,
             changes,
         };
@@ -109,13 +114,15 @@ impl TerminalWebSocketSession {
     }
 
     fn feed_input(&mut self, input: &[u8]) -> Result<(), ServeConnectionError> {
+        let operations = self.input.observe_input(input);
         let output = self
             .shell
             .input(input)
             .map_err(ServeConnectionError::Terminal)?;
         self.send_output(output)?;
         if input_contains_line_boundary(input) {
-            self.send_mutations()?;
+            self.send_mutations(&operations)?;
+            self.input.sync_cwd(&self.shell.cwd());
         }
         Ok(())
     }
@@ -165,7 +172,10 @@ impl TerminalWebSocketSession {
             .map_err(ws_error)
     }
 
-    fn send_mutations(&mut self) -> Result<(), ServeConnectionError> {
+    fn send_mutations(
+        &mut self,
+        operations: &[ShellMutationOperation],
+    ) -> Result<(), ServeConnectionError> {
         let paths = self
             .changes
             .take_changed_paths()
@@ -173,8 +183,13 @@ impl TerminalWebSocketSession {
         if paths.is_empty() {
             return Ok(());
         }
+        let operations = operations_for_changed_paths(operations, &paths);
         self.socket
-            .send(Message::text(shell_mutation_message(&self.shell, &paths)))
+            .send(Message::text(shell_mutation_message(
+                &self.shell,
+                &paths,
+                &operations,
+            )))
             .map_err(ws_error)
     }
 
@@ -201,10 +216,20 @@ fn shell_session_message(shell: &QjsShellSession) -> String {
     )
 }
 
-fn shell_mutation_message(shell: &QjsShellSession, paths: &[String]) -> String {
+fn shell_mutation_message(
+    shell: &QjsShellSession,
+    paths: &[String],
+    operations: &[ShellMutationOperation],
+) -> String {
+    let operations = operations
+        .iter()
+        .map(shell_operation_json)
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
         "{{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\
-         \"taskId\":{},\"terminalId\":{},\"cwd\":{},\"paths\":[{}]}}",
+         \"taskId\":{},\"terminalId\":{},\"cwd\":{},\"paths\":[{}],\
+         \"operations\":[{}]}}",
         json_string(&shell.task_id()),
         json_string(shell.terminal_id()),
         json_string(shell.cwd().as_str()),
@@ -213,7 +238,31 @@ fn shell_mutation_message(shell: &QjsShellSession, paths: &[String]) -> String {
             .map(|path| json_string(path))
             .collect::<Vec<_>>()
             .join(","),
+        operations,
     )
+}
+
+fn shell_operation_json(operation: &ShellMutationOperation) -> String {
+    let mut fields = vec![
+        format!("\"kind\":{}", json_string(&operation.kind)),
+        "\"status\":\"changed\"".to_owned(),
+    ];
+    if let Some(source) = &operation.source {
+        fields.push(format!("\"source\":{}", json_string(source)));
+    }
+    if let Some(target) = &operation.target {
+        fields.push(format!("\"target\":{}", json_string(target)));
+    }
+    fields.push(format!(
+        "\"paths\":[{}]",
+        operation
+            .paths
+            .iter()
+            .map(|path| json_string(path))
+            .collect::<Vec<_>>()
+            .join(",")
+    ));
+    format!("{{{}}}", fields.join(","))
 }
 
 enum TerminalWebSocketEvent {

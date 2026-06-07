@@ -2206,7 +2206,7 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: (activity
 			return false;
 		}
 		shellInput.cwd = resolveWanixPath(".", message.cwd);
-		const activity = shellMutationActivity(message.paths);
+		const activity = shellMutationActivity(message);
 		if (activity) {
 			notifyFilesystemActivity(onFilesystemActivity, activity);
 		}
@@ -2244,6 +2244,15 @@ type QjsShellMutationMessage = {
 	terminalId: string;
 	cwd: string;
 	paths: string[];
+	operations?: QjsShellMutationOperation[];
+};
+
+type QjsShellMutationOperation = {
+	kind: string;
+	status?: string;
+	source?: string;
+	target?: string;
+	paths: string[];
 };
 
 function isQjsShellMutationMessage(message: unknown): message is QjsShellMutationMessage {
@@ -2260,11 +2269,31 @@ function isQjsShellMutationMessage(message: unknown): message is QjsShellMutatio
 		&& typeof candidate.cwd === "string"
 		&& candidate.cwd.length > 0
 		&& Array.isArray(candidate.paths)
+		&& candidate.paths.every((path) => typeof path === "string" && path.length > 0)
+		&& (candidate.operations === undefined
+			|| (Array.isArray(candidate.operations) && candidate.operations.every(isQjsShellMutationOperation)));
+}
+
+function isQjsShellMutationOperation(operation: unknown): operation is QjsShellMutationOperation {
+	if (!operation || typeof operation !== "object") {
+		return false;
+	}
+	const candidate = operation as Record<string, unknown>;
+	return typeof candidate.kind === "string"
+		&& candidate.kind.length > 0
+		&& (candidate.status === undefined || typeof candidate.status === "string")
+		&& (candidate.source === undefined || typeof candidate.source === "string")
+		&& (candidate.target === undefined || typeof candidate.target === "string")
+		&& Array.isArray(candidate.paths)
 		&& candidate.paths.every((path) => typeof path === "string" && path.length > 0);
 }
 
-function shellMutationActivity(paths: string[]): FilesystemActivity | undefined {
-	const unique = [...new Set(paths.filter((path) => path && !path.startsWith("#")))];
+function shellMutationActivity(message: QjsShellMutationMessage): FilesystemActivity | undefined {
+	const operation = message.operations?.find((operation) => operation.paths.length > 0);
+	if (operation) {
+		return shellOperationActivity(operation);
+	}
+	const unique = uniqueShellPaths(message.paths);
 	if (unique.length === 0) {
 		return undefined;
 	}
@@ -2273,6 +2302,45 @@ function shellMutationActivity(paths: string[]): FilesystemActivity | undefined 
 		? `shell changed ${displayWanixPath(openPath)}`
 		: `shell changed ${unique.length} paths`;
 	return { label, openPath, paths: unique };
+}
+
+function shellOperationActivity(operation: QjsShellMutationOperation): FilesystemActivity | undefined {
+	const unique = uniqueShellPaths(operation.paths);
+	if (unique.length === 0) {
+		return undefined;
+	}
+	const target = operation.target && !operation.target.startsWith("#") ? operation.target : undefined;
+	const source = operation.source && !operation.source.startsWith("#") ? operation.source : undefined;
+	const openPath = shellOperationOpenPath(operation.kind, source, target, unique);
+	const label = shellOperationLabel(operation.kind, source, target, unique);
+	return { label, openPath, paths: unique };
+}
+
+function shellOperationOpenPath(kind: string, source: string | undefined, target: string | undefined, paths: string[]): string {
+	if (kind === "rm" || kind === "rmdir") {
+		return parentPath(target || source || paths[0]) || "/";
+	}
+	if (kind === "mv" && target) {
+		return target;
+	}
+	return target || paths[paths.length - 1];
+}
+
+function shellOperationLabel(kind: string, source: string | undefined, target: string | undefined, paths: string[]): string {
+	if (kind === "mv" && source && target) {
+		return `shell mv ${displayWanixPath(source)} -> ${displayWanixPath(target)}`;
+	}
+	if (kind === "cp" && source && target) {
+		return `shell cp ${displayWanixPath(source)} -> ${displayWanixPath(target)}`;
+	}
+	if (kind === "redirect" && paths.length > 1) {
+		return `shell redirect ${paths.length} paths`;
+	}
+	return `shell ${kind} ${displayWanixPath(target || paths[paths.length - 1])}`;
+}
+
+function uniqueShellPaths(paths: string[]): string[] {
+	return [...new Set(paths.filter((path) => path && !path.startsWith("#")))];
 }
 
 type TerminalOptions = {

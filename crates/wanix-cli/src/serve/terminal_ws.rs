@@ -2,6 +2,7 @@ mod message;
 mod request;
 mod root_changes;
 mod session;
+mod shell_activity;
 
 #[cfg(test)]
 pub(super) use message::parse_terminal_resize_message;

@@ -1417,7 +1417,7 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     );
     assert_eq!(
         qjs_shell["mutationMessage"],
-        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"]}"
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"],\"operations\":[{\"kind\":\"write\",\"status\":\"changed\",\"target\":\"/path\",\"paths\":[\"/path\"]}]}"
     );
     assert_eq!(qjs_shell["exitMessage"], "{\"type\":\"exit\",\"code\":N}");
     assert_eq!(
@@ -2342,6 +2342,14 @@ std.exit(6);
                 qjs_shell_mutation_paths(&mutation_json).contains(&"/app/observed.txt".to_owned()),
                 "{mutation_json}"
             );
+            let operation = &mutation_json["operations"][0];
+            assert_eq!(operation["kind"], "write");
+            assert_eq!(operation["status"], "changed");
+            assert_eq!(operation["target"], "/app/observed.txt");
+            assert_eq!(
+                qjs_shell_operation_paths(operation),
+                vec!["/app/observed.txt".to_owned()]
+            );
         }
         other => panic!("expected shell mutation message, got {other:?}"),
     }
@@ -2397,6 +2405,16 @@ std.exit(6);
             let paths = qjs_shell_mutation_paths(mutation);
             paths.contains(&"/app/child-out.txt".to_owned())
                 && paths.contains(&"/app/child-err.txt".to_owned())
+                && mutation["operations"].as_array().is_some_and(|operations| {
+                    operations.iter().any(|operation| {
+                        operation["kind"] == "redirect"
+                            && qjs_shell_operation_paths(operation)
+                                == vec![
+                                    "/app/child-out.txt".to_owned(),
+                                    "/app/child-err.txt".to_owned(),
+                                ]
+                    })
+                })
         }),
         "{mutations:?}"
     );
@@ -2410,6 +2428,19 @@ fn qjs_shell_mutation_paths(message: &serde_json::Value) -> Vec<String> {
         .map(|path| {
             path.as_str()
                 .unwrap_or_else(|| panic!("non-string mutation path: {message}"))
+                .to_owned()
+        })
+        .collect()
+}
+
+fn qjs_shell_operation_paths(operation: &serde_json::Value) -> Vec<String> {
+    operation["paths"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing operation paths: {operation}"))
+        .iter()
+        .map(|path| {
+            path.as_str()
+                .unwrap_or_else(|| panic!("non-string operation path: {operation}"))
                 .to_owned()
         })
         .collect()
