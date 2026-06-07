@@ -2086,3 +2086,286 @@ What's next now has both directions of the dual *and* a way for jobs to find eac
 
 Import pulled the world to you; cpu sends you to the world; the namespace is still the
 integration layer, and now it travels in both directions.
+
+---
+
+# Slice 7 — Agents on the Mesh, and the Plumber
+
+Every slice so far gave one agent more reach: import another node's namespace, carry a
+service device across, ship a whole world by hash, send the job to the data. Slice 7 is
+the one where **a second agent shows up**. Two agents on two machines need two things the
+mesh did not yet have: a way to *hand work off* to each other — a typed message bus, not a
+file either one polls — and a way for one to *operate the other's agent* as files without
+the import freezing the moment it reads a streaming reply. This slice builds both: the
+**plumber** (`#plumb`) for coordination, and the **agent layer on the mesh** (a router that
+dispatches a session to a local engine or a remote peer's `#agent`), with the head-of-line
+deadlock the imported streaming read would otherwise cause designed out.
+
+## What We Built
+
+- **`wanix-plumb` — the `#plumb` coordination device.** A new crate depending only on
+  `wanix-fs` (plus serde) and **no network code at all**. `PlumbDevice` is a plain
+  `FileSystem` exposing `#plumb/<topic>/send` (write-only) and `#plumb/<topic>/recv`
+  (read-only): a write to `send` publishes one newline-JSON `PlumbEnvelope`
+  (`{kind,from,to,body}`) to a named topic; a read of `recv` drains the envelopes that
+  topic has received *since the file was opened*. The transport is injected as a
+  `PlumbPort` — `LocalPlumbPort` fans out in-process for single-node use and tests;
+  `wanix-mesh`'s `GossipPlumbPort` carries the same device across the wire. Because the
+  device is just a `FileSystem`, it **imports for free**: `/n/A/#plumb/build/recv` reads
+  node A's bus as ordinary files, no new mechanism.
+
+- **`PlumbEnvelope` — the typed message, the plumber's rule.** `{kind, from, to, body}`
+  serialized one-JSON-object-per-line: `kind` is the routing tag (e.g. `task.done`), `from`
+  and `to` are optional addresses (a node or agent id, empty for broadcast), `body` is a
+  free-form JSON value. `parse` rejects unknown fields (a typo surfaces as an error, not a
+  silent drop) and refuses any encoding past `MAX_ENVELOPE_LEN` (64 KiB); `to_line` appends
+  the newline that makes `recv` line-delimited without a length prefix.
+
+- **`GossipPlumbPort` — the mesh edge, the device unchanged.** The synchronous
+  `PlumbDevice` is reused verbatim; this port only implements its `PlumbPort` backend over
+  iroh-gossip. Each topic maps to a gossip `TopicId::from_bytes(blake3(topic))`; `send`
+  broadcasts on it, `recv` drains `Event::Received`. The gossip ALPN rides the **same
+  identity-bound endpoint** as the 9P control plane and the blob data plane
+  (`serve_with_plumb` registers all of them on one `Router`), so a peer reaches every plane
+  over one QUIC path — and because gossip grants no filesystem or exec capability, it is
+  safe on the public endpoint, unlike `#task`/`#agent`/`#cpu`.
+
+- **The agent layer, on the mesh.** `RouterEngine` is an `AgentEngine` that holds a default
+  route and any number of named routes; the bare `start_session` dispatches to the default
+  (so the router drops in anywhere a single engine is expected), and `start_session_on(name)`
+  targets a named peer. `RemoteEngine` is an `AgentEngine` backed by an imported `#agent`
+  device reached *through a plain `FileSystem` handle* — it reads `new` to allocate a remote
+  session, then writes `<id>/prompt` and reads `<id>/reply`/`<id>/events`/`<id>/status` as
+  files. "Run the agent here" and "run it on node A" become the same call with a different
+  route — Plan 9 cpu's "run there, namespace from here," applied to agents.
+
+- **`StreamingImportFs` — one bidi stream per blocking open-file.** The load-bearing
+  correction. A `RemoteFs` multiplexes every op onto **one** serial 9P stream (the server's
+  `serve_stream` is strictly serial). An imported `#agent/<id>/events` read is a
+  near-never-EOF blocking read; a `Tread` on it parks that one stream forever, freezing
+  *every other operation on the whole import*. `StreamingImportFs` wraps the shared
+  everyday-ops import and, when an `open` matches the blocking-stream predicate
+  (`#agent/<id>/events`, `#agent/<id>/reply`, `#plumb/<topic>/recv`), **dials a fresh
+  `RemoteFs` over a new bidi stream** and returns a handle that owns it — so the blocking
+  read stalls only its own stream, and dropping the file tears that stream down.
+
+- **The mesh wiring and the bounded surfaces.** `MeshNode::plumb_port` /
+  `serve_with_plumb` add the gossip plane; `MeshDialer::dial_streaming` +
+  `default_blocking_stream` build a streaming import. Both unbounded inputs an imported bus
+  exposes are capped: `LineBuffer` enforces a per-subscription `MAX_BUFFERED_BYTES` ceiling
+  (a remote flood drops oldest bytes rather than growing an idle reader's buffer without
+  limit, matching the lossy contract), and topic names are length-bounded at parse time
+  while idle topics are swept — both `LocalPlumbPort` and `GossipPlumbPort` release a topic
+  (and, for gossip, its swarm membership and pump task) once its last `recv` subscriber
+  drops, with `MAX_LIVE_TOPICS` as a backstop.
+
+## Why: The Plumber, the Coordination Half Plan 9 Always Had
+
+Plan 9's plumber was the piece that let independent programs *talk by intent* instead of by
+hard wiring. You did not connect your editor to your debugger to your acme window with
+sockets; you sent a typed message — "this is a file:line" — onto the plumber, and a small
+rule set routed it to whatever was listening for that kind. It was best-effort, broker-less
+coordination by message *type*, and it was the connective tissue of a Plan 9 desktop. It
+was also, famously, the bit humans found too fiddly to keep wired — you had to write the
+rules, keep the ports open, think about who was listening.
+
+That is exactly the shape a mesh of agents needs, and exactly the shape an agent does *not*
+find fiddly:
+
+- **`#plumb` is the plumber.** A `task.done` posted to `#plumb/build` is a typed message
+  routed by `kind` to whoever subscribed to that topic — across nodes, best-effort, with no
+  central broker. The envelope's `kind`/`from`/`to`/`body` *are* the plumber's routing
+  fields. An agent that just finished a build does not need to know who picks it up; it
+  posts the type and moves on, and an agent listening on `build` gets the handoff.
+
+- **Best-effort, not a queue — and honest about it.** The blueprint is explicit: `#plumb`
+  is epidemic gossip, **not** a durable queue. A subscriber that was not listening when a
+  message was broadcast never sees it; there is no acknowledgement. Durable handoff belongs
+  in `#kv` (Slice 4) or a content-addressed capsule blob (Slice 5). `#plumb` is the *nudge*
+  — "the artifact is ready at this path" — and the durable artifact rides a plane built for
+  durability. Conflating the two is the classic message-bus mistake; we did not make it.
+
+- **The agent is the operator the plumber always wanted.** Humans wrote plumber rules
+  grudgingly. An agent operating a confined world as files finds `cat #plumb/build/recv` and
+  "if `kind == task.done`, go read `body.out`" native — it is just reading a file and acting
+  on it. The mesh gives agents the one coordination primitive that lets them hand work off
+  without a human in the loop or a broker in the middle.
+
+And the through-line holds once more: `#plumb` is *just a `FileSystem`*, so it imports at
+`/n/A/#plumb` with zero new code; the agent layer is *just `AgentEngine` routes*, so a
+remote agent is the same call as a local one; the streaming fix is *just another
+`FileSystem` wrapper*, so the namespace stays the integration layer. The mesh added a
+coordination plane and a second agent, not a new abstraction.
+
+## The How: Architecture, and the Corrections
+
+The shape of the demo, end to end:
+
+1. Node A binds, serves its world (a host `MemFs`) **and** the gossip plane on one endpoint
+   via `serve_with_plumb`, and subscribes to `#plumb/build/recv` — the agent on A is
+   listening.
+2. The agent on B imports `/n/A` (`dial_attach` → `RemoteFs` bound at `n/A`), reads A's
+   `world/spec.txt` over the 9P window, then **writes its build output back into A's world**
+   (`world/out/rootfs.img`) over the same import — editing A's confined world, the file
+   crossing QUIC as ordinary 9P writes.
+3. The agent on B posts a `task.done` envelope to `#plumb/build` over gossip, its `body`
+   naming the `out` path it just wrote.
+4. The agent on A reads `#plumb/build/recv`, picks up the envelope, follows the `out` path
+   it names **into A's own world**, and finds exactly the bytes B produced.
+
+Three corrections from the blueprint are load-bearing and are baked in, not hand-waved:
+
+1. **The imported streaming read does not freeze the import — one bidi stream per blocking
+   open-file, not one per attach.** This is the agent-mesh verdict's central break. A
+   `RemoteFs` is one serial 9P stream behind a connection mutex; a blocking `Tread` on an
+   imported `#agent/<id>/events` would park it forever and freeze status, prompts, a second
+   agent, even the host root. `StreamingImportFs` dials a *dedicated* bidi stream for each
+   blocking open (`events`/`reply`/`recv`), so the parked read stalls only its own stream.
+   The `mesh_agent` test proves the fix *live*: a thread parks in the never-EOF events read
+   on its dedicated stream while a second thread completes a host-root read and an `#agent`
+   status read on the shared connection promptly — operations that would deadlock behind the
+   parked `Tread` on a single serial stream.
+
+2. **`#plumb` is best-effort gossip, not a durable queue — stated and enforced.** A late
+   subscriber misses earlier messages (`a_late_subscriber_misses_earlier_messages`); a
+   publish with no subscribers is simply dropped. The demo's `recv_with_retry` re-posts the
+   handoff because a *freshly formed* gossip swarm can drop the first broadcast before
+   membership settles — which is the honest behavior of epidemic delivery, not a bug to
+   paper over. Durable handoff is `#kv`/capsule; `#plumb` carries the nudge.
+
+3. **`#agent`/`#cpu`/`#task` export stays local-trust; gossip is safe on the public
+   endpoint.** Remote code execution is not handed to arbitrary NodeIDs (AGENTS.md flags
+   public auth as unimplemented; we honor that). The gossip plane is the exception the
+   blueprint allows: it carries only message bytes and grants no filesystem or exec
+   capability, so `serve_with_plumb` advertises it on the public endpoint alongside the
+   grant-gated 9P serve. The trust boundary that matters for `#plumb` is the topic *name* —
+   anyone who knows it can read and write the bus — not a per-peer exec grant.
+
+One subtlety the bus gets right: a topic name is **caller-controlled** — a remote 9P client
+walking an imported `#plumb` supplies it through walk paths. So the device length-bounds the
+topic segment at parse time, caps the cosmetic root listing (`MAX_KNOWN_TOPICS`), and the
+gossip port sweeps idle topics on the next lookup (releasing the swarm membership and pump
+task) with `MAX_LIVE_TOPICS` as a backstop — a peer churning through distinct topic names
+cannot accumulate memberships and tasks without bound
+(`churned_topics_do_not_accumulate_gossip_memberships`).
+
+## Copy-Paste: Input / Output
+
+The Slice 7 path is proven three ways: the headline two-machine handoff demo over real QUIC,
+the plumber alone over real gossip, and the streaming-import deadlock fix proven live.
+
+```sh
+# --- "Two agents, two machines, one conversation" — the demo, over real QUIC ---
+# Node A serves its world + gossip on one identity-bound endpoint and subscribes to
+# #plumb/build/recv. The agent on node B imports /n/A, reads A's spec, writes its build
+# output BACK into A's world over the 9P window, then posts task.done to #plumb/build.
+# The agent on node A reads #plumb/build/recv, follows the `out` path the envelope names
+# into its OWN world, and finds exactly the bytes B produced.
+$ cargo test -p wanix-mesh --test mesh_agent_handoff -- --nocapture
+     Running tests/mesh_agent_handoff.rs (target/debug/deps/mesh_agent_handoff-fb0fd2eb34ce5de4)
+
+running 1 test
+== two agents, two machines, one conversation ==
+[B] imported /n/A, read A's spec: "build the bootable root"
+[B] wrote build output into A's world over 9P at "world/out/rootfs.img"
+[B] posted to #plumb/build: kind=task.done from=agent-B to=agent-A body={"out":"world/out/rootfs.img","task":"build-rootfs"}
+[A] read #plumb/build/recv -> kind=task.done from=agent-B out="world/out/rootfs.img"
+[A] followed `out` into its own world: "#!bootable rootfs built by agent B\n"
+== handoff complete: A holds exactly the bytes B produced ==
+test two_agents_two_machines_one_conversation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+```
+
+This is the demo in full: `[B]` lines are the agent on node B operating node A's world over
+the import and posting the handoff; `[A]` lines are the agent on node A picking it up off the
+bus and following the named path into its own store. The last assertion — `A holds exactly
+the bytes B produced` — is the round trip closed: the artifact B wrote over 9P at
+`world/out/rootfs.img` is byte-for-byte the artifact A reads back after the gossip nudge, two
+machines, two planes, one conversation.
+
+```sh
+# --- The plumber alone, over real iroh-gossip between two nodes ---
+# Node A subscribes to #plumb/build/recv; node B writes a task.done to #plumb/build/send;
+# the typed envelope crosses the gossip swarm and A reads it byte-exact. The other two
+# cases pin the contract: same-node delivery needs no swarm, and churning distinct topic
+# names does not accumulate gossip memberships.
+$ cargo test -p wanix-mesh --test mesh_plumb
+     Running tests/mesh_plumb.rs (target/debug/deps/mesh_plumb-991d660a352d7395)
+
+running 3 tests
+test same_node_delivery_needs_no_swarm ... ok
+test churned_topics_do_not_accumulate_gossip_memberships ... ok
+test a_topic_message_crosses_the_gossip_mesh ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+```
+
+```sh
+# --- The head-of-line deadlock fix, proven live ---
+# Node B imports node A's #agent through dial_streaming, parks a thread in the never-EOF
+# `events` read on its DEDICATED bidi stream, and proves ordinary ops on the shared
+# connection (a host-root read, an #agent status read) still complete promptly. On a
+# single serial 9P stream these would deadlock behind the parked Tread.
+$ cargo test -p wanix-mesh --test mesh_agent
+     Running tests/mesh_agent.rs (target/debug/deps/mesh_agent-6516e0da4091716a)
+
+running 2 tests
+test the_shared_import_serializes_on_one_stream ... ok
+test a_blocking_event_read_does_not_freeze_the_import ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+```
+
+`a_blocking_event_read_does_not_freeze_the_import` is the fix made executable: with the
+blocking events read parked on its own stream, the shared-connection ops return in under the
+test's timeout — the freeze the blueprint warned about is gone.
+`the_shared_import_serializes_on_one_stream` documents the structural cause hang-free (a plain
+import routes every op onto one stream, which is why the dedicated-stream wrapper is needed),
+without parking a server thread for the process lifetime.
+
+The whole `wanix-plumb` device contract is unit-tested directly, too — the envelope round-trip
+and field defaults, write-only `send` / read-only `recv`, fan-out to multiple subscribers, the
+best-effort "a late subscriber misses earlier messages" semantics, and the bounded-buffer and
+bounded-topic-name flood defenses:
+
+```sh
+$ cargo test -p wanix-plumb
+running 26 tests
+...
+test tests::send_publishes_an_envelope_that_recv_observes ... ok
+test tests::two_subscribers_each_receive_a_broadcast ... ok
+test local::tests::a_late_subscriber_misses_earlier_messages ... ok
+test buffer::tests::push_caps_total_buffered_bytes_against_a_flood ... ok
+test path::tests::rejects_an_over_long_topic_name ... ok
+...
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+```
+
+## The Plan 9 Lineage, and What's Next
+
+Slice 7 finishes the inheritance the document opened with. Plan 9 had `import`/`export` and
+`/n/` (Slices 1–3), service devices carried across a namespace (Slice 4), venti
+content-addressing (Slice 5), and `cpu` (Slice 6); the one piece left was the **plumber** —
+the typed coordination bus that let independent programs hand work off by intent. `#plumb`
+is that, on the mesh: `task.done` posted to `#plumb/build` on one node, read from
+`#plumb/build/recv` on another, best-effort and broker-less, with the durable artifact riding
+`#kv` or a capsule blob. And the agent layer is the operator the plumber always wanted: a
+`RouterEngine` dispatches a session to a local engine or a peer's imported `#agent`, with the
+head-of-line freeze designed out by one bidi stream per blocking open-file. Two agents, two
+machines, one conversation — the thing humans had the mechanisms for but never the patience to
+wire.
+
+What remains is the trust and lifecycle work the slices have deliberately deferred:
+
+- **Public auth.** `#agent`/`#cpu`/`#task` export stays local-trust / grant-allowlisted until
+  a public auth story lands. Gossip is safe on the public endpoint because it grants no
+  capability; remote exec is not, and we do not pretend otherwise. The grant table keyed by
+  verified `EndpointId` (Slice 2) is the hook; the policy is the open question.
+- **Incremental agent streaming and richer routing.** The streaming-import fix removes the
+  deadlock; live token-by-token agent reply streaming, plumber *rules* (route by `kind`
+  pattern, not just topic name), and a `#plumb`-driven multi-agent supervisor are the natural
+  next steps now that the bus and the router exist.
+
+Import pulled the world to you; cpu sent you to the world; the plumber lets two of you, on two
+machines, agree on what to do next — and the namespace is still the only integration layer.
