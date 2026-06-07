@@ -464,6 +464,13 @@ file that points at the exact artifacts the tour created.
 
 ![Wanix OS cockpit tour report](assets/wanix-workbench-browser-dx/53-os-cockpit-tour.png)
 
+The tour is live in the sidebar now too. The `Tour` section resets when a tour
+starts, shows each step as running/ok/failed, and expands into the Wanix files
+that step created or used. That means the capstone demo is inspectable while it
+runs, not just after the report opens.
+
+![Live Wanix tour section](assets/wanix-workbench-browser-dx/54-live-tour-section.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -724,6 +731,8 @@ leave the report behind.
 The cockpit tour does the same thing for the whole sprint arc. It makes the
 system prove itself in one pass, then leaves a report that tells people where to
 inspect the actual files, task transcripts, route traces, and agent artifacts.
+The live Tour section keeps those same steps visible in the system panel, with
+artifact children that open directly into the Wanix namespace.
 
 ## The Feeling Now
 
@@ -734,91 +743,93 @@ The current loop is:
 3. Click `Run OS Cockpit Tour` when you want the whole story at once: v86
    shared files, JS/WASM duet, qjs HTTP route, WASM HTTP route, agent repair,
    and `/.wanix/cockpit-tour.md`.
-4. Edit or create a file in `wanix:/`.
-5. Create a file from the shell, for example
+4. Expand `Tour` to inspect each completed step and open the exact artifacts it
+   created.
+5. Edit or create a file in `wanix:/`.
+6. Create a file from the shell, for example
    `write shellmade hello from shell activity`, and see Explorer plus Activity
    update around that exact path.
-5. Click that Activity row to reopen the changed Wanix file.
-6. Move a file from the shell, expand the `shell mv ...` Activity row, and open
+7. Click that Activity row to reopen the changed Wanix file.
+8. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
-7. Create or save a `wanix:` file from the browser editor/Explorer and see the
+9. Create or save a `wanix:` file from the browser editor/Explorer and see the
    file-provider mutation appear in Activity.
-8. Use the System view's `Actions` rows when you want visible commands instead
+10. Use the System view's `Actions` rows when you want visible commands instead
    of toolbar icons.
-9. Run a qjs task from the play button or `New qjs Script` action.
-10. Run a `.wasm` module from Explorer.
-11. Watch tasks, terminals, exits, and filesystem refreshes in the Wanix sidebar;
+11. Run a qjs task from the play button or `New qjs Script` action.
+12. Run a `.wasm` module from Explorer.
+13. Watch tasks, terminals, exits, and filesystem refreshes in the Wanix sidebar;
     rows marked `· #task` have been confirmed from Wanix service files.
-12. Click `#task` or `#term` in the sidebar to inspect real service directories.
-13. Right-click a task row and inspect its `#task/<id>` service directory.
-14. Follow a safe service entry like `#task/1/kind` into the real Wanix file.
-15. See why allocator/control/stream service files stay plain text.
-16. See output and exit status in the terminal.
-17. Run again without terminal clutter.
-18. Click `Install WASM Starter`, then `Run WASM Starter`, and inspect
+14. Click `#task` or `#term` in the sidebar to inspect real service directories.
+15. Right-click a task row and inspect its `#task/<id>` service directory.
+16. Follow a safe service entry like `#task/1/kind` into the real Wanix file.
+17. See why allocator/control/stream service files stay plain text.
+18. See output and exit status in the terminal.
+19. Run again without terminal clutter.
+20. Click `Install WASM Starter`, then `Run WASM Starter`, and inspect
     `/wasm/shared/out.txt`.
-19. Install the duet demo and run qjs -> wasm -> qjs as one visible workflow.
-20. Or click `Run JS and WASM Duet Demo` and let the workbench drive the
+21. Install the duet demo and run qjs -> wasm -> qjs as one visible workflow.
+22. Or click `Run JS and WASM Duet Demo` and let the workbench drive the
     sequence.
-21. Inspect the generated `duet/shared/out.txt` result when the guided run
+23. Inspect the generated `duet/shared/out.txt` result when the guided run
     opens it.
-22. Edit `duet/producer.js`, run the guided duet without losing the edit, then
+24. Edit `duet/producer.js`, run the guided duet without losing the edit, then
     explicitly reset the duet when you want the starter files back.
-23. Click `Open v86 Shared Files Demo` to seed `/shared/message.txt`, arm the
+25. Click `Open v86 Shared Files Demo` to seed `/shared/message.txt`, arm the
     `/shared` watcher, and read the direct-v86 launch and 9P mount instructions.
-24. Open the `direct-v86` route when a prepared rootfs is available, then have
+26. Open the `direct-v86` route when a prepared rootfs is available, then have
     Linux read `/shared/message.txt` and write `/shared/from-linux.txt`; the
     changed file appears in Activity without a manual Explorer refresh.
-25. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
-26. Open
+27. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
+28. Open
     `/.wanix/app/hello?from=browser` to get an HTTP response from a Wanix task.
-27. See the HTTP app route contract in the Wanix sidebar.
-28. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
+29. See the HTTP app route contract in the Wanix sidebar.
+30. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
     `/apps/hello.response.txt` report inside the workbench.
-29. Click the `/.wanix/app/<name>` route row itself to run the same preview from
+31. Click the `/.wanix/app/<name>` route row itself to run the same preview from
     the visible system contract.
-30. Edit `/apps/hello.js`, preview again, and see the changed handler output
+32. Edit `/apps/hello.js`, preview again, and see the changed handler output
     without losing the edit or reopening the report.
-31. Open the HTTP handler source directly, and reset the demo only through the
+33. Open the HTTP handler source directly, and reset the demo only through the
     explicit reset command.
-32. Right-click the route row to preview, open source, copy the route URL, or
+34. Right-click the route row to preview, open source, copy the route URL, or
     intentionally reset the demo handler.
-33. Click `Preview HTTP WASM Demo` to install `/apps/wasm.wasm`, run it through
+35. Click `Preview HTTP WASM Demo` to install `/apps/wasm.wasm`, run it through
     `/.wanix/app/wasm`, and inspect the route response plus wasm task trace.
-33. After previewing, read the route row's latest HTTP status and reopen the
+36. After previewing, read the route row's latest HTTP status and reopen the
     saved response report from `Open Latest HTTP App Preview`.
-34. Expand `Route Runs` to see the previewed HTTP route execution and reopen
+37. Expand `Route Runs` to see the previewed HTTP route execution and reopen
     its response report or handler source.
-35. Click `Preview HTTP Counter Demo` twice to run a stateful qjs-backed HTTP
+38. Click `Preview HTTP Counter Demo` twice to run a stateful qjs-backed HTTP
     app, then inspect `apps/counter.response.txt` and `apps/counter.count.txt`.
-36. Expand the counter route run and open the `State File` child directly from
+39. Expand the counter route run and open the `State File` child directly from
     the execution row.
-37. Expand the same route run and inspect `Task Stdout` or `Task Stderr` from
+40. Expand the same route run and inspect `Task Stdout` or `Task Stderr` from
     the exact HTTP execution that produced the response.
-38. Notice that `Routes` and `Route Runs` stay near the top of the System view,
+41. Notice that `Routes` and `Route Runs` stay near the top of the System view,
     and hover truncated rows to see their full backing paths.
-39. Run either HTTP preview action again and see the response report open while
+42. Run either HTTP preview action again and see the response report open while
     the sidebar stays on Wanix System.
-40. Click `New qjs Script` to create a unique runnable scratch script without
+43. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-41. Run that script, then expand its task row to reopen the source, transcript,
+44. Run that script, then expand its task row to reopen the source, transcript,
     metadata, terminal output, or `#task/<id>` service directory.
-42. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+45. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-43. Click `Clear Finished Rows` when old exited tasks and closed terminals are
+46. Click `Clear Finished Rows` when old exited tasks and closed terminals are
     crowding the sidebar.
-44. Click `Run Agent Repair Demo` to install `/agent/broken.js`, run it, repair
+47. Click `Run Agent Repair Demo` to install `/agent/broken.js`, run it, repair
     it, rerun it, and open the generated report.
-45. Watch the `Agent` section list the repair loop: read, run, observe, edit,
+48. Watch the `Agent` section list the repair loop: read, run, observe, edit,
     rerun, capture transcripts, and verify `agent/out/result.txt`.
-46. Click an Agent row with an artifact to reopen the source, transcript, or
+49. Click an Agent row with an artifact to reopen the source, transcript, or
     result file from the same system panel.
-47. Click `diff broken.js` to reopen the before/after repair diff from
+50. Click `diff broken.js` to reopen the before/after repair diff from
     `/agent/out`.
-48. Click `write repair report` or open
+51. Click `write repair report` or open
     `/agent/out/broken.repair-report.md` to inspect the complete repair trace:
     operation list, task ids, transcript paths, snapshots, result, and status.
-49. Use the System action row `Fix Current Wanix Program` when the current
+52. Use the System action row `Fix Current Wanix Program` when the current
     editor is a qjs file and you want to apply the same repair contract outside
     the canned demo.
 

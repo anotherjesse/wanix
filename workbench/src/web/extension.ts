@@ -937,10 +937,12 @@ async function runCockpitTour(
 		artifacts: string[],
 		action: () => Promise<void>,
 	): Promise<void> => {
+		systemView.tourStepStarted(label, { description, artifacts });
 		systemView.filesystemActivity(`cockpit tour ${label}`);
 		try {
 			await action();
 			steps.push({ label, description, artifacts, status: "ok" });
+			systemView.tourStepCompleted(label);
 		} catch (error) {
 			steps.push({
 				label,
@@ -949,10 +951,12 @@ async function runCockpitTour(
 				status: "failed",
 				error: error instanceof Error ? error.message : String(error),
 			});
+			systemView.tourStepFailed(label, error);
 			throw error;
 		}
 	};
 
+	systemView.tourStarted("OS cockpit tour");
 	systemView.filesystemActivity("cockpit tour started");
 	try {
 		await runStep(
@@ -994,12 +998,16 @@ async function runCockpitTour(
 			() => runAgentRepairDemo(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context),
 		);
 		const reportPath = await writeCockpitTourReport(fsys, bridge, startedAt, new Date(), "complete", steps);
+		systemView.tourStepCompleted("OS cockpit tour");
+		systemView.tourReport(reportPath, "complete");
 		systemView.filesystemActivity("cockpit tour report written", { path: reportPath });
 		await refreshWanixPaths(bridge, [reportPath]);
 		await openWanixPath(reportPath);
 		vscode.window.showInformationMessage("Wanix OS cockpit tour completed");
 	} catch (error) {
 		const reportPath = await writeCockpitTourReport(fsys, bridge, startedAt, new Date(), "failed", steps, error);
+		systemView.tourStepFailed("OS cockpit tour", error);
+		systemView.tourReport(reportPath, "failed");
 		systemView.filesystemActivity("cockpit tour failure report written", { path: reportPath });
 		await refreshWanixPaths(bridge, [reportPath]);
 		await openWanixPath(reportPath);

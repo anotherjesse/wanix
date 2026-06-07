@@ -115,7 +115,19 @@ type AgentRecord = {
 	afterPath?: string;
 };
 
-type CategoryId = "actions" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
+type TourStatus = "running" | "ok" | "failed" | "report";
+
+type TourRecord = {
+	id: number;
+	label: string;
+	status: TourStatus;
+	description?: string;
+	artifacts?: string[];
+	path?: string;
+	error?: string;
+};
+
+type CategoryId = "actions" | "tour" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
@@ -123,6 +135,7 @@ type SystemTreeItem =
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "actions", label: "Actions" },
+	{ type: "category", id: "tour", label: "Tour" },
 	{ type: "category", id: "activity", label: "Activity" },
 	{ type: "category", id: "routes", label: "Routes" },
 	{ type: "category", id: "routeRuns", label: "Route Runs" },
@@ -142,6 +155,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private namespace: NamespaceRecord[] = [];
 	private routes: RouteRecord[] = [];
 	private routeRuns: RouteRunRecord[] = [];
+	private tour: TourRecord[] = [];
 	private agent: AgentRecord[] = [];
 	private activity: ActivityRecord[] = [];
 	private serviceTaskIds = new Set<string>();
@@ -150,6 +164,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private hasV86 = false;
 	private nextActivityId = 1;
 	private nextRouteRunId = 1;
+	private nextTourId = 1;
 	private nextAgentId = 1;
 
 	readonly onDidChangeTreeData = this.emitter.event;
@@ -253,6 +268,47 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}
 	}
 
+	tourStarted(label: string): void {
+		this.tour = [];
+		this.nextTourId = 1;
+		this.upsertTourStep(label, "running", { description: "full cockpit demo arc" });
+		this.addActivity(`tour ${label} started`);
+		this.refresh();
+	}
+
+	tourStepStarted(label: string, options: { description?: string; artifacts?: string[] } = {}): void {
+		this.upsertTourStep(label, "running", options);
+		this.addActivity(`tour ${label} started`);
+		this.refresh();
+	}
+
+	tourStepCompleted(label: string): void {
+		this.upsertTourStep(label, "ok");
+		this.addActivity(`tour ${label} completed`);
+		this.refresh();
+	}
+
+	tourStepFailed(label: string, error: unknown): void {
+		this.upsertTourStep(label, "failed", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		this.addActivity(`tour ${label} failed`);
+		this.refresh();
+	}
+
+	tourReport(path: string, status: "complete" | "failed"): void {
+		this.tour.unshift({
+			id: this.nextTourId++,
+			label: "Tour Report",
+			status: "report",
+			description: status,
+			path,
+			artifacts: [path],
+		});
+		this.addActivity("tour report written", { path });
+		this.refresh();
+	}
+
 	agentStarted(label: string): void {
 		this.agent = [];
 		this.nextAgentId = 1;
@@ -335,6 +391,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		switch (element.id) {
 			case "actions":
 				return this.actionItems();
+			case "tour":
+				return this.tourItems();
 			case "drivers":
 				return this.drivers.length > 0
 					? this.drivers.map((driver) => leaf(`driver:${driver}`, driver, undefined, "symbol-method"))
@@ -399,6 +457,28 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				children,
 			});
 		});
+	}
+
+	private tourItems(): SystemTreeItem[] {
+		if (this.tour.length === 0) {
+			return [leaf("tour:empty", "no tour has run yet")];
+		}
+		return this.tour.map((entry) => leaf(
+			`tour:${entry.id}`,
+			entry.label,
+			tourDescription(entry),
+			tourIcon(entry.status),
+			entry.path ? {
+				command: "workbench.openWanixPath",
+				title: "Open Wanix Path",
+				arguments: [entry.path],
+			} : undefined,
+			entry.path ? "wanixTourArtifact" : undefined,
+			{
+				path: entry.path,
+				children: tourArtifactItems(entry),
+			},
+		));
 	}
 
 	private agentItems(): SystemTreeItem[] {
@@ -502,6 +582,25 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}
 		this.activity.unshift({ id: this.nextActivityId++, label, path, paths });
 		this.activity = this.activity.slice(0, 12);
+	}
+
+	private upsertTourStep(label: string, status: TourStatus, options: { description?: string; artifacts?: string[]; error?: string } = {}): void {
+		const existing = this.tour.find((entry) => entry.label === label && entry.status !== "report");
+		if (existing) {
+			existing.status = status;
+			existing.description = options.description || existing.description;
+			existing.artifacts = options.artifacts || existing.artifacts;
+			existing.error = options.error || existing.error;
+			return;
+		}
+		this.tour.push({
+			id: this.nextTourId++,
+			label,
+			status,
+			description: options.description,
+			artifacts: options.artifacts,
+			error: options.error,
+		});
 	}
 
 	private observeServiceTasks(tasks: WanixServiceTask[]): boolean {
@@ -729,6 +828,22 @@ function routeRunArtifactItems(run: RouteRunRecord): SystemTreeItem[] {
 	return items;
 }
 
+function tourArtifactItems(entry: TourRecord): SystemTreeItem[] {
+	return uniquePaths(entry.artifacts).map((path, index) => leaf(
+		`tour:${entry.id}:artifact:${index}`,
+		path,
+		pathDescription(path),
+		path === entry.path ? "output" : "file",
+		{
+			command: "workbench.openWanixPath",
+			title: "Open Wanix Path",
+			arguments: [path],
+		},
+		"wanixTourArtifact",
+		{ path },
+	));
+}
+
 function activityItem(entry: ActivityRecord): SystemTreeItem {
 	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
 	const path = entry.path || paths[paths.length - 1];
@@ -765,6 +880,12 @@ function activityItem(entry: ActivityRecord): SystemTreeItem {
 
 function routeRunDescription(run: RouteRunRecord): string {
 	return run.url ? `${run.status} · ${run.url}` : run.status;
+}
+
+function tourDescription(entry: TourRecord): string {
+	const status = entry.status === "ok" ? "ok" : entry.status;
+	const detail = entry.error || entry.description;
+	return detail ? `${status} · ${detail}` : status;
 }
 
 function pathDescription(path: string): string {
@@ -817,6 +938,8 @@ function categoryIcon(id: CategoryId): vscode.ThemeIcon {
 	switch (id) {
 		case "actions":
 			return new vscode.ThemeIcon("run-all");
+		case "tour":
+			return new vscode.ThemeIcon("checklist");
 		case "drivers":
 			return new vscode.ThemeIcon("symbol-method");
 		case "tasks":
@@ -903,6 +1026,19 @@ function taskIcon(status: TaskStatus): string {
 			return "pass";
 		case "closed":
 			return "circle-slash";
+	}
+}
+
+function tourIcon(status: TourStatus): string {
+	switch (status) {
+		case "running":
+			return "loading";
+		case "ok":
+			return "pass";
+		case "failed":
+			return "error";
+		case "report":
+			return "notebook";
 	}
 }
 
