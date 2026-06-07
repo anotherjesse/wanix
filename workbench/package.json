@@ -247,6 +247,12 @@
         "icon": "$(list-tree)"
       },
       {
+        "command": "workbench.openShellHistoryArchiveDossier",
+        "title": "Open Shell Archive Dossier",
+        "category": "Wanix",
+        "icon": "$(notebook)"
+      },
+      {
         "command": "workbench.exportShellHistoryArchiveBundle",
         "title": "Export Shell Archive Bundle",
         "category": "Wanix",
@@ -554,24 +560,29 @@
           "group": "navigation@0"
         },
         {
-          "command": "workbench.compareShellHistoryArchive",
+          "command": "workbench.openShellHistoryArchiveDossier",
           "when": "view == wanix.system && (viewItem == wanixShellArchive || viewItem == wanixShellArchiveWithBundle)",
           "group": "navigation@1"
         },
         {
-          "command": "workbench.exportShellHistoryArchiveBundle",
+          "command": "workbench.compareShellHistoryArchive",
           "when": "view == wanix.system && (viewItem == wanixShellArchive || viewItem == wanixShellArchiveWithBundle)",
           "group": "navigation@2"
         },
         {
+          "command": "workbench.exportShellHistoryArchiveBundle",
+          "when": "view == wanix.system && (viewItem == wanixShellArchive || viewItem == wanixShellArchiveWithBundle)",
+          "group": "navigation@3"
+        },
+        {
           "command": "workbench.importShellHistoryArchiveBundle",
           "when": "view == wanix.system && viewItem == wanixShellArchiveWithBundle",
-          "group": "navigation@3"
+          "group": "navigation@4"
         },
         {
           "command": "workbench.restoreShellHistoryArchive",
           "when": "view == wanix.system && (viewItem == wanixShellArchive || viewItem == wanixShellArchiveWithBundle)",
-          "group": "navigation@4"
+          "group": "navigation@5"
         },
         {
           "command": "workbench.pruneShellHistoryArchives",

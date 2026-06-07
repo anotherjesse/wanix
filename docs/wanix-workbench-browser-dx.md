@@ -623,6 +623,19 @@ restore, or repair an archive without opening every report by hand.
 
 ![Shell archive health badges](assets/wanix-workbench-browser-dx/88-shell-archive-health-badges.png)
 
+The next click is a dossier. `Open Shell Archive Dossier` writes
+`dossier.md` and `dossier.json` inside one timestamped archive, then opens the
+markdown as the archive's first-stop report. It rolls up the health badges,
+compare freshness, bundle/import state, restore state, evidence links, and the
+latest commands into one compact view with recommended next actions. If a
+dossier already exists, the archive row shows `Dossier Report` and
+`Dossier JSON`; if it does not, the same row has an `Open Dossier` action that
+creates it. Exported bundles now include any existing dossier files too, so a
+rehydrated archive can explain itself without asking someone to rediscover the
+context from scratch.
+
+![Shell archive dossier](assets/wanix-workbench-browser-dx/89-shell-archive-dossier.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1246,6 +1259,9 @@ The current loop is:
     `inventory.json` without needing to run the inventory command first. Use
     each archive row's health badges to spot missing manifests, stale compare
     reports, missing bundles, importable bundles, and restorable snapshots.
+    Use `Open Shell Archive Dossier` to write `dossier.md/json` for one archive
+    with health, evidence links, latest commands, compare state, bundle/import
+    state, restore state, and recommended next actions.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1357,9 +1373,9 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add a shell archive detail dashboard that opens one archive as a compact
-  markdown/JSON dossier with health, evidence links, latest commands, compare
-  state, bundle/import state, and recommended next actions.
+- Make archive dossier recommendations runnable from the report itself, so the
+  markdown can trigger compare/export/import/restore without returning to the
+  tree context menu.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

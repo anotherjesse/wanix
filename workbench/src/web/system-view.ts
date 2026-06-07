@@ -193,6 +193,9 @@ export type WanixShellArchiveRecord = {
 	importMarkdownPath: string;
 	importJsonPath: string;
 	importGeneratedAt?: string;
+	dossierMarkdownPath: string;
+	dossierJsonPath: string;
+	dossierGeneratedAt?: string;
 };
 
 type CategoryId = "actions" | "tour" | "checks" | "reports" | "shellArchives" | "dataStores" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
@@ -1444,6 +1447,7 @@ function shellArchiveArtifactItems(archive: WanixShellArchiveRecord): SystemTree
 			commandsPath: archive.commandsPath,
 			bundleJsonPath: archive.bundleJsonPath,
 		}),
+		archiveActionLeaf(archive, "dossier", "Open Dossier", archive.dossierGeneratedAt ? "refresh dossier" : "health + evidence", "notebook", "workbench.openShellHistoryArchiveDossier"),
 		leaf(`shell-archive:${archive.name}:index`, "Archive Index", pathDescription(archive.indexPath), "notebook", {
 			command: "workbench.openWanixPath",
 			title: "Open Shell Archive Index",
@@ -1472,6 +1476,20 @@ function shellArchiveArtifactItems(archive: WanixShellArchiveRecord): SystemTree
 		archiveActionLeaf(archive, "compare", "Compare With Live", archive.compareGeneratedAt ? "refresh report" : "write report", "diff", "workbench.compareShellHistoryArchive"),
 		archiveActionLeaf(archive, "export-bundle", "Export Bundle", archive.bundleGeneratedAt ? "refresh bundle" : "portable JSON", "package", "workbench.exportShellHistoryArchiveBundle"),
 	];
+	if (archive.dossierGeneratedAt) {
+		items.push(
+			leaf(`shell-archive:${archive.name}:dossier-report`, "Dossier Report", archive.dossierGeneratedAt, "notebook", {
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive Dossier",
+				arguments: [archive.dossierMarkdownPath],
+			}, "wanixShellArchiveArtifact", { path: archive.dossierMarkdownPath }),
+			leaf(`shell-archive:${archive.name}:dossier-json`, "Dossier JSON", pathDescription(archive.dossierJsonPath), "json", {
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive Dossier JSON",
+				arguments: [archive.dossierJsonPath],
+			}, "wanixShellArchiveArtifact", { path: archive.dossierJsonPath }),
+		);
+	}
 	if (archive.compareGeneratedAt) {
 		items.push(
 			leaf(`shell-archive:${archive.name}:compare-report`, "Compare Report", shellArchiveCompareDescription(archive), "diff", {
@@ -1927,6 +1945,10 @@ function shellArchiveSnapshot(archive: WanixShellArchiveRecord): object {
 		importGeneratedAt: archive.importGeneratedAt,
 		importMarkdownPath: displayJournalPath(archive.importMarkdownPath),
 		importJsonPath: displayJournalPath(archive.importJsonPath),
+		dossiered: archive.dossierGeneratedAt !== undefined,
+		dossierGeneratedAt: archive.dossierGeneratedAt,
+		dossierMarkdownPath: displayJournalPath(archive.dossierMarkdownPath),
+		dossierJsonPath: displayJournalPath(archive.dossierJsonPath),
 		wasLastRestored: Boolean(archive.wasLastRestored),
 	};
 }
@@ -1940,6 +1962,7 @@ function shellArchiveJournalLines(archive: WanixShellArchiveRecord): string[] {
 		archive.compareGeneratedAt ? `  - compare: ${displayJournalPath(archive.compareMarkdownPath)} (${shellArchiveCompareDescription(archive)})` : undefined,
 		archive.bundleGeneratedAt ? `  - bundle: ${displayJournalPath(archive.bundleMarkdownPath)} (${shellArchiveBundleDescription(archive)})` : undefined,
 		archive.importGeneratedAt ? `  - import: ${displayJournalPath(archive.importMarkdownPath)} (${archive.importGeneratedAt})` : undefined,
+		archive.dossierGeneratedAt ? `  - dossier: ${displayJournalPath(archive.dossierMarkdownPath)} (${archive.dossierGeneratedAt})` : undefined,
 		archive.wasLastRestored ? "  - restore: last restored into live history" : undefined,
 	].filter((line): line is string => line !== undefined);
 }

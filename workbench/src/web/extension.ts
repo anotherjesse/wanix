@@ -152,6 +152,9 @@ type ShellHistoryArchiveInfo = {
 	importMarkdownPath: string;
 	importJsonPath: string;
 	importGeneratedAt?: string;
+	dossierMarkdownPath: string;
+	dossierJsonPath: string;
+	dossierGeneratedAt?: string;
 };
 
 type ShellHistoryArchiveInventory = {
@@ -274,6 +277,8 @@ const SHELL_HISTORY_ARCHIVE_BUNDLE_MD_NAME = "bundle.md";
 const SHELL_HISTORY_ARCHIVE_BUNDLE_JSON_NAME = "bundle.json";
 const SHELL_HISTORY_ARCHIVE_IMPORT_MD_NAME = "imported.md";
 const SHELL_HISTORY_ARCHIVE_IMPORT_JSON_NAME = "imported.json";
+const SHELL_HISTORY_ARCHIVE_DOSSIER_MD_NAME = "dossier.md";
+const SHELL_HISTORY_ARCHIVE_DOSSIER_JSON_NAME = "dossier.json";
 const SHELL_HISTORY_COMPARE_MD_NAME = "compare-live.md";
 const SHELL_HISTORY_COMPARE_JSON_NAME = "compare-live.json";
 const SHELL_HISTORY_LATEST_MARKDOWN_LIMIT = 12;
@@ -499,6 +504,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openShellHistoryArchiveInventory', async () => {
 			try {
 				await openShellHistoryArchiveInventory(fsys, bridge, systemView);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openShellHistoryArchiveDossier', async (target?: ShellHistoryArchiveTarget) => {
+			try {
+				await openShellHistoryArchiveDossier(fsys, bridge, systemView, target);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -1089,6 +1102,38 @@ async function openShellHistoryArchiveInventory(
 	vscode.window.showInformationMessage(`Opened qjs shell archive inventory: ${inventory.archives.length} archives`);
 }
 
+async function openShellHistoryArchiveDossier(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+	target?: ShellHistoryArchiveTarget,
+): Promise<void> {
+	const pick = await pickShellHistoryArchive(fsys, target, "Open qjs shell history archive dossier");
+	if (!pick) {
+		return;
+	}
+	const archive = await shellHistoryArchiveInfoForTarget(fsys, { archiveDir: pick.archiveDir });
+	if (!archive) {
+		throw new Error(`Shell history archive not found: ${shellHistoryAbsolutePath(pick.archiveDir)}`);
+	}
+	const entries = await readShellHistoryEntriesOptional(fsys, archive.commandsPath);
+	const generatedAt = new Date();
+	const paths = await writeShellHistoryArchiveDossier(fsys, archive, entries, generatedAt);
+	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
+	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	const reportPaths = [...paths, ...inventoryPaths];
+	publishShellHistoryArchiveDossierReport(systemView, archive, reportPaths);
+	systemView.filesystemActivity("shell archive dossier opened", {
+		description: `${archive.commandCount} commands, ${shellHistoryArchiveHealthBadges(archive).length} health badges`,
+		path: archive.dossierMarkdownPath,
+		paths: reportPaths,
+	});
+	await refreshWanixPaths(bridge, [archive.archiveDir, SHELL_HISTORY_ARCHIVE_DIR, ...reportPaths]);
+	await openWanixPath(archive.dossierMarkdownPath);
+	vscode.window.showInformationMessage(`Opened qjs shell archive dossier: ${archive.name}`);
+}
+
 async function hydrateShellArchiveInventory(
 	fsys: any,
 	bridge: WanixBridge,
@@ -1623,6 +1668,8 @@ async function shellHistoryArchiveInfos(fsys: any, lastRestoredArchiveDir?: stri
 		const bundle = await shellHistoryReadJson(fsys, bundleJsonPath);
 		const importJsonPath = `${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_JSON_NAME}`;
 		const imported = await shellHistoryReadJson(fsys, importJsonPath);
+		const dossierJsonPath = `${archiveDir}/${SHELL_HISTORY_ARCHIVE_DOSSIER_JSON_NAME}`;
+		const dossier = await shellHistoryReadJson(fsys, dossierJsonPath);
 		const generatedAt = typeof manifest?.generatedAt === "string" ? manifest.generatedAt : name;
 		const generatedAtUnixMillis = typeof manifest?.generatedAtUnixMillis === "number"
 			? manifest.generatedAtUnixMillis
@@ -1661,6 +1708,9 @@ async function shellHistoryArchiveInfos(fsys: any, lastRestoredArchiveDir?: stri
 			importMarkdownPath: `${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_MD_NAME}`,
 			importJsonPath,
 			importGeneratedAt: typeof imported?.generatedAt === "string" ? imported.generatedAt : undefined,
+			dossierMarkdownPath: `${archiveDir}/${SHELL_HISTORY_ARCHIVE_DOSSIER_MD_NAME}`,
+			dossierJsonPath,
+			dossierGeneratedAt: typeof dossier?.generatedAt === "string" ? dossier.generatedAt : undefined,
 		});
 	}
 	return archives.sort((left, right) => shellHistoryArchiveSortMillis(right) - shellHistoryArchiveSortMillis(left) || right.name.localeCompare(left.name));
@@ -1734,6 +1784,9 @@ function shellHistoryArchiveInfoFromInventoryJson(source: any): ShellHistoryArch
 		importMarkdownPath: shellHistoryArchiveInventoryPath(source, "importMarkdownPath", `${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_MD_NAME}`, archiveDir),
 		importJsonPath: shellHistoryArchiveInventoryPath(source, "importJsonPath", `${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_JSON_NAME}`, archiveDir),
 		importGeneratedAt: typeof source.importGeneratedAt === "string" ? source.importGeneratedAt : undefined,
+		dossierMarkdownPath: shellHistoryArchiveInventoryPath(source, "dossierMarkdownPath", `${archiveDir}/${SHELL_HISTORY_ARCHIVE_DOSSIER_MD_NAME}`, archiveDir),
+		dossierJsonPath: shellHistoryArchiveInventoryPath(source, "dossierJsonPath", `${archiveDir}/${SHELL_HISTORY_ARCHIVE_DOSSIER_JSON_NAME}`, archiveDir),
+		dossierGeneratedAt: typeof source.dossierGeneratedAt === "string" ? source.dossierGeneratedAt : undefined,
 	};
 }
 
@@ -1805,6 +1858,10 @@ function shellHistoryArchiveInfoJson(archive: ShellHistoryArchiveInfo): Record<s
 		importGeneratedAt: archive.importGeneratedAt,
 		importMarkdownPath: shellHistoryAbsolutePath(archive.importMarkdownPath),
 		importJsonPath: shellHistoryAbsolutePath(archive.importJsonPath),
+		dossiered: archive.dossierGeneratedAt !== undefined,
+		dossierGeneratedAt: archive.dossierGeneratedAt,
+		dossierMarkdownPath: shellHistoryAbsolutePath(archive.dossierMarkdownPath),
+		dossierJsonPath: shellHistoryAbsolutePath(archive.dossierJsonPath),
 	};
 }
 
@@ -2041,6 +2098,9 @@ function shellHistoryArchiveInfoFromBundleJson(value: any): ShellHistoryArchiveI
 		bundleFileCount: typeof value.fileCount === "number" ? value.fileCount : undefined,
 		importMarkdownPath: `${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_MD_NAME}`,
 		importJsonPath: `${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_JSON_NAME}`,
+		dossierMarkdownPath: shellHistoryRelativePath(source.dossierMarkdownPath || `${archiveDir}/${SHELL_HISTORY_ARCHIVE_DOSSIER_MD_NAME}`),
+		dossierJsonPath: shellHistoryRelativePath(source.dossierJsonPath || `${archiveDir}/${SHELL_HISTORY_ARCHIVE_DOSSIER_JSON_NAME}`),
+		dossierGeneratedAt: typeof source.dossierGeneratedAt === "string" ? source.dossierGeneratedAt : undefined,
 	};
 }
 
@@ -2146,6 +2206,199 @@ function shellHistoryArchiveImportMarkdown(
 	].join("\n");
 }
 
+async function writeShellHistoryArchiveDossier(
+	fsys: any,
+	archive: ShellHistoryArchiveInfo,
+	entries: ShellHistoryEntry[],
+	generatedAt: Date,
+): Promise<string[]> {
+	const dossierArchive = { ...archive, dossierGeneratedAt: generatedAt.toISOString() };
+	await fsys.writeFile(archive.dossierJsonPath, shellHistoryArchiveDossierJson(dossierArchive, entries, generatedAt));
+	await fsys.writeFile(archive.dossierMarkdownPath, shellHistoryArchiveDossierMarkdown(dossierArchive, entries, generatedAt));
+	return [archive.dossierMarkdownPath, archive.dossierJsonPath];
+}
+
+function shellHistoryArchiveDossierJson(
+	archive: ShellHistoryArchiveInfo,
+	entries: ShellHistoryEntry[],
+	generatedAt: Date,
+): string {
+	const artifacts = shellHistoryArtifacts(entries, `${archive.archiveDir}/commands`);
+	return `${JSON.stringify({
+		schema: "wanix.qjs-shell.archive-dossier.v1",
+		generatedAt: generatedAt.toISOString(),
+		archive: shellHistoryArchiveInfoJson(archive),
+		health: shellHistoryArchiveHealthJson(archive),
+		recommendedActions: shellHistoryArchiveDossierRecommendedActions(archive),
+		state: shellHistoryArchiveDossierState(archive),
+		evidence: shellHistoryArchiveDossierEvidence(archive),
+		latestCommands: artifacts.slice(-12).reverse().map((artifact) => ({
+			index: artifact.index,
+			command: shellHistoryCommand(artifact.entry),
+			status: shellHistoryStatus(artifact.entry),
+			observedAt: formatShellHistoryTime(artifact.entry.observedAtUnixMillis),
+			cwd: artifact.entry.cwd,
+			taskId: artifact.entry.taskId,
+			terminalId: artifact.entry.terminalId,
+			target: shellHistoryTarget(artifact.entry),
+			evidencePath: shellHistoryAbsolutePath(artifact.path),
+		})),
+	}, null, 2)}\n`;
+}
+
+function shellHistoryArchiveDossierMarkdown(
+	archive: ShellHistoryArchiveInfo,
+	entries: ShellHistoryEntry[],
+	generatedAt: Date,
+): string {
+	const artifacts = shellHistoryArtifacts(entries, `${archive.archiveDir}/commands`);
+	const badges = shellHistoryArchiveHealthBadges(archive);
+	return [
+		"# qjs Shell Archive Dossier",
+		"",
+		"Schema: wanix.qjs-shell.archive-dossier.v1",
+		`Generated: ${generatedAt.toISOString()}`,
+		`Archive: ${shellHistoryWanixLink(archive.name, archive.indexPath)}`,
+		`JSON: ${shellHistoryWanixLink(shellHistoryAbsolutePath(archive.dossierJsonPath), archive.dossierJsonPath)}`,
+		"",
+		"## Health",
+		"",
+		`Status: ${badges.some((badge) => badge.kind === "warning") ? "warn" : "ok"}`,
+		...badges.map((badge) => `- ${badge.kind}: ${badge.label}${badge.detail ? ` (${badge.detail})` : ""}`),
+		"",
+		"## Recommended Next Actions",
+		"",
+		...shellHistoryArchiveDossierRecommendedActions(archive).map((action) => `- ${action.label}: run \`${action.command}\` - ${action.reason}`),
+		"",
+		"## State",
+		"",
+		...shellHistoryArchiveDossierStateLines(archive),
+		"",
+		"## Evidence Links",
+		"",
+		...shellHistoryArchiveDossierEvidence(archive).map((item) => `- ${item.label}: ${shellHistoryWanixLink(shellHistoryAbsolutePath(item.path), item.path)}${item.available ? "" : " (not generated yet)"}`),
+		"",
+		"## Latest Commands",
+		"",
+		...(artifacts.length > 0 ? shellHistoryRecentLines(artifacts, 12) : [`- no command records found at ${shellHistoryAbsolutePath(archive.commandsPath)}`]),
+		"",
+		"This dossier is generated from archive metadata plus commands.jsonl. It is meant to be the first file to open when deciding whether to compare, bundle, import, restore, or prune an old shell audit trail.",
+		"",
+	].join("\n");
+}
+
+function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchiveInfo): Array<{ label: string; command: string; reason: string }> {
+	const actions: Array<{ label: string; command: string; reason: string }> = [];
+	if (archive.manifestPresent === false) {
+		actions.push({
+			label: "Inspect the archive manifest",
+			command: "workbench.openWanixPath",
+			reason: `manifest metadata is missing at ${shellHistoryAbsolutePath(archive.manifestPath)}`,
+		});
+	}
+	if (!archive.compareGeneratedAt) {
+		actions.push({
+			label: "Compare with live history",
+			command: "workbench.compareShellHistoryArchive",
+			reason: "no archive-vs-live report exists yet",
+		});
+	} else if (archive.compareStale) {
+		actions.push({
+			label: "Refresh archive comparison",
+			command: "workbench.compareShellHistoryArchive",
+			reason: `live history changed after the last comparison${archive.liveLastObservedAt ? ` at ${archive.liveLastObservedAt}` : ""}`,
+		});
+	}
+	if (!archive.bundleGeneratedAt) {
+		actions.push({
+			label: "Export a portable bundle",
+			command: "workbench.exportShellHistoryArchiveBundle",
+			reason: "the archive is not yet portable across browser sessions",
+		});
+	}
+	if (archive.bundleGeneratedAt && !archive.importGeneratedAt) {
+		actions.push({
+			label: "Import bundle when rehydration is needed",
+			command: "workbench.importShellHistoryArchiveBundle",
+			reason: "bundle.json is available and can recreate the archive evidence files",
+		});
+	}
+	if (!archive.wasLastRestored) {
+		actions.push({
+			label: "Restore into live shell history when useful",
+			command: "workbench.restoreShellHistoryArchive",
+			reason: "the archive has not been replayed into the live history artifacts",
+		});
+	}
+	if (actions.length === 0) {
+		actions.push({
+			label: "Open the archive index",
+			command: "workbench.openWanixPath",
+			reason: "archive health is clean and the dossier is informational",
+		});
+	}
+	return actions;
+}
+
+function shellHistoryArchiveDossierState(archive: ShellHistoryArchiveInfo): Record<string, unknown> {
+	return {
+		compare: {
+			generatedAt: archive.compareGeneratedAt,
+			stale: archive.compareStale === true,
+			liveLastObservedAt: archive.liveLastObservedAt,
+			archivedOnlyCount: archive.archivedOnlyCount,
+			liveOnlyCount: archive.liveOnlyCount,
+			markdownPath: shellHistoryAbsolutePath(archive.compareMarkdownPath),
+			jsonPath: shellHistoryAbsolutePath(archive.compareJsonPath),
+		},
+		bundle: {
+			generatedAt: archive.bundleGeneratedAt,
+			fileCount: archive.bundleFileCount,
+			markdownPath: shellHistoryAbsolutePath(archive.bundleMarkdownPath),
+			jsonPath: shellHistoryAbsolutePath(archive.bundleJsonPath),
+		},
+		import: {
+			generatedAt: archive.importGeneratedAt,
+			markdownPath: shellHistoryAbsolutePath(archive.importMarkdownPath),
+			jsonPath: shellHistoryAbsolutePath(archive.importJsonPath),
+		},
+		restore: {
+			wasLastRestored: archive.wasLastRestored === true,
+			commandsPath: shellHistoryAbsolutePath(archive.commandsPath),
+		},
+	};
+}
+
+function shellHistoryArchiveDossierStateLines(archive: ShellHistoryArchiveInfo): string[] {
+	return [
+		`- Compare: ${archive.compareGeneratedAt ? `${archive.compareStale ? "stale" : "current"} at ${archive.compareGeneratedAt}; ${archive.archivedOnlyCount ?? "?"} archived-only, ${archive.liveOnlyCount ?? "?"} live-only` : "not generated"}`,
+		`- Bundle: ${archive.bundleGeneratedAt ? `${archive.bundleFileCount ?? "?"} files at ${archive.bundleGeneratedAt}` : "not exported"}`,
+		`- Import: ${archive.importGeneratedAt ? `rehydrated at ${archive.importGeneratedAt}` : "not imported"}`,
+		`- Restore: ${archive.wasLastRestored ? "last restored into live history" : "not the last restored archive"}`,
+		`- Commands: ${archive.commandCount} archived commands`,
+	];
+}
+
+function shellHistoryArchiveDossierEvidence(archive: ShellHistoryArchiveInfo): Array<{ label: string; path: string; available: boolean }> {
+	return [
+		{ label: "Dossier markdown", path: archive.dossierMarkdownPath, available: true },
+		{ label: "Dossier JSON", path: archive.dossierJsonPath, available: true },
+		{ label: "Archive index", path: archive.indexPath, available: true },
+		{ label: "Manifest JSON", path: archive.manifestPath, available: archive.manifestPresent !== false },
+		{ label: "Commands JSONL", path: archive.commandsPath, available: true },
+		{ label: "Grouped summary", path: archive.summaryPath, available: true },
+		{ label: "Latest tail", path: archive.latestMarkdownPath, available: true },
+		{ label: "Compare report", path: archive.compareMarkdownPath, available: archive.compareGeneratedAt !== undefined },
+		{ label: "Compare JSON", path: archive.compareJsonPath, available: archive.compareGeneratedAt !== undefined },
+		{ label: "Bundle report", path: archive.bundleMarkdownPath, available: archive.bundleGeneratedAt !== undefined },
+		{ label: "Bundle JSON", path: archive.bundleJsonPath, available: archive.bundleGeneratedAt !== undefined },
+		{ label: "Import report", path: archive.importMarkdownPath, available: archive.importGeneratedAt !== undefined },
+		{ label: "Import JSON", path: archive.importJsonPath, available: archive.importGeneratedAt !== undefined },
+		{ label: "Command evidence directory", path: `${archive.archiveDir}/commands`, available: true },
+		{ label: "Archive directory", path: archive.archiveDir, available: true },
+	];
+}
+
 async function shellHistoryArchiveBundle(
 	fsys: any,
 	archive: ShellHistoryArchiveInfo,
@@ -2173,6 +2426,8 @@ async function shellHistoryArchiveBundleFilePaths(fsys: any, archive: ShellHisto
 		archive.latestMarkdownPath,
 		`${archive.archiveDir}/latest.json`,
 		archive.summaryPath,
+		archive.dossierMarkdownPath,
+		archive.dossierJsonPath,
 		archive.compareMarkdownPath,
 		archive.compareJsonPath,
 	];
@@ -3435,6 +3690,19 @@ function publishShellHistoryArchiveBundleReport(
 		kind: "shell",
 		description: "portable audit bundle",
 		icon: "package",
+		artifacts: paths,
+	});
+}
+
+function publishShellHistoryArchiveDossierReport(
+	systemView: WanixSystemView,
+	archive: ShellHistoryArchiveInfo,
+	paths: string[],
+): void {
+	systemView.reportPublished("qjs Shell Archive Dossier", archive.dossierMarkdownPath, {
+		kind: "shell",
+		description: "archive health and next actions",
+		icon: "notebook",
 		artifacts: paths,
 	});
 }
