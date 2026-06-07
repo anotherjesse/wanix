@@ -105,7 +105,8 @@
             if (discovery.services?.task && discovery.services?.term) {
               workbenchConfig.ns = {
                 task: discovery.services.task,
-                term: discovery.services.term
+                term: discovery.services.term,
+                devices: discovery.services.devices || []
               };
               workbenchConfig.qjsTask = discovery.services.drivers?.includes("qjs") || false;
               workbenchConfig.shell = {

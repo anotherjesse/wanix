@@ -151,9 +151,14 @@ fn serve_services_json(roots: &ServeRoots) -> String {
     // discovery JSON cannot silently drift from what clients can actually launch
     // via `#task/new/<kind>`. Today this is `["auto","noop","qjs","wasm"]`.
     if roots.wanix_services {
+        let devices: Vec<String> = super::roots::INSPECTABLE_SERVICE_DEVICES
+            .iter()
+            .map(|device| (*device).to_owned())
+            .collect();
         format!(
-            "{{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":{}}}",
-            json_string_array(&roots.driver_kinds)
+            "{{\"task\":\"#task\",\"term\":\"#term\",\"drivers\":{},\"devices\":{}}}",
+            json_string_array(&roots.driver_kinds),
+            json_string_array(&devices)
         )
     } else {
         "null".to_owned()

@@ -11,6 +11,7 @@ export type WanixSystemConfig = {
 	ns?: {
 		task: string;
 		term: string;
+		devices?: string[];
 	};
 	p9?: {
 		websocket?: string;
@@ -224,6 +225,12 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}
 		if (config.ns?.term) {
 			this.namespace.push({ path: config.ns.term, label: "terminal device" });
+		}
+		for (const device of config.ns?.devices ?? []) {
+			if (this.namespace.some((entry) => entry.path === device)) {
+				continue;
+			}
+			this.namespace.push({ path: device, label: serviceDeviceLabel(device) });
 		}
 		if (config.qjsShellUrl) {
 			this.addActivity("qjs shell route discovered");
@@ -1902,4 +1909,27 @@ function shouldReplaceServiceLabel(existingLabel: string, kind: string, serviceL
 
 function isPlaceholderServiceLabel(label: string): boolean {
 	return label === "noop" || label === "task" || label === "auto";
+}
+
+// Human labels for the service devices advertised in discovery
+// (`services.devices`, sourced from roots::INSPECTABLE_SERVICE_DEVICES).
+function serviceDeviceLabel(device: string): string {
+	switch (device) {
+		case "#task":
+			return "task service";
+		case "#term":
+			return "terminal device";
+		case "#kv":
+			return "key/value store";
+		case "#pipe":
+			return "byte-channel pipes";
+		case "#plumb":
+			return "plumber bus";
+		case "#cas":
+			return "content store";
+		case "#agent":
+			return "agent device";
+		default:
+			return "service device";
+	}
 }

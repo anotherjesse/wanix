@@ -112,6 +112,13 @@ fn serve_services_namespace(
     Ok(namespace)
 }
 
+/// Service devices bound into the `--wanix-services` namespace, advertised in
+/// discovery so the cockpit can list and inspect them. Must stay in sync with
+/// the binds in [`bind_host_and_terminal`] and [`bind_task_service`]; the
+/// `serve_wanix_services_*` tests exercise each one over 9P.
+pub(super) const INSPECTABLE_SERVICE_DEVICES: &[&str] =
+    &["#task", "#term", "#kv", "#pipe", "#plumb", "#cas", "#agent"];
+
 fn bind_host_and_terminal(
     namespace: &mut Namespace,
     host_root: Arc<dyn FileSystem>,
