@@ -259,6 +259,12 @@
         "icon": "$(run-all)"
       },
       {
+        "command": "workbench.resumeShellHistoryArchiveDossierRetryBatch",
+        "title": "Resume Shell Archive Retry Batch",
+        "category": "Wanix",
+        "icon": "$(debug-continue)"
+      },
+      {
         "command": "workbench.exportShellHistoryArchiveBundle",
         "title": "Export Shell Archive Bundle",
         "category": "Wanix",
