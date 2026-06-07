@@ -74,8 +74,8 @@ const AGENT_TOOLS: AgentTool[] = [
 		name: "writeSystemSnapshot",
 		description: "Persist the current cockpit state for humans and agents.",
 		input: {},
-		output: { journalPath: "/.wanix/system-journal.md", statePath: "/.wanix/system-state.json" },
-		wanixSurface: [".wanix/system-journal.md", ".wanix/system-state.json"],
+		output: { journalPath: "/.wanix/system-journal.md", statePath: "/.wanix/system-state.json with shellArchives, tasks, routes, reports, and activity" },
+		wanixSurface: [".wanix/system-journal.md", ".wanix/system-state.json", ".wanix/system-state.json#shellArchives"],
 	},
 	{
 		name: "openPath",

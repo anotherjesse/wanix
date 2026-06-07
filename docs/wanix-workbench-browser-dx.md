@@ -589,6 +589,18 @@ rerunning shell commands or depending on the original directory tree.
 
 ![Shell archive bundle import](assets/wanix-workbench-browser-dx/85-shell-archive-bundle-import.png)
 
+The archive inventory has also become a real cockpit section. After archive,
+compare, export, import, restore, or prune runs, the System view refreshes
+`Shell Archives` from the same archive metadata that writes
+`inventory.json`. Expanding a timestamped archive shows its index, manifest,
+commands log, summaries, bundle/import reports, and direct actions for that
+specific archive: compare with live, export bundle, import bundle, restore live
+history, or prune that one archive. The same archive list now lands in the
+system journal and `/.wanix/system-state.json`, so a human or future agent can
+navigate from OS state to archive evidence to a concrete action.
+
+![Shell archive explorer](assets/wanix-workbench-browser-dx/86-shell-archive-explorer.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1205,7 +1217,10 @@ The current loop is:
     artifacts inside a chosen archive, including the archive's text files and
     per-command evidence contents in one JSON payload. `Import Shell Archive
     Bundle` can read an open `bundle.json` editor or an existing archive bundle,
-    rehydrate the archive files, and write `imported.md/json`.
+    rehydrate the archive files, and write `imported.md/json`. Expand
+    `Shell Archives` in the System view to operate on a specific archive row:
+    open evidence, compare, export/import bundle, restore, or prune that
+    timestamped archive.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1317,8 +1332,9 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add a first-class shell-history archive/bundle explorer, so inventory rows can
-  directly trigger compare, restore, export, import, and prune actions.
+- Let the shell archive explorer persist its latest inventory across workbench
+  reloads, so retained archive rows appear before the user runs an inventory
+  command in a fresh browser session.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

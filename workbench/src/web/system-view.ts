@@ -165,16 +165,44 @@ type DataStoreRecord = {
 	artifacts?: string[];
 };
 
-type CategoryId = "actions" | "tour" | "checks" | "reports" | "dataStores" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
+export type WanixShellArchiveRecord = {
+	name: string;
+	archiveDir: string;
+	commandsPath: string;
+	indexPath: string;
+	manifestPath: string;
+	summaryPath: string;
+	latestMarkdownPath: string;
+	generatedAt: string;
+	commandCount: number;
+	firstObservedAt?: string;
+	lastObservedAt?: string;
+	compareMarkdownPath: string;
+	compareJsonPath: string;
+	compareGeneratedAt?: string;
+	archivedOnlyCount?: number;
+	liveOnlyCount?: number;
+	wasLastRestored?: boolean;
+	bundleMarkdownPath: string;
+	bundleJsonPath: string;
+	bundleGeneratedAt?: string;
+	bundleFileCount?: number;
+	importMarkdownPath: string;
+	importJsonPath: string;
+	importGeneratedAt?: string;
+};
+
+type CategoryId = "actions" | "tour" | "checks" | "reports" | "shellArchives" | "dataStores" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
-	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string; beforePath?: string; afterPath?: string; children?: SystemTreeItem[] };
+	| { type: "leaf"; id: string; label: string; description?: string; icon?: vscode.ThemeIcon; command?: vscode.Command; contextValue?: string; taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string; beforePath?: string; afterPath?: string; archiveDir?: string; commandsPath?: string; bundleJsonPath?: string; children?: SystemTreeItem[] };
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "actions", label: "Actions" },
 	{ type: "category", id: "tour", label: "Tour" },
 	{ type: "category", id: "reports", label: "Reports" },
+	{ type: "category", id: "shellArchives", label: "Shell Archives" },
 	{ type: "category", id: "dataStores", label: "Data Stores" },
 	{ type: "category", id: "checks", label: "Checks" },
 	{ type: "category", id: "activity", label: "Activity" },
@@ -199,6 +227,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private tour: TourRecord[] = [];
 	private checks: CheckRecord[] = [];
 	private reports: ReportRecord[] = [];
+	private shellArchives: WanixShellArchiveRecord[] = [];
 	private dataStores: DataStoreRecord[] = [];
 	private agent: AgentRecord[] = [];
 	private activity: ActivityRecord[] = [];
@@ -430,6 +459,16 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
+	shellArchiveInventoryPublished(archives: WanixShellArchiveRecord[]): void {
+		this.shellArchives = archives.map((archive) => ({ ...archive }));
+		this.addActivity(
+			archives.length > 0
+				? `shell archives indexed ${formatClearCount(archives.length, "archive")}`
+				: "shell archive inventory found no archives",
+		);
+		this.refresh();
+	}
+
 	httpAppCatalogPublished(entries: Array<{ name: string; runtime: string; sourcePath: string; routeLabel?: string; previewPath?: string }>): void {
 		const ids = new Set(entries.map((entry) => httpAppRouteId(entry.name)));
 		this.routes = this.routes.filter((route) => !isIndexedHttpAppRoute(route) || ids.has(route.id));
@@ -654,6 +693,9 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			"## Reports",
 			...journalList(this.reports.flatMap(reportJournalLines)),
 			"",
+			"## Shell Archives",
+			...journalList(this.shellArchives.flatMap(shellArchiveJournalLines)),
+			"",
 			"## Agent",
 			...journalList(this.agent.flatMap(agentJournalLines)),
 			"",
@@ -687,6 +729,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			tour: this.tour.map(tourSnapshot),
 			checks: this.checks.map(checkSnapshot),
 			reports: this.reports.map(reportSnapshot),
+			shellArchives: this.shellArchives.map(shellArchiveSnapshot),
 			agent: this.agent.map(agentSnapshot),
 			activity: this.activity.map(activitySnapshot),
 		};
@@ -728,6 +771,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				return this.checkItems();
 			case "reports":
 				return this.reportItems();
+			case "shellArchives":
+				return this.shellArchiveItems();
 			case "dataStores":
 				return this.dataStoreItems();
 			case "drivers":
@@ -858,6 +903,31 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			{
 				path: entry.path,
 				children: reportArtifactItems(entry),
+			},
+		));
+	}
+
+	private shellArchiveItems(): SystemTreeItem[] {
+		if (this.shellArchives.length === 0) {
+			return [leaf("shell-archives:empty", "no shell archives indexed yet")];
+		}
+		return this.shellArchives.map((archive) => leaf(
+			`shell-archive:${archive.name}`,
+			archive.name,
+			shellArchiveDescription(archive),
+			"archive",
+			{
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive",
+				arguments: [archive.indexPath],
+			},
+			archive.bundleGeneratedAt ? "wanixShellArchiveWithBundle" : "wanixShellArchive",
+			{
+				path: archive.indexPath,
+				archiveDir: archive.archiveDir,
+				commandsPath: archive.commandsPath,
+				bundleJsonPath: archive.bundleJsonPath,
+				children: shellArchiveArtifactItems(archive),
 			},
 		));
 	}
@@ -1211,7 +1281,7 @@ function leaf(
 	icon?: string,
 	command?: vscode.Command,
 	contextValue?: string,
-	metadata: { taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string; beforePath?: string; afterPath?: string; children?: SystemTreeItem[] } = {},
+	metadata: { taskId?: string; sourcePath?: string; outputPath?: string; metadataPath?: string; path?: string; beforePath?: string; afterPath?: string; archiveDir?: string; commandsPath?: string; bundleJsonPath?: string; children?: SystemTreeItem[] } = {},
 ): SystemTreeItem {
 	return {
 		type: "leaf",
@@ -1228,6 +1298,9 @@ function leaf(
 		path: metadata.path,
 		beforePath: metadata.beforePath,
 		afterPath: metadata.afterPath,
+		archiveDir: metadata.archiveDir,
+		commandsPath: metadata.commandsPath,
+		bundleJsonPath: metadata.bundleJsonPath,
 		children: metadata.children,
 	};
 }
@@ -1240,6 +1313,9 @@ function treeItemTooltip(element: SystemTreeItem & { type: "leaf" }): string {
 		element.sourcePath ? `Source: ${element.sourcePath}` : undefined,
 		element.outputPath ? `Output: ${element.outputPath}` : undefined,
 		element.metadataPath ? `Metadata: ${element.metadataPath}` : undefined,
+		element.archiveDir ? `Archive: ${element.archiveDir}` : undefined,
+		element.commandsPath ? `Commands: ${element.commandsPath}` : undefined,
+		element.bundleJsonPath ? `Bundle: ${element.bundleJsonPath}` : undefined,
 		element.beforePath ? `Before: ${element.beforePath}` : undefined,
 		element.afterPath ? `After: ${element.afterPath}` : undefined,
 	].filter((part): part is string => Boolean(part)).join("\n");
@@ -1358,6 +1434,115 @@ function reportArtifactItems(entry: ReportRecord): SystemTreeItem[] {
 	));
 }
 
+function shellArchiveArtifactItems(archive: WanixShellArchiveRecord): SystemTreeItem[] {
+	const items: SystemTreeItem[] = [
+		leaf(`shell-archive:${archive.name}:index`, "Archive Index", pathDescription(archive.indexPath), "notebook", {
+			command: "workbench.openWanixPath",
+			title: "Open Shell Archive Index",
+			arguments: [archive.indexPath],
+		}, "wanixShellArchiveArtifact", { path: archive.indexPath }),
+		leaf(`shell-archive:${archive.name}:manifest`, "Manifest JSON", pathDescription(archive.manifestPath), "json", {
+			command: "workbench.openWanixPath",
+			title: "Open Shell Archive Manifest",
+			arguments: [archive.manifestPath],
+		}, "wanixShellArchiveArtifact", { path: archive.manifestPath }),
+		leaf(`shell-archive:${archive.name}:commands`, "Commands JSONL", pathDescription(archive.commandsPath), "list-flat", {
+			command: "workbench.openWanixPath",
+			title: "Open Shell Archive Commands",
+			arguments: [archive.commandsPath],
+		}, "wanixShellArchiveArtifact", { path: archive.commandsPath }),
+		leaf(`shell-archive:${archive.name}:summary`, "Grouped Summary", pathDescription(archive.summaryPath), "list-tree", {
+			command: "workbench.openWanixPath",
+			title: "Open Shell Archive Summary",
+			arguments: [archive.summaryPath],
+		}, "wanixShellArchiveArtifact", { path: archive.summaryPath }),
+		leaf(`shell-archive:${archive.name}:latest`, "Latest Tail", pathDescription(archive.latestMarkdownPath), "history", {
+			command: "workbench.openWanixPath",
+			title: "Open Shell Archive Latest Tail",
+			arguments: [archive.latestMarkdownPath],
+		}, "wanixShellArchiveArtifact", { path: archive.latestMarkdownPath }),
+		archiveActionLeaf(archive, "compare", "Compare With Live", archive.compareGeneratedAt ? "refresh report" : "write report", "diff", "workbench.compareShellHistoryArchive"),
+		archiveActionLeaf(archive, "export-bundle", "Export Bundle", archive.bundleGeneratedAt ? "refresh bundle" : "portable JSON", "package", "workbench.exportShellHistoryArchiveBundle"),
+	];
+	if (archive.compareGeneratedAt) {
+		items.push(
+			leaf(`shell-archive:${archive.name}:compare-report`, "Compare Report", shellArchiveCompareDescription(archive), "diff", {
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive Compare",
+				arguments: [archive.compareMarkdownPath],
+			}, "wanixShellArchiveArtifact", { path: archive.compareMarkdownPath }),
+			leaf(`shell-archive:${archive.name}:compare-json`, "Compare JSON", pathDescription(archive.compareJsonPath), "json", {
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive Compare JSON",
+				arguments: [archive.compareJsonPath],
+			}, "wanixShellArchiveArtifact", { path: archive.compareJsonPath }),
+		);
+	}
+	if (archive.bundleGeneratedAt) {
+		items.push(
+			leaf(`shell-archive:${archive.name}:bundle-report`, "Bundle Report", shellArchiveBundleDescription(archive), "package", {
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive Bundle",
+				arguments: [archive.bundleMarkdownPath],
+			}, "wanixShellArchiveArtifact", { path: archive.bundleMarkdownPath }),
+			leaf(`shell-archive:${archive.name}:bundle-json`, "Bundle JSON", pathDescription(archive.bundleJsonPath), "json", {
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive Bundle JSON",
+				arguments: [archive.bundleJsonPath],
+			}, "wanixShellArchiveArtifact", { path: archive.bundleJsonPath }),
+			archiveActionLeaf(archive, "import-bundle", "Import Bundle", archive.importGeneratedAt ? "rehydrate again" : "rehydrate archive", "cloud-download", "workbench.importShellHistoryArchiveBundle"),
+		);
+	}
+	if (archive.importGeneratedAt) {
+		items.push(
+			leaf(`shell-archive:${archive.name}:import-report`, "Import Report", archive.importGeneratedAt, "cloud-download", {
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive Import Report",
+				arguments: [archive.importMarkdownPath],
+			}, "wanixShellArchiveArtifact", { path: archive.importMarkdownPath }),
+			leaf(`shell-archive:${archive.name}:import-json`, "Import JSON", pathDescription(archive.importJsonPath), "json", {
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive Import JSON",
+				arguments: [archive.importJsonPath],
+			}, "wanixShellArchiveArtifact", { path: archive.importJsonPath }),
+		);
+	}
+	items.push(
+		archiveActionLeaf(archive, "restore", archive.wasLastRestored ? "Restore Again" : "Restore Live History", archive.wasLastRestored ? "last restored" : "replay records", "history", "workbench.restoreShellHistoryArchive"),
+		archiveActionLeaf(archive, "prune", "Prune This Archive", "delete archive dir", "trash", "workbench.pruneShellHistoryArchives"),
+		leaf(`shell-archive:${archive.name}:dir`, "Archive Directory", pathDescription(archive.archiveDir), "root-folder", {
+			command: "workbench.openWanixPath",
+			title: "Open Shell Archive Directory",
+			arguments: [archive.archiveDir],
+		}, "wanixShellArchiveArtifact", { path: archive.archiveDir }),
+	);
+	return items;
+}
+
+function archiveActionLeaf(
+	archive: WanixShellArchiveRecord,
+	id: string,
+	label: string,
+	description: string,
+	icon: string,
+	command: string,
+): SystemTreeItem {
+	const target = shellArchiveTarget(archive);
+	return leaf(`shell-archive:${archive.name}:action:${id}`, label, description, icon, {
+		command,
+		title: label,
+		arguments: [target],
+	}, "wanixShellArchiveAction", target);
+}
+
+function shellArchiveTarget(archive: WanixShellArchiveRecord): { archiveDir: string; commandsPath: string; bundleJsonPath: string } {
+	return {
+		archiveDir: archive.archiveDir,
+		commandsPath: archive.commandsPath,
+		bundleJsonPath: archive.bundleJsonPath,
+	};
+}
+
 function dataStoreArtifactItems(entry: DataStoreRecord): SystemTreeItem[] {
 	const items: SystemTreeItem[] = [
 		leaf(`data-store:${entry.id}:state`, "State File", pathDescription(entry.path), "database", {
@@ -1445,6 +1630,31 @@ function checkDescription(entry: CheckRecord): string {
 function reportDescription(entry: ReportRecord): string {
 	const detail = entry.description;
 	return detail ? `${detail} · ${pathDescription(entry.path)}` : pathDescription(entry.path);
+}
+
+function shellArchiveDescription(archive: WanixShellArchiveRecord): string {
+	const range = [archive.firstObservedAt, archive.lastObservedAt].filter((part): part is string => Boolean(part)).join(" to ");
+	const state = [
+		archive.compareGeneratedAt ? "compared" : undefined,
+		archive.bundleGeneratedAt ? "bundled" : undefined,
+		archive.importGeneratedAt ? "imported" : undefined,
+		archive.wasLastRestored ? "last restored" : undefined,
+	].filter((part): part is string => Boolean(part)).join(" · ");
+	return [
+		`${archive.commandCount} commands`,
+		range || archive.generatedAt,
+		state || undefined,
+	].filter((part): part is string => Boolean(part)).join(" · ");
+}
+
+function shellArchiveCompareDescription(archive: WanixShellArchiveRecord): string {
+	const counts = `${archive.archivedOnlyCount ?? "?"} archived-only, ${archive.liveOnlyCount ?? "?"} live-only`;
+	return archive.compareGeneratedAt ? `${counts} · ${archive.compareGeneratedAt}` : counts;
+}
+
+function shellArchiveBundleDescription(archive: WanixShellArchiveRecord): string {
+	const files = archive.bundleFileCount !== undefined ? formatClearCount(archive.bundleFileCount, "file") : "bundle";
+	return archive.bundleGeneratedAt ? `${files} · ${archive.bundleGeneratedAt}` : files;
 }
 
 function dataStoreDescription(entry: DataStoreRecord): string {
@@ -1630,6 +1840,50 @@ function reportJournalLines(entry: ReportRecord): string[] {
 	];
 }
 
+function shellArchiveSnapshot(archive: WanixShellArchiveRecord): object {
+	return {
+		name: archive.name,
+		archiveDir: displayJournalPath(archive.archiveDir),
+		commandCount: archive.commandCount,
+		generatedAt: archive.generatedAt,
+		firstObservedAt: archive.firstObservedAt,
+		lastObservedAt: archive.lastObservedAt,
+		indexPath: displayJournalPath(archive.indexPath),
+		manifestPath: displayJournalPath(archive.manifestPath),
+		commandsPath: displayJournalPath(archive.commandsPath),
+		summaryPath: displayJournalPath(archive.summaryPath),
+		latestMarkdownPath: displayJournalPath(archive.latestMarkdownPath),
+		compared: archive.compareGeneratedAt !== undefined,
+		compareGeneratedAt: archive.compareGeneratedAt,
+		compareMarkdownPath: displayJournalPath(archive.compareMarkdownPath),
+		compareJsonPath: displayJournalPath(archive.compareJsonPath),
+		archivedOnlyCount: archive.archivedOnlyCount,
+		liveOnlyCount: archive.liveOnlyCount,
+		bundled: archive.bundleGeneratedAt !== undefined,
+		bundleGeneratedAt: archive.bundleGeneratedAt,
+		bundleMarkdownPath: displayJournalPath(archive.bundleMarkdownPath),
+		bundleJsonPath: displayJournalPath(archive.bundleJsonPath),
+		bundleFileCount: archive.bundleFileCount,
+		imported: archive.importGeneratedAt !== undefined,
+		importGeneratedAt: archive.importGeneratedAt,
+		importMarkdownPath: displayJournalPath(archive.importMarkdownPath),
+		importJsonPath: displayJournalPath(archive.importJsonPath),
+		wasLastRestored: Boolean(archive.wasLastRestored),
+	};
+}
+
+function shellArchiveJournalLines(archive: WanixShellArchiveRecord): string[] {
+	return [
+		`- ${archive.name} - ${shellArchiveDescription(archive)}`,
+		`  - index: ${displayJournalPath(archive.indexPath)}`,
+		`  - commands: ${displayJournalPath(archive.commandsPath)}`,
+		archive.compareGeneratedAt ? `  - compare: ${displayJournalPath(archive.compareMarkdownPath)} (${shellArchiveCompareDescription(archive)})` : undefined,
+		archive.bundleGeneratedAt ? `  - bundle: ${displayJournalPath(archive.bundleMarkdownPath)} (${shellArchiveBundleDescription(archive)})` : undefined,
+		archive.importGeneratedAt ? `  - import: ${displayJournalPath(archive.importMarkdownPath)} (${archive.importGeneratedAt})` : undefined,
+		archive.wasLastRestored ? "  - restore: last restored into live history" : undefined,
+	].filter((line): line is string => line !== undefined);
+}
+
 function reportInventorySnapshot(entry: ReportRecord): object {
 	return {
 		id: entry.id,
@@ -1777,6 +2031,8 @@ function categoryIcon(id: CategoryId): vscode.ThemeIcon {
 			return new vscode.ThemeIcon("testing-view-icon");
 		case "reports":
 			return new vscode.ThemeIcon("notebook");
+		case "shellArchives":
+			return new vscode.ThemeIcon("archive");
 		case "dataStores":
 			return new vscode.ThemeIcon("database");
 		case "drivers":

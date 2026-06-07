@@ -549,6 +549,36 @@
           "group": "navigation@0"
         },
         {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && (viewItem == wanixShellArchive || viewItem == wanixShellArchiveWithBundle || viewItem == wanixShellArchiveArtifact)",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.compareShellHistoryArchive",
+          "when": "view == wanix.system && (viewItem == wanixShellArchive || viewItem == wanixShellArchiveWithBundle)",
+          "group": "navigation@1"
+        },
+        {
+          "command": "workbench.exportShellHistoryArchiveBundle",
+          "when": "view == wanix.system && (viewItem == wanixShellArchive || viewItem == wanixShellArchiveWithBundle)",
+          "group": "navigation@2"
+        },
+        {
+          "command": "workbench.importShellHistoryArchiveBundle",
+          "when": "view == wanix.system && viewItem == wanixShellArchiveWithBundle",
+          "group": "navigation@3"
+        },
+        {
+          "command": "workbench.restoreShellHistoryArchive",
+          "when": "view == wanix.system && (viewItem == wanixShellArchive || viewItem == wanixShellArchiveWithBundle)",
+          "group": "navigation@4"
+        },
+        {
+          "command": "workbench.pruneShellHistoryArchives",
+          "when": "view == wanix.system && (viewItem == wanixShellArchive || viewItem == wanixShellArchiveWithBundle)",
+          "group": "reset@1"
+        },
+        {
           "command": "workbench.openWanixDiff",
           "when": "view == wanix.system && viewItem == wanixAgentDiff",
           "group": "navigation@0"

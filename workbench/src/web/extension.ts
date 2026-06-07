@@ -8,7 +8,7 @@ import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } fro
 import { copyHttpAppUrl, createHttpApp, installHttpAppDemo, openHttpAppCatalog, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, previewHttpAppPath, previewHttpCatalogApp, publishHttpAppDataStores, publishHttpAppsToSystemView, type HttpAppCatalogTarget, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
-import { WanixSystemView, type WanixServiceTask, type WanixServiceTerminal } from './system-view.js';
+import { WanixSystemView, type WanixServiceTask, type WanixServiceTerminal, type WanixShellArchiveRecord } from './system-view.js';
 import { openDirectV86, openV86SharedDemo, V86_SHARED_DIR, V86_SHARED_LINUX_PATH, type V86SharedConfig } from './v86-shared-demo.js';
 import { ensureWasmStarter, installWasmStarter, WASM_STARTER_OUTPUT_PATH, WASM_STARTER_PATH } from './wasm-starter.js';
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
@@ -117,6 +117,12 @@ type ShellHistoryArchivePick = vscode.QuickPickItem & {
 	commandsPath: string;
 };
 
+type ShellHistoryArchiveTarget = {
+	archiveDir?: string;
+	commandsPath?: string;
+	bundleJsonPath?: string;
+};
+
 type ShellHistoryArchiveInfo = {
 	name: string;
 	archiveDir: string;
@@ -173,7 +179,7 @@ type ShellHistoryArchiveBundleImportPick = vscode.QuickPickItem & {
 };
 
 type ShellHistoryArchivePrunePick = vscode.QuickPickItem & {
-	retentionKind: "count" | "age";
+	retentionKind: "count" | "age" | "selected";
 	keepCount?: number;
 	ageMs?: number;
 };
@@ -492,41 +498,41 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
-		context.subscriptions.push(vscode.commands.registerCommand('workbench.exportShellHistoryArchiveBundle', async () => {
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.exportShellHistoryArchiveBundle', async (target?: ShellHistoryArchiveTarget) => {
 			try {
-				await exportShellHistoryArchiveBundle(fsys, bridge, systemView);
+				await exportShellHistoryArchiveBundle(fsys, bridge, systemView, target);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
-		context.subscriptions.push(vscode.commands.registerCommand('workbench.importShellHistoryArchiveBundle', async () => {
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.importShellHistoryArchiveBundle', async (target?: ShellHistoryArchiveTarget) => {
 			try {
-				await importShellHistoryArchiveBundle(fsys, bridge, systemView);
+				await importShellHistoryArchiveBundle(fsys, bridge, systemView, target);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
-		context.subscriptions.push(vscode.commands.registerCommand('workbench.compareShellHistoryArchive', async () => {
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.compareShellHistoryArchive', async (target?: ShellHistoryArchiveTarget) => {
 			try {
-				await compareShellHistoryArchive(fsys, bridge, systemView);
+				await compareShellHistoryArchive(fsys, bridge, systemView, target);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
-		context.subscriptions.push(vscode.commands.registerCommand('workbench.restoreShellHistoryArchive', async () => {
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.restoreShellHistoryArchive', async (target?: ShellHistoryArchiveTarget) => {
 			try {
-				await restoreShellHistoryArchive(fsys, bridge, systemView);
+				await restoreShellHistoryArchive(fsys, bridge, systemView, target);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
-		context.subscriptions.push(vscode.commands.registerCommand('workbench.pruneShellHistoryArchives', async () => {
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.pruneShellHistoryArchives', async (target?: ShellHistoryArchiveTarget) => {
 			try {
-				await pruneShellHistoryArchives(fsys, bridge, systemView);
+				await pruneShellHistoryArchives(fsys, bridge, systemView, target);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -1043,13 +1049,17 @@ async function archiveShellCommandHistory(
 	const archiveDir = `${SHELL_HISTORY_ARCHIVE_DIR}/${shellHistoryArchiveId(generatedAt)}`;
 	const paths = await writeShellHistoryArchiveArtifacts(fsys, entries, archiveDir, generatedAt);
 	const indexPath = `${archiveDir}/index.md`;
-	publishShellCommandHistoryArchiveReport(systemView, archiveDir, paths);
+	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
+	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	const reportPaths = [...paths, ...inventoryPaths];
+	publishShellCommandHistoryArchiveReport(systemView, archiveDir, reportPaths);
 	systemView.filesystemActivity("shell command history archived", {
 		description: `${entries.length} commands exported`,
 		path: indexPath,
-		paths,
+		paths: reportPaths,
 	});
-	await refreshWanixPaths(bridge, [SHELL_HISTORY_ARCHIVE_DIR, archiveDir, ...paths]);
+	await refreshWanixPaths(bridge, [SHELL_HISTORY_ARCHIVE_DIR, archiveDir, ...reportPaths]);
 	await openWanixPath(indexPath);
 	vscode.window.showInformationMessage(`Archived qjs shell history: ${entries.length} commands`);
 }
@@ -1061,6 +1071,7 @@ async function openShellHistoryArchiveInventory(
 ): Promise<void> {
 	const inventory = await shellHistoryArchiveInventory(fsys, new Date());
 	const paths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
 	publishShellHistoryArchiveInventoryReport(systemView, paths);
 	systemView.filesystemActivity("shell archive inventory published", {
 		description: `${inventory.archives.length} archives`,
@@ -1076,25 +1087,19 @@ async function exportShellHistoryArchiveBundle(
 	fsys: any,
 	bridge: WanixBridge,
 	systemView: WanixSystemView,
+	target?: ShellHistoryArchiveTarget,
 ): Promise<void> {
-	const archives = await shellHistoryArchiveInfos(fsys);
-	if (archives.length === 0) {
-		throw new Error("No qjs shell history archives yet. Use Archive Shell Command History first.");
-	}
-	const pick = await vscode.window.showQuickPick(shellHistoryArchiveBundlePicks(archives), {
-		placeHolder: "Export qjs shell history archive bundle",
-		matchOnDescription: true,
-		matchOnDetail: true,
-	});
-	if (!pick) {
+	const targetedArchive = await shellHistoryArchiveInfoForTarget(fsys, target);
+	const archive = targetedArchive || await pickShellHistoryArchiveBundle(fsys);
+	if (!archive) {
 		return;
 	}
-	const archive = pick.archive;
 	const generatedAt = new Date();
 	const bundle = await shellHistoryArchiveBundle(fsys, archive, generatedAt);
 	const paths = await writeShellHistoryArchiveBundle(fsys, bundle);
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
 	const reportPaths = [...paths, ...inventoryPaths];
 	publishShellHistoryArchiveBundleReport(systemView, archive, reportPaths);
 	systemView.filesystemActivity("shell archive bundle exported", {
@@ -1111,16 +1116,9 @@ async function importShellHistoryArchiveBundle(
 	fsys: any,
 	bridge: WanixBridge,
 	systemView: WanixSystemView,
+	target?: ShellHistoryArchiveTarget,
 ): Promise<void> {
-	const picks = await shellHistoryArchiveBundleImportPicks(fsys);
-	if (picks.length === 0) {
-		throw new Error("No shell archive bundle found. Open a bundle.json editor or use Export Shell Archive Bundle first.");
-	}
-	const pick = await vscode.window.showQuickPick(picks, {
-		placeHolder: "Import qjs shell history archive bundle",
-		matchOnDescription: true,
-		matchOnDetail: true,
-	});
+	const pick = await shellHistoryArchiveBundleImportPick(fsys, target);
 	if (!pick) {
 		return;
 	}
@@ -1129,6 +1127,7 @@ async function importShellHistoryArchiveBundle(
 	const paths = await rehydrateShellHistoryArchiveBundle(fsys, parsed, pick.sourcePath, generatedAt);
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
 	const reportPaths = [...paths, ...inventoryPaths];
 	publishShellHistoryArchiveImportReport(systemView, parsed.archive, reportPaths);
 	systemView.filesystemActivity("shell archive bundle imported", {
@@ -1145,16 +1144,9 @@ async function compareShellHistoryArchive(
 	fsys: any,
 	bridge: WanixBridge,
 	systemView: WanixSystemView,
+	target?: ShellHistoryArchiveTarget,
 ): Promise<void> {
-	const picks = await shellHistoryArchivePicks(fsys);
-	if (picks.length === 0) {
-		throw new Error("No qjs shell history archives yet. Use Archive Shell Command History first.");
-	}
-	const pick = await vscode.window.showQuickPick(picks, {
-		placeHolder: "Compare qjs shell history archive with current live history",
-		matchOnDescription: true,
-		matchOnDetail: true,
-	});
+	const pick = await pickShellHistoryArchive(fsys, target, "Compare qjs shell history archive with current live history");
 	if (!pick) {
 		return;
 	}
@@ -1163,14 +1155,18 @@ async function compareShellHistoryArchive(
 	const generatedAt = new Date();
 	const comparison = shellHistoryArchiveComparison(pick.archiveDir, archiveEntries, liveEntries, generatedAt);
 	const paths = await writeShellHistoryArchiveComparison(fsys, comparison);
+	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
+	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
 	const comparePath = `${pick.archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`;
-	publishShellCommandHistoryArchiveCompareReport(systemView, pick.archiveDir, paths);
+	const reportPaths = [...paths, ...inventoryPaths];
+	publishShellCommandHistoryArchiveCompareReport(systemView, pick.archiveDir, reportPaths);
 	systemView.filesystemActivity("shell history archive compared", {
 		description: `${comparison.archivedOnly.length} archived-only, ${comparison.liveOnly.length} live-only`,
 		path: comparePath,
-		paths,
+		paths: reportPaths,
 	});
-	await refreshWanixPaths(bridge, [pick.archiveDir, ...paths]);
+	await refreshWanixPaths(bridge, [pick.archiveDir, SHELL_HISTORY_ARCHIVE_DIR, ...reportPaths]);
 	await openWanixPath(comparePath);
 	vscode.window.showInformationMessage(`Compared qjs shell archive: ${comparison.archivedOnly.length} archived-only, ${comparison.liveOnly.length} live-only`);
 }
@@ -1179,16 +1175,9 @@ async function restoreShellHistoryArchive(
 	fsys: any,
 	bridge: WanixBridge,
 	systemView: WanixSystemView,
+	target?: ShellHistoryArchiveTarget,
 ): Promise<void> {
-	const picks = await shellHistoryArchivePicks(fsys);
-	if (picks.length === 0) {
-		throw new Error("No qjs shell history archives yet. Use Archive Shell Command History first.");
-	}
-	const pick = await vscode.window.showQuickPick(picks, {
-		placeHolder: "Restore qjs shell history archive into the live history view",
-		matchOnDescription: true,
-		matchOnDetail: true,
-	});
+	const pick = await pickShellHistoryArchive(fsys, target, "Restore qjs shell history archive into the live history view");
 	if (!pick) {
 		return;
 	}
@@ -1211,14 +1200,17 @@ async function restoreShellHistoryArchive(
 	});
 	await fsys.writeFile(SHELL_HISTORY_RESTORE_JSON_PATH, shellHistoryRestoreJson(pick.archiveDir, archiveEntries, liveEntries, generatedAt));
 	await fsys.writeFile(SHELL_HISTORY_RESTORE_MD_PATH, shellHistoryRestoreMarkdown(pick.archiveDir, archiveEntries, liveEntries, generatedAt));
-	const reportPaths = [SHELL_HISTORY_RESTORE_MD_PATH, SHELL_HISTORY_RESTORE_JSON_PATH, ...paths];
+	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
+	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	const reportPaths = [SHELL_HISTORY_RESTORE_MD_PATH, SHELL_HISTORY_RESTORE_JSON_PATH, ...paths, ...inventoryPaths];
 	publishShellCommandHistoryRestoreReport(systemView, reportPaths);
 	systemView.filesystemActivity("shell history archive restored", {
 		description: `${archiveEntries.length} commands restored`,
 		path: SHELL_HISTORY_RESTORE_MD_PATH,
 		paths: reportPaths,
 	});
-	await refreshWanixPaths(bridge, [".wanix/qjs-shell", ...reportPaths]);
+	await refreshWanixPaths(bridge, [".wanix/qjs-shell", SHELL_HISTORY_ARCHIVE_DIR, ...reportPaths]);
 	await openWanixPath(SHELL_HISTORY_RESTORE_MD_PATH);
 	vscode.window.showInformationMessage(`Restored qjs shell history archive: ${archiveEntries.length} commands`);
 }
@@ -1227,21 +1219,25 @@ async function pruneShellHistoryArchives(
 	fsys: any,
 	bridge: WanixBridge,
 	systemView: WanixSystemView,
+	target?: ShellHistoryArchiveTarget,
 ): Promise<void> {
 	const archives = await shellHistoryArchiveInfos(fsys);
 	if (archives.length === 0) {
 		throw new Error("No qjs shell history archives yet. Use Archive Shell Command History first.");
 	}
 	const now = Date.now();
-	const pick = await vscode.window.showQuickPick(shellHistoryArchivePrunePicks(archives, now), {
-		placeHolder: "Prune qjs shell history archives",
-		matchOnDescription: true,
-		matchOnDetail: true,
-	});
+	const targetedArchive = await shellHistoryArchiveInfoForTarget(fsys, target, archives);
+	const pick = targetedArchive
+		? shellHistorySingleArchivePrunePick(targetedArchive)
+		: await vscode.window.showQuickPick(shellHistoryArchivePrunePicks(archives, now), {
+			placeHolder: "Prune qjs shell history archives",
+			matchOnDescription: true,
+			matchOnDetail: true,
+		});
 	if (!pick) {
 		return;
 	}
-	const removed = shellHistoryArchivesToPrune(archives, pick, now);
+	const removed = targetedArchive ? [targetedArchive] : shellHistoryArchivesToPrune(archives, pick, now);
 	if (removed.length === 0) {
 		await openShellHistoryArchiveInventory(fsys, bridge, systemView);
 		vscode.window.showInformationMessage(`No qjs shell archives matched ${pick.label}; refreshed archive inventory`);
@@ -1262,6 +1258,7 @@ async function pruneShellHistoryArchives(
 	const remaining = await shellHistoryArchiveInfos(fsys);
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt, remaining);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
 	const prunePaths = await writeShellHistoryArchivePruneReport(fsys, generatedAt, pick, removed, remaining);
 	const paths = [...prunePaths, ...inventoryPaths];
 	publishShellHistoryArchivePruneReport(systemView, paths);
@@ -1431,6 +1428,110 @@ async function shellHistoryArchivePicks(fsys: any): Promise<ShellHistoryArchiveP
 		});
 	}
 	return picks;
+}
+
+async function pickShellHistoryArchive(
+	fsys: any,
+	target: ShellHistoryArchiveTarget | undefined,
+	placeHolder: string,
+): Promise<ShellHistoryArchivePick | undefined> {
+	const targetedArchive = await shellHistoryArchiveInfoForTarget(fsys, target);
+	if (targetedArchive) {
+		return shellHistoryArchivePickFromInfo(targetedArchive);
+	}
+	const picks = await shellHistoryArchivePicks(fsys);
+	if (picks.length === 0) {
+		throw new Error("No qjs shell history archives yet. Use Archive Shell Command History first.");
+	}
+	const pick = await vscode.window.showQuickPick(picks, {
+		placeHolder,
+		matchOnDescription: true,
+		matchOnDetail: true,
+	});
+	return pick || undefined;
+}
+
+async function pickShellHistoryArchiveBundle(fsys: any): Promise<ShellHistoryArchiveInfo | undefined> {
+	const archives = await shellHistoryArchiveInfos(fsys);
+	if (archives.length === 0) {
+		throw new Error("No qjs shell history archives yet. Use Archive Shell Command History first.");
+	}
+	const pick = await vscode.window.showQuickPick(shellHistoryArchiveBundlePicks(archives), {
+		placeHolder: "Export qjs shell history archive bundle",
+		matchOnDescription: true,
+		matchOnDetail: true,
+	});
+	return pick?.archive;
+}
+
+async function shellHistoryArchiveBundleImportPick(
+	fsys: any,
+	target?: ShellHistoryArchiveTarget,
+): Promise<ShellHistoryArchiveBundleImportPick | undefined> {
+	const targetedArchive = await shellHistoryArchiveInfoForTarget(fsys, target);
+	if (targetedArchive) {
+		let bundleText = "";
+		try {
+			bundleText = await fsys.readText(targetedArchive.bundleJsonPath);
+		} catch {
+			throw new Error(`Archive ${shellHistoryAbsolutePath(targetedArchive.archiveDir)} has no bundle.json yet. Use Export Bundle first.`);
+		}
+		return {
+			label: targetedArchive.name,
+			description: "import archive bundle",
+			detail: shellHistoryAbsolutePath(targetedArchive.bundleJsonPath),
+			bundleText,
+			sourcePath: targetedArchive.bundleJsonPath,
+		};
+	}
+	const picks = await shellHistoryArchiveBundleImportPicks(fsys);
+	if (picks.length === 0) {
+		throw new Error("No shell archive bundle found. Open a bundle.json editor or use Export Shell Archive Bundle first.");
+	}
+	const pick = await vscode.window.showQuickPick(picks, {
+		placeHolder: "Import qjs shell history archive bundle",
+		matchOnDescription: true,
+		matchOnDetail: true,
+	});
+	return pick || undefined;
+}
+
+async function shellHistoryArchiveInfoForTarget(
+	fsys: any,
+	target?: ShellHistoryArchiveTarget,
+	archives?: ShellHistoryArchiveInfo[],
+): Promise<ShellHistoryArchiveInfo | undefined> {
+	const archiveDir = shellHistoryArchiveTargetDir(target);
+	if (!archiveDir) {
+		return undefined;
+	}
+	const candidates = archives || await shellHistoryArchiveInfos(fsys);
+	const found = candidates.find((archive) => shellHistoryRelativePath(archive.archiveDir) === archiveDir);
+	if (!found) {
+		throw new Error(`Shell history archive not found: ${shellHistoryAbsolutePath(archiveDir)}`);
+	}
+	return found;
+}
+
+function shellHistoryArchiveTargetDir(target?: ShellHistoryArchiveTarget): string | undefined {
+	if (!target || typeof target.archiveDir !== "string" || target.archiveDir.length === 0) {
+		return undefined;
+	}
+	const archiveDir = shellHistoryRelativePath(target.archiveDir);
+	if (!archiveDir.startsWith(`${SHELL_HISTORY_ARCHIVE_DIR}/`) || archiveDir === SHELL_HISTORY_ARCHIVE_DIR) {
+		throw new Error(`Invalid shell archive target: ${target.archiveDir}`);
+	}
+	return archiveDir;
+}
+
+function shellHistoryArchivePickFromInfo(archive: ShellHistoryArchiveInfo): ShellHistoryArchivePick {
+	return {
+		label: archive.name,
+		description: `${archive.commandCount} commands`,
+		detail: [archive.generatedAt, shellHistoryAbsolutePath(archive.archiveDir)].join(" - "),
+		archiveDir: archive.archiveDir,
+		commandsPath: archive.commandsPath,
+	};
 }
 
 async function shellHistoryReadDirNames(fsys: any, path: string): Promise<string[]> {
@@ -2038,6 +2139,15 @@ function shellHistoryArchivePruneDescription(total: number, removed: number): st
 	return removed > 0 ? `${total} -> ${total - removed} archives, remove ${removed}` : `${total} archives already fit`;
 }
 
+function shellHistorySingleArchivePrunePick(archive: ShellHistoryArchiveInfo): ShellHistoryArchivePrunePick {
+	return {
+		label: `Prune ${archive.name}`,
+		description: `${archive.commandCount} commands`,
+		detail: "Delete this timestamped archive directory; live shell history is not changed.",
+		retentionKind: "selected",
+	};
+}
+
 function shellHistoryArchivesToPrune(
 	archives: ShellHistoryArchiveInfo[],
 	pick: ShellHistoryArchivePrunePick,
@@ -2047,6 +2157,9 @@ function shellHistoryArchivesToPrune(
 	if (pick.retentionKind === "count") {
 		const keepCount = Math.max(1, pick.keepCount ?? sorted.length);
 		return sorted.slice(keepCount);
+	}
+	if (pick.retentionKind === "selected") {
+		return [];
 	}
 	const cutoff = now - Math.max(0, pick.ageMs ?? 0);
 	return sorted.filter((archive) => {
@@ -2067,6 +2180,10 @@ async function removeShellHistoryArchiveDir(fsys: any, archiveDir: string): Prom
 	for (const path of [
 		`${archiveDir}/${SHELL_HISTORY_COMPARE_JSON_NAME}`,
 		`${archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`,
+		`${archiveDir}/${SHELL_HISTORY_ARCHIVE_BUNDLE_JSON_NAME}`,
+		`${archiveDir}/${SHELL_HISTORY_ARCHIVE_BUNDLE_MD_NAME}`,
+		`${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_JSON_NAME}`,
+		`${archiveDir}/${SHELL_HISTORY_ARCHIVE_IMPORT_MD_NAME}`,
 		`${archiveDir}/latest.json`,
 		`${archiveDir}/latest.md`,
 		`${archiveDir}/summary.md`,
@@ -3133,6 +3250,13 @@ function publishShellHistoryArchiveInventoryReport(
 		icon: "list-tree",
 		artifacts: paths,
 	});
+}
+
+function publishShellArchiveInventoryToSystemView(
+	systemView: WanixSystemView,
+	archives: WanixShellArchiveRecord[],
+): void {
+	systemView.shellArchiveInventoryPublished(archives);
 }
 
 function publishShellHistoryArchiveBundleReport(
