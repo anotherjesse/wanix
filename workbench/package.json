@@ -121,6 +121,12 @@
         "icon": "$(tools)"
       },
       {
+        "command": "workbench.openAgentToolContract",
+        "title": "Open Agent Tool Contract",
+        "category": "Wanix",
+        "icon": "$(symbol-method)"
+      },
+      {
         "command": "workbench.clearFinishedSystemRows",
         "title": "Clear Finished Rows",
         "category": "Wanix",

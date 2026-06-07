@@ -455,6 +455,17 @@ repair the qjs file the user is already looking at.
 
 ![One-click Wanix agent repair demo](assets/wanix-workbench-browser-dx/52-one-click-agent-repair.png)
 
+The agent tool surface is now a Wanix artifact too. `Open Agent Tool Contract`
+writes `/.wanix/agent-tools.md` and `/.wanix/agent-tools.json`, opens the
+markdown contract, and records the write in both the Agent section and Activity.
+The JSON uses the explicit `wanix.agent-tools.v1` schema and names the current
+repair backend, service roots, policies, repair-demo loop, and tools such as
+`readFile`, `writeFile`, `runTask`, `observeTask`, `previewHttpRoute`, and
+`writeSystemSnapshot`. This is the shape a Codex app-server engine can attach to
+without changing the Wanix-facing contract.
+
+![Wanix agent tool contract](assets/wanix-workbench-browser-dx/57-agent-tool-contract.png)
+
 The cockpit now has a capstone button too. `Run OS Cockpit Tour` runs the story
 as one visible system operation: it seeds the v86 shared-files workspace, runs
 the qjs -> WASM -> qjs duet, previews a stateful qjs HTTP route, previews a
@@ -745,6 +756,9 @@ The one-click action matters for demos because it removes the last bit of
 coordination: no command palette, no title-bar hunting, no active-editor
 assumption. The system view can bootstrap the broken program, operate it, and
 leave the report behind.
+The agent tool contract makes that operation boundary explicit before a repair
+runs, so an external engine can use the same Wanix-shaped tools instead of
+learning behavior from UI affordances.
 
 The cockpit tour does the same thing for the whole sprint arc. It makes the
 system prove itself in one pass, then leaves a report that tells people where to
@@ -840,18 +854,20 @@ The current loop is:
     output, exit, and transcript capture state.
 47. Click `Clear Finished Rows` when old exited tasks and closed terminals are
     crowding the sidebar.
-48. Click `Run Agent Repair Demo` to install `/agent/broken.js`, run it, repair
+48. Click `Open Agent Tool Contract` to write `/.wanix/agent-tools.md` and
+    `/.wanix/agent-tools.json`.
+49. Click `Run Agent Repair Demo` to install `/agent/broken.js`, run it, repair
     it, rerun it, and open the generated report.
-49. Watch the `Agent` section list the repair loop: read, run, observe, edit,
+50. Watch the `Agent` section list the repair loop: read, run, observe, edit,
     rerun, capture transcripts, and verify `agent/out/result.txt`.
-50. Click an Agent row with an artifact to reopen the source, transcript, or
+51. Click an Agent row with an artifact to reopen the source, transcript, or
     result file from the same system panel.
-51. Click `diff broken.js` to reopen the before/after repair diff from
+52. Click `diff broken.js` to reopen the before/after repair diff from
     `/agent/out`.
-52. Click `write repair report` or open
+53. Click `write repair report` or open
     `/agent/out/broken.repair-report.md` to inspect the complete repair trace:
     operation list, task ids, transcript paths, snapshots, result, and status.
-53. Use the System action row `Fix Current Wanix Program` when the current
+54. Use the System action row `Fix Current Wanix Program` when the current
     editor is a qjs file and you want to apply the same repair contract outside
     the canned demo.
 
