@@ -54,6 +54,80 @@ export function repairQjsProgram(source: string): string {
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
+type AgentStep = (label: string, options?: { icon?: string; path?: string; description?: string }) => void;
+
+// Drive the #agent device to mediate a repair: open a session, submit the patch
+// plan as an `approve:`-prefixed prompt so the device parks an approval request,
+// resolve it through `ctl`, then return the approved patch for the caller to
+// apply. The served #agent runs the deterministic FakeEngine (no filesystem
+// access), so the cockpit computes the concrete patch while the device owns the
+// session identity and the approval trust-gate. `onStep` records each device
+// interaction in the Agent trace. Falls back to the in-process patch only if the
+// device is unreachable (services disabled), so the demo never hard-fails.
+export async function repairViaAgent(
+	fsys: any,
+	source: string,
+	onStep: AgentStep = () => {},
+): Promise<string> {
+	const repaired = repairQjsProgram(source);
+	if (repaired === source) {
+		return source;
+	}
+	let id: string;
+	try {
+		id = await allocSession(fsys);
+	} catch (error: unknown) {
+		log(`#agent/new unavailable, applying patch directly: ${String(error)}`);
+		onStep("#agent unavailable; applied patch directly", { icon: "warning" });
+		return repaired;
+	}
+	const sessionDir = `${AGENT_DEVICE}/${id}`;
+	onStep(`open #agent session ${id}`, { icon: "comment-discussion", path: `${sessionDir}/events` });
+	const plan = "declare missingValue so /agent/broken.js writes out/result.txt";
+	await fsys.writeFile(stripLeading(`${sessionDir}/prompt`), encoder.encode(`approve: ${plan}`));
+	onStep("propose patch to #agent", { icon: "comment", path: `${sessionDir}/prompt` });
+	try {
+		await approveAgentPlan(fsys, id, sessionDir, onStep);
+	} finally {
+		try {
+			await fsys.writeFile(stripLeading(`${sessionDir}/ctl`), encoder.encode("close\n"));
+		} catch (error: unknown) {
+			console.warn("Wanix agent close failed", error);
+		}
+	}
+	return repaired;
+}
+
+// Poll the non-blocking `pending` snapshot until the device parks the approval,
+// then resolve it via `ctl approve`. Uses snapshot reads (pending) rather than
+// the streaming events file so it never blocks the extension host.
+async function approveAgentPlan(
+	fsys: any,
+	id: string,
+	sessionDir: string,
+	onStep: AgentStep,
+): Promise<void> {
+	const deadline = Date.now() + 15_000;
+	while (Date.now() < deadline) {
+		const raw = decoder.decode(await fsys.readFile(stripLeading(`${sessionDir}/pending`)));
+		const requests = parsePending(raw);
+		if (requests.length > 0) {
+			for (const request of requests) {
+				onStep(`approval needed: ${request.action}`, { icon: "shield", path: `${sessionDir}/pending` });
+				log(`#agent/${id}/ctl <- approve ${request.id}`);
+				await fsys.writeFile(
+					stripLeading(`${sessionDir}/ctl`),
+					encoder.encode(`approve ${request.id}\n`),
+				);
+				onStep("approved via #agent ctl", { icon: "pass", path: `${sessionDir}/ctl` });
+			}
+			return;
+		}
+		await sleep(120);
+	}
+	throw new Error("Wanix #agent did not surface an approval request in time");
+}
+
 type PendingRequest = { id: string; action: string };
 type StreamEvent = { t: string; [k: string]: unknown };
 

@@ -1,7 +1,7 @@
 
 import * as vscode from 'vscode';
 import { openAgentToolContract, writeAgentToolContract } from './agent-tool-contract.js';
-import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairQjsProgram } from './agent-repair-demo.js';
+import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairViaAgent } from './agent-repair-demo.js';
 import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
 import { COCKPIT_SELF_CHECK_JSON_PATH, COCKPIT_SELF_CHECK_MD_PATH, COCKPIT_SELF_CHECK_PROBE_PATH, runCockpitSelfCheck } from './cockpit-self-check.js';
 import { createQjsStarter } from './qjs-starter.js';
@@ -1426,7 +1426,7 @@ async function repairWanixProgramTarget(
 			: "";
 		const observation = agentObservation(firstCode, firstTranscript);
 		agentStep(`observe ${observation}`, { icon: firstCode === 0 ? "pass" : "warning", exitCode: firstCode });
-		const repaired = repairQjsProgram(source);
+		const repaired = await repairViaAgent(fsys, source, agentStep);
 		if (repaired === source && firstCode === 0) {
 			agentStep("already repaired", { icon: "pass", path: target.path });
 			const path = await writeReport("already repaired");
