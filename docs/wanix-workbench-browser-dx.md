@@ -143,6 +143,15 @@ workbench -> Linux -> workbench file loop.
 
 ![Wanix v86 shared files demo](assets/wanix-workbench-browser-dx/34-v86-shared-files-demo.png)
 
+That loop is now live instead of manual. Opening the v86 shared-files demo arms
+a `/shared` watcher in the System view. When a Linux guest writes
+`/shared/from-linux.txt` through the shared 9P filesystem, the workbench refreshes
+the changed path and records it in Activity, so the browser side becomes a
+dashboard for guest-visible filesystem traffic instead of a page you remember to
+refresh.
+
+![Wanix v86 shared watch Activity](assets/wanix-workbench-browser-dx/48-v86-shared-watch-activity.png)
+
 The next polish pass removed another bit of demo friction: you no longer need
 to hand-copy a WASM fixture into the served root. The Wanix system view has an
 `Open JS and WASM Duet Demo` action. It creates missing starter files:
@@ -698,10 +707,11 @@ The current loop is:
     opens it.
 22. Edit `duet/producer.js`, run the guided duet without losing the edit, then
     explicitly reset the duet when you want the starter files back.
-23. Click `Open v86 Shared Files Demo` to seed `/shared/message.txt` and read
-    the direct-v86 launch and 9P mount instructions.
+23. Click `Open v86 Shared Files Demo` to seed `/shared/message.txt`, arm the
+    `/shared` watcher, and read the direct-v86 launch and 9P mount instructions.
 24. Open the `direct-v86` route when a prepared rootfs is available, then have
-    Linux read `/shared/message.txt` and write `/shared/from-linux.txt`.
+    Linux read `/shared/message.txt` and write `/shared/from-linux.txt`; the
+    changed file appears in Activity without a manual Explorer refresh.
 25. Click `Install HTTP App Demo` to create and open `apps/hello.js`.
 26. Open
     `/.wanix/app/hello?from=browser` to get an HTTP response from a Wanix task.

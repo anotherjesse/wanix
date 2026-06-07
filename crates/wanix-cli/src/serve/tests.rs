@@ -713,6 +713,10 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
         "{response}"
     );
     assert!(
+        response.contains("Cache-Control: no-store\r\n"),
+        "{response}"
+    );
+    assert!(
         response.contains(
             "const discoveryUrl = new URL(\"/.well-known/wanix.json\", location.href).href"
         ),
@@ -877,6 +881,10 @@ fn serve_once_returns_workbench_assets_outside_served_root() {
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(
         response.contains("Content-Type: text/javascript; charset=utf-8\r\n"),
+        "{response}"
+    );
+    assert!(
+        response.contains("Cache-Control: no-store\r\n"),
         "{response}"
     );
     assert!(!response.ends_with("not bundled"), "{response}");

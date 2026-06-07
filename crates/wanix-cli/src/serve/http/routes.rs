@@ -9,6 +9,8 @@ use super::super::html::bundle_html;
 use super::app::app_route_response;
 use super::{HttpStatus, StaticResponse, read_static_response, request_target};
 
+const LOCAL_BUNDLE_CACHE_CONTROL: &str = "no-store";
+
 pub(super) fn http_route_response(
     roots: &ServeRoots,
     relative_path: &Path,
@@ -188,12 +190,15 @@ fn query_param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
 
 fn bundle_html_response(bundle: &str) -> Option<StaticResponse> {
     let html = bundle_html(bundle)?;
-    Some(StaticResponse {
-        status: HttpStatus::Ok,
-        content_type: "text/html; charset=utf-8",
-        headers: Vec::new(),
-        body: html.into_bytes(),
-    })
+    Some(
+        StaticResponse {
+            status: HttpStatus::Ok,
+            content_type: "text/html; charset=utf-8",
+            headers: Vec::new(),
+            body: html.into_bytes(),
+        }
+        .with_header("Cache-Control", LOCAL_BUNDLE_CACHE_CONTROL),
+    )
 }
 
 fn workbench_asset_response(roots: &ServeRoots, relative_path: &Path) -> Option<StaticResponse> {
@@ -202,7 +207,10 @@ fn workbench_asset_response(roots: &ServeRoots, relative_path: &Path) -> Option<
     }
     let asset_path = workbench_asset_path(relative_path)?;
     let asset_root = workbench_asset_root()?;
-    Some(read_static_response(&asset_root, asset_path))
+    Some(
+        read_static_response(&asset_root, asset_path)
+            .with_header("Cache-Control", LOCAL_BUNDLE_CACHE_CONTROL),
+    )
 }
 
 fn workbench_asset_path(relative_path: &Path) -> Option<&Path> {

@@ -2,10 +2,13 @@ import * as vscode from 'vscode';
 import { WanixBridge } from './bridge.js';
 import { WanixSystemView } from './system-view.js';
 
-const SHARED_DIR = "/shared";
+export const V86_SHARED_DIR = "/shared";
+export const V86_SHARED_LINUX_PATH = `${V86_SHARED_DIR}/from-linux.txt`;
+
+const SHARED_DIR = V86_SHARED_DIR;
 const README_PATH = `${SHARED_DIR}/README.md`;
 const MESSAGE_PATH = `${SHARED_DIR}/message.txt`;
-const LINUX_PATH = `${SHARED_DIR}/from-linux.txt`;
+const LINUX_PATH = V86_SHARED_LINUX_PATH;
 
 const STARTER_MESSAGE = "hello from Wanix workbench\n";
 const LINUX_PLACEHOLDER = "Linux/v86 has not written here yet.\n";
@@ -127,7 +130,9 @@ cat /mnt/wanix/shared/message.txt
 printf 'from linux\\n' > /mnt/wanix/shared/from-linux.txt
 \`\`\`
 
-Back in the workbench, refresh Explorer and open ${LINUX_PATH}.
+Back in the workbench, the Wanix System view watches ${SHARED_DIR}. When Linux
+writes ${LINUX_PATH}, Activity should show the changed file and Explorer should
+refresh around it.
 `;
 }
 

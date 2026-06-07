@@ -7,7 +7,7 @@ import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView, type WanixServiceTask, type WanixServiceTerminal } from './system-view.js';
-import { openDirectV86, openV86SharedDemo, type V86SharedConfig } from './v86-shared-demo.js';
+import { openDirectV86, openV86SharedDemo, V86_SHARED_DIR, V86_SHARED_LINUX_PATH, type V86SharedConfig } from './v86-shared-demo.js';
 import { ensureWasmStarter, installWasmStarter, WASM_STARTER_OUTPUT_PATH, WASM_STARTER_PATH } from './wasm-starter.js';
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
 //@ts-ignore
@@ -69,6 +69,7 @@ const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = 
 const TASK_OUTPUT_DIR = ".wanix/tasks";
 const TASK_OUTPUT_MAX_CHARS = 512 * 1024;
 const SERVICE_STATE_POLL_MS = 1000;
+const SHARED_DIRECTORY_POLL_MS = 1500;
 
 export async function activate(context: vscode.ExtensionContext) {
 	if (typeof navigator !== 'object') {	// do not run under node.js
@@ -97,6 +98,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	};
 	const activeTaskTerminals = new Map<TaskRunKind, vscode.Terminal>();
 	const taskTerminals = new Map<string, vscode.Terminal>();
+	let sharedWatcher: WanixSharedDirectoryWatcher | undefined;
 	context.subscriptions.push(bridge);
 	context.subscriptions.push(bridge.onDidWanixMutation((mutation) => {
 		const activity = bridgeMutationActivity(mutation);
@@ -131,6 +133,11 @@ export async function activate(context: vscode.ExtensionContext) {
 		);
 		systemView.configure(config);
 		context.subscriptions.push(startWanixServiceStatePolling(fsys, config, systemView));
+		sharedWatcher = new WanixSharedDirectoryWatcher(fsys, bridge, systemView);
+		context.subscriptions.push(sharedWatcher);
+		if (config.v86?.launchUrl) {
+			sharedWatcher.start();
+		}
 		revealWanixSystemView();
 		fsys.logger = (...args: any[]) => {
 			// console.log(...args);
@@ -216,6 +223,12 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openV86SharedDemo', async () => {
 			try {
 				await openV86SharedDemo(fsys, bridge, config, systemView);
+				await sharedWatcher?.resetBaseline();
+				sharedWatcher?.start();
+				systemView.filesystemActivity("v86 shared watch armed", {
+					path: V86_SHARED_LINUX_PATH,
+					paths: [V86_SHARED_DIR, V86_SHARED_LINUX_PATH],
+				});
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -612,6 +625,147 @@ function serviceTaskLabel(kind: string, cmd: string): string {
 		return baseName(words[0]);
 	}
 	return kind;
+}
+
+type SharedDirectoryEntry = {
+	path: string;
+	isDir: boolean;
+	size: number;
+	modTime: number;
+};
+
+class WanixSharedDirectoryWatcher implements vscode.Disposable {
+	private baseline = new Map<string, string>();
+	private baselineInitialized = false;
+	private interval: ReturnType<typeof setInterval> | undefined;
+	private started = false;
+	private inFlight = false;
+	private warned = false;
+
+	constructor(
+		private readonly fsys: any,
+		private readonly bridge: WanixBridge,
+		private readonly systemView: WanixSystemView,
+	) {}
+
+	start(): void {
+		if (this.started) {
+			return;
+		}
+		this.started = true;
+		this.interval = setInterval(() => {
+			void this.poll();
+		}, SHARED_DIRECTORY_POLL_MS);
+		void this.poll();
+	}
+
+	async resetBaseline(): Promise<void> {
+		this.baseline = await this.snapshot();
+		this.baselineInitialized = true;
+	}
+
+	dispose(): void {
+		this.started = false;
+		if (this.interval) {
+			clearInterval(this.interval);
+			this.interval = undefined;
+		}
+	}
+
+	private async poll(): Promise<void> {
+		if (!this.started || this.inFlight) {
+			return;
+		}
+		this.inFlight = true;
+		try {
+			const next = await this.snapshot();
+			if (!this.baselineInitialized) {
+				this.baseline = next;
+				this.baselineInitialized = true;
+				this.warned = false;
+				return;
+			}
+			const changes = sharedDirectoryChanges(this.baseline, next);
+			this.baseline = next;
+			if (changes.length > 0) {
+				await refreshWanixPaths(this.bridge, changes);
+				for (const path of changes) {
+					this.systemView.filesystemActivity(sharedDirectoryActivityLabel(path), {
+						path,
+						paths: [path],
+					});
+				}
+				revealWanixSystemView();
+			}
+			this.warned = false;
+		} catch (error) {
+			if (!this.warned) {
+				console.warn("Wanix shared directory watch failed", error);
+				this.warned = true;
+			}
+		} finally {
+			this.inFlight = false;
+		}
+	}
+
+	private async snapshot(): Promise<Map<string, string>> {
+		const entries = await readSharedDirectoryEntries(this.fsys);
+		return new Map(entries.map((entry) => [entry.path, sharedEntrySignature(entry)]));
+	}
+}
+
+async function readSharedDirectoryEntries(fsys: any): Promise<SharedDirectoryEntry[]> {
+	let entries: unknown;
+	try {
+		entries = typeof fsys.readDirEntries === "function"
+			? await fsys.readDirEntries(V86_SHARED_DIR)
+			: await fsys.readDir(V86_SHARED_DIR);
+	} catch {
+		return [];
+	}
+	const names = serviceEntryNames(entries);
+	const results: SharedDirectoryEntry[] = [];
+	for (const name of names) {
+		const path = `${V86_SHARED_DIR}/${name}`;
+		try {
+			const stat = await fsys.stat(path);
+			results.push({
+				path,
+				isDir: Boolean(stat?.IsDir),
+				size: Number(stat?.Size || 0),
+				modTime: Number(stat?.ModTime || 0),
+			});
+		} catch {
+			// The file can disappear between readdir and stat.
+		}
+	}
+	return results;
+}
+
+function sharedDirectoryChanges(previous: Map<string, string>, next: Map<string, string>): string[] {
+	const changes: string[] = [];
+	for (const [path, signature] of next) {
+		if (previous.get(path) !== signature) {
+			changes.push(path);
+		}
+	}
+	for (const path of previous.keys()) {
+		if (!next.has(path)) {
+			changes.push(path);
+		}
+	}
+	return changes.sort((left, right) => left.localeCompare(right));
+}
+
+function sharedEntrySignature(entry: SharedDirectoryEntry): string {
+	return `${entry.isDir ? "dir" : "file"}:${entry.size}:${entry.modTime}`;
+}
+
+function sharedDirectoryActivityLabel(path: string): string {
+	if (path === V86_SHARED_LINUX_PATH) {
+		return "v86 shared file changed from-linux.txt";
+	}
+	return `v86 shared file changed ${baseName(path)}`;
 }
 
 function taskIdFromArgument(task: string | { taskId?: string } | undefined): string | undefined {
