@@ -5,15 +5,24 @@
 North star: build a Rust-native Wanix core that runs outside Chrome, with
 Wasmtime as the execution substrate and QuickJS/WASI as the first serious task
 runtime. Browser support becomes a frontend or deployment option, not the
-runtime foundation.
+runtime foundation. The same core now also reaches across machines: a Plan 9
+style mesh imports remote namespaces as local files, so devices, agents, and
+compute compose across nodes through the one 9P contract.
 
 ## Current Big Targets
 
-The baseline qjs, terminal, 9P, direct-v86, and native QEMU paths now exist.
-Highest-leverage next work should make those paths feel like a usable system:
-interactive shells and terminal lifecycle, broader Linux/v86/editor 9P
-compatibility, QEMU/v86 boot workflows, and serve/workbench/VS Code
-integration.
+The baseline qjs, terminal, 9P, direct-v86, and native QEMU paths exist, and on
+top of them the mesh/agent layer is built out: service devices (`#pipe`, `#kv`,
+`#plumb`, `#cas`, `#agent`), the 9P client (`wanix-9p-client`) that mounts
+remote namespaces, 9P over iroh QUIC with ed25519 identity and default-deny
+capability binds, the `#cpu` exec plane, `wanix capsule` world snapshots, and a
+browser cockpit (VS Code workbench extension) that operates all of it over
+direct 9P.
+
+Highest-leverage next work: deepen interactive shells and terminal lifecycle,
+broaden Linux/v86/editor 9P compatibility, finish QEMU/v86 boot workflows,
+harden the mesh trust boundary (per-principal namespaces, grant lifecycle), and
+keep growing the cockpit's coverage of the mesh devices.
 
 ## Crate Shape
 
@@ -46,9 +55,47 @@ integration.
   both `wanix-qjs-engine` and `wanix-wasm`.
 - `wanix-wasm`: compiled-`wasm32-wasi` task driver (`WasmTaskDriver`) and
   free-standing `WasiRunner`, the second WASI task runtime alongside `wanix-qjs`.
-- `wanix-cli`: native CLI and demo runner.
+
+Service-device and mesh crates (the distributed layer; each device is a plain
+`FileSystem`, so it imports across the mesh for free):
+
+- `wanix-kv`: `#kv` key/value service filesystem; `#kv/<key>` reads/writes a
+  value, the device is the durable state primitive for app/agent state.
+- `wanix-pipe`: `#pipe` in-memory byte channels (`#pipe/new` allocates,
+  `<id>/data` is the unidirectional read/write end, EOF on last writer drop).
+- `wanix-plumb`: `#plumb` plumber bus; `#plumb/<topic>/send` publishes a
+  newline-JSON envelope and `#plumb/<topic>/recv` drains envelopes received
+  since open. `LocalPlumbPort` is single-node; the mesh swaps in a gossip port.
+- `wanix-cas`: content-addressed store (venti): `ContentStore` trait,
+  owner-private `LocalCasStore`, the `#cas` device (`<hash>` read, `ingest`
+  write-then-read-hash, `have/<hash>` probe), and CAS-backed `.wcap` capsules.
+- `wanix-id`: node identity (persisted ed25519 `NodeIdentity`) and default-deny
+  capability grants (`AttachPolicy`, `GrantTable`) for the mesh trust boundary.
+- `wanix-9p-client`: 9P client backed by Wanix filesystem contracts — the
+  import half of Plan 9. `RemoteFs` mounts a remote 9P export as a local
+  `FileSystem`; shares the synchronous 9P core with `wanix-9p`.
+- `wanix-cpu`: Plan 9 cpu over the mesh — a `#cpu` acceptor that runs a task
+  against a reverse-exported caller namespace, plus the sync, transport-agnostic
+  CPU control protocol.
+- `wanix-agent`: `#agent` device fronting an LLM session as Wanix files
+  (`new`, `prompt`, `events`, `pending`, `ctl`, `reply`, `status`). Backed by a
+  codex app-server engine on the local-trust CLI path and a deterministic
+  `FakeEngine` on the served path; approvals are files.
+- `wanix-mesh`: the network edge and the only async crate. Binds one
+  `iroh::Endpoint` per node from the `wanix-id` secret key, exports a namespace
+  as 9P over QUIC (ALPN), and dials peers to import their namespaces as
+  `RemoteFs`. Reuses the synchronous 9P core; composes `wanix-cas`/`-cpu`/
+  `-plumb`/`-kv`/`-agent`/`-term` across nodes.
+
+- `wanix-cli`: native CLI and demo runner (includes `serve`, the mesh
+  subcommands, and `capsule`).
 - Future protocol work beyond the current 9P stack: CBOR/RPC, HTTPFS, and R2FS
   protocol pieces when those integrations need them.
+
+The browser cockpit lives in `workbench/` (a VS Code / Code OSS web extension,
+TypeScript): it drives the served namespace and all of the devices above over
+direct 9P (`workbench/src/wanix/p9.ts`), and is the human operator surface for
+the Rust runtime. It is a frontend, not a runtime foundation.
 
 ## Dependency Direction
 
@@ -68,13 +115,27 @@ wanix-module-cache -> Wasmtime
 wanix-qjs-engine -> Wasmtime + QuickJS WASM fixture + wanix-module-cache
 wanix-qjs  -> wanix-fs + wanix-vfs + wanix-task + wanix-wasi + wanix-qjs-engine + wanix-module-cache
 wanix-wasm -> wanix-fs + wanix-vfs + wanix-task + wanix-wasi + wanix-wasi-host + wanix-module-cache
+
+# service devices: plain FileSystems over wanix-fs
+wanix-kv | wanix-pipe | wanix-plumb | wanix-agent -> wanix-fs (+ wanix-vfs)
+wanix-cas -> wanix-fs + wanix-module-cache
+wanix-id  -> wanix-fs + wanix-vfs
+
+# 9P import half + mesh
+wanix-9p-client -> wanix-fs + wanix-protocol + wanix-9p + wanix-kv
+wanix-cpu       -> wanix-9p + wanix-9p-client + wanix-fs + wanix-task + wanix-vfs + wanix-protocol
+wanix-mesh      -> wanix-9p + wanix-9p-client + wanix-cas + wanix-cpu + wanix-plumb
+                   + wanix-kv + wanix-agent + wanix-id + wanix-task + wanix-term + wanix-vfs + iroh/tokio
+
 wanix-cli  -> runtime crates for orchestration
 ```
 
 `wanix-wasm` now depends on `wanix-task` (it is a task driver, not just a bare
 runner). No upward dependencies: `wanix-task` must not depend on `wanix-wasi`,
 `wanix-qjs`, or `wanix-wasm`. Keep core filesystem and namespace crates free of
-Wasmtime.
+Wasmtime. `wanix-mesh` is the single async/iroh edge: keep tokio and iroh out
+of every other crate, including the service devices and the synchronous 9P core
+that the mesh reuses.
 
 ## Current Capability Map
 
@@ -117,15 +178,26 @@ tests.
   exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
   layers, with binary protocol traffic kept separate from diagnostics.
 - `serve --wanix-services`: exports a Wanix namespace containing the served
-  root, `#task`, and `#term`; direct 9P clients can allocate/start `noop` or
-  `qjs` tasks and attach terminal resources through service files.
+  root plus the service devices `#task`, `#term`, `#pipe`, `#kv`, `#plumb`,
+  `#cas`, and `#agent` (the inspectable set is the single
+  `roots::INSPECTABLE_SERVICE_DEVICES` source, advertised in discovery as
+  `services.devices`). Direct 9P clients can allocate/start `noop`/`qjs`/`wasm`
+  tasks, attach terminals, and read/write every device through service files.
+  WASI guests resolve any `#name` device path from the namespace root, so a
+  `qjs`/`wasm` task can open e.g. `#kv/<key>` regardless of its cwd.
 - `serve --bundle fs9p`: browser filesystem client over direct 9P.
-- `serve --bundle workbench-fs9p`: local Code OSS/workbench launch path where
-  the bootstrap passes the discovered direct-9P route into the extension,
-  negotiates Google.2 `walkgetattr` when available, browses and mutates
-  `wanix:/` over direct 9P, preserves symlink metadata for editor file types,
-  and can open qjs-backed terminal sessions when services are enabled. Direct
-  terminal disposal writes `close` through `#term/<id>/ctl`.
+- `serve --bundle workbench-fs9p`: the browser cockpit — a Code OSS/workbench
+  launch path where the bootstrap passes the discovered direct-9P route into the
+  extension, negotiates Google.2 `walkgetattr` when available, browses and
+  mutates `wanix:/` over direct 9P, preserves symlink metadata for editor file
+  types, and opens qjs-backed terminal sessions when services are enabled.
+  Static workbench/vscode-web assets are served from the repo `workbench/` tree
+  (not the served root) so a disposable root still boots. The Wanix activity-bar
+  view is the operator surface: it inspects the service devices over 9P
+  (`wanix-inspect:`), runs the agent repair demo through `#agent` (session +
+  approval), runs the qjs→wasm→qjs duet on one shared FS, serves HTTP apps via
+  `/.wanix/app/<name>` with `#kv`-backed state, and self-checks the device set.
+  Direct terminal disposal writes `close` through `#term/<id>/ctl`.
 - `serve --bundle direct-v86`: browser v86 handoff over Rust serve discovery,
   direct 9P, boot-asset hints, hvc0 console bridging with Ctrl-C/Ctrl-D byte
   forwarding and a scriptable hvc0 send hook, direct-v86 9P `msize` discovery
@@ -145,11 +217,34 @@ tests.
   and emits a shell or `wanix-qemu-virtio9p.v1` JSON handoff with discovered or
   explicit initrd support plus an explicit 9P `msize` boot knob; `--exec` is an
   explicit foreground launch, not a Wanix VM supervisor.
+- The mesh (Plan 9 import realized): `wanix-9p-client::RemoteFs` mounts a remote
+  9P export as a local `FileSystem`, and `wanix-mesh` carries 9P over iroh QUIC.
+  A node binds an `iroh::Endpoint` from its persisted ed25519 identity
+  (`wanix-id`), exports its namespace under the Wanix ALPN, and dials peers to
+  import theirs at `/n/<peer>`. Attach is capability-gated (default-deny grants),
+  and because every device is a plain `FileSystem`, `#kv`/`#cas`/`#plumb`/
+  `#agent` import across the mesh for free (`/n/A/#kv/...`).
+- `#cpu` exec plane: a `wanix-cpu` acceptor runs a task against the caller's
+  reverse-exported namespace, so a node can run compute on a peer that operates
+  on the caller's files — Plan 9 cpu(1) over the mesh.
+- `#agent` device: an LLM session as files (`new`/`prompt`/`events`/`pending`/
+  `ctl`/`reply`/`status`), with approvals as files. The CLI `wanix agent` path
+  uses the codex app-server engine against a confined Wanix world; the served
+  `#agent` uses a deterministic `FakeEngine` (real codex is local-trust only).
+  Agents delegate to agents via `#agent/<id>/reply`, and `POST /agent` exposes
+  the agent as a network service.
+- `wanix-rust capsule`: freezes a Wanix world into a portable, CAS-backed
+  `.wcap` (via `wanix-cas`) that can be loaded elsewhere; live mesh peers and
+  ephemeral handles are not portable.
 
 The biggest missing pieces remain interactive shell/session depth, broader
-Linux/v86/editor 9P compatibility, QEMU/v86 boot workflows, and Rust
-serve/workbench/VS Code integration. Ethernet/vnet and public auth remain
-explicitly unimplemented trust-boundary work.
+Linux/v86/editor 9P compatibility, QEMU/v86 boot workflows, and hardening the
+mesh trust boundary (per-principal namespaces, grant lifecycle). The serve 9P
+websocket handles one frame at a time per connection, so a blocking read (e.g.
+`#plumb/<topic>/recv`) cannot be interleaved with a write on the same
+connection — live pub/sub needs a second connection or concurrent frame
+handling. Ethernet/vnet and public/multi-user auth remain explicitly
+unimplemented trust-boundary work.
 
 ## Code Quality Guardrails
 
@@ -196,6 +291,15 @@ current-state docs, and commit messages instead of active ADRs.
   browser filesystem/workbench, direct-v86, rootfs prep, and native QEMU share
   explicit discovery and handoff contracts instead of becoming runtime
   foundations.
+
+The mesh/agent layer (9P-over-QUIC transport, ed25519 identity + capability
+binds, the `#agent` device, and the `#kv`/`#pipe`/`#plumb`/`#cas`/`#cpu`
+service contracts) does not yet have ADRs; its design is captured in
+[docs/mesh-blueprint.md](docs/mesh-blueprint.md) and
+[docs/mesh-the-missing-half-of-9p.md](docs/mesh-the-missing-half-of-9p.md), and
+the cockpit↔mesh integration in [docs/integration/](docs/integration/). Promote
+the durable boundaries (mesh transport + identity; agent-as-device; the service
+device contracts) into consecutive ADRs when those contracts stabilize.
 
 ## Runtime Guardrails
 
@@ -245,13 +349,19 @@ more feature work.
 
 ## Queued Follow-ups
 
-- Module-line health is currently clean: `tools/module-line-baseline.txt` is
-  empty and every production module is under the 250-line warn limit (the former
-  split targets `serve.rs`, `qjs_term.rs`, `lib.rs`, `host/fs.rs`, `9p/lib.rs`,
-  `wasi/ctx.rs` are all decomposed into sibling submodule directories). Keep
-  running `just module-lines` during cleanup, but the next structural pressure is
-  the serve session/connection boundary and typed discovery/handoff JSON below,
-  not file size.
+- Module-line health: `just module-lines` is green against the 350-line hard
+  limit, but three modules sit above the 250-line warn limit and should be split
+  before they grow — `wanix-agent/src/codex.rs` (~307), `wanix-agent/src/
+  exec_server.rs` (~283), and `wanix-cli/src/serve/http/app.rs` (~273, restored
+  from the cockpit work). Keep running `just module-lines` during cleanup.
+- Cockpit follow-ups: `v86-shared-demo` is still a no-op stub in
+  `workbench/src/web/extension.ts` (marked `// STUB:`); port it next. `#plumb`
+  live receive in the self-check probes the publish path only because a blocking
+  recv would deadlock the single-frame-at-a-time serve connection — wiring a
+  second 9P connection (or concurrent frame handling) would let it verify
+  end-to-end delivery. Consider Slice 8 from `docs/integration/plan.md` (rename
+  `--bundle workbench-fs9p` to `--bundle cockpit`, retire the `workbench/code/`
+  vscode-web vendor dependency).
 - Serve concurrency: `serve/concurrent.rs` spawns a detached worker thread per
   connection with no cap and busy-polls `accept()` on a fixed sleep in unbounded
   mode. A proper fix (connection cap + thread accounting) needs a shutdown signal

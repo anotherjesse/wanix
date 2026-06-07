@@ -23,24 +23,38 @@ Play with the Wanix shell bundle at [wanix.run](https://wanix.run).
 ## Rust-Native Port Status
 
 This repository also contains the active Rust-native Wanix port. The north star
-for that work is a Wanix core that can run outside Chrome, with Wasmtime as the
-execution substrate and QuickJS/WASI as the first serious task runtime.
+is a Wanix core that runs outside Chrome, with Wasmtime as the execution
+substrate and QuickJS/WASI as the first serious task runtime — and that reaches
+across machines through a Plan 9-style mesh.
 
-The Rust port now has native slices for QuickJS-backed Wanix tasks, terminal
-devices with service-file lifecycle control, `qjs-shell` with basic filesystem
-and environment commands including symlink/readlink/stat metadata, child `qjs`
-task launches, namespace stdio redirection, direct terminal stdio with buffered foreground
-stdin handoff, queued resize tracking from `#term/<id>/winch`, `ps` task
-inspection, child exit status inspection, and served shell terminal cleanup, 9P
-exports over stdio/TCP/WebSocket, Rust `serve` discovery, browser filesystem
-and workbench demos, qjs-shell discovery metadata for cwd, resize, exit, and
-session lifecycle, direct-v86 handoff with tunable 9P `msize`, rootfs
-preparation with shell/JSON handoffs, trusted-local served prepared-root
-handoff discovery with copyable browser commands, hvc0 Ctrl-C/Ctrl-D forwarding
-plus a scriptable send hook, and initrd-aware native QEMU command/JSON handoff
-with default executable `/bin/init` validation and the same 9P `msize` policy.
-Wanix owns task identity, namespaces, cwd/env/cmd, stdio/fds, exit status, and
-WASI filesystem semantics; QuickJS is the execution engine inside a `qjs` task.
+**Runtime.** Wanix owns task identity, namespaces, cwd/env/cmd, stdio/fds, exit
+status, and WASI filesystem semantics. `qjs` runs JavaScript (QuickJS is the
+engine inside the task) and `wasm` runs compiled `wasm32-wasi` modules as a
+second task runtime on the same substrate. Terminals (`#term`) drive native and
+served `qjs-shell` sessions with filesystem/env builtins, child task launches,
+resize tracking, and lifecycle control.
+
+**Devices.** Beyond `#task` and `#term`, the port exposes service devices as
+plain filesystems: `#kv` (key/value state), `#pipe` (byte channels), `#plumb`
+(plumber pub/sub bus), `#cas` (content-addressed store), and `#agent` (an LLM
+session as files, with approvals as files).
+
+**Mesh.** `wanix-9p-client` mounts a remote 9P export as a local filesystem (the
+import half of Plan 9), and `wanix-mesh` carries 9P over [iroh](https://iroh.computer)
+QUIC. Each node has a persisted ed25519 identity; attach is capability-gated
+(default-deny grants); peers mount at `/n/<peer>`. Because every device is just a
+filesystem, `#kv`/`#cas`/`#agent` and friends import across the mesh for free.
+`#cpu` runs a task on a peer against the caller's reverse-exported namespace
+(cpu(1) over the mesh), and `wanix capsule` freezes a world into a portable,
+CAS-backed `.wcap`.
+
+**Serve + cockpit.** The Rust `serve` exports Wanix filesystems over
+stdio/TCP/WebSocket/HTTP with a discovery document, plus direct-v86 and native
+QEMU handoffs and rootfs preparation. A browser cockpit (a Code OSS / VS Code
+web extension under `workbench/`) operates the whole namespace over direct 9P:
+inspect the service devices, repair a broken program through `#agent`, run a
+qjs→wasm→qjs duet on one shared filesystem, serve HTTP apps at
+`/.wanix/app/<name>` with `#kv`-backed state, and self-check the device set.
 
 Try the native demo path from the workspace root:
 
@@ -49,12 +63,18 @@ cargo run --locked --package wanix-cli -- qjs examples/qjs-demo.js
 cargo run --locked --package wanix-cli -- \
   qjs-term --stdin "hello terminal" examples/qjs-term-demo.js
 printf 'write note.txt hello\nls\ncat note.txt\nexit\n' | cargo run --locked --package wanix-cli -- qjs-shell
+# serve the browser cockpit (open the printed URL):
+cargo run --locked --package wanix-cli -- \
+  serve --root /tmp/wanix-root --bundle workbench-fs9p --wanix-services
 just check
 ```
 
 The Rust workspace crates and active ADR index are documented in
-[AGENTS.md](AGENTS.md). For a hands-on path, see
-[rust-walkthrough.md](rust-walkthrough.md). For the Go/Rust architecture
+[AGENTS.md](AGENTS.md). The mesh design is in
+[docs/mesh-blueprint.md](docs/mesh-blueprint.md) and
+[docs/mesh-the-missing-half-of-9p.md](docs/mesh-the-missing-half-of-9p.md);
+hands-on recipes live in [docs/recipes/](docs/recipes/). For a hands-on path,
+see [rust-walkthrough.md](rust-walkthrough.md). For the Go/Rust architecture
 comparison, see [docs/rust-vs-go-wanix.md](docs/rust-vs-go-wanix.md). The
 QuickJS/Wasmtime engine mechanics live in
 [crates/wanix-qjs-engine](crates/wanix-qjs-engine), while Wanix process,
