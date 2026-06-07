@@ -63,10 +63,11 @@ pub(in crate::serve) enum HttpStatus {
     NotFound,
     MethodNotAllowed,
     NotImplemented,
+    InternalServerError,
 }
 
 impl HttpStatus {
-    const REASONS: [&'static str; 7] = [
+    const REASONS: [&'static str; 8] = [
         "ok",
         "bad request",
         "conflict",
@@ -74,8 +75,9 @@ impl HttpStatus {
         "not found",
         "method not allowed",
         "not implemented",
+        "internal server error",
     ];
-    const STATUS_LINES: [&'static str; 7] = [
+    const STATUS_LINES: [&'static str; 8] = [
         "200 OK",
         "400 Bad Request",
         "409 Conflict",
@@ -83,6 +85,7 @@ impl HttpStatus {
         "404 Not Found",
         "405 Method Not Allowed",
         "501 Not Implemented",
+        "500 Internal Server Error",
     ];
 
     pub(in crate::serve) fn status_line(self) -> &'static str {

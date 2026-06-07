@@ -759,6 +759,46 @@ fn serve_once_returns_workbench_assets_outside_served_root() {
 }
 
 #[test]
+fn serve_once_runs_qjs_http_app_route() {
+    let root = temp_dir("wanix-cli-serve-http-app");
+    fs::create_dir_all(root.join("apps")).unwrap();
+    fs::write(
+        root.join("apps/hello.js"),
+        br##"
+import * as std from "qjs:std";
+const app = std.getenv("WANIX_HTTP_APP");
+const target = std.getenv("WANIX_HTTP_TARGET");
+std.out.puts("app " + app + "\n");
+std.out.puts("target " + target + "\n");
+"##,
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let command = ServeCommand {
+        root_path: root,
+        addr: addr.to_string(),
+        bundle: None,
+        wanix_services: true,
+        once: true,
+    };
+    let handle = thread::spawn(move || {
+        let mut stderr = Vec::new();
+        let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+        (exit_code, stderr)
+    });
+    let response = http_request(
+        addr,
+        b"GET /.wanix/app/hello?from=browser HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    );
+    let (exit_code, _stderr) = handle.join().unwrap();
+    assert_eq!(exit_code, 0);
+    let (headers, body) = http_response_parts(&response);
+    assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+    assert_eq!(body, b"app hello\ntarget /.wanix/app/hello?from=browser\n");
+}
+
+#[test]
 fn serve_once_returns_direct_v86_embedded_asset_over_static_collision() {
     let root = temp_dir("wanix-cli-serve-direct-v86-assets");
     fs::create_dir_all(root.join("v86/bundle")).unwrap();

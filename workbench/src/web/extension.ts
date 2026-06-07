@@ -5,27 +5,12 @@ import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairViaAgent } from './age
 import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
 import { COCKPIT_SELF_CHECK_JSON_PATH, COCKPIT_SELF_CHECK_MD_PATH, COCKPIT_SELF_CHECK_PROBE_PATH, runCockpitSelfCheck } from './cockpit-self-check.js';
 import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
+import { copyHttpAppUrl, createHttpApp, installHttpAppDemo, openHttpAppCatalog, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, previewHttpAppPath, previewHttpCatalogApp, publishHttpAppDataStores, publishHttpAppsToSystemView, type HttpAppCatalogTarget, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView, type WanixServiceTask, type WanixServiceTerminal } from './system-view.js';
 import { ensureWasmStarter, installWasmStarter, WASM_STARTER_OUTPUT_PATH, WASM_STARTER_PATH } from './wasm-starter.js';
 
-
-// STUB: http-app-demo not yet ported — see docs/integration/plan.md
-type HttpAppRouteConfig = { url?: string; status?: string };
-type HttpAppCatalogTarget = { name?: string; sourcePath?: string };
-async function installHttpAppDemo(..._args: any[]): Promise<any> { return undefined; }
-async function openHttpAppHandler(..._args: any[]): Promise<any> { return undefined; }
-async function copyHttpAppUrl(..._args: any[]): Promise<any> { return undefined; }
-async function openHttpAppDemo(..._args: any[]): Promise<any> { return undefined; }
-async function openHttpCounterDemo(..._args: any[]): Promise<any> { return undefined; }
-async function publishHttpAppDataStores(..._args: any[]): Promise<any> { return undefined; }
-async function openHttpWasmDemo(..._args: any[]): Promise<any> { return undefined; }
-async function createHttpApp(..._args: any[]): Promise<any> { return undefined; }
-async function openHttpAppCatalog(..._args: any[]): Promise<any> { return undefined; }
-async function publishHttpAppsToSystemView(..._args: any[]): Promise<any> { return undefined; }
-async function previewHttpCatalogApp(..._args: any[]): Promise<any> { return undefined; }
-async function previewHttpAppPath(..._args: any[]): Promise<any> { return undefined; }
 
 // STUB: v86-shared-demo not yet ported — see docs/integration/plan.md
 const V86_SHARED_DIR = "/shared";

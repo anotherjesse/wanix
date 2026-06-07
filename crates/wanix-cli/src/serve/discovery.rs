@@ -11,6 +11,7 @@ use super::direct_v86::{
     DIRECT_V86_OFFSCREEN_PATH, DIRECT_V86_VGA_BIOS_PATH, DIRECT_V86_VGA_MEMORY_SIZE,
     DIRECT_V86_WASM_PATH, direct_v86_boot_json, rootfs_handoff_readiness,
 };
+use super::http::app::app_route_json;
 use super::http::{HttpStatus, StaticResponse};
 use super::terminal_ws::QJS_SHELL_WEBSOCKET_PATH;
 
@@ -40,6 +41,7 @@ pub(super) fn serve_discovery_json(
     let p9_url = format!("ws://{host}/.well-known/export9p");
     let rootfs_url = format!("http://{host}/.well-known/rootfs.json");
     let qjs_shell_url = format!("ws://{host}{QJS_SHELL_WEBSOCKET_PATH}");
+    let app_url = format!("http://{host}/.wanix/app/{{name}}");
     let ethernet_url = format!("ws://{host}/.well-known/ethernet");
     let bundle = roots
         .bundle
@@ -48,6 +50,7 @@ pub(super) fn serve_discovery_json(
         .unwrap_or_else(|| "null".to_owned());
     let services = serve_services_json(roots);
     let qjs_shell_route = serve_qjs_shell_route_json(roots, &qjs_shell_url);
+    let app_route = app_route_json(roots, &app_url);
     let rootfs_route = serve_rootfs_route_json(&roots.static_root, &rootfs_url, peer_addr);
     let direct_v86_boot = direct_v86_boot_json(&roots.static_root);
     format!(
@@ -58,6 +61,7 @@ pub(super) fn serve_discovery_json(
          \"supportedProtocols\":[\"9P2000.L\",\"9P2000.L.Google.2\"]}},\
          \"rootfs\":{},\
          \"qjsShell\":{},\
+         \"httpApp\":{},\
          \"ethernet\":{{\"websocket\":{},\"status\":\"not-implemented\"}}\
          }},\
          \"v86\":{{\"assets\":{{\"module\":{},\"mod\":{},\"offscreen\":{},\"wasm\":{},\"bios\":{},\"vgaBios\":{}}},\
@@ -68,6 +72,7 @@ pub(super) fn serve_discovery_json(
         json_string(&p9_url),
         rootfs_route,
         qjs_shell_route,
+        app_route,
         json_string(&ethernet_url),
         json_string(DIRECT_V86_MODULE_PATH),
         json_string(DIRECT_V86_MOD_REEXPORT_PATH),
