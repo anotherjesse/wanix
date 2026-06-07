@@ -139,7 +139,16 @@ type CheckRecord = {
 	error?: string;
 };
 
-type CategoryId = "actions" | "tour" | "checks" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
+type ReportRecord = {
+	id: number;
+	label: string;
+	path: string;
+	description?: string;
+	icon?: string;
+	artifacts?: string[];
+};
+
+type CategoryId = "actions" | "tour" | "checks" | "reports" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
@@ -148,6 +157,7 @@ type SystemTreeItem =
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "actions", label: "Actions" },
 	{ type: "category", id: "tour", label: "Tour" },
+	{ type: "category", id: "reports", label: "Reports" },
 	{ type: "category", id: "checks", label: "Checks" },
 	{ type: "category", id: "activity", label: "Activity" },
 	{ type: "category", id: "routes", label: "Routes" },
@@ -170,6 +180,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private routeRuns: RouteRunRecord[] = [];
 	private tour: TourRecord[] = [];
 	private checks: CheckRecord[] = [];
+	private reports: ReportRecord[] = [];
 	private agent: AgentRecord[] = [];
 	private activity: ActivityRecord[] = [];
 	private serviceTaskIds = new Set<string>();
@@ -180,6 +191,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private nextRouteRunId = 1;
 	private nextTourId = 1;
 	private nextCheckId = 1;
+	private nextReportId = 1;
 	private nextAgentId = 1;
 
 	readonly onDidChangeTreeData = this.emitter.event;
@@ -373,6 +385,29 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
+	reportPublished(label: string, path: string, options: { description?: string; icon?: string; artifacts?: string[] } = {}): void {
+		const artifacts = uniquePaths([path, ...(options.artifacts || [])]);
+		const existing = this.reports.find((entry) => entry.path === path);
+		if (existing) {
+			existing.label = label;
+			existing.description = options.description || existing.description;
+			existing.icon = options.icon || existing.icon;
+			existing.artifacts = artifacts;
+		} else {
+			this.reports.unshift({
+				id: this.nextReportId++,
+				label,
+				path,
+				description: options.description,
+				icon: options.icon,
+				artifacts,
+			});
+			this.reports = this.reports.slice(0, 12);
+		}
+		this.addActivity(`report ${label} published`, { path, paths: artifacts });
+		this.refresh();
+	}
+
 	agentStarted(label: string): void {
 		this.agent = [];
 		this.nextAgentId = 1;
@@ -463,6 +498,9 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			"## Checks",
 			...journalList(this.checks.flatMap(checkJournalLines)),
 			"",
+			"## Reports",
+			...journalList(this.reports.flatMap(reportJournalLines)),
+			"",
 			"## Agent",
 			...journalList(this.agent.flatMap(agentJournalLines)),
 			"",
@@ -494,6 +532,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			routeRuns: this.routeRuns.map(routeRunSnapshot),
 			tour: this.tour.map(tourSnapshot),
 			checks: this.checks.map(checkSnapshot),
+			reports: this.reports.map(reportSnapshot),
 			agent: this.agent.map(agentSnapshot),
 			activity: this.activity.map(activitySnapshot),
 		};
@@ -533,6 +572,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				return this.tourItems();
 			case "checks":
 				return this.checkItems();
+			case "reports":
+				return this.reportItems();
 			case "drivers":
 				return this.drivers.length > 0
 					? this.drivers.map((driver) => leaf(`driver:${driver}`, driver, undefined, "symbol-method"))
@@ -639,6 +680,28 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			{
 				path: entry.path,
 				children: checkArtifactItems(entry),
+			},
+		));
+	}
+
+	private reportItems(): SystemTreeItem[] {
+		if (this.reports.length === 0) {
+			return [leaf("reports:empty", "no reports published yet")];
+		}
+		return this.reports.map((entry) => leaf(
+			`report:${entry.id}`,
+			entry.label,
+			reportDescription(entry),
+			entry.icon || "notebook",
+			{
+				command: "workbench.openWanixPath",
+				title: "Open Wanix Path",
+				arguments: [entry.path],
+			},
+			"wanixReportArtifact",
+			{
+				path: entry.path,
+				children: reportArtifactItems(entry),
 			},
 		));
 	}
@@ -1045,6 +1108,22 @@ function checkArtifactItems(entry: CheckRecord): SystemTreeItem[] {
 	));
 }
 
+function reportArtifactItems(entry: ReportRecord): SystemTreeItem[] {
+	return uniquePaths(entry.artifacts).map((path, index) => leaf(
+		`report:${entry.id}:artifact:${index}`,
+		path,
+		pathDescription(path),
+		path === entry.path ? "notebook" : "file",
+		{
+			command: "workbench.openWanixPath",
+			title: "Open Wanix Path",
+			arguments: [path],
+		},
+		"wanixReportArtifact",
+		{ path },
+	));
+}
+
 function activityItem(entry: ActivityRecord): SystemTreeItem {
 	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
 	const path = entry.path || paths[paths.length - 1];
@@ -1093,6 +1172,11 @@ function checkDescription(entry: CheckRecord): string {
 	const status = entry.status === "ok" ? "ok" : entry.status;
 	const detail = entry.error || entry.description;
 	return detail ? `${status} · ${detail}` : status;
+}
+
+function reportDescription(entry: ReportRecord): string {
+	const detail = entry.description;
+	return detail ? `${detail} · ${pathDescription(entry.path)}` : pathDescription(entry.path);
 }
 
 function journalList(lines: string[]): string[] {
@@ -1226,6 +1310,24 @@ function checkJournalLines(entry: CheckRecord): string[] {
 	].filter((line): line is string => line !== undefined);
 }
 
+function reportSnapshot(entry: ReportRecord): object {
+	return {
+		id: entry.id,
+		label: entry.label,
+		description: entry.description,
+		path: displayJournalPath(entry.path),
+		artifacts: uniquePaths(entry.artifacts).map(displayJournalPath),
+	};
+}
+
+function reportJournalLines(entry: ReportRecord): string[] {
+	return [
+		`- ${entry.label}${entry.description ? ` - ${entry.description}` : ""}`,
+		`  - path: ${displayJournalPath(entry.path)}`,
+		...uniquePaths(entry.artifacts).map((path) => `  - artifact: ${displayJournalPath(path)}`),
+	];
+}
+
 function agentSnapshot(entry: AgentRecord): object {
 	return {
 		id: entry.id,
@@ -1322,6 +1424,8 @@ function categoryIcon(id: CategoryId): vscode.ThemeIcon {
 			return new vscode.ThemeIcon("checklist");
 		case "checks":
 			return new vscode.ThemeIcon("testing-view-icon");
+		case "reports":
+			return new vscode.ThemeIcon("notebook");
 		case "drivers":
 			return new vscode.ThemeIcon("symbol-method");
 		case "tasks":

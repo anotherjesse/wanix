@@ -5,8 +5,7 @@ import { WanixSystemView, type WanixSystemConfig } from './system-view.js';
 
 export const COCKPIT_SELF_CHECK_MD_PATH = ".wanix/cockpit-check.md";
 export const COCKPIT_SELF_CHECK_JSON_PATH = ".wanix/cockpit-check.json";
-
-const COCKPIT_SELF_CHECK_PROBE_PATH = ".wanix/checks/probe.txt";
+export const COCKPIT_SELF_CHECK_PROBE_PATH = ".wanix/checks/probe.txt";
 const SYSTEM_JOURNAL_PATH = ".wanix/system-journal.md";
 const SYSTEM_STATE_PATH = ".wanix/system-state.json";
 
@@ -99,6 +98,11 @@ export async function runCockpitSelfCheck(
 		systemView.checkPassed("Wanix cockpit self-check", { description: "overall status ok", artifacts: reportArtifacts });
 	}
 	systemView.checkReport(COCKPIT_SELF_CHECK_MD_PATH, status, reportArtifacts);
+	systemView.reportPublished("Cockpit Self Check", COCKPIT_SELF_CHECK_MD_PATH, {
+		description: `status ${status}`,
+		icon: "testing-view-icon",
+		artifacts: reportArtifacts,
+	});
 	for (const path of reportArtifacts) {
 		systemView.filesystemActivity(`self-check artifact ${baseName(path)}`, { path });
 	}

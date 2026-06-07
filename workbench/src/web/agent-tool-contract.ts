@@ -101,6 +101,11 @@ export async function writeAgentToolContract(
 		path: AGENT_TOOL_CONTRACT_MD_PATH,
 		paths: [AGENT_TOOL_CONTRACT_JSON_PATH, AGENT_TOOL_CONTRACT_MD_PATH],
 	});
+	systemView.reportPublished("Agent Tool Contract", AGENT_TOOL_CONTRACT_MD_PATH, {
+		description: "agent tools",
+		icon: "symbol-method",
+		artifacts: [AGENT_TOOL_CONTRACT_MD_PATH, AGENT_TOOL_CONTRACT_JSON_PATH],
+	});
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
 	});
