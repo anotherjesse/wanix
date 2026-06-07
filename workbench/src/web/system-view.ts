@@ -106,13 +106,13 @@ type SystemTreeItem =
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "actions", label: "Actions" },
+	{ type: "category", id: "routes", label: "Routes" },
+	{ type: "category", id: "routeRuns", label: "Route Runs" },
 	{ type: "category", id: "agent", label: "Agent" },
-	{ type: "category", id: "drivers", label: "Drivers" },
 	{ type: "category", id: "tasks", label: "Tasks" },
 	{ type: "category", id: "terminals", label: "Terminals" },
 	{ type: "category", id: "namespace", label: "Namespace" },
-	{ type: "category", id: "routes", label: "Routes" },
-	{ type: "category", id: "routeRuns", label: "Route Runs" },
+	{ type: "category", id: "drivers", label: "Drivers" },
 	{ type: "category", id: "activity", label: "Activity" },
 ];
 
@@ -270,6 +270,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	getTreeItem(element: SystemTreeItem): vscode.TreeItem {
 		if (element.type === "category") {
 			const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Expanded);
+			item.id = element.id;
 			item.iconPath = categoryIcon(element.id);
 			return item;
 		}
@@ -277,9 +278,11 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			? vscode.TreeItemCollapsibleState.Collapsed
 			: vscode.TreeItemCollapsibleState.None);
 		item.description = element.description;
+		item.tooltip = treeItemTooltip(element);
 		item.iconPath = element.icon;
 		item.command = element.command;
 		item.contextValue = element.contextValue;
+		item.id = element.id;
 		return item;
 	}
 
@@ -485,6 +488,19 @@ function leaf(
 		afterPath: metadata.afterPath,
 		children: metadata.children,
 	};
+}
+
+function treeItemTooltip(element: SystemTreeItem & { type: "leaf" }): string {
+	return [
+		element.label,
+		element.description,
+		element.path ? `Path: ${element.path}` : undefined,
+		element.sourcePath ? `Source: ${element.sourcePath}` : undefined,
+		element.outputPath ? `Output: ${element.outputPath}` : undefined,
+		element.metadataPath ? `Metadata: ${element.metadataPath}` : undefined,
+		element.beforePath ? `Before: ${element.beforePath}` : undefined,
+		element.afterPath ? `After: ${element.afterPath}` : undefined,
+	].filter((part): part is string => Boolean(part)).join("\n");
 }
 
 function taskArtifactItems(task: TaskRecord): SystemTreeItem[] {
