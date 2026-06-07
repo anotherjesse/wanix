@@ -310,6 +310,15 @@ row instead of asking the user to remember which file changed.
 
 ![HTTP counter state artifact](assets/wanix-workbench-browser-dx/39-http-counter-state-artifact.png)
 
+That state file is now a first-class data store object. `Open Data Store Index`
+discovers existing app state such as `/apps/counter.count.txt`, publishes it in
+the sidebar under `Data Stores`, and writes both `/.wanix/data-stores.md` and
+`/.wanix/data-stores.json`. The JSON sidecar uses the explicit
+`wanix.data-stores.v1` schema, so a future agent or HTTP-program manager can
+ask "what mutable app state exists here?" without scraping route-run history.
+
+![Wanix data store index](assets/wanix-workbench-browser-dx/62-data-store-index.png)
+
 The route run also exposes the task traces that the Rust HTTP app runner writes
 under `/.wanix/http`. The local route response carries the task id plus stdout
 and stderr paths, the response report records them, and the `Route Runs` tree
@@ -529,6 +538,8 @@ But the first browser pass had several small breaks in the loop:
   first-class row in the system panel.
 - HTTP route previews could prove a qjs handler returned text, but not yet that
   a browser-triggered app could mutate Wanix state.
+- Stateful route files were inspectable only from the route execution that
+  happened to create them, not from a durable data-store inventory.
 - The complete OS story existed, but only if the user knew which demo buttons
   to press and in what order.
 
@@ -678,6 +689,11 @@ the route contract grows broader namespace write semantics on purpose.
 The cleanup pass made route-run artifacts generic. Counter state is the first
 use, but the tree can now hang other run outputs under the same execution row
 without adding another route-specific sidebar path.
+
+The data-store index applies that object-model rule to mutable app state. If a
+route writes durable state under the Wanix namespace, the cockpit can publish
+it as a data-store row and as markdown/JSON artifacts under `/.wanix`, instead
+of leaving it as an incidental file someone has to rediscover from a prior run.
 
 HTTP app responses now carry local Wanix trace headers for the task id, stdout
 trace, and stderr trace. The workbench records those paths in the saved response
@@ -906,34 +922,37 @@ The current loop is:
     app, then inspect `apps/counter.response.txt` and `apps/counter.count.txt`.
 44. Expand the counter route run and open the `State File` child directly from
     the execution row.
-45. Expand the same route run and inspect `Task Stdout` or `Task Stderr` from
+45. Click `Open Data Store Index` to publish `/.wanix/data-stores.md` and
+    `/.wanix/data-stores.json`, then inspect `/apps/counter.count.txt` as a
+    stateful Wanix data store.
+46. Expand the same route run and inspect `Task Stdout` or `Task Stderr` from
     the exact HTTP execution that produced the response.
-46. Notice that `Routes` and `Route Runs` stay near the top of the System view,
+47. Notice that `Routes` and `Route Runs` stay near the top of the System view,
     and hover truncated rows to see their full backing paths.
-47. Run either HTTP preview action again and see the response report open while
+48. Run either HTTP preview action again and see the response report open while
     the sidebar stays on Wanix System.
-48. Click `New qjs Script` to create a unique runnable scratch script without
+49. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-49. Run that script, then expand its task row to reopen the source, transcript,
+50. Run that script, then expand its task row to reopen the source, transcript,
     metadata, terminal output, or `#task/<id>` service directory.
-50. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+51. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-51. Click `Clear Finished Rows` when old exited tasks and closed terminals are
+52. Click `Clear Finished Rows` when old exited tasks and closed terminals are
     crowding the sidebar.
-52. Click `Open Agent Tool Contract` to write `/.wanix/agent-tools.md` and
+53. Click `Open Agent Tool Contract` to write `/.wanix/agent-tools.md` and
     `/.wanix/agent-tools.json`.
-53. Click `Run Agent Repair Demo` to install `/agent/broken.js`, run it, repair
+54. Click `Run Agent Repair Demo` to install `/agent/broken.js`, run it, repair
     it, rerun it, and open the generated report.
-54. Watch the `Agent` section list the repair loop: read, run, observe, edit,
+55. Watch the `Agent` section list the repair loop: read, run, observe, edit,
     rerun, capture transcripts, and verify `agent/out/result.txt`.
-55. Click an Agent row with an artifact to reopen the source, transcript, or
+56. Click an Agent row with an artifact to reopen the source, transcript, or
     result file from the same system panel.
-56. Click `diff broken.js` to reopen the before/after repair diff from
+57. Click `diff broken.js` to reopen the before/after repair diff from
     `/agent/out`.
-57. Click `write repair report` or open
+58. Click `write repair report` or open
     `/agent/out/broken.repair-report.md` to inspect the complete repair trace:
     operation list, task ids, transcript paths, snapshots, result, and status.
-58. Use the System action row `Fix Current Wanix Program` when the current
+59. Use the System action row `Fix Current Wanix Program` when the current
     editor is a qjs file and you want to apply the same repair contract outside
     the canned demo.
 

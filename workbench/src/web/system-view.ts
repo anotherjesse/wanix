@@ -149,7 +149,18 @@ type ReportRecord = {
 	artifacts?: string[];
 };
 
-type CategoryId = "actions" | "tour" | "checks" | "reports" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
+type DataStoreRecord = {
+	id: number;
+	label: string;
+	path: string;
+	kind?: string;
+	description?: string;
+	sourcePath?: string;
+	routeLabel?: string;
+	artifacts?: string[];
+};
+
+type CategoryId = "actions" | "tour" | "checks" | "reports" | "dataStores" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
@@ -159,6 +170,7 @@ const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "actions", label: "Actions" },
 	{ type: "category", id: "tour", label: "Tour" },
 	{ type: "category", id: "reports", label: "Reports" },
+	{ type: "category", id: "dataStores", label: "Data Stores" },
 	{ type: "category", id: "checks", label: "Checks" },
 	{ type: "category", id: "activity", label: "Activity" },
 	{ type: "category", id: "routes", label: "Routes" },
@@ -182,6 +194,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private tour: TourRecord[] = [];
 	private checks: CheckRecord[] = [];
 	private reports: ReportRecord[] = [];
+	private dataStores: DataStoreRecord[] = [];
 	private agent: AgentRecord[] = [];
 	private activity: ActivityRecord[] = [];
 	private serviceTaskIds = new Set<string>();
@@ -193,6 +206,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private nextTourId = 1;
 	private nextCheckId = 1;
 	private nextReportId = 1;
+	private nextDataStoreId = 1;
 	private nextAgentId = 1;
 
 	readonly onDidChangeTreeData = this.emitter.event;
@@ -451,6 +465,73 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}, null, 2)}\n`;
 	}
 
+	dataStorePublished(label: string, path: string, options: { kind?: string; description?: string; sourcePath?: string; routeLabel?: string; artifacts?: string[] } = {}): void {
+		const artifacts = uniquePaths([path, ...(options.artifacts || [])]);
+		const existing = this.dataStores.find((entry) => entry.path === path);
+		if (existing) {
+			existing.label = label;
+			existing.kind = options.kind || existing.kind;
+			existing.description = options.description || existing.description;
+			existing.sourcePath = options.sourcePath || existing.sourcePath;
+			existing.routeLabel = options.routeLabel || existing.routeLabel;
+			existing.artifacts = artifacts;
+		} else {
+			this.dataStores.unshift({
+				id: this.nextDataStoreId++,
+				label,
+				path,
+				kind: options.kind,
+				description: options.description,
+				sourcePath: options.sourcePath,
+				routeLabel: options.routeLabel,
+				artifacts,
+			});
+			this.dataStores = this.dataStores.slice(0, 12);
+		}
+		this.addActivity(`data store ${label} indexed`, { path, paths: artifacts });
+		this.refresh();
+	}
+
+	dataStoreInventoryMarkdown(options: { generatedAt?: Date; markdownPath?: string; jsonPath?: string } = {}): string {
+		const generatedAt = options.generatedAt || new Date();
+		const byKind = new Map<string, DataStoreRecord[]>();
+		for (const store of this.dataStores) {
+			const kind = store.kind || "store";
+			const entries = byKind.get(kind) || [];
+			entries.push(store);
+			byKind.set(kind, entries);
+		}
+		return [
+			"# Wanix Data Stores",
+			"",
+			`Generated: ${generatedAt.toISOString()}`,
+			"Schema: wanix.data-stores.v1",
+			options.jsonPath ? `JSON: ${displayJournalPath(options.jsonPath)}` : undefined,
+			"",
+			"## Stores",
+			"",
+			...Array.from(byKind.entries()).flatMap(([kind, stores]) => [
+				`### ${kind}`,
+				"",
+				...stores.flatMap(dataStoreInventoryMarkdownLines),
+			]),
+		].filter((line): line is string => line !== undefined).join("\n");
+	}
+
+	dataStoreInventoryJson(options: { generatedAt?: Date; markdownPath?: string; jsonPath?: string } = {}): string {
+		const generatedAt = options.generatedAt || new Date();
+		const stores = this.dataStores.map(dataStoreInventorySnapshot);
+		return `${JSON.stringify({
+			schema: "wanix.data-stores.v1",
+			generatedAt: generatedAt.toISOString(),
+			markdownPath: options.markdownPath ? displayJournalPath(options.markdownPath) : undefined,
+			jsonPath: options.jsonPath ? displayJournalPath(options.jsonPath) : undefined,
+			storeCount: stores.length,
+			artifactPaths: uniquePaths(this.dataStores.flatMap((store) => store.artifacts || [store.path])).map(displayJournalPath),
+			stores,
+		}, null, 2)}\n`;
+	}
+
 	agentStarted(label: string): void {
 		this.agent = [];
 		this.nextAgentId = 1;
@@ -535,6 +616,9 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			"## Route Runs",
 			...journalList(this.routeRuns.flatMap(routeRunJournalLines)),
 			"",
+			"## Data Stores",
+			...journalList(this.dataStores.flatMap(dataStoreJournalLines)),
+			"",
 			"## Tour",
 			...journalList(this.tour.flatMap(tourJournalLines)),
 			"",
@@ -573,6 +657,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				.map(terminalSnapshot),
 			routes: this.routes.map(routeSnapshot),
 			routeRuns: this.routeRuns.map(routeRunSnapshot),
+			dataStores: this.dataStores.map(dataStoreSnapshot),
 			tour: this.tour.map(tourSnapshot),
 			checks: this.checks.map(checkSnapshot),
 			reports: this.reports.map(reportSnapshot),
@@ -617,6 +702,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				return this.checkItems();
 			case "reports":
 				return this.reportItems();
+			case "dataStores":
+				return this.dataStoreItems();
 			case "drivers":
 				return this.drivers.length > 0
 					? this.drivers.map((driver) => leaf(`driver:${driver}`, driver, undefined, "symbol-method"))
@@ -749,6 +836,29 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		));
 	}
 
+	private dataStoreItems(): SystemTreeItem[] {
+		if (this.dataStores.length === 0) {
+			return [leaf("data-stores:empty", "no data stores indexed yet")];
+		}
+		return this.dataStores.map((entry) => leaf(
+			`data-store:${entry.id}`,
+			entry.label,
+			dataStoreDescription(entry),
+			"database",
+			{
+				command: "workbench.openWanixPath",
+				title: "Open Wanix Path",
+				arguments: [entry.path],
+			},
+			"wanixDataStore",
+			{
+				path: entry.path,
+				sourcePath: entry.sourcePath,
+				children: dataStoreArtifactItems(entry),
+			},
+		));
+	}
+
 	private agentItems(): SystemTreeItem[] {
 		if (this.agent.length === 0) {
 			return [leaf("agent:empty", "no agent steps yet")];
@@ -823,6 +933,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			actionLeaf("action:run-self-check", "Run Cockpit Self Check", "diagnose", "checklist", "workbench.runCockpitSelfCheck"),
 			actionLeaf("action:prepare-cockpit", "Prepare Cockpit Reports", "make ready", "check-all", "workbench.prepareCockpitReports"),
 			actionLeaf("action:open-reports", "Open Report Inventory", "reports", "notebook", "workbench.openCockpitReports"),
+			actionLeaf("action:open-data-stores", "Open Data Store Index", "state", "database", "workbench.openDataStoreInventory"),
 			actionLeaf("action:system-journal", "Open System Journal", "snapshot", "notebook", "workbench.openSystemJournal"),
 			actionLeaf("action:agent-tools", "Open Agent Tool Contract", "agent tools", "symbol-method", "workbench.openAgentToolContract"),
 			actionLeaf("action:install-agent-repair", "Install Agent Repair Demo", "agent", "bug", "workbench.installAgentRepairDemo"),
@@ -1168,6 +1279,36 @@ function reportArtifactItems(entry: ReportRecord): SystemTreeItem[] {
 	));
 }
 
+function dataStoreArtifactItems(entry: DataStoreRecord): SystemTreeItem[] {
+	const items: SystemTreeItem[] = [
+		leaf(`data-store:${entry.id}:state`, "State File", pathDescription(entry.path), "database", {
+			command: "workbench.openWanixPath",
+			title: "Open Wanix Path",
+			arguments: [entry.path],
+		}, "wanixDataStore", { path: entry.path }),
+	];
+	if (entry.sourcePath) {
+		items.push(leaf(`data-store:${entry.id}:source`, "Source", pathDescription(entry.sourcePath), "go-to-file", {
+			command: "workbench.openWanixPath",
+			title: "Open Wanix Path",
+			arguments: [entry.sourcePath],
+		}, "wanixDataStore", { path: entry.sourcePath }));
+	}
+	for (const [index, path] of uniquePaths(entry.artifacts)
+		.filter((path) => path !== entry.path && path !== entry.sourcePath)
+		.entries()) {
+		items.push(leaf(`data-store:${entry.id}:artifact:${index}`, path, pathDescription(path), "file", {
+			command: "workbench.openWanixPath",
+			title: "Open Wanix Path",
+			arguments: [path],
+		}, "wanixDataStore", { path }));
+	}
+	if (entry.routeLabel) {
+		items.push(leaf(`data-store:${entry.id}:route`, "Route", entry.routeLabel, "globe"));
+	}
+	return items;
+}
+
 function activityItem(entry: ActivityRecord): SystemTreeItem {
 	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
 	const path = entry.path || paths[paths.length - 1];
@@ -1221,6 +1362,11 @@ function checkDescription(entry: CheckRecord): string {
 function reportDescription(entry: ReportRecord): string {
 	const detail = entry.description;
 	return detail ? `${detail} · ${pathDescription(entry.path)}` : pathDescription(entry.path);
+}
+
+function dataStoreDescription(entry: DataStoreRecord): string {
+	const details = [entry.kind, entry.description, entry.routeLabel].filter((part): part is string => Boolean(part));
+	return details.length > 0 ? `${details.join(" · ")} · ${pathDescription(entry.path)}` : pathDescription(entry.path);
 }
 
 function journalList(lines: string[]): string[] {
@@ -1314,6 +1460,30 @@ function routeRunJournalLines(run: RouteRunRecord): string[] {
 	].filter((line): line is string => line !== undefined);
 }
 
+function dataStoreSnapshot(entry: DataStoreRecord): object {
+	return {
+		id: entry.id,
+		label: entry.label,
+		kind: entry.kind,
+		description: entry.description,
+		path: displayJournalPath(entry.path),
+		sourcePath: entry.sourcePath ? displayJournalPath(entry.sourcePath) : undefined,
+		routeLabel: entry.routeLabel,
+		artifacts: uniquePaths(entry.artifacts).map(displayJournalPath),
+	};
+}
+
+function dataStoreJournalLines(entry: DataStoreRecord): string[] {
+	return [
+		`- ${entry.label}${entry.description ? ` - ${entry.description}` : ""}`,
+		entry.kind ? `  - kind: ${entry.kind}` : undefined,
+		`  - path: ${displayJournalPath(entry.path)}`,
+		entry.sourcePath ? `  - source: ${displayJournalPath(entry.sourcePath)}` : undefined,
+		entry.routeLabel ? `  - route: ${entry.routeLabel}` : undefined,
+		...uniquePaths(entry.artifacts).map((path) => `  - artifact: ${displayJournalPath(path)}`),
+	].filter((line): line is string => line !== undefined);
+}
+
 function tourSnapshot(entry: TourRecord): object {
 	return {
 		id: entry.id,
@@ -1392,6 +1562,31 @@ function reportInventoryMarkdownLines(entry: ReportRecord): string[] {
 			.map((path) => `  - ${displayJournalPath(path)}`),
 		"",
 	];
+}
+
+function dataStoreInventorySnapshot(entry: DataStoreRecord): object {
+	return {
+		id: entry.id,
+		label: entry.label,
+		kind: entry.kind || "store",
+		description: entry.description,
+		path: displayJournalPath(entry.path),
+		sourcePath: entry.sourcePath ? displayJournalPath(entry.sourcePath) : undefined,
+		routeLabel: entry.routeLabel,
+		artifacts: uniquePaths(entry.artifacts || [entry.path]).map(displayJournalPath),
+	};
+}
+
+function dataStoreInventoryMarkdownLines(entry: DataStoreRecord): string[] {
+	return [
+		`- ${entry.label}: ${displayJournalPath(entry.path)}${entry.description ? ` - ${entry.description}` : ""}`,
+		entry.sourcePath ? `  - source: ${displayJournalPath(entry.sourcePath)}` : undefined,
+		entry.routeLabel ? `  - route: ${entry.routeLabel}` : undefined,
+		...uniquePaths(entry.artifacts || [entry.path])
+			.filter((path) => path !== entry.path && path !== entry.sourcePath)
+			.map((path) => `  - ${displayJournalPath(path)}`),
+		"",
+	].filter((line): line is string => line !== undefined);
 }
 
 function agentSnapshot(entry: AgentRecord): object {
@@ -1492,6 +1687,8 @@ function categoryIcon(id: CategoryId): vscode.ThemeIcon {
 			return new vscode.ThemeIcon("testing-view-icon");
 		case "reports":
 			return new vscode.ThemeIcon("notebook");
+		case "dataStores":
+			return new vscode.ThemeIcon("database");
 		case "drivers":
 			return new vscode.ThemeIcon("symbol-method");
 		case "tasks":

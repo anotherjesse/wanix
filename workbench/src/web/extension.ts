@@ -5,7 +5,7 @@ import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairQjsProgram } from './a
 import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
 import { COCKPIT_SELF_CHECK_JSON_PATH, COCKPIT_SELF_CHECK_MD_PATH, COCKPIT_SELF_CHECK_PROBE_PATH, runCockpitSelfCheck } from './cockpit-self-check.js';
 import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
-import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, type HttpAppRouteConfig } from './http-app-demo.js';
+import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, publishHttpAppDataStores, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView, type WanixServiceTask, type WanixServiceTerminal } from './system-view.js';
@@ -85,6 +85,8 @@ const TASK_OUTPUT_MAX_CHARS = 512 * 1024;
 const COCKPIT_TOUR_REPORT_PATH = ".wanix/cockpit-tour.md";
 const COCKPIT_REPORT_INDEX_MD_PATH = ".wanix/cockpit-reports.md";
 const COCKPIT_REPORT_INDEX_JSON_PATH = ".wanix/cockpit-reports.json";
+const DATA_STORE_INDEX_MD_PATH = ".wanix/data-stores.md";
+const DATA_STORE_INDEX_JSON_PATH = ".wanix/data-stores.json";
 const SYSTEM_JOURNAL_PATH = ".wanix/system-journal.md";
 const SYSTEM_STATE_PATH = ".wanix/system-state.json";
 const SERVICE_STATE_POLL_MS = 1000;
@@ -248,6 +250,16 @@ export async function activate(context: vscode.ExtensionContext) {
 				await openWanixPath(COCKPIT_REPORT_INDEX_MD_PATH);
 				revealWanixSystemView();
 				vscode.window.showInformationMessage(`Opened Wanix cockpit report inventory`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openDataStoreInventory', async () => {
+			try {
+				await publishDataStoreInventory(fsys, bridge, systemView);
+				await openWanixPath(DATA_STORE_INDEX_MD_PATH);
+				revealWanixSystemView();
+				vscode.window.showInformationMessage(`Opened Wanix data store index`);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -532,6 +544,7 @@ async function writeSystemJournal(
 ): Promise<{ journalPath: string; statePath: string }> {
 	await fsys.makeDirAll(".wanix");
 	const generatedAt = new Date();
+	await publishHttpAppDataStores(fsys, systemView);
 	systemView.filesystemActivity("system state written", { path: SYSTEM_STATE_PATH });
 	systemView.filesystemActivity("system journal written", { path: SYSTEM_JOURNAL_PATH });
 	systemView.reportPublished("System Journal", SYSTEM_JOURNAL_PATH, {
@@ -602,6 +615,33 @@ async function publishCockpitReportInventory(
 		jsonPath: COCKPIT_REPORT_INDEX_JSON_PATH,
 	}));
 	await refreshWanixPaths(bridge, [COCKPIT_REPORT_INDEX_MD_PATH, COCKPIT_REPORT_INDEX_JSON_PATH]);
+}
+
+async function publishDataStoreInventory(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const generatedAt = new Date();
+	await fsys.makeDirAll(".wanix");
+	await publishHttpAppDataStores(fsys, systemView);
+	systemView.reportPublished("Data Store Index", DATA_STORE_INDEX_MD_PATH, {
+		kind: "data",
+		description: "live data store inventory",
+		icon: "database",
+		artifacts: [DATA_STORE_INDEX_MD_PATH, DATA_STORE_INDEX_JSON_PATH],
+	});
+	await fsys.writeFile(DATA_STORE_INDEX_JSON_PATH, systemView.dataStoreInventoryJson({
+		generatedAt,
+		markdownPath: DATA_STORE_INDEX_MD_PATH,
+		jsonPath: DATA_STORE_INDEX_JSON_PATH,
+	}));
+	await fsys.writeFile(DATA_STORE_INDEX_MD_PATH, systemView.dataStoreInventoryMarkdown({
+		generatedAt,
+		markdownPath: DATA_STORE_INDEX_MD_PATH,
+		jsonPath: DATA_STORE_INDEX_JSON_PATH,
+	}));
+	await refreshWanixPaths(bridge, [DATA_STORE_INDEX_MD_PATH, DATA_STORE_INDEX_JSON_PATH]);
 }
 
 function wanixUri(path: string): vscode.Uri {

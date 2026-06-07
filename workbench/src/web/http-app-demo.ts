@@ -32,6 +32,13 @@ type HttpAppPreviewTarget = {
 	message: string;
 	errorLabel: string;
 	artifacts?: Array<{ label: string; path: string; icon?: string }>;
+	dataStore?: {
+		label: string;
+		path: string;
+		kind: string;
+		description: string;
+		routeLabel?: string;
+	};
 };
 
 type HttpAppTrace = {
@@ -55,6 +62,13 @@ const COUNTER_PREVIEW: HttpAppPreviewTarget = {
 	message: "Previewed Wanix HTTP counter response in /apps",
 	errorLabel: "Wanix HTTP counter",
 	artifacts: [{ label: "State File", path: COUNTER_STATE_PATH, icon: "database" }],
+	dataStore: {
+		label: "HTTP Counter State",
+		path: COUNTER_STATE_PATH,
+		kind: "stateful http",
+		description: "counter backing file",
+		routeLabel: `/.wanix/app/${COUNTER_NAME}`,
+	},
 };
 
 const WASM_ROUTE_PREVIEW: HttpAppPreviewTarget = {
@@ -207,6 +221,26 @@ export async function openHttpCounterDemo(
 	await previewHttpApp(fsys, bridge, config, systemView, COUNTER_PREVIEW);
 }
 
+export async function publishHttpAppDataStores(
+	fsys: any,
+	systemView: WanixSystemView,
+): Promise<void> {
+	if (!await wanixPathExists(fsys, COUNTER_STATE_PATH)) {
+		return;
+	}
+	const artifacts = [COUNTER_STATE_PATH];
+	if (await wanixPathExists(fsys, COUNTER_PREVIEW_PATH)) {
+		artifacts.push(COUNTER_PREVIEW_PATH);
+	}
+	systemView.dataStorePublished("HTTP Counter State", COUNTER_STATE_PATH, {
+		kind: "stateful http",
+		description: "counter backing file",
+		sourcePath: await wanixPathExists(fsys, COUNTER_PATH) ? COUNTER_PATH : undefined,
+		routeLabel: `/.wanix/app/${COUNTER_NAME}`,
+		artifacts,
+	});
+}
+
 export async function openHttpWasmDemo(
 	fsys: any,
 	bridge: WanixBridge,
@@ -255,6 +289,15 @@ async function previewHttpApp(
 		label: `/.wanix/app/${target.name}`,
 		artifacts,
 	});
+	if (target.dataStore) {
+		systemView.dataStorePublished(target.dataStore.label, target.dataStore.path, {
+			kind: target.dataStore.kind,
+			description: target.dataStore.description,
+			sourcePath: target.sourcePath,
+			routeLabel: target.dataStore.routeLabel || `/.wanix/app/${target.name}`,
+			artifacts: [target.dataStore.path, target.previewPath, ...artifacts.map((artifact) => artifact.path)],
+		});
+	}
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
 	});

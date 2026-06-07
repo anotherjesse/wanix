@@ -211,6 +211,12 @@
         "icon": "$(notebook)"
       },
       {
+        "command": "workbench.openDataStoreInventory",
+        "title": "Open Data Store Index",
+        "category": "Wanix",
+        "icon": "$(database)"
+      },
+      {
         "command": "workbench.openSystemJournal",
         "title": "Open System Journal",
         "category": "Wanix",
@@ -319,44 +325,49 @@
           "group": "navigation@7"
         },
         {
-          "command": "workbench.installDuetDemo",
+          "command": "workbench.openDataStoreInventory",
           "when": "view == wanix.system",
           "group": "navigation@8"
         },
         {
-          "command": "workbench.resetDuetDemo",
+          "command": "workbench.installDuetDemo",
           "when": "view == wanix.system",
           "group": "navigation@9"
         },
         {
-          "command": "workbench.openHttpAppDemo",
+          "command": "workbench.resetDuetDemo",
           "when": "view == wanix.system",
           "group": "navigation@10"
         },
         {
-          "command": "workbench.openHttpCounterDemo",
+          "command": "workbench.openHttpAppDemo",
           "when": "view == wanix.system",
           "group": "navigation@11"
         },
         {
-          "command": "workbench.openHttpWasmDemo",
+          "command": "workbench.openHttpCounterDemo",
           "when": "view == wanix.system",
           "group": "navigation@12"
         },
         {
-          "command": "workbench.openHttpAppHandler",
+          "command": "workbench.openHttpWasmDemo",
           "when": "view == wanix.system",
           "group": "navigation@13"
         },
         {
-          "command": "workbench.installAgentRepairDemo",
+          "command": "workbench.openHttpAppHandler",
           "when": "view == wanix.system",
           "group": "navigation@14"
         },
         {
-          "command": "workbench.runAgentRepairDemo",
+          "command": "workbench.installAgentRepairDemo",
           "when": "view == wanix.system",
           "group": "navigation@15"
+        },
+        {
+          "command": "workbench.runAgentRepairDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@16"
         }
       ],
       "view/item/context": [
@@ -403,6 +414,11 @@
         {
           "command": "workbench.openWanixPath",
           "when": "view == wanix.system && viewItem == wanixActivityPath",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixDataStore",
           "group": "navigation@0"
         },
         {
