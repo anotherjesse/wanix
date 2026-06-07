@@ -123,6 +123,7 @@ type SystemTreeItem =
 
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "actions", label: "Actions" },
+	{ type: "category", id: "activity", label: "Activity" },
 	{ type: "category", id: "routes", label: "Routes" },
 	{ type: "category", id: "routeRuns", label: "Route Runs" },
 	{ type: "category", id: "agent", label: "Agent" },
@@ -130,7 +131,6 @@ const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "terminals", label: "Terminals" },
 	{ type: "category", id: "namespace", label: "Namespace" },
 	{ type: "category", id: "drivers", label: "Drivers" },
-	{ type: "category", id: "activity", label: "Activity" },
 ];
 
 export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>, vscode.Disposable {

@@ -148,9 +148,11 @@ a `/shared` watcher in the System view. When a Linux guest writes
 `/shared/from-linux.txt` through the shared 9P filesystem, the workbench refreshes
 the changed path and records it in Activity, so the browser side becomes a
 dashboard for guest-visible filesystem traffic instead of a page you remember to
-refresh.
+refresh. Activity now sits directly under Actions, because the newest feedback
+from the system should be visible before routes, tasks, terminals, and namespace
+details.
 
-![Wanix v86 shared watch Activity](assets/wanix-workbench-browser-dx/48-v86-shared-watch-activity.png)
+![Wanix Activity near Actions](assets/wanix-workbench-browser-dx/49-activity-near-actions.png)
 
 The next polish pass removed another bit of demo friction: you no longer need
 to hand-copy a WASM fixture into the served root. The Wanix system view has an
