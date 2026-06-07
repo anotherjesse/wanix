@@ -15,4 +15,4 @@ mod serve;
 mod ticket;
 
 pub(crate) use serve::{parse_mesh_serve_command, run_mesh_serve_streaming};
-pub(crate) use ticket::{IROH_SCHEME, IrohMount, dial_iroh_remote};
+pub(crate) use ticket::{IROH_SCHEME, IrohMount, MeshTicket, dial_iroh_remote};

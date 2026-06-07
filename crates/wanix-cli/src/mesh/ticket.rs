@@ -51,7 +51,7 @@ impl MeshTicket {
     }
 
     /// Builds the iroh [`EndpointAddr`] this ticket dials.
-    fn endpoint_addr(&self) -> EndpointAddr {
+    pub(crate) fn endpoint_addr(&self) -> EndpointAddr {
         let mut addr = EndpointAddr::new(self.peer);
         for socket in &self.addrs {
             addr = addr.with_ip_addr(*socket);

@@ -38,7 +38,27 @@ pub const DEFAULT_OP_DEADLINE: Duration = Duration::from_secs(30);
 /// schedules.
 pub const MAX_CONCURRENT_SESSIONS: usize = 512;
 
-/// Blocking-pool headroom above [`MAX_CONCURRENT_SESSIONS`] for transient work.
+/// Hard cap on concurrently running cpu jobs on the acceptor side.
+///
+/// The cpu plane shares the runtime's blocking pool with the 9P plane, and a
+/// running job pins blocking-pool threads (the `run_job` thread parked in
+/// `block_on` on the reverse-export reader, plus transient role-sort work). With
+/// no cap a hostile-but-allowlisted peer opening many stalled cpu connections
+/// could exhaust the pool and starve the 9P plane. This bound mirrors the 9P
+/// session semaphore for the exec plane; the blocking pool is sized to admit
+/// these jobs (each accounted at [`CPU_THREADS_PER_JOB`]) alongside 9P sessions.
+pub const MAX_CONCURRENT_CPU_JOBS: usize = 32;
+
+/// Blocking-pool threads a single in-flight cpu job is accounted at.
+///
+/// A running job parks one blocking-pool thread inside `run_job`'s `block_on`
+/// on the reverse-export reader for the job's lifetime; the role-sort step uses
+/// a second, transient `spawn_blocking`. Sizing the pool at two threads per
+/// admitted job keeps a full cpu plane from borrowing from the 9P budget.
+const CPU_THREADS_PER_JOB: usize = 2;
+
+/// Blocking-pool headroom above the admitted 9P sessions and cpu jobs for the
+/// runtime's own transient `spawn_blocking` work.
 const BLOCKING_POOL_HEADROOM: usize = 64;
 
 /// One mesh node: a held tokio runtime, an iroh endpoint, and an optional router.
@@ -75,12 +95,18 @@ impl MeshNode {
     fn bind_with(identity: &NodeIdentity, binding: Binding) -> MeshResult<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            // Bound the blocking pool so a flood of long-lived sessions (one
-            // pinned blocking thread each) cannot grow the pool without limit.
-            // The session semaphore in the handler admits at most
-            // MAX_CONCURRENT_SESSIONS of these; the headroom covers the runtime's
-            // own short-lived spawn_blocking work.
-            .max_blocking_threads(MAX_CONCURRENT_SESSIONS + BLOCKING_POOL_HEADROOM)
+            // Bound the blocking pool so a flood of long-lived sessions or cpu
+            // jobs (each pinning blocking threads) cannot grow the pool without
+            // limit. The session semaphore in the 9P handler admits at most
+            // MAX_CONCURRENT_SESSIONS of these and the cpu acceptor's semaphore
+            // admits at most MAX_CONCURRENT_CPU_JOBS (accounted at
+            // CPU_THREADS_PER_JOB each); the headroom covers the runtime's own
+            // short-lived spawn_blocking work.
+            .max_blocking_threads(
+                MAX_CONCURRENT_SESSIONS
+                    + MAX_CONCURRENT_CPU_JOBS * CPU_THREADS_PER_JOB
+                    + BLOCKING_POOL_HEADROOM,
+            )
             .build()
             .map_err(|err| MeshError::Bind(err.to_string()))?;
         let secret = secret_key_for(identity);
@@ -199,6 +225,61 @@ impl MeshNode {
                 .spawn()
         });
         self.router = Some(router);
+    }
+
+    /// Starts serving the cpu exec plane (`acceptor`) on [`crate::WANIX_CPU_ALPN`].
+    ///
+    /// The cpu plane runs grant-allowlisted remote tasks against a caller's
+    /// reverse-exported namespace. It is a distinct ALPN from the 9P plane and is
+    /// gated by the acceptor's own allowlist, per the blueprint's "exec-device
+    /// export stays local-trust until public auth lands": a node should serve cpu
+    /// only on a direct-address-only (local-trust) endpoint, never the public one.
+    pub fn serve_cpu(&mut self, acceptor: crate::CpuAcceptor) {
+        let router = self.runtime.block_on(async {
+            Router::builder(self.endpoint.clone())
+                .accept(crate::WANIX_CPU_ALPN, acceptor)
+                .spawn()
+        });
+        self.router = Some(router);
+    }
+
+    /// Builds a [`crate::CpuAcceptor`] over this node's runtime handle.
+    ///
+    /// `table_factory` produces a fresh driver-registered task table per job;
+    /// `allowlist` is the exec trust gate (`true` admits a peer to run code).
+    #[must_use]
+    pub fn cpu_acceptor(
+        &self,
+        table_factory: crate::TaskTableFactory,
+        allowlist: std::sync::Arc<dyn Fn(PeerId) -> bool + Send + Sync>,
+    ) -> crate::CpuAcceptor {
+        crate::CpuAcceptor::new(
+            table_factory,
+            allowlist,
+            self.runtime.handle().clone(),
+            self.deadline,
+        )
+    }
+
+    /// Dials `addr` over the cpu ALPN and returns a [`crate::CpuDialer`].
+    ///
+    /// The returned dialer runs one job: it opens the control and export streams,
+    /// exports a scoped reverse namespace, and drains the result batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MeshError::Dial`] when the QUIC connection cannot be established.
+    pub fn dial_cpu(&self, addr: EndpointAddr) -> MeshResult<crate::CpuDialer> {
+        let endpoint = self.endpoint.clone();
+        let connection = self
+            .runtime
+            .block_on(async move { endpoint.connect(addr, crate::WANIX_CPU_ALPN).await })
+            .map_err(|err| MeshError::Dial(err.to_string()))?;
+        Ok(crate::CpuDialer::new(
+            connection,
+            self.runtime.handle().clone(),
+            self.deadline,
+        ))
     }
 
     /// Builds the deadline-bound 9P protocol handler for `config`.

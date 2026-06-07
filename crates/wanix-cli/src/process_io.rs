@@ -4,8 +4,8 @@ use std::io::{Read, Write};
 mod fd;
 
 use crate::{
-    CliError, agent_exec_server, mesh, p9_listen, p9_stdio, p9_ws, qemu, qjs_term, run_collected,
-    serve, write_process_output,
+    CliError, agent_exec_server, cpu, mesh, p9_listen, p9_stdio, p9_ws, qemu, qjs_term,
+    run_collected, serve, write_process_output,
 };
 
 /// Unix fd pair used by terminal-aware CLI entrypoints.
@@ -115,6 +115,11 @@ fn run_streaming_command(
         Some("p9-stdio" | "p9-listen" | "p9-ws") => run_9p_streaming_command(command, rest, io),
         Some("mesh-serve") => Ok(Some(mesh::run_mesh_serve_streaming(
             mesh::parse_mesh_serve_command(rest)?,
+            io.stderr,
+        )?)),
+        Some("cpu") => Ok(Some(cpu::run_cpu_streaming(
+            cpu::parse_cpu_command(rest)?,
+            io.stdout,
             io.stderr,
         )?)),
         Some("agent-exec-server") => Ok(Some(agent_exec_server::run_agent_exec_server_streaming(

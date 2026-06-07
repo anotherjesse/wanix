@@ -1,0 +1,25 @@
+[package]
+name = "wanix-cpu"
+description = "Plan 9 cpu over the mesh: a #cpu acceptor that runs a task against a reverse-exported caller namespace, and the sync, transport-agnostic CPU control protocol."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wanix-9p = { path = "../wanix-9p" }
+wanix-9p-client = { path = "../wanix-9p-client" }
+wanix-fs = { path = "../wanix-fs" }
+wanix-task = { path = "../wanix-task" }
+wanix-vfs = { path = "../wanix-vfs" }
+
+[dev-dependencies]
+wanix-protocol = { path = "../wanix-protocol" }
+
+[lib]
+name = "wanix_cpu"
+path = "src/lib.rs"

@@ -31,6 +31,7 @@
 //! [`wanix_id::AttachPolicy`].
 
 mod cas;
+mod cpu;
 mod dialer;
 mod duplex;
 mod error;
@@ -39,6 +40,7 @@ mod identity;
 mod node;
 
 pub use cas::{IrohCasStore, blob_hash, blobs_protocol, content_hash};
+pub use cpu::{CpuAcceptor, CpuDialer, CpuJobReport, TaskTableFactory, WANIX_CPU_ALPN};
 pub use dialer::MeshDialer;
 pub use duplex::{BlockingDuplex, BlockingReader, BlockingWriter};
 pub use error::{MeshError, MeshResult};

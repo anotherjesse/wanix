@@ -6,6 +6,7 @@ mod agent_program;
 mod capsule;
 mod collected;
 mod command_args;
+mod cpu;
 mod help;
 mod json;
 mod mesh;
@@ -4453,7 +4454,16 @@ std.out.flush();
     fn temp_dir(prefix: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
         let nonce = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        path.push(format!("{prefix}-{}-{nonce}", std::process::id()));
+        // Include a per-process nanosecond stamp so a reused PID across separate
+        // `cargo test` runs cannot collide with a leftover dir from an earlier run
+        // (the in-process nonce alone resets to 0 each process). Tests that then
+        // `create_dir` (not `create_dir_all`) a child would otherwise fail
+        // `AlreadyExists` against stale state.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0);
+        path.push(format!("{prefix}-{}-{stamp}-{nonce}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
     }

@@ -4726,6 +4726,7 @@ dependencies = [
  "wanix-9p-client",
  "wanix-agent",
  "wanix-cas",
+ "wanix-cpu",
  "wanix-fs",
  "wanix-id",
  "wanix-kv",
@@ -4738,6 +4739,18 @@ dependencies = [
  "wanix-vfs",
  "wanix-wasi",
  "wanix-wasm",
+]
+
+[[package]]
+name = "wanix-cpu"
+version = "0.1.0"
+dependencies = [
+ "wanix-9p",
+ "wanix-9p-client",
+ "wanix-fs",
+ "wanix-protocol",
+ "wanix-task",
+ "wanix-vfs",
 ]
 
 [[package]]
@@ -4772,6 +4785,7 @@ dependencies = [
  "wanix-9p",
  "wanix-9p-client",
  "wanix-cas",
+ "wanix-cpu",
  "wanix-fs",
  "wanix-id",
  "wanix-kv",

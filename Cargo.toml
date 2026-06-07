@@ -3,6 +3,7 @@ members = [
     "crates/wanix-agent",
     "crates/wanix-cas",
     "crates/wanix-cli",
+    "crates/wanix-cpu",
     "crates/wanix-9p",
     "crates/wanix-9p-client",
     "crates/wanix-fs",

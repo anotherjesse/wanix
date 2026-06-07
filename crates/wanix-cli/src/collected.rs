@@ -3,9 +3,9 @@ use std::io::Read;
 
 use crate::wasm_args::parse_wasm_command;
 use crate::{
-    CliError, CliOutput, agent, agent_exec_server, capsule, mesh, mount, new, p9_listen, p9_stdio,
-    p9_ws, parse_qjs_command, parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term,
-    rootfs, serve, wasm,
+    CliError, CliOutput, agent, agent_exec_server, capsule, cpu, mesh, mount, new, p9_listen,
+    p9_stdio, p9_ws, parse_qjs_command, parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore,
+    qjs_term, rootfs, serve, wasm,
 };
 
 pub(super) fn run_collected_command(
@@ -38,6 +38,7 @@ pub(super) fn run_collected_command(
         Some("mesh-serve") => {
             require_live_process_io(mesh::parse_mesh_serve_command(rest), "mesh-serve")
         }
+        Some("cpu") => require_live_process_io(cpu::parse_cpu_command(rest), "cpu"),
         _ => unknown_collected_command(command),
     }
 }
