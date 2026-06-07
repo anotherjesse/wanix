@@ -13,6 +13,7 @@ use super::message::parse_terminal_resize_message;
 use super::root_changes::RootChangeTracker;
 use super::shell_activity::{
     ShellInputActivityTracker, ShellMutationOperation, operations_for_changed_paths,
+    operations_without_changed_paths,
 };
 
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
@@ -180,10 +181,14 @@ impl TerminalWebSocketSession {
             .changes
             .take_changed_paths()
             .map_err(ServeConnectionError::Io)?;
-        if paths.is_empty() {
+        let operations = if paths.is_empty() {
+            operations_without_changed_paths(operations)
+        } else {
+            operations_for_changed_paths(operations, &paths)
+        };
+        if paths.is_empty() && operations.is_empty() {
             return Ok(());
         }
-        let operations = operations_for_changed_paths(operations, &paths);
         self.socket
             .send(Message::text(shell_mutation_message(
                 &self.shell,
@@ -245,7 +250,7 @@ fn shell_mutation_message(
 fn shell_operation_json(operation: &ShellMutationOperation) -> String {
     let mut fields = vec![
         format!("\"kind\":{}", json_string(&operation.kind)),
-        "\"status\":\"changed\"".to_owned(),
+        format!("\"status\":{}", json_string(&operation.status)),
     ];
     if let Some(source) = &operation.source {
         fields.push(format!("\"source\":{}", json_string(source)));

@@ -169,6 +169,7 @@ fn serve_qjs_shell_route_json(roots: &ServeRoots, websocket_url: &str) -> String
              \"resize COLS ROWS\"],\
              \"sessionMessage\":\"{{\\\"type\\\":\\\"session\\\",\\\"protocol\\\":\\\"wanix-qjs-shell.v1\\\",\\\"taskId\\\":\\\"ID\\\",\\\"terminalId\\\":\\\"ID\\\",\\\"cwd\\\":\\\"PATH\\\"}}\",\
              \"mutationMessage\":\"{{\\\"type\\\":\\\"mutation\\\",\\\"protocol\\\":\\\"wanix-qjs-shell.v1\\\",\\\"taskId\\\":\\\"ID\\\",\\\"terminalId\\\":\\\"ID\\\",\\\"cwd\\\":\\\"PATH\\\",\\\"paths\\\":[\\\"/path\\\"],\\\"operations\\\":[{{\\\"kind\\\":\\\"write\\\",\\\"status\\\":\\\"changed\\\",\\\"target\\\":\\\"/path\\\",\\\"paths\\\":[\\\"/path\\\"]}}]}}\",\
+             \"unchangedOperationMessage\":\"{{\\\"type\\\":\\\"mutation\\\",\\\"protocol\\\":\\\"wanix-qjs-shell.v1\\\",\\\"taskId\\\":\\\"ID\\\",\\\"terminalId\\\":\\\"ID\\\",\\\"cwd\\\":\\\"PATH\\\",\\\"paths\\\":[],\\\"operations\\\":[{{\\\"kind\\\":\\\"rm\\\",\\\"status\\\":\\\"unchanged\\\",\\\"target\\\":\\\"/missing\\\",\\\"paths\\\":[]}}]}}\",\
              \"exitMessage\":\"{{\\\"type\\\":\\\"exit\\\",\\\"code\\\":N}}\",\
              \"terminalLifecycle\":\"owned-resource-closed-on-session-close\"}}",
             json_string(websocket_url)

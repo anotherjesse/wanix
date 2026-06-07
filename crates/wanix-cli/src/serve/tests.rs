@@ -1419,6 +1419,10 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
         qjs_shell["mutationMessage"],
         "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"],\"operations\":[{\"kind\":\"write\",\"status\":\"changed\",\"target\":\"/path\",\"paths\":[\"/path\"]}]}"
     );
+    assert_eq!(
+        qjs_shell["unchangedOperationMessage"],
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"status\":\"unchanged\",\"target\":\"/missing\",\"paths\":[]}]}"
+    );
     assert_eq!(qjs_shell["exitMessage"], "{\"type\":\"exit\",\"code\":N}");
     assert_eq!(
         qjs_shell["terminalLifecycle"],
@@ -2352,6 +2356,34 @@ std.exit(6);
             );
         }
         other => panic!("expected shell mutation message, got {other:?}"),
+    }
+
+    socket
+        .send(Message::binary(b"rm definitely-missing.txt\n".as_slice()))
+        .unwrap();
+    match socket.read().unwrap() {
+        Message::Binary(bytes) => {
+            let output = String::from_utf8_lossy(bytes.as_ref());
+            assert!(output.contains("rm definitely-missing.txt\r\n"), "{output}");
+            assert!(
+                output.contains("rm: definitely-missing.txt: errno -44\r\n"),
+                "{output}"
+            );
+        }
+        other => panic!("expected failed shell rm output, got {other:?}"),
+    }
+    match socket.read().unwrap() {
+        Message::Text(text) => {
+            let mutation_json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(mutation_json["type"], "mutation");
+            assert_eq!(mutation_json["paths"].as_array().unwrap().len(), 0);
+            let operation = &mutation_json["operations"][0];
+            assert_eq!(operation["kind"], "rm");
+            assert_eq!(operation["status"], "unchanged");
+            assert_eq!(operation["target"], "/app/definitely-missing.txt");
+            assert!(qjs_shell_operation_paths(operation).is_empty());
+        }
+        other => panic!("expected no-change shell operation message, got {other:?}"),
     }
 
     socket

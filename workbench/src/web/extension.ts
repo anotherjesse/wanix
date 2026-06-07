@@ -2401,7 +2401,8 @@ function isQjsShellMutationOperation(operation: unknown): operation is QjsShellM
 }
 
 function shellMutationActivity(message: QjsShellMutationMessage): FilesystemActivity | undefined {
-	const operation = message.operations?.find((operation) => operation.paths.length > 0);
+	const operation = message.operations?.find((operation) => operation.paths.length > 0)
+		|| message.operations?.[0];
 	if (operation) {
 		return shellOperationActivity(operation);
 	}
@@ -2418,13 +2419,21 @@ function shellMutationActivity(message: QjsShellMutationMessage): FilesystemActi
 
 function shellOperationActivity(operation: QjsShellMutationOperation): FilesystemActivity | undefined {
 	const unique = uniqueShellPaths(operation.paths);
-	if (unique.length === 0) {
-		return undefined;
-	}
 	const target = operation.target && !operation.target.startsWith("#") ? operation.target : undefined;
 	const source = operation.source && !operation.source.startsWith("#") ? operation.source : undefined;
+	if (unique.length === 0) {
+		if (operation.status === "unchanged" && (target || source)) {
+			const openPath = shellOperationNoChangeOpenPath(operation.kind, source, target);
+			return {
+				label: shellOperationLabel(operation.kind, source, target, unique, operation.status),
+				openPath,
+				paths: [openPath],
+			};
+		}
+		return undefined;
+	}
 	const openPath = shellOperationOpenPath(operation.kind, source, target, unique);
-	const label = shellOperationLabel(operation.kind, source, target, unique);
+	const label = shellOperationLabel(operation.kind, source, target, unique, operation.status);
 	return { label, openPath, paths: unique };
 }
 
@@ -2438,17 +2447,33 @@ function shellOperationOpenPath(kind: string, source: string | undefined, target
 	return target || paths[paths.length - 1];
 }
 
-function shellOperationLabel(kind: string, source: string | undefined, target: string | undefined, paths: string[]): string {
+function shellOperationNoChangeOpenPath(kind: string, source: string | undefined, target: string | undefined): string {
+	const candidate = target || source;
+	return candidate ? parentPath(candidate) || "/" : "/";
+}
+
+function shellOperationLabel(kind: string, source: string | undefined, target: string | undefined, paths: string[], status?: string): string {
+	const suffix = shellOperationStatusSuffix(status);
 	if (kind === "mv" && source && target) {
-		return `shell mv ${displayWanixPath(source)} -> ${displayWanixPath(target)}`;
+		return `shell mv ${displayWanixPath(source)} -> ${displayWanixPath(target)}${suffix}`;
 	}
 	if (kind === "cp" && source && target) {
-		return `shell cp ${displayWanixPath(source)} -> ${displayWanixPath(target)}`;
+		return `shell cp ${displayWanixPath(source)} -> ${displayWanixPath(target)}${suffix}`;
 	}
 	if (kind === "redirect" && paths.length > 1) {
-		return `shell redirect ${paths.length} paths`;
+		return `shell redirect ${paths.length} paths${suffix}`;
 	}
-	return `shell ${kind} ${displayWanixPath(target || paths[paths.length - 1])}`;
+	return `shell ${kind} ${displayWanixPath(target || source || paths[paths.length - 1])}${suffix}`;
+}
+
+function shellOperationStatusSuffix(status: string | undefined): string {
+	if (!status || status === "changed") {
+		return "";
+	}
+	if (status === "unchanged") {
+		return " no change";
+	}
+	return ` ${status}`;
 }
 
 function uniqueShellPaths(paths: string[]): string[] {

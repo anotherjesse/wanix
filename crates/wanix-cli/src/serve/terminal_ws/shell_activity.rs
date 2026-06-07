@@ -3,6 +3,7 @@ use wanix_fs::NormalizedPath;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::serve) struct ShellMutationOperation {
     pub(in crate::serve) kind: String,
+    pub(in crate::serve) status: String,
     pub(in crate::serve) source: Option<String>,
     pub(in crate::serve) target: Option<String>,
     pub(in crate::serve) paths: Vec<String>,
@@ -111,6 +112,7 @@ impl ShellInputActivityTracker {
             }
             _ if !redirected.is_empty() => Some(ShellMutationOperation {
                 kind: "redirect".to_owned(),
+                status: "changed".to_owned(),
                 source: None,
                 target: redirected.last().cloned(),
                 paths: unique_paths(redirected),
@@ -128,6 +130,19 @@ pub(in crate::serve) fn operations_for_changed_paths(
         .iter()
         .filter(|operation| operation_intersects_changed_paths(operation, changed_paths))
         .cloned()
+        .collect()
+}
+
+pub(in crate::serve) fn operations_without_changed_paths(
+    operations: &[ShellMutationOperation],
+) -> Vec<ShellMutationOperation> {
+    operations
+        .iter()
+        .map(|operation| ShellMutationOperation {
+            status: "unchanged".to_owned(),
+            paths: Vec::new(),
+            ..operation.clone()
+        })
         .collect()
 }
 
@@ -152,6 +167,7 @@ fn operation(kind: &str, source: Option<String>, target: Option<String>) -> Shel
     }
     ShellMutationOperation {
         kind: kind.to_owned(),
+        status: "changed".to_owned(),
         source,
         target,
         paths: unique_paths(paths),
@@ -265,7 +281,8 @@ mod tests {
     use wanix_fs::NormalizedPath;
 
     use super::{
-        ShellInputActivityTracker, operations_for_changed_paths, resolve_wanix_path, shell_words,
+        ShellInputActivityTracker, operations_for_changed_paths, operations_without_changed_paths,
+        resolve_wanix_path, shell_words,
     };
 
     #[test]
@@ -293,6 +310,7 @@ mod tests {
 
         assert_eq!(operations.len(), 2);
         assert_eq!(operations[0].kind, "write");
+        assert_eq!(operations[0].status, "changed");
         assert_eq!(operations[0].target.as_deref(), Some("/app/made.txt"));
         assert_eq!(operations[0].paths, ["/app/made.txt"]);
         assert_eq!(operations[1].kind, "mv");
@@ -315,5 +333,18 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].kind, "redirect");
         assert_eq!(filtered[0].paths, ["/app/out.txt", "/app/err.txt"]);
+    }
+
+    #[test]
+    fn marks_operations_without_changed_paths_as_unchanged() {
+        let mut tracker = ShellInputActivityTracker::new(&NormalizedPath::new("app").unwrap());
+        let operations = tracker.observe_input(b"rm missing.txt\n");
+        let unchanged = operations_without_changed_paths(&operations);
+
+        assert_eq!(unchanged.len(), 1);
+        assert_eq!(unchanged[0].kind, "rm");
+        assert_eq!(unchanged[0].status, "unchanged");
+        assert_eq!(unchanged[0].target.as_deref(), Some("/app/missing.txt"));
+        assert!(unchanged[0].paths.is_empty());
     }
 }
