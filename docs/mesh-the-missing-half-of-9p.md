@@ -494,3 +494,368 @@ incremental, because it all rides the same `Duplex` and the same import:
 The missing half of 9P is now built. Wanix could always export; now it can
 import, and import is the primitive from which network transparency — and the
 agent's reach — falls out. The mesh is incremental from here.
+
+---
+
+# Slice 2 — Identity: A Capability Is a Bind
+
+The first slice gave Wanix the 9P *client* and, with it, import: bind a remote
+at `n/remote` and another node's namespace becomes part of yours. But import as
+built in Slice 1 was all-or-nothing. The server `p9-listen`-ed a host directory
+and handed the *entire* tree to anyone who could open the socket. That is fine
+for `127.0.0.1` and a single trusting user. It is exactly wrong for a mesh,
+where the point is that *other people's nodes* import *yours*. The missing
+piece is the boundary: **who** may import, and **how much** of your namespace
+they get.
+
+Slice 2 builds that boundary, and it builds it the Plan 9 way. The headline is
+one sentence: **a capability is a bind.** A grant is not an ACL bolted onto the
+side of the filesystem; it is a re-rooting of the namespace at a subpath, gated
+by rights — the same `bind`-with-a-source-subpath that `wanix-vfs` already does,
+plus a permission gate. The peer you granted attaches and lands inside a
+`SubtreeFs` whose `.` *is* the subtree you gave them. They cannot name a path
+outside it because, in their namespace, there is no outside.
+
+## What We Built
+
+- **`wanix-id`** — a new sync, iroh-free crate that owns identity and
+  authorization: `NodeIdentity` (an ed25519 keypair, persisted owner-private and
+  stable across restarts), `PeerId` (a node is named by its public key — the key
+  *is* the address), `Grant` / `GrantTable` (a **default-deny**,
+  live-editable capability table keyed by verified peer identity),
+  `Authorization`, and the `AttachPolicy` trait with its `GrantTablePolicy`
+  implementation. It depends only on `wanix-fs`, `wanix-vfs`, and
+  `ed25519-dalek` — no transport, no async, testable over a pipe.
+- **`SubtreeFs`** in `wanix-vfs` — the concrete form of a grant: a `FileSystem`
+  that re-roots a backing filesystem at a prefix and gates every method through
+  one central `require(right)` check, so a missing right is *always*
+  `PermissionDenied`, enforced inside the filesystem itself and not only at
+  attach time.
+- **`P9Server::with_policy(default_root, peer, policy)`** in `wanix-9p` — the
+  one new server entry point. When the policy is `None`, the server is
+  byte-for-byte today's. When a policy is present, `handle_attach` consults
+  `evaluate(peer, aname)` and installs the returned scoped root for that attach,
+  or denies with EACCES. The same `handle_frame`/`serve_stream` hot loop runs
+  unchanged underneath.
+- **`p9-listen --peer HEX --grant ANAME:PREFIX:RIGHTS`** — the CLI surface that
+  wires a default-deny `GrantTablePolicy` (scoped to the server's `--root`) into
+  the real TCP transport. Without `--peer`, the listener keeps its prior
+  all-or-nothing behavior, so nothing about the unguarded path changed.
+
+## Why: factotum, `/n/`, and "the key is the address"
+
+Plan 9 split *authentication* from *every other program*. A daemon called
+`factotum` held your keys and spoke the auth protocols, so a file server never
+had to know how to verify you — it asked factotum, and factotum answered.
+Authorization, separately, was the file server's job: having learned *who* you
+are, it decided *which files* you see, and the mechanism it reached for was the
+one Plan 9 already had for everything — the namespace. You were given a view.
+The files you were not authorized for were simply not in your tree.
+
+The mesh inherits both halves, and iroh collapses the first one. In Slice 3 the
+QUIC handshake authenticates the peer's ed25519 key *in the transport*: by the
+time a connection is accepted, the peer's identity is already proven, and the
+verified `PeerId` is the node's address simultaneously. There is nothing left
+for an in-band `Tauth` to do — `Tauth` stays `ENOSYS` forever, which is the
+whole meaning of "made cheap by iroh." Factotum's job became a property of the
+connection.
+
+That leaves authorization, and here the Plan 9 instinct is exact: **don't invent
+an ACL layer; give the peer a namespace.** A grant says "peer K, attaching name
+`projects/foo`, gets the host tree re-rooted at `projects/foo`, read-write." The
+object that embodies that is a `SubtreeFs`, and a `SubtreeFs` is *just a
+`FileSystem`* — the same universal currency the whole system already trades in.
+The peer attaches and is standing inside the granted subtree. A walk toward
+`../../docs` cannot escape because the peer's root *is* `projects/foo`; there is
+no parent to walk to. This is the `/n/` discipline turned into a security
+boundary: you do not filter a shared tree, you hand out *different trees*, and
+the namespace does the confinement for free.
+
+And, as with import itself, the operator this most empowers is the agent. A
+default-deny capability table keyed by verified identity, where each grant is a
+sub-namespace — that is a structure an agent reads by `ls`, extends by adding a
+grant, and revokes by removing one. The capability table is itself meant to be a
+filesystem an agent edits. Slice 2 builds the table and the enforcement; wiring
+it to a `#grant` device an agent `cat`s and `echo`s to is a later edge, but the
+shape is deliberately already file-shaped.
+
+## The How: Architecture
+
+### `evaluate(peer, aname) -> Authorization` is the whole trust boundary
+
+Everything funnels through one pure function. `AttachPolicy::evaluate` takes the
+verified peer and the requested attach name and returns either an
+`Authorization { root, rights }` to install or `None` to deny:
+
+```rust
+pub trait AttachPolicy: Send + Sync {
+    fn evaluate(&self, peer: PeerId, aname: &str) -> Option<Authorization>;
+}
+```
+
+`GrantTablePolicy` implements it by consulting a `GrantTable` — an
+`Arc<RwLock<Vec<Grant>>>` that is **default-deny** (a peer with no matching
+grant is denied; there is no implicit allow) and matched *exactly* by
+`(peer, aname)` with no wildcards. Because the table is cheaply cloneable and
+shares one backing store, a grant added or revoked through one handle is visible
+through every clone — which is exactly what lets the table be edited live while
+the policy reads it on each attach.
+
+When a grant matches, it materializes into the scoped root:
+
+```rust
+pub fn authorize(&self) -> Option<Authorization> {
+    let root = SubtreeFs::new(Arc::clone(&self.backing), &self.prefix, self.rights).ok()?;
+    Some(Authorization::new(Arc::new(root), self.rights))
+}
+```
+
+That is the sentence "a capability is a bind" expressed in five lines: the grant
+*is* the construction of a `SubtreeFs` re-rooted at the prefix with the rights.
+
+### `SubtreeFs`: one `require` per method, rights enforced inside the filesystem
+
+`SubtreeFs` holds the backing filesystem, a `NormalizedPath` prefix, and
+`Rights { read, write }`. Every method does the same two steps: check the right,
+then rebase the path under the prefix and call the backing. The check is
+centralized so it cannot drift:
+
+```rust
+fn require(&self, access: Access) -> FsResult<()> {
+    let granted = match access {
+        Access::Read  => self.rights.read,
+        Access::Write => self.rights.write,
+    };
+    if granted { Ok(()) } else { Err(FsError::PermissionDenied) }
+}
+```
+
+A read-only grant denies *every* mutator — `create_dir`, `remove_file`,
+`rename`, `symlink`, `set_permissions`, … — and also denies a write-mode `open`,
+because `access_for_open` classifies `write || create || truncate` as
+`Access::Write`. The rights live in the filesystem object, not only at the
+attach gate, so even code that already holds a `SubtreeFs` cannot mutate past
+its grant.
+
+### The flow at attach time
+
+```
+peer K opens a stream ──► P9Server::with_policy(root, K, policy)
+        │
+        ▼  Tattach{ aname = "projects/foo" }
+   handle_attach ──► policy.evaluate(K, "projects/foo")
+        │                     │
+        │            ┌────────┴─────────┐
+        │         Some(auth)          None
+        │            │                  │
+        ▼            ▼                  ▼
+  install auth.root  self.root =     Rlerror EACCES,
+  as the fid's root  SubtreeFs       bind nothing
+                     (projects/foo)
+```
+
+Single-attach-per-connection is the v1 simplification: the connection installs
+one scoped root and serves it. Multi-attach scoping (a different `SubtreeFs` per
+fid sub-namespace) is a fid-namespace change deferred to a later slice.
+
+### The corrections this slice carries
+
+**1. Default-deny, keyed by *verified* identity — not by client-claimed
+`uname`.** A 9P `Tattach` carries a `uname` string the client picks. A naive
+server trusts it. The mesh never does: the `GrantTable` is keyed by `PeerId`,
+which in Slice 3 comes from the QUIC handshake, not from anything on the wire.
+Over plain TCP (no QUIC yet) the peer identity is supplied *explicitly* via
+`--peer`, making the trust assumption visible rather than smuggled. An empty
+table denies everyone; there is no allow-by-default seam.
+
+**2. The symlink-escape confinement bypass — found and closed.** This is the
+sharp one, and the first draft got it wrong. Re-rooting only rewrites the path
+*string*. On a symlink-*following* backing like `LocalFs`, a symlink planted
+*inside* the granted prefix whose target points up-and-over to a sibling that is
+still inside the backing root would resolve to out-of-prefix content — escaping
+the grant while never leaving the `LocalFs` root, so `LocalFs`'s own root
+confinement never fires. The fix re-confines every symlink-dereferencing method
+through a new `FileSystem::confine_to_prefix` hook: `LocalFs` overrides it to
+canonicalize the resolved target and reject anything outside the prefix, while
+opaque-symlink `MemFs` keeps the no-op default. A planted
+`../../docs/secret.txt` link inside a read-only `projects/foo` grant now returns
+`PermissionDenied` on `open` *and* on a following `metadata`, while the *opaque*
+`read_link` still returns the raw target bytes (it does not dereference) and a
+`NoFollow` stat still reports the link itself. The earlier doc claim that "a
+walk can never escape the prefix" was corrected: a *string* walk can't, but a
+*symlink* walk could until this gate was added.
+
+**3. `with_policy(None)` is byte-for-byte the old server.** The grant boundary
+is strictly additive. The unguarded `p9-listen` (no `--peer`) constructs
+`P9Server::new(root)` exactly as before; only `--peer` swaps in
+`with_policy(root, peer, policy)`. There is a test asserting `build_serve_policy`
+returns `None` without a peer, so the no-policy path can't silently acquire a
+policy.
+
+### Dependency layering: identity stays iroh-free
+
+`wanix-id` is a sync crate with no transport and no async runtime, exactly as
+the blueprint requires. It is testable over a local pipe today and reusable over
+iroh tomorrow. Critically, **`SubtreeFs` lives in `wanix-vfs`, not in
+`wanix-id`** — re-rooting at a subpath already exists in `Namespace::bind`'s
+source-subpath logic, so the genuinely new part (the rights gate) lands next to
+the re-rooting it extends, and `wanix-id` keeps only `Grant` / `GrantTable` /
+`Authorization` / `AttachPolicy`. When iroh arrives in Slice 3 it injects a
+`PeerId` from `Connection::remote_id()` into `with_policy`; not a line of
+`wanix-id` or `SubtreeFs` has to move.
+
+## Copy-Paste: Input / Output
+
+Everything below is real, run from the repo root
+(`cd /Users/jesse/lw/wanix-qemu`).
+
+### (a) The grant boundary, enforced over real loopback TCP
+
+These five tests stand up `P9Server::with_policy` over a real loopback
+`TcpStream` on a background thread, dial it, and drive *raw 9P frames* — a
+`Tversion`, then a `Tattach{ aname = "projects/foo" }`, then `Twalk` / `Tlopen`
+/ `Tread` / `Twrite` — asserting the wire-level outcomes. They are the
+authoritative form of the blueprint's "capability is a bind" demo, because they
+send the exact `aname=projects/foo` the importer is meant to send:
+
+```
+$ cargo test -p wanix-cli --lib p9_listen::runtime::tests
+running 5 tests
+test p9_listen::runtime::tests::p9_listen_loop_continue_message_is_only_written_after_connection_errors ... ok
+test p9_listen::runtime::tests::build_serve_policy_is_none_without_peer ... ok
+test p9_listen::runtime::tests::read_only_grant_denies_writes_with_eacces ... ok
+test p9_listen::runtime::tests::revoking_a_grant_denies_the_next_attach ... ok
+test p9_listen::runtime::tests::authorized_peer_attaches_scoped_subtree_and_reads_it ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 293 filtered out; finished in 0.00s
+```
+
+What each one proves, over the socket:
+
+- `authorized_peer_attaches_scoped_subtree_and_reads_it` — peer K is granted
+  `projects/foo` read-write; it attaches `aname=projects/foo`, walks to
+  `file.txt` (which exists *only* under the granted prefix), opens and reads it,
+  and the bytes come back `granted`. The scoped root *is* `projects/foo`.
+- `read_only_grant_denies_writes_with_eacces` — peer K is granted `docs`
+  read-only; it attaches, walks to `readme.txt`, and the **write-mode open**
+  returns `Rlerror` with errno **13 (EACCES)**. The write can never land because
+  the fid was never opened for writing.
+- `revoking_a_grant_denies_the_next_attach` — the first attach on the granted
+  table succeeds (`Rattach`); the grant is then `revoke`-d on the *shared* table;
+  the next connection's attach returns `Rlerror` EACCES. Revoke is observed live.
+- `build_serve_policy_is_none_without_peer` — no `--peer` means no policy means
+  the server is byte-for-byte the old one.
+
+### (b) The `SubtreeFs` confinement, including the symlink-escape POC
+
+```
+$ cargo test -p wanix-vfs subtree::tests
+running 9 tests
+test subtree::tests::invalid_prefix_is_rejected ... ok
+test subtree::tests::dot_prefix_reroots_at_backing_root ... ok
+test subtree::tests::every_mutation_on_read_only_subtree_is_permission_denied ... ok
+test subtree::tests::rebase_keeps_paths_inside_the_prefix ... ok
+test subtree::tests::read_only_subtree_reads_inside_prefix ... ok
+test subtree::tests::no_rights_denies_even_reads ... ok
+test subtree::tests::read_write_subtree_allows_scoped_mutation ... ok
+test subtree::tests::localfs_backed_subtree_allows_in_prefix_symlink ... ok
+test subtree::tests::localfs_backed_subtree_denies_symlink_escape_of_prefix ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 0.00s
+```
+
+`every_mutation_on_read_only_subtree_is_permission_denied` is the "one
+`require` per method holds" check. `localfs_backed_subtree_denies_symlink_escape_of_prefix`
+is the corrected POC: a `LocalFs` root holds a granted `projects/foo` and an
+ungranted sibling `docs/secret.txt`, with a `../../docs/secret.txt` symlink
+planted inside the prefix; opening or following that link through a read-only
+`SubtreeFs("projects/foo")` returns `PermissionDenied`, while the in-prefix file
+reads `inside` and the opaque `read_link` still returns the raw target bytes.
+
+### (c) The identity and capability table unit suite
+
+```
+$ cargo test -p wanix-id
+running 16 tests
+test grant::tests::empty_table_denies_everyone ... ok
+test grant::tests::grant_authorizes_only_matching_peer_and_aname ... ok
+test grant::tests::clones_share_one_grant_list ... ok
+test grant::tests::revoke_removes_the_grant ... ok
+test grant::tests::authorized_root_is_scoped_and_rights_gated ... ok
+test peer::tests::equality_is_by_key ... ok
+test policy::tests::default_deny_when_no_grant_matches ... ok
+test identity::tests::peer_id_is_the_public_key ... ok
+test peer::tests::hex_round_trips_through_bytes ... ok
+test tests::purpose_is_declared ... ok
+test policy::tests::grant_table_policy_evaluates_through_the_table ... ok
+test identity::tests::secret_bytes_round_trip ... ok
+test identity::tests::distinct_generations_have_distinct_keys ... ok
+test identity::tests::wrong_length_key_file_is_rejected ... ok
+test identity::tests::persisted_key_is_owner_private ... ok
+test identity::tests::load_or_create_is_stable_across_restarts ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+`empty_table_denies_everyone` and `policy::tests::default_deny_when_no_grant_matches`
+pin the default-deny posture; `peer::tests::equality_is_by_key` and
+`identity::tests::peer_id_is_the_public_key` pin "the key is the identity is the
+address"; `load_or_create_is_stable_across_restarts` and
+`persisted_key_is_owner_private` pin the 0600-persisted, stable-across-restarts
+node key.
+
+### (d) Default-deny, live across two OS processes over TCP
+
+This is the boundary running across two real processes over a real socket. The
+server is started in policy mode — it grants a peer `projects/foo` (read-write)
+and `docs` (read-only) — and an importer dials it:
+
+Server (terminal 1):
+
+```
+$ SROOT=$(mktemp -d) && mkdir -p "$SROOT/projects/foo" "$SROOT/docs" \
+    && echo "foo project file" > "$SROOT/projects/foo/main.rs" \
+    && echo "secret docs"      > "$SROOT/docs/readme.txt"
+$ wanix-rust p9-listen --root "$SROOT" --addr 127.0.0.1:5652 --once \
+    --peer 2222222222222222222222222222222222222222222222222222222222222222 \
+    --grant projects/foo:projects/foo:rw \
+    --grant docs:docs:ro
+wanix-rust p9-listen: listening on 127.0.0.1:5652
+```
+
+Importer (terminal 2):
+
+```
+$ wanix-rust mount-ls tcp://127.0.0.1:5652
+failed to negotiate 9P session: 9P server returned errno 13
+$ echo $?
+1
+```
+
+Errno **13 is EACCES**: the default-deny table rejected the attach before any
+walk. The grant table is keyed by `(peer, aname)`, and the `mount-*` client
+attaches with the root `aname` (empty) — which matches *neither* the
+`projects/foo` nor the `docs` grant — so a peer with no matching grant is
+denied. That is the boundary doing exactly its job: even a client that reaches
+the socket gets nothing it was not granted, by name.
+
+> **Honest scope note.** The shipped `mount-ls`/`mount-cat`/`mount-write` verbs
+> always attach with the root `aname` (Slice 1 had no notion of attaching a
+> *named* subtree), so they cannot yet send `aname=projects/foo` from the CLI —
+> which is why the *allow* side and the revoke step are proven by the
+> `serve_stream`-level loopback-TCP tests in (a), which drive the exact
+> `aname=projects/foo` frames, rather than by a `mount-*` command. The *deny*
+> side is fully live across two processes here in (d). Teaching `mount-*` to
+> carry an `--aname` (so the allow side is also a two-process copy-paste) is a
+> natural Slice-3 follow-up, landing alongside the iroh transport that supplies
+> the verified `PeerId` for real.
+
+## What's Next
+
+Slice 2 made the boundary; Slice 3 makes it reach. The `PeerId` that `--peer`
+supplies by hand becomes the cryptographically verified `Connection::remote_id()`
+from an iroh QUIC handshake; the `Box<dyn Duplex>` that `RemoteFs` already wants
+becomes an iroh bi-stream; and `with_policy` is fed the real key with not a line
+of `wanix-id` or `SubtreeFs` changed. Two laptops on two NATs, one namespace,
+grants enforced by identity — that is the next slice, and the trust boundary it
+needs is already built and green.
