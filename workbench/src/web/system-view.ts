@@ -472,6 +472,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			actionLeaf("action:install-wasm-starter", "Install WASM Starter", "wasm", "package", "workbench.installWasmStarter"),
 			actionLeaf("action:run-duet", "Run JS and WASM Duet Demo", "qjs + wasm", "run-all", "workbench.runDuetDemo"),
 			actionLeaf("action:install-agent-repair", "Install Agent Repair Demo", "agent", "bug", "workbench.installAgentRepairDemo"),
+			actionLeaf("action:fix-agent-repair", "Fix Current Wanix Program", "agent", "tools", "workbench.fixCurrentWanixProgram"),
 		];
 		if (this.hasV86) {
 			items.splice(4, 0,

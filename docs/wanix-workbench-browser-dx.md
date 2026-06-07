@@ -438,6 +438,15 @@ diff so the inserted line is visible without leaving the cockpit.
 
 ![Wanix agent repair diff](assets/wanix-workbench-browser-dx/36-agent-repair-diff.png)
 
+The next pass turns the repair trace into a durable Wanix object. After a
+repair, the agent writes `/agent/out/broken.repair-report.md` with the target,
+backend, operation list, task ids, transcript paths, before/after snapshots,
+result file, and status. The System actions now include `Fix Current Wanix
+Program`, so install and repair both live in the cockpit instead of depending on
+the editor title bar alone.
+
+![Wanix agent repair report](assets/wanix-workbench-browser-dx/51-agent-repair-report.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -684,6 +693,10 @@ an automated helper is no longer outside the system. It uses the same qjs task
 runner, transcript files, source edits, result files, and Agent action log that
 a person can inspect.
 
+The repair report makes that loop durable. It is useful today for humans
+reviewing what happened, and it gives the future Codex app-server backend a
+stable artifact shape to fill in without changing the browser story.
+
 ## The Feeling Now
 
 The current loop is:
@@ -771,6 +784,12 @@ The current loop is:
     result file from the same system panel.
 47. Click `diff broken.js` to reopen the before/after repair diff from
     `/agent/out`.
+48. Click `write repair report` or open
+    `/agent/out/broken.repair-report.md` to inspect the complete repair trace:
+    operation list, task ids, transcript paths, snapshots, result, and status.
+49. Use the System action row `Fix Current Wanix Program` when the current
+    editor is a qjs file; the repair no longer depends on spotting the editor
+    title icon.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.
 

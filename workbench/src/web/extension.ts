@@ -56,6 +56,18 @@ type TaskArtifacts = {
 	metadataPath: string;
 };
 
+type AgentTraceStep = {
+	label: string;
+	description?: string;
+	path?: string;
+	beforePath?: string;
+	afterPath?: string;
+	taskId?: string;
+	outputPath?: string;
+	metadataPath?: string;
+	exitCode?: number;
+};
+
 type FilesystemActivity = {
 	label?: string;
 	openPath?: string;
@@ -892,95 +904,170 @@ async function fixCurrentWanixProgram(
 	context: vscode.ExtensionContext,
 ): Promise<void> {
 	const target = await taskRunTarget("qjs", bridge);
+	const trace: AgentTraceStep[] = [];
+	const startedAt = new Date();
+	let reportPath: string | undefined;
+	const agentStep = (label: string, options: Partial<AgentTraceStep> & { icon?: string } = {}): void => {
+		trace.push({
+			label,
+			description: options.description,
+			path: options.path,
+			beforePath: options.beforePath,
+			afterPath: options.afterPath,
+			taskId: options.taskId,
+			outputPath: options.outputPath,
+			metadataPath: options.metadataPath,
+			exitCode: options.exitCode,
+		});
+		systemView.agentStep(label, {
+			description: options.description,
+			icon: options.icon,
+			path: options.path,
+			beforePath: options.beforePath,
+			afterPath: options.afterPath,
+		});
+	};
+	const writeReport = async (status: string, error?: unknown, resultPath?: string): Promise<string> => {
+		const path = reportPath || agentReportPath(target);
+		reportPath = path;
+		const reportDir = parentPath(path);
+		if (reportDir) {
+			await fsys.makeDirAll(reportDir);
+		}
+		const report = agentRepairReportMarkdown({
+			target,
+			status,
+			startedAt,
+			completedAt: new Date(),
+			steps: trace,
+			reportPath: path,
+			resultPath,
+			error: error instanceof Error ? error.message : error ? String(error) : undefined,
+		});
+		await fsys.writeFile(path, report);
+		bridge.refresh(path);
+		return path;
+	};
 	systemView.agentStarted(`repair ${target.name}`);
-	systemView.agentStep(`read ${target.name}`, { icon: "book", path: target.path });
-	const source = await fsys.readText(target.path);
-	let firstRun: TaskRunStart | undefined;
-	systemView.agentStep(`run qjs ${target.name}`, { icon: "play" });
-	const firstCode = await runWanixTaskTarget(
-		fsys,
-		bridge,
-		config,
-		systemView,
-		activeTaskTerminals,
-		taskTerminals,
-		"qjs",
-		target,
-		context,
-		{
-			waitForExit: true,
-			onTaskStarted: (event) => {
-				firstRun = event;
-				if (event.outputPath) {
-					systemView.agentStep("capture first transcript", { icon: "output", path: event.outputPath });
-				}
+	try {
+		agentStep(`read ${target.name}`, { icon: "book", path: target.path });
+		const source = await fsys.readText(target.path);
+		let firstRun: TaskRunStart | undefined;
+		agentStep(`run qjs ${target.name}`, { icon: "play" });
+		const firstCode = await runWanixTaskTarget(
+			fsys,
+			bridge,
+			config,
+			systemView,
+			activeTaskTerminals,
+			taskTerminals,
+			"qjs",
+			target,
+			context,
+			{
+				waitForExit: true,
+				onTaskStarted: (event) => {
+					firstRun = event;
+					if (event.outputPath) {
+						agentStep("capture first transcript", {
+							icon: "output",
+							path: event.outputPath,
+							taskId: event.taskId,
+							outputPath: event.outputPath,
+							metadataPath: event.metadataPath,
+						});
+					}
+				},
 			},
-		},
-	);
-	const firstTranscript = firstRun?.outputPath
-		? await waitForTaskTranscript(fsys, firstRun.outputPath)
-		: "";
-	const observation = agentObservation(firstCode, firstTranscript);
-	systemView.agentStep(`observe ${observation}`, { icon: firstCode === 0 ? "pass" : "warning" });
-	const repaired = repairQjsProgram(source);
-	if (repaired === source && firstCode === 0) {
-		systemView.agentStep("already repaired", { icon: "pass", path: target.path });
-		vscode.window.showInformationMessage(`${target.name} already looks repaired`);
-		return;
-	}
-	const diff = agentDiffPaths(target);
-	await fsys.makeDirAll(diff.dir);
-	await fsys.writeFile(diff.beforePath, source);
-	systemView.agentStep("snapshot original", { icon: "go-to-file", path: diff.beforePath });
-	await fsys.writeFile(target.path, repaired);
-	await fsys.writeFile(diff.afterPath, repaired);
-	bridge.refresh(target.path);
-	bridge.refresh(diff.beforePath);
-	bridge.refresh(diff.afterPath);
-	await refreshWorkbenchFiles(bridge);
-	systemView.agentStep(`edit ${target.name}`, { icon: "edit", path: target.path });
-	await openWanixPath(target.path);
-	systemView.agentStep(`diff ${target.name}`, {
-		description: `${baseName(diff.beforePath)} -> ${baseName(diff.afterPath)}`,
-		icon: "diff",
-		beforePath: diff.beforePath,
-		afterPath: diff.afterPath,
-	});
-	await openWanixDiff(diff.beforePath, diff.afterPath);
-	let secondRun: TaskRunStart | undefined;
-	systemView.agentStep(`rerun qjs ${target.name}`, { icon: "run" });
-	const secondCode = await runWanixTaskTarget(
-		fsys,
-		bridge,
-		config,
-		systemView,
-		activeTaskTerminals,
-		taskTerminals,
-		"qjs",
-		target,
-		context,
-		{
-			waitForExit: true,
-			onTaskStarted: (event) => {
-				secondRun = event;
-				if (event.outputPath) {
-					systemView.agentStep("capture rerun transcript", { icon: "output", path: event.outputPath });
-				}
+		);
+		const firstTranscript = firstRun?.outputPath
+			? await waitForTaskTranscript(fsys, firstRun.outputPath)
+			: "";
+		const observation = agentObservation(firstCode, firstTranscript);
+		agentStep(`observe ${observation}`, { icon: firstCode === 0 ? "pass" : "warning", exitCode: firstCode });
+		const repaired = repairQjsProgram(source);
+		if (repaired === source && firstCode === 0) {
+			agentStep("already repaired", { icon: "pass", path: target.path });
+			const path = await writeReport("already repaired");
+			agentStep("write repair report", { icon: "notebook", path });
+			await openWanixPath(path);
+			vscode.window.showInformationMessage(`${target.name} already looks repaired`);
+			return;
+		}
+		const diff = agentDiffPaths(target);
+		await fsys.makeDirAll(diff.dir);
+		await fsys.writeFile(diff.beforePath, source);
+		agentStep("snapshot original", { icon: "go-to-file", path: diff.beforePath });
+		await fsys.writeFile(target.path, repaired);
+		await fsys.writeFile(diff.afterPath, repaired);
+		bridge.refresh(target.path);
+		bridge.refresh(diff.beforePath);
+		bridge.refresh(diff.afterPath);
+		await refreshWorkbenchFiles(bridge);
+		agentStep(`edit ${target.name}`, { icon: "edit", path: target.path });
+		await openWanixPath(target.path);
+		agentStep(`diff ${target.name}`, {
+			description: `${baseName(diff.beforePath)} -> ${baseName(diff.afterPath)}`,
+			icon: "diff",
+			beforePath: diff.beforePath,
+			afterPath: diff.afterPath,
+		});
+		await openWanixDiff(diff.beforePath, diff.afterPath);
+		let secondRun: TaskRunStart | undefined;
+		agentStep(`rerun qjs ${target.name}`, { icon: "run" });
+		const secondCode = await runWanixTaskTarget(
+			fsys,
+			bridge,
+			config,
+			systemView,
+			activeTaskTerminals,
+			taskTerminals,
+			"qjs",
+			target,
+			context,
+			{
+				waitForExit: true,
+				onTaskStarted: (event) => {
+					secondRun = event;
+					if (event.outputPath) {
+						agentStep("capture rerun transcript", {
+							icon: "output",
+							path: event.outputPath,
+							taskId: event.taskId,
+							outputPath: event.outputPath,
+							metadataPath: event.metadataPath,
+						});
+					}
+				},
 			},
-		},
-	);
-	if (secondRun?.outputPath) {
-		await waitForTaskTranscript(fsys, secondRun.outputPath);
+		);
+		if (secondRun?.outputPath) {
+			await waitForTaskTranscript(fsys, secondRun.outputPath);
+		}
+		if (secondCode !== 0) {
+			agentStep(`rerun failed ${formatTaskExitCode(secondCode)}`, { icon: "error", exitCode: secondCode });
+			throw new Error(`Agent repair rerun exited ${formatTaskExitCode(secondCode)}`);
+		}
+		const resultPath = agentResultPath(target);
+		const result = await waitForTextFile(fsys, resultPath);
+		agentStep(`verify ${baseName(resultPath)}`, { icon: "pass", path: resultPath });
+		await openWanixPath(resultPath);
+		const path = await writeReport("repaired", undefined, resultPath);
+		agentStep("write repair report", { icon: "notebook", path });
+		await refreshWanixPaths(bridge, [resultPath, path]);
+		await openWanixPath(path);
+		vscode.window.showInformationMessage(`Wanix agent repair wrote ${resultPath}: ${result.trim()}`);
+	} catch (error) {
+		agentStep("repair failed", { icon: "error", description: error instanceof Error ? error.message : String(error) });
+		try {
+			const path = await writeReport("failed", error);
+			agentStep("write failure report", { icon: "notebook", path });
+			await openWanixPath(path);
+		} catch (reportError) {
+			console.warn("Wanix agent repair report failed", reportError);
+		}
+		throw error;
 	}
-	if (secondCode !== 0) {
-		systemView.agentStep(`rerun failed ${formatTaskExitCode(secondCode)}`, { icon: "error" });
-		throw new Error(`Agent repair rerun exited ${formatTaskExitCode(secondCode)}`);
-	}
-	const resultPath = agentResultPath(target);
-	const result = await waitForTextFile(fsys, resultPath);
-	systemView.agentStep(`verify ${baseName(resultPath)}`, { icon: "pass", path: resultPath });
-	await openWanixPath(resultPath);
-	vscode.window.showInformationMessage(`Wanix agent repair wrote ${resultPath}: ${result.trim()}`);
 }
 
 async function runWanixTaskTarget(
@@ -1291,6 +1378,85 @@ function agentDiffPaths(target: TaskRunTarget): { dir: string; beforePath: strin
 		beforePath: `${artifactDir}/${stem}.before.js`,
 		afterPath: `${artifactDir}/${stem}.after.js`,
 	};
+}
+
+function agentReportPath(target: TaskRunTarget): string {
+	const dir = target.dir === "." ? "" : target.dir.replace(/^\/+|\/+$/g, "");
+	const artifactDir = dir ? `${dir}/out` : "out";
+	const stem = safeOutputFileName(target.name.replace(/\.js$/i, ""));
+	return `${artifactDir}/${stem}.repair-report.md`;
+}
+
+function agentRepairReportMarkdown(report: {
+	target: TaskRunTarget;
+	status: string;
+	startedAt: Date;
+	completedAt: Date;
+	steps: AgentTraceStep[];
+	reportPath: string;
+	resultPath?: string;
+	error?: string;
+}): string {
+	const artifacts = uniqueReportPaths([
+		report.target.path,
+		report.resultPath || "",
+		report.reportPath,
+		...report.steps.flatMap((step) => [
+			step.path || "",
+			step.beforePath || "",
+			step.afterPath || "",
+			step.outputPath || "",
+			step.metadataPath || "",
+		]),
+	]);
+	return [
+		"# Wanix Agent Repair Report",
+		"",
+		`Status: ${report.status}`,
+		`Target: ${displayWanixReportPath(report.target.path)}`,
+		"Backend: deterministic local repair",
+		"Contract: read file, run task, observe transcript, write file, rerun task, verify filesystem output",
+		`Started: ${report.startedAt.toISOString()}`,
+		`Completed: ${report.completedAt.toISOString()}`,
+		report.error ? `Error: ${report.error}` : undefined,
+		"",
+		"## Operations",
+		"",
+		...report.steps.flatMap((step, index) => agentReportStepLines(step, index + 1)),
+		"## Artifacts",
+		"",
+		...artifacts.map((path) => `- ${displayWanixReportPath(path)}`),
+		"",
+	].filter((line): line is string => line !== undefined).join("\n");
+}
+
+function agentReportStepLines(step: AgentTraceStep, index: number): string[] {
+	const details = [
+		step.description ? `detail: ${step.description}` : undefined,
+		step.taskId ? `task: ${step.taskId}` : undefined,
+		typeof step.exitCode === "number" ? `exit: ${step.exitCode}` : undefined,
+		step.path ? `path: ${displayWanixReportPath(step.path)}` : undefined,
+		step.beforePath ? `before: ${displayWanixReportPath(step.beforePath)}` : undefined,
+		step.afterPath ? `after: ${displayWanixReportPath(step.afterPath)}` : undefined,
+		step.outputPath ? `transcript: ${displayWanixReportPath(step.outputPath)}` : undefined,
+		step.metadataPath ? `metadata: ${displayWanixReportPath(step.metadataPath)}` : undefined,
+	].filter((detail): detail is string => Boolean(detail));
+	if (details.length === 0) {
+		return [`${index}. ${step.label}`, ""];
+	}
+	return [
+		`${index}. ${step.label}`,
+		...details.map((detail) => `   - ${detail}`),
+		"",
+	];
+}
+
+function uniqueReportPaths(paths: string[]): string[] {
+	return [...new Set(paths.filter((path) => path.length > 0))];
+}
+
+function displayWanixReportPath(path: string): string {
+	return absoluteWanixPath(path);
 }
 
 async function refreshWorkbenchFiles(bridge: WanixBridge): Promise<void> {
