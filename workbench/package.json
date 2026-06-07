@@ -229,6 +229,12 @@
         "icon": "$(search)"
       },
       {
+        "command": "workbench.openShellHistorySummary",
+        "title": "Open Shell History Summary",
+        "category": "Wanix",
+        "icon": "$(list-tree)"
+      },
+      {
         "command": "workbench.clearShellCommandHistory",
         "title": "Clear Shell Command History",
         "category": "Wanix",

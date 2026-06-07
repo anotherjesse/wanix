@@ -44,10 +44,10 @@ const AGENT_TOOLS: AgentTool[] = [
 	},
 	{
 		name: "readShellHistory",
-		description: "Read served qjs-shell command outcomes without subscribing to terminal bytes.",
+		description: "Read or summarize served qjs-shell command outcomes without subscribing to terminal bytes.",
 		input: {},
-		output: { commands: "append-only command history and latest shell outcome batch" },
-		wanixSurface: [".wanix/qjs-shell/commands.jsonl", ".wanix/qjs-shell/latest.json", ".wanix/qjs-shell/latest.md"],
+		output: { commands: "append-only command history, latest shell outcome batch, and grouped summary artifact" },
+		wanixSurface: [".wanix/qjs-shell/commands.jsonl", ".wanix/qjs-shell/latest.json", ".wanix/qjs-shell/latest.md", ".wanix/qjs-shell/summary.md", ".wanix/qjs-shell/selected.md"],
 	},
 	{
 		name: "diffFiles",

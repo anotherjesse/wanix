@@ -121,6 +121,7 @@ const SHELL_HISTORY_JSONL_PATH = ".wanix/qjs-shell/commands.jsonl";
 const SHELL_HISTORY_JSON_PATH = ".wanix/qjs-shell/latest.json";
 const SHELL_HISTORY_MD_PATH = ".wanix/qjs-shell/latest.md";
 const SHELL_HISTORY_SELECTED_MD_PATH = ".wanix/qjs-shell/selected.md";
+const SHELL_HISTORY_SUMMARY_MD_PATH = ".wanix/qjs-shell/summary.md";
 const SYSTEM_JOURNAL_PATH = ".wanix/system-journal.md";
 const SYSTEM_STATE_PATH = ".wanix/system-state.json";
 const SERVICE_STATE_POLL_MS = 1000;
@@ -316,6 +317,15 @@ export async function activate(context: vscode.ExtensionContext) {
 			try {
 				await searchShellCommandHistory(fsys, bridge, systemView);
 				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openShellHistorySummary', async () => {
+			try {
+				await openShellHistorySummary(fsys, bridge, systemView);
+				revealWanixSystemView();
+				vscode.window.showInformationMessage(`Opened qjs shell history summary`);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -785,6 +795,29 @@ async function searchShellCommandHistory(
 	await openWanixPath(SHELL_HISTORY_SELECTED_MD_PATH);
 }
 
+async function openShellHistorySummary(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const entries = await readShellHistoryEntries(fsys);
+	if (entries.length === 0) {
+		throw new Error("No qjs shell command history entries yet. Run a served shell command first.");
+	}
+	await fsys.makeDirAll(parentPath(SHELL_HISTORY_SUMMARY_MD_PATH));
+	await fsys.writeFile(SHELL_HISTORY_SUMMARY_MD_PATH, shellHistorySummaryMarkdown(entries, new Date()));
+	const paths = await existingShellHistoryPaths(fsys);
+	const reportPaths = paths.includes(SHELL_HISTORY_SUMMARY_MD_PATH) ? paths : [SHELL_HISTORY_SUMMARY_MD_PATH, ...paths];
+	publishShellCommandHistoryReportFromPaths(systemView, reportPaths, shellHistoryReportOpenPath(reportPaths));
+	systemView.filesystemActivity("shell history summary opened", {
+		description: `${entries.length} commands grouped`,
+		path: SHELL_HISTORY_SUMMARY_MD_PATH,
+		paths: reportPaths,
+	});
+	await refreshWanixPaths(bridge, reportPaths);
+	await openWanixPath(SHELL_HISTORY_SUMMARY_MD_PATH);
+}
+
 async function clearShellCommandHistory(
 	fsys: any,
 	bridge: WanixBridge,
@@ -799,6 +832,7 @@ async function clearShellCommandHistory(
 		return;
 	}
 	const paths = [
+		SHELL_HISTORY_SUMMARY_MD_PATH,
 		SHELL_HISTORY_SELECTED_MD_PATH,
 		SHELL_HISTORY_MD_PATH,
 		SHELL_HISTORY_JSON_PATH,
@@ -946,6 +980,139 @@ function shellHistorySelectionMarkdown(entry: ShellHistoryEntry): string {
 	return lines.join("\n");
 }
 
+function shellHistorySummaryMarkdown(entries: ShellHistoryEntry[], generatedAt: Date): string {
+	const firstObserved = shellHistoryObservedRange(entries, "first");
+	const lastObserved = shellHistoryObservedRange(entries, "last");
+	const lines = [
+		"# qjs Shell History Summary",
+		"",
+		"Schema: wanix.qjs-shell.history-summary.v1",
+		`Generated: ${generatedAt.toISOString()}`,
+		`Commands: ${entries.length}`,
+		`Time range: ${firstObserved || "unknown"} to ${lastObserved || "unknown"}`,
+		`Latest history: /${SHELL_HISTORY_MD_PATH}`,
+		`Append log: /${SHELL_HISTORY_JSONL_PATH}`,
+		"",
+		"## Outcome Counts",
+		...shellHistoryCountLines(shellHistoryGroupBy(entries, shellHistoryStatusKey)),
+		"",
+		"## Changed Counts",
+		...shellHistoryCountLines(shellHistoryGroupBy(entries, shellHistoryChangedKey)),
+		"",
+		"## By Time",
+		...shellHistoryGroupLines(shellHistoryGroupBy(entries, shellHistoryTimeBucket), { includeRange: true }),
+		"",
+		"## By Cwd",
+		...shellHistoryGroupLines(shellHistoryGroupBy(entries, (entry) => entry.cwd || "(unknown cwd)")),
+		"",
+		"## By Terminal",
+		...shellHistoryGroupLines(shellHistoryGroupBy(entries, (entry) => entry.terminalId || "(unknown terminal)")),
+		"",
+		"## By Task",
+		...shellHistoryGroupLines(shellHistoryGroupBy(entries, (entry) => entry.taskId || "(unknown task)")),
+		"",
+		"## Recent Commands",
+		...shellHistoryRecentLines(entries, 12),
+		"",
+	];
+	return lines.join("\n");
+}
+
+function shellHistoryGroupBy(entries: ShellHistoryEntry[], keyFor: (entry: ShellHistoryEntry) => string): Map<string, ShellHistoryEntry[]> {
+	const groups = new Map<string, ShellHistoryEntry[]>();
+	for (const entry of entries) {
+		const key = keyFor(entry);
+		const group = groups.get(key);
+		if (group) {
+			group.push(entry);
+		} else {
+			groups.set(key, [entry]);
+		}
+	}
+	return groups;
+}
+
+function shellHistoryCountLines(groups: Map<string, ShellHistoryEntry[]>): string[] {
+	return shellHistorySortedGroups(groups).map(([key, group]) => `- ${key}: ${group.length}`);
+}
+
+function shellHistoryGroupLines(
+	groups: Map<string, ShellHistoryEntry[]>,
+	options: { includeRange?: boolean } = {},
+): string[] {
+	const lines: string[] = [];
+	for (const [key, group] of shellHistorySortedGroups(groups)) {
+		const changed = group.filter((entry) => entry.outcome?.changed).length;
+		const errors = group.filter(shellHistoryLooksFailed).length;
+		const range = options.includeRange ? `, ${shellHistoryObservedRange(group, "first") || "unknown"} to ${shellHistoryObservedRange(group, "last") || "unknown"}` : "";
+		lines.push(`- ${key}: ${group.length} commands, ${changed} changed, ${errors} failed${range}`);
+		for (const entry of [...group].slice(-3).reverse()) {
+			lines.push(`  - ${shellHistoryEntrySummary(entry)}`);
+		}
+	}
+	return lines.length ? lines : ["- no entries"];
+}
+
+function shellHistoryRecentLines(entries: ShellHistoryEntry[], limit: number): string[] {
+	return [...entries].slice(-limit).reverse().map((entry) => `- ${shellHistoryEntrySummary(entry)}`);
+}
+
+function shellHistoryEntrySummary(entry: ShellHistoryEntry): string {
+	const time = formatShellHistoryTime(entry.observedAtUnixMillis) || "unknown time";
+	const target = shellHistoryTarget(entry);
+	const targetText = target ? ` -> ${target}` : "";
+	return `${time} - ${shellHistoryStatus(entry)} - ${shellHistoryCommand(entry)}${targetText}`;
+}
+
+function shellHistorySortedGroups(groups: Map<string, ShellHistoryEntry[]>): [string, ShellHistoryEntry[]][] {
+	return [...groups.entries()].sort(([leftKey, leftEntries], [rightKey, rightEntries]) => {
+		const byCount = rightEntries.length - leftEntries.length;
+		return byCount || leftKey.localeCompare(rightKey);
+	});
+}
+
+function shellHistoryStatusKey(entry: ShellHistoryEntry): string {
+	return entry.outcome?.status || entry.operation?.status || "observed";
+}
+
+function shellHistoryChangedKey(entry: ShellHistoryEntry): string {
+	if (typeof entry.outcome?.changed !== "boolean") {
+		return "unknown";
+	}
+	return entry.outcome.changed ? "changed" : "unchanged";
+}
+
+function shellHistoryTimeBucket(entry: ShellHistoryEntry): string {
+	const millis = shellHistoryObservedMillis(entry);
+	if (millis === undefined) {
+		return "(unknown time)";
+	}
+	const date = new Date(millis);
+	return `${date.toISOString().slice(0, 13)}:00Z`;
+}
+
+function shellHistoryObservedRange(entries: ShellHistoryEntry[], edge: "first" | "last"): string | undefined {
+	const observed = entries
+		.map(shellHistoryObservedMillis)
+		.filter((value): value is number => value !== undefined)
+		.sort((left, right) => left - right);
+	const value = edge === "first" ? observed[0] : observed[observed.length - 1];
+	return formatShellHistoryTime(value);
+}
+
+function shellHistoryObservedMillis(entry: ShellHistoryEntry): number | undefined {
+	const value = entry.observedAtUnixMillis;
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function shellHistoryLooksFailed(entry: ShellHistoryEntry): boolean {
+	const status = entry.outcome?.status || entry.operation?.status;
+	if (typeof entry.outcome?.exitCode === "number" && entry.outcome.exitCode !== 0) {
+		return true;
+	}
+	return !!status && status !== "ok" && status !== "observed";
+}
+
 function formatShellHistoryTime(value: unknown): string | undefined {
 	if (typeof value !== "number" || !Number.isFinite(value)) {
 		return undefined;
@@ -965,8 +1132,18 @@ async function publishShellCommandHistoryReport(
 	if (paths.length === 0) {
 		return;
 	}
-	const openPath = paths.includes(SHELL_HISTORY_MD_PATH) ? SHELL_HISTORY_MD_PATH : paths[0];
+	const openPath = shellHistoryReportOpenPath(paths);
 	publishShellCommandHistoryReportFromPaths(systemView, paths, openPath);
+}
+
+function shellHistoryReportOpenPath(paths: string[]): string {
+	if (paths.includes(SHELL_HISTORY_MD_PATH)) {
+		return SHELL_HISTORY_MD_PATH;
+	}
+	if (paths.includes(SHELL_HISTORY_SUMMARY_MD_PATH)) {
+		return SHELL_HISTORY_SUMMARY_MD_PATH;
+	}
+	return paths[0];
 }
 
 function publishShellCommandHistoryReportFromPaths(
@@ -983,7 +1160,7 @@ function publishShellCommandHistoryReportFromPaths(
 }
 
 async function existingShellHistoryPaths(fsys: any): Promise<string[]> {
-	const paths = [SHELL_HISTORY_SELECTED_MD_PATH, SHELL_HISTORY_MD_PATH, SHELL_HISTORY_JSON_PATH, SHELL_HISTORY_JSONL_PATH];
+	const paths = [SHELL_HISTORY_SUMMARY_MD_PATH, SHELL_HISTORY_SELECTED_MD_PATH, SHELL_HISTORY_MD_PATH, SHELL_HISTORY_JSON_PATH, SHELL_HISTORY_JSONL_PATH];
 	const existing: string[] = [];
 	for (const path of paths) {
 		try {
