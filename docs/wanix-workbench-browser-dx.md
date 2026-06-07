@@ -666,6 +666,18 @@ like a context jump; the archive remembers what was launched from it.
 
 ![Shell archive action result breadcrumb](assets/wanix-workbench-browser-dx/92-shell-archive-action-result.png)
 
+The breadcrumb now checks whether the action actually produced its expected
+report. Before dispatch, the wrapper snapshots the expected markdown and JSON
+outputs; after the inner command returns, it records whether those files were
+new, updated, unchanged, missing, partially changed, opened, or failed. That
+turns a dossier click into an auditable outcome: `generated` means the result
+report changed during this action, while `not-generated` is the clue that an
+inner confirmation may have been cancelled. The same status appears in
+`dossier-action.md/json`, the refreshed dossier, the archive health badge, the
+System view child row, Activity, and `system-state.json`.
+
+![Shell archive action status](assets/wanix-workbench-browser-dx/93-shell-archive-action-status.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1296,6 +1308,8 @@ The current loop is:
     report itself; each generated command link previews the archive target
     before dispatching, then writes `dossier-action.md/json` and refreshes the
     dossier with a `Last Dossier Action` breadcrumb after the action launches.
+    The breadcrumb now records whether the expected report was generated,
+    updated, unchanged, missing, partially changed, opened, or failed.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1407,8 +1421,9 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Give dossier action breadcrumbs a tiny status check for whether the expected
-  result report was actually generated or the inner command was cancelled.
+- Add a re-run/repair affordance for `not-generated` or `failed` dossier
+  actions, so a cancelled restore or broken archive action has an obvious next
+  move.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

@@ -196,6 +196,13 @@ export type WanixShellArchiveRecord = {
 	dossierMarkdownPath: string;
 	dossierJsonPath: string;
 	dossierGeneratedAt?: string;
+	dossierActionMarkdownPath?: string;
+	dossierActionJsonPath?: string;
+	dossierActionGeneratedAt?: string;
+	dossierActionLabel?: string;
+	dossierActionCommand?: string;
+	dossierActionStatus?: string;
+	dossierActionStatusDetail?: string;
 };
 
 type CategoryId = "actions" | "tour" | "checks" | "reports" | "shellArchives" | "dataStores" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
@@ -1490,6 +1497,24 @@ function shellArchiveArtifactItems(archive: WanixShellArchiveRecord): SystemTree
 			}, "wanixShellArchiveArtifact", { path: archive.dossierJsonPath }),
 		);
 	}
+	if (archive.dossierActionGeneratedAt && archive.dossierActionMarkdownPath) {
+		items.push(
+			leaf(`shell-archive:${archive.name}:dossier-action-report`, "Dossier Action Result", shellArchiveDossierActionDescription(archive), shellArchiveDossierActionIcon(archive), {
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive Dossier Action",
+				arguments: [archive.dossierActionMarkdownPath],
+			}, "wanixShellArchiveArtifact", { path: archive.dossierActionMarkdownPath }),
+		);
+	}
+	if (archive.dossierActionGeneratedAt && archive.dossierActionJsonPath) {
+		items.push(
+			leaf(`shell-archive:${archive.name}:dossier-action-json`, "Dossier Action JSON", pathDescription(archive.dossierActionJsonPath), "json", {
+				command: "workbench.openWanixPath",
+				title: "Open Shell Archive Dossier Action JSON",
+				arguments: [archive.dossierActionJsonPath],
+			}, "wanixShellArchiveArtifact", { path: archive.dossierActionJsonPath }),
+		);
+	}
 	if (archive.compareGeneratedAt) {
 		items.push(
 			leaf(`shell-archive:${archive.name}:compare-report`, "Compare Report", shellArchiveCompareDescription(archive), "diff", {
@@ -1709,6 +1734,15 @@ function shellArchiveBadges(archive: WanixShellArchiveRecord): Array<{ label: st
 	if (archive.importGeneratedAt) {
 		badges.push({ label: "imported", kind: "ok", detail: archive.importGeneratedAt });
 	}
+	if (archive.dossierActionGeneratedAt) {
+		const status = archive.dossierActionStatus || "recorded";
+		const warning = status === "failed" || status === "not-generated" || status === "partial";
+		badges.push({
+			label: `last action ${status}`,
+			kind: warning ? "warning" : status === "generated" ? "ok" : "info",
+			detail: archive.dossierActionStatusDetail || archive.dossierActionGeneratedAt,
+		});
+	}
 	return badges;
 }
 
@@ -1725,6 +1759,26 @@ function shellArchiveCompareDescription(archive: WanixShellArchiveRecord): strin
 function shellArchiveBundleDescription(archive: WanixShellArchiveRecord): string {
 	const files = archive.bundleFileCount !== undefined ? formatClearCount(archive.bundleFileCount, "file") : "bundle";
 	return archive.bundleGeneratedAt ? `${files} · ${archive.bundleGeneratedAt}` : files;
+}
+
+function shellArchiveDossierActionDescription(archive: WanixShellArchiveRecord): string {
+	const parts = [
+		archive.dossierActionStatus || "recorded",
+		archive.dossierActionLabel,
+		archive.dossierActionGeneratedAt,
+	].filter((part): part is string => Boolean(part));
+	return parts.length > 0 ? parts.join(" · ") : pathDescription(archive.dossierActionMarkdownPath || "");
+}
+
+function shellArchiveDossierActionIcon(archive: WanixShellArchiveRecord): string {
+	const status = archive.dossierActionStatus;
+	if (status === "failed" || status === "not-generated" || status === "partial") {
+		return "warning";
+	}
+	if (status === "generated") {
+		return "pass";
+	}
+	return "notebook";
 }
 
 function dataStoreDescription(entry: DataStoreRecord): string {
@@ -1949,6 +2003,14 @@ function shellArchiveSnapshot(archive: WanixShellArchiveRecord): object {
 		dossierGeneratedAt: archive.dossierGeneratedAt,
 		dossierMarkdownPath: displayJournalPath(archive.dossierMarkdownPath),
 		dossierJsonPath: displayJournalPath(archive.dossierJsonPath),
+		dossierActioned: archive.dossierActionGeneratedAt !== undefined,
+		dossierActionGeneratedAt: archive.dossierActionGeneratedAt,
+		dossierActionLabel: archive.dossierActionLabel,
+		dossierActionCommand: archive.dossierActionCommand,
+		dossierActionStatus: archive.dossierActionStatus,
+		dossierActionStatusDetail: archive.dossierActionStatusDetail,
+		dossierActionMarkdownPath: archive.dossierActionMarkdownPath ? displayJournalPath(archive.dossierActionMarkdownPath) : undefined,
+		dossierActionJsonPath: archive.dossierActionJsonPath ? displayJournalPath(archive.dossierActionJsonPath) : undefined,
 		wasLastRestored: Boolean(archive.wasLastRestored),
 	};
 }
@@ -1963,6 +2025,7 @@ function shellArchiveJournalLines(archive: WanixShellArchiveRecord): string[] {
 		archive.bundleGeneratedAt ? `  - bundle: ${displayJournalPath(archive.bundleMarkdownPath)} (${shellArchiveBundleDescription(archive)})` : undefined,
 		archive.importGeneratedAt ? `  - import: ${displayJournalPath(archive.importMarkdownPath)} (${archive.importGeneratedAt})` : undefined,
 		archive.dossierGeneratedAt ? `  - dossier: ${displayJournalPath(archive.dossierMarkdownPath)} (${archive.dossierGeneratedAt})` : undefined,
+		archive.dossierActionGeneratedAt && archive.dossierActionMarkdownPath ? `  - dossier action: ${displayJournalPath(archive.dossierActionMarkdownPath)} (${shellArchiveDossierActionDescription(archive)})` : undefined,
 		archive.wasLastRestored ? "  - restore: last restored into live history" : undefined,
 	].filter((line): line is string => line !== undefined);
 }
