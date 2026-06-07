@@ -60,6 +60,24 @@ impl RemoteFs {
         })
     }
 
+    /// Negotiates a session and attaches the named subtree `aname`.
+    ///
+    /// Used to import a scoped capability from a grant-gated server: the server
+    /// authorizes the attach by the verified peer identity *and* this `aname`,
+    /// installing the matching [`wanix_vfs::SubtreeFs`] as the connection root.
+    /// [`Self::connect`] uses the empty root `aname`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::ClientError`] when version or attach negotiation
+    /// fails, including a default-deny `EACCES` rejection.
+    pub fn connect_with_aname(transport: Box<dyn Duplex>, aname: &str) -> ClientResult<Self> {
+        let conn = P9Conn::connect_with_aname(transport, aname)?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
+    }
+
     /// Wraps an already-negotiated connection as a filesystem.
     ///
     /// Useful when a caller drove [`P9Conn::connect`] directly, for example to

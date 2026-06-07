@@ -18,7 +18,9 @@ wanix-9p = { path = "../wanix-9p" }
 wanix-9p-client = { path = "../wanix-9p-client" }
 wanix-agent = { path = "../wanix-agent" }
 wanix-fs = { path = "../wanix-fs" }
+wanix-id = { path = "../wanix-id" }
 wanix-kv = { path = "../wanix-kv" }
+wanix-mesh = { path = "../wanix-mesh" }
 wanix-pipe = { path = "../wanix-pipe" }
 wanix-protocol = { path = "../wanix-protocol" }
 wanix-qjs = { path = "../wanix-qjs" }

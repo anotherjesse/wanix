@@ -53,6 +53,23 @@ impl P9Conn {
     /// Returns [`ClientError`] when negotiation I/O fails, a reply is malformed,
     /// or the server rejects the attach with an `Rlerror`.
     pub fn connect(transport: Box<dyn Duplex>) -> ClientResult<Self> {
+        Self::connect_with_aname(transport, "")
+    }
+
+    /// Negotiates a session and attaches the named subtree `aname`.
+    ///
+    /// This is the mesh-facing constructor: a server gated by an
+    /// [`crate::ClientError`]-mapped `AttachPolicy` keys its grant by the verified
+    /// peer identity *and* the requested attach name, so a client importing a
+    /// scoped capability must send the matching `aname` (e.g. `projects/foo`).
+    /// [`Self::connect`] sends the empty root `aname` for the unscoped case.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] when negotiation I/O fails, a reply is malformed,
+    /// or the server rejects the attach with an `Rlerror` (for example a
+    /// default-deny grant table returning `EACCES`).
+    pub fn connect_with_aname(transport: Box<dyn Duplex>, aname: &str) -> ClientResult<Self> {
         let mut conn = Self {
             transport,
             msize: PREFERRED_MSIZE,
@@ -62,7 +79,7 @@ impl P9Conn {
             poisoned: None,
         };
         conn.negotiate_version()?;
-        conn.attach_root()?;
+        conn.attach_root(aname)?;
         Ok(conn)
     }
 
@@ -176,8 +193,8 @@ impl P9Conn {
         Ok(())
     }
 
-    fn attach_root(&mut self) -> ClientResult<P9Qid> {
-        let reply = self.rpc(|tag| p9_tattach(tag, ROOT_FID, P9_NOFID, "wanix", "", 0))?;
+    fn attach_root(&mut self, aname: &str) -> ClientResult<P9Qid> {
+        let reply = self.rpc(|tag| p9_tattach(tag, ROOT_FID, P9_NOFID, "wanix", aname, 0))?;
         Ok(p9_decode_rattach(&reply)?)
     }
 

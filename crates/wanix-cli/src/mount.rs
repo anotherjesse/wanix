@@ -115,23 +115,40 @@ fn optional_path_arg(arg: Option<&OsString>, verb: &str) -> Result<Option<String
 pub(super) fn run_mount_command(command: MountCommand) -> Result<CliOutput, CliError> {
     match command {
         MountCommand::Ls { addr, path } => {
-            let namespace = mount_namespace(&addr)?;
-            ops::mount_ls(&namespace, &mount_path(&path)?)
+            // `session` holds the mount's keepalive (the dialer node for an
+            // `iroh://` mount owns the runtime the op runs on) for the whole op.
+            let session = mount_namespace(&addr)?;
+            ops::mount_ls(&session.namespace, &mount_path(&path)?)
         }
         MountCommand::Cat { addr, path } => {
-            let namespace = mount_namespace(&addr)?;
-            ops::mount_cat(&namespace, &mount_path(&path)?)
+            let session = mount_namespace(&addr)?;
+            ops::mount_cat(&session.namespace, &mount_path(&path)?)
         }
         MountCommand::Write { addr, path, text } => {
-            let namespace = mount_namespace(&addr)?;
-            ops::mount_write(&namespace, &mount_path(&path)?, text.as_bytes())
+            let session = mount_namespace(&addr)?;
+            ops::mount_write(&session.namespace, &mount_path(&path)?, text.as_bytes())
         }
     }
 }
 
+/// A live mount: a namespace with the remote bound at `/n/remote`, plus the
+/// transport keepalive that must outlive every operation on it.
+///
+/// For an `iroh://` mount the keepalive is the dialer [`crate::mesh::IrohMount`],
+/// which owns the tokio runtime the `RemoteFs` drives its QUIC traffic on;
+/// dropping it before the op runs would shut that runtime down and panic. For a
+/// `tcp://` mount there is nothing extra to hold (the `TcpStream` lives inside
+/// the `RemoteFs`), so the keepalive is `None`.
+struct MountSession {
+    namespace: Namespace,
+    /// Held only to keep the transport (and its runtime, for iroh) alive for the
+    /// mount's lifetime.
+    _keepalive: Option<crate::mesh::IrohMount>,
+}
+
 /// Dials `addr`, negotiates a 9P session, and binds the remote at `/n/remote`.
-fn mount_namespace(addr: &str) -> Result<Namespace, CliError> {
-    let remote = dial_remote(addr)?;
+fn mount_namespace(addr: &str) -> Result<MountSession, CliError> {
+    let (remote, keepalive) = dial_remote(addr)?;
     let mut namespace = Namespace::new();
     namespace
         .bind(remote, ".", MOUNT_POINT, BindOptions::default())
@@ -141,14 +158,39 @@ fn mount_namespace(addr: &str) -> Result<Namespace, CliError> {
                 1,
             )
         })?;
-    Ok(namespace)
+    Ok(MountSession {
+        namespace,
+        _keepalive: keepalive,
+    })
+}
+
+/// Dials the remote 9P server named by `addr`, choosing transport by scheme.
+///
+/// `tcp://HOST:PORT` opens a raw TCP 9P stream; `iroh://<peer>[?addr=...]` dials
+/// the peer over the QUIC mesh transport. Both yield the same [`RemoteFs`], so
+/// the `mount-*` verbs run identically over either transport.
+///
+/// The `iroh://` arm also returns its dialer node (inside [`crate::mesh::IrohMount`])
+/// as a keepalive: it owns the runtime the `RemoteFs` runs every op on, so the
+/// caller must hold it until the operation completes.
+fn dial_remote(
+    addr: &str,
+) -> Result<(std::sync::Arc<RemoteFs>, Option<crate::mesh::IrohMount>), CliError> {
+    if addr.starts_with(crate::mesh::IROH_SCHEME) {
+        let mount = crate::mesh::dial_iroh_remote(addr, "")?;
+        let remote = std::sync::Arc::clone(&mount.remote);
+        return Ok((remote, Some(mount)));
+    }
+    Ok((dial_tcp_remote(addr)?, None))
 }
 
 /// Connects a TCP stream to the `tcp://HOST:PORT` address and negotiates 9P.
-fn dial_remote(addr: &str) -> Result<std::sync::Arc<RemoteFs>, CliError> {
-    let host_port = addr
-        .strip_prefix("tcp://")
-        .ok_or_else(|| CliError::usage(format!("mount address must be tcp://HOST:PORT: {addr}")))?;
+fn dial_tcp_remote(addr: &str) -> Result<std::sync::Arc<RemoteFs>, CliError> {
+    let host_port = addr.strip_prefix("tcp://").ok_or_else(|| {
+        CliError::usage(format!(
+            "mount address must be tcp://HOST:PORT or iroh://<peer>: {addr}"
+        ))
+    })?;
     let stream = TcpStream::connect(host_port).map_err(|error| {
         CliError::new(format!("failed to dial 9P server {host_port}: {error}"), 1)
     })?;

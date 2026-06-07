@@ -8,6 +8,7 @@ mod collected;
 mod command_args;
 mod help;
 mod json;
+mod mesh;
 mod mount;
 mod native;
 mod new;
