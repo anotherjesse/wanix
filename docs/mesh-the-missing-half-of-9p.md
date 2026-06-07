@@ -859,3 +859,365 @@ becomes an iroh bi-stream; and `with_policy` is fed the real key with not a line
 of `wanix-id` or `SubtreeFs` changed. Two laptops on two NATs, one namespace,
 grants enforced by identity — that is the next slice, and the trust boundary it
 needs is already built and green.
+
+---
+
+# Slice 3 — iroh: The Mesh Goes Real
+
+Slice 1 built the 9P client — import realized over a byte stream. Slice 2 built
+the trust boundary — a capability is a bind, keyed by a peer identity supplied by
+hand over plain TCP. Both slices were deliberately transport-agnostic: `RemoteFs`
+only ever asked for a `Box<dyn Duplex>` (anything `Read + Write + Send`), and the
+grant table only ever asked for a `PeerId`. The whole design pointed at one
+missing edge — a real transport that **supplies a cryptographically verified
+identity** and **reaches a machine that is not `127.0.0.1`**.
+
+Slice 3 lands that edge. It is iroh: QUIC with ed25519 node identities, NAT
+traversal, and relays, where the public key *is* the address. A node binds one
+iroh endpoint from its persisted node key, serves its Wanix namespace as 9P over
+QUIC, and prints a dialable ticket. Another node mounts that ticket and the
+remote namespace — files and `#`-services alike — splices into its own at
+`/n/<node>`. The peer is authenticated by the QUIC handshake before a single
+`Tattach` is served, and the Slice 2 grant table now keys on that *verified*
+identity instead of a hand-supplied hex string. The mesh reaches the real
+internet, and not one line of `wanix-fs`, `wanix-vfs`, `wanix-protocol`,
+`wanix-9p`, or `wanix-9p-client` moved to make it happen.
+
+## What We Built
+
+- **`wanix-mesh`** — the only async crate in the workspace, and the only one that
+  contacts iroh or tokio. It binds one `iroh::Endpoint` per node from the
+  persisted `wanix_id::NodeIdentity` secret key, exports a Wanix namespace as 9P
+  over QUIC under ALPN `wanix/9p/1`, and dials peers to import their namespaces as
+  a `wanix_9p_client::RemoteFs`. The synchronous 9P core — `P9Server::serve_stream`
+  and `RemoteFs` — runs **unchanged**; the async/sync boundary is bridged here and
+  nowhere else.
+- **`MeshNode`** — one node: a held multi-thread tokio runtime, an iroh endpoint
+  bound from the node identity, and (when serving) an iroh `Router` dispatching
+  ALPN `wanix/9p/1` to the protocol handler. It can bind `Public` (n0 preset:
+  relays + DNS discovery, for crossing NATs) or `bind_local` (relays/DNS disabled,
+  pinned to one IP socket — the testable, LAN, and loopback form). Callers get
+  only synchronous values: a `PeerId`, an `EndpointAddr` ticket, and a dialer.
+- **`P9ProtocolHandler` + the `BlockingDuplex` bridge** — the inbound side reads
+  the verified peer id from the handshake and runs `serve_stream` inside
+  `spawn_blocking`; the outbound `MeshDialer` connects, opens a bidi stream, wraps
+  it in a `BlockingDuplex`, and hands it to `RemoteFs`. Both directions drive the
+  async stream halves on a **held** runtime `Handle`, never `block_on` on a
+  worker thread.
+- **`wanix-rust mesh-serve` and the `iroh://` mount scheme** — the CLI surface:
+  `mesh-serve --root DIR` binds an endpoint and prints `iroh://<peer-id>?addr=...`;
+  the existing `mount-ls`/`mount-cat`/`mount-write` verbs now accept that
+  `iroh://` ticket and dial the peer over QUIC, running *identically* to the
+  `tcp://` path because both yield the same `RemoteFs`.
+
+## Why: cpu, factotum, and "the key is the address"
+
+Plan 9's `import`/`export` and the `/n/` convention assumed a network you could
+name and reach: a file server at a known address, an auth server (`factotum`)
+holding your keys, a flat trusted campus LAN. That assumption does not survive
+contact with the modern internet — NATs, no stable addresses, no campus trust.
+The Wanix mesh keeps the Plan 9 *mechanisms* and swaps the *transport* for one
+built for exactly this world.
+
+Two Plan 9 ideas collapse into the iroh handshake:
+
+- **factotum becomes a property of the connection.** Plan 9 split authentication
+  into a separate daemon so no file server had to speak auth protocols. iroh goes
+  further: the QUIC handshake authenticates the peer's ed25519 key *in the
+  transport*. By the time a connection is accepted, the peer's identity is already
+  proven — `Connection::remote_id()` returns the verified `EndpointId`. There is
+  nothing left for an in-band `Tauth` to do; it stays `ENOSYS` forever. The
+  server never trusts a client-claimed `uname`; the cryptographic identity *is*
+  the transport peer.
+- **the node id is simultaneously the identity and the address.** This is the
+  property that makes `/n/<node>` workable on the open internet. A node is named
+  by its public key. The same 32 bytes that authorize it also let iroh *find* it,
+  via relays and DNS discovery, across NATs you could never have addressed
+  directly. A ticket is that key plus whatever direct addresses are known for a
+  fast first hop. "Mount this node" and "trust this node" are the same act on the
+  same bytes.
+
+And this is the slice that makes the **agent's reach** real. An agent operating
+`/n/<node>` over loopback was a demo; an agent that mounts a node behind a NAT in
+another building, authenticated by its key, confined by a grant, is the mesh
+doing its job. The operator the namespace mechanisms always wanted now has the
+whole network to operate — by `cat`, `write`, and `ls`, over QUIC.
+
+It is also the foundation for **cpu — send the agent to the data.** Slice 1
+framed `cpu` as relocating compute next to files instead of streaming files to
+compute. That move needs exactly what Slice 3 supplies: a node you can reach,
+an identity that gates what it exposes, and a bidi stream you can reverse-export
+a namespace over. Slice 3 is not cpu, but every primitive cpu needs is now on the
+wire.
+
+## The How: Architecture
+
+### One endpoint, one identity, the sync core untouched
+
+The center of `wanix-mesh` is `MeshNode`: it owns a dedicated tokio runtime and
+binds one `iroh::Endpoint` from the node's persisted secret key. The endpoint
+serves *and* dials over the same identity — there is no separate client identity.
+Binding speaks the **real, pinned iroh API** (the blueprint warned that earlier
+designs cited methods and versions that don't exist):
+
+```rust
+let endpoint = Endpoint::builder(presets::N0)   // not node_id(); not 0.102
+    .secret_key(secret)
+    .alpns(vec![WANIX_9P_ALPN.to_vec()])
+    .bind().await?;
+let peer = peer_id_for(endpoint.id());           // endpoint.id() -> EndpointId
+```
+
+iroh is pinned to `0.98.2` and every signature was validated against that pin:
+`endpoint.id()` (not `node_id()`), `Connection::remote_id()` (not
+`remote_node_id()`), `Router::builder(ep).accept(ALPN, handler).spawn()`,
+`accept_bi`/`open_bi`. The ALPN is the wire contract `b"wanix/9p/1"` that selects
+the 9P plane on a shared endpoint.
+
+### The sync↔async bridge, designed not asserted
+
+Every subsystem design flagged the sync/async bridge as *the* risk, and the
+single sharpest hazard is concrete: **`Handle::block_on` panics if called from a
+thread that is itself a runtime worker.** `wanix-mesh` answers it structurally, in
+`duplex.rs`:
+
+- **Inbound.** `P9ProtocolHandler::accept(conn)` reads `conn.remote_id()` once,
+  then for each `accept_bi()` bidi stream runs the unchanged synchronous
+  `serve_stream` inside `tokio::task::spawn_blocking` — the blocking pool, *not* a
+  worker. The bidi stream's two halves are split into a `BlockingReader` and a
+  `BlockingWriter`, each holding the runtime `Handle` explicitly (never
+  `Handle::current`), so `block_on` always runs on a blocking-pool thread.
+- **Outbound.** `MeshDialer::dial` runs connect/open on the runtime, wraps the
+  stream halves in a `BlockingDuplex`, and hands it to `RemoteFs::connect`. The
+  `FileSystem` methods then run on ordinary OS threads and `block_on` through the
+  held `Handle`. The duplex satisfies `wanix_9p_client::Duplex` (`Read + Write +
+  Send`) — it is just one more byte stream, exactly as Slice 1 promised iroh would
+  be.
+
+### The corrections this slice carries
+
+**1. The first-write gotcha is real, and the handshake satisfies it.** An iroh
+bidi stream is invisible to the peer's `accept_bi` until the *opener writes its
+first byte*. A dialer that tried to read first would hang forever. The 9P
+`Tversion` handshake writes immediately on connect — that first write is exactly
+what makes the inbound side see the stream. The dialer's doc comment asserts this
+dependency so a future refactor cannot quietly invert read/write order and
+deadlock.
+
+**2. Identity is read before any attach, and 0-RTT is off.** The handler never
+calls `into_0rtt`, so `remote_id()` is the *proven* peer key, not an
+optimistically-claimed one, before a single `Tattach` is served. The grant table
+keys on that verified `PeerId` — the Slice 2 boundary, now fed a real
+cryptographic identity instead of `--peer HEX`.
+
+**3. Idle mounts must survive; in-flight work must be bounded.** 9P has no
+keepalive: a healthy mounted-but-idle session simply blocks on the server's
+next-request read, possibly for minutes ("open a mount, walk away"). So the
+per-op deadline rides only on the server's *write* (where a stalled peer must not
+park a thread), never on its idle read. There is a test —
+`idle_mount_survives_past_the_op_deadline` — that sits idle four times past a
+300 ms deadline and then succeeds on the same mount. The client keeps the
+deadline on both halves, since its read always follows a request write.
+
+**4. Slow-peer DoS is capped, stated, and sized.** Every live inbound session
+pins one blocking-pool thread inside `block_on` on its idle read for the session's
+lifetime. That cost is made explicit: a `Semaphore` admits at most
+`MAX_CONCURRENT_SESSIONS = 512` live sessions, and the runtime's blocking pool is
+sized to that plus headroom. A flood of half-open mounts cannot exhaust the
+process; the per-op write deadline closes the stalled-response leg.
+
+**5. Default-deny is enforced on the *global* transport, at parse time.** Serving
+the public endpoint with no grant gate would export the whole root read-write to
+anyone holding the ticket — the exact inversion of default-deny, now on a
+transport that reaches the whole internet. `mesh-serve` *refuses* it: a public
+serve with no `--peer`/`--grant` and no explicit `--insecure-open` is a usage
+error, with guidance to gate it, pin it local, or opt in loudly. A
+direct-address-only `--addr` endpoint (peers exchange tickets out of band) is
+allowed without grants; the open public export must be deliberate.
+
+### Dependency layering: async stays at the edge
+
+`wanix-mesh` is the *only* crate that depends on iroh and tokio. It sits above
+`wanix-9p-client` + `wanix-9p` + `wanix-id` + `wanix-vfs`, and everything it
+exposes upward is iroh-free: an `Arc<dyn FileSystem>` (the imported `RemoteFs`), a
+`PeerId`, an `EndpointAddr` ticket. The promise Slice 1 made — "when iroh arrives
+it arrives as one more `Duplex`, and not a single line of
+`wanix-fs`/`wanix-vfs`/`wanix-protocol` moves" — held exactly. iroh churn is
+confined to one crate behind one pin.
+
+## Copy-Paste: Input / Output
+
+Everything below is real, captured not fabricated, run from the repo root
+(`cd /Users/jesse/lw/wanix-qemu`). The live demo uses a local
+direct-address-only endpoint (`--addr 127.0.0.1:PORT`, relays/DNS disabled) so it
+needs no external network — loopback QUIC. The same `iroh://` ticket and the same
+`mount-*` verbs work against a public NAT-crossing endpoint; only the binding
+mode and the discovery path differ.
+
+### (a) The end-to-end mesh-over-QUIC test passes
+
+Five tests stand up two real `MeshNode`s on loopback (relay/DNS disabled), have
+node A serve a Wanix namespace, and have node B dial A's direct `EndpointAddr`
+ticket, build a `RemoteFs` over the bridged QUIC stream, bind it at `/n/A`, and
+drive a full round trip — the unchanged sync 9P server and client, over real
+QUIC, with the peer authenticated by its ed25519 key:
+
+```
+$ cargo test -p wanix-mesh --test mesh_quic
+running 5 tests
+test default_deny_denies_an_ungranted_peer ... ok
+test service_devices_cross_quic_identically ... ok
+test verified_peer_id_keys_a_read_only_grant ... ok
+test regular_file_round_trips_through_quic_mount ... ok
+test idle_mount_survives_past_the_op_deadline ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+```
+
+What each proves over QUIC: `regular_file_round_trips_through_quic_mount` —
+`create_dir` + write + read-back, the server's `MemFs` observing the exact bytes
+and the file reporting `is_seekable() == true`; `service_devices_cross_quic_identically`
+— `#task/self/kind == noop\n` and a streamed `#term/new` read returns live server
+state (`1\n`), so `#`-devices cross the wire, not just plain files;
+`verified_peer_id_keys_a_read_only_grant` — node B's verified `PeerId` keys a
+read-only grant on `docs`, B attaches `aname=docs`, reads it, and a write-mode
+open is denied by the rights gate; `default_deny_denies_an_ungranted_peer` — an
+empty grant table denies the attach (the QUIC connection succeeds, the 9P
+`Tattach` is default-denied); `idle_mount_survives_past_the_op_deadline` — a
+mount idle four times past the per-op deadline still serves a later op.
+
+### (b) A live two-process import over QUIC loopback
+
+Node A mesh-serves a host directory and prints its node id and a dialable ticket.
+This is a local direct-address-only endpoint, so the ticket carries
+`?addr=127.0.0.1:5680` for first contact and needs no relay.
+
+Server (terminal 1):
+
+```
+$ SROOT=$(mktemp -d) && mkdir "$SROOT/docs" \
+    && printf 'hello from node A over QUIC\n' > "$SROOT/greeting.txt"
+$ wanix-rust mesh-serve --root "$SROOT" --key "$SROOT/../node.key" --addr 127.0.0.1:5680
+wanix-rust mesh-serve: node 829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986
+wanix-rust mesh-serve: mount iroh://829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986?addr=127.0.0.1:5680
+```
+
+The client (terminal 2) mounts that exact ticket and round-trips ls / cat /
+write / cat through `/n/remote`, every operation a 9P exchange over the QUIC
+stream:
+
+```
+$ TICKET='iroh://829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986?addr=127.0.0.1:5680'
+
+$ wanix-rust mount-ls "$TICKET"
+docs
+greeting.txt
+
+$ wanix-rust mount-cat "$TICKET" greeting.txt
+hello from node A over QUIC
+
+$ wanix-rust mount-write "$TICKET" docs/note.txt "written across QUIC"
+wrote 19 bytes to n/remote/docs/note.txt
+
+$ wanix-rust mount-cat "$TICKET" docs/note.txt
+written across QUIC
+
+$ wanix-rust mount-ls "$TICKET" docs
+note.txt
+```
+
+And the write **persisted on the server host** — the bytes crossed the QUIC
+stream, went through the server's `Tlcreate`/`Twrite` path, and landed in the
+served directory:
+
+```
+$ cat "$SROOT/docs/note.txt"
+written across QUIC
+```
+
+Nineteen bytes that never existed on the client's disk, written through an
+`iroh://` ticket and a namespace bind, materialized in node A's directory across
+a QUIC connection that authenticated A's ed25519 key on the way in.
+
+### (c) Identity-keyed grant enforcement, live over QUIC
+
+Node A serves the same root, but in grant-gated mode: a **default-deny** table
+that grants *only* peer `2222…2222` the scoped subtree `docs` read-only. The
+`mount-*` verbs attach with the root `aname` (Slice 1 has no notion of a named
+attach), which matches no grant — so the default-deny table rejects the attach
+before any walk.
+
+Server (terminal 1):
+
+```
+$ wanix-rust mesh-serve --root "$SROOT" --key "$SROOT/../node2.key" --addr 127.0.0.1:5681 \
+    --peer 2222222222222222222222222222222222222222222222222222222222222222 \
+    --grant docs:docs:ro
+wanix-rust mesh-serve: node b0afc03cd92636a572460d7579f502c53686a96193b69f690d54eba0a23b3299
+wanix-rust mesh-serve: mount iroh://b0afc03cd92636a572460d7579f502c53686a96193b69f690d54eba0a23b3299?addr=127.0.0.1:5681
+```
+
+Importer (terminal 2):
+
+```
+$ wanix-rust mount-ls 'iroh://b0afc03cd92636a572460d7579f502c53686a96193b69f690d54eba0a23b3299?addr=127.0.0.1:5681'
+failed to dial iroh peer: failed to negotiate mesh 9P session: 9P server returned errno 13
+$ echo $?
+1
+```
+
+Errno **13 is EACCES**: the QUIC connection succeeded and the peer's identity was
+verified, but the default-deny grant table denied the attach. The grant boundary
+from Slice 2 is now enforced on the QUIC transport, keyed on the verified peer.
+The *allow* side — peer `2222…` attaching `aname=docs` and reading the scoped
+read-only subtree, with a write denied by the rights gate — is proven over QUIC
+by `verified_peer_id_keys_a_read_only_grant` in (a), which keys on node B's real
+verified `PeerId` and drives the matching `aname=docs` attach (the shipped
+`mount-*` verbs always attach the root `aname`, so the CLI shows the live *deny*
+side; the test drives the live *allow* side over the same QUIC transport).
+
+### (d) Default-deny is enforced before the network, too
+
+Serving the public endpoint with no grant gate would export the whole root
+read-write to anyone with the ticket. `mesh-serve` refuses that at parse time:
+
+```
+$ wanix-rust mesh-serve --root /tmp
+mesh-serve on the public endpoint with no --peer/--grant exports the entire root read-write to anyone with the ticket; pass --peer HEX with --grant to gate access, --addr IP:PORT to serve a local direct-address-only endpoint, or --insecure-open to deliberately export it to the open internet
+```
+
+A local `--addr` endpoint (peers trade tickets out of band) or a grant-gated
+public serve is allowed; the open global export must be opted into with
+`--insecure-open`, which prints a loud warning.
+
+## The Plan 9 Lineage, and What's Next
+
+Slice 3 finishes the transport story the first two slices were built against.
+9P is unchanged — the same frames, the same `msize`, the same fids, now over a
+QUIC bidi stream. import/export and `/n/` are unchanged — `bind(RemoteFs, ".",
+"n/<node>")` is still the whole move; only the `Duplex` underneath is now an iroh
+stream instead of a TCP socket. The capability-is-a-bind boundary is unchanged —
+`SubtreeFs` + `GrantTable` + `with_policy`, now fed a `PeerId` that the transport
+*proved* instead of one a flag *claimed*. factotum's job moved into the QUIC
+handshake; the node id became the address; and the agent's `cat`/`write`/`ls`
+vocabulary now reaches any node it holds a ticket for.
+
+What's next rides the same endpoint and the same identity:
+
+- **cpu — send the agent to the data.** A reverse-exported caller namespace over
+  a second bidi stream, plus remote `allocate_root` + `bind` + `start`, makes
+  Plan 9's cpu(1) workable: run the task *on* the node holding the data, against
+  its fast local namespace, outputs returning over the control stream. Every
+  primitive it needs — a reachable node, a verified identity, a grant jail, a
+  bidi stream — is now on the wire.
+- **venti — content-addressed blobs.** A second ALPN (`iroh-blobs`) on the *same*
+  endpoint moves bulk bytes — worlds, capsules, modules — peer-to-peer and
+  BLAKE3-verified, so large data never crawls through the 9P `msize` window. The
+  control plane references content by hash; the data plane ships it.
+- **plumber — gossip.** A third ALPN (`iroh-gossip`) carries a `#plumb` topic bus
+  for typed, best-effort coordination between agents and tools across nodes.
+
+The missing half of 9P is built, the boundary that confines it is built, and now
+the transport that carries both to the open internet is built. Wanix could always
+export; it can import; it imports *only what it grants*; and it does all of it
+across QUIC, addressed and authenticated by the same key. The mesh is real.
