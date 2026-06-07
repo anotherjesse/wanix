@@ -225,6 +225,36 @@ type ShellHistoryArchiveDossierRetryQueueItem = {
 	retryAction: ShellHistoryArchiveDossierAction;
 };
 
+type ShellHistoryArchiveDossierRetryBatchStatus = "completed" | "partial" | "cancelled" | "empty";
+
+type ShellHistoryArchiveDossierRetryBatchResultStatus = ShellHistoryArchiveDossierActionStatus | "skipped";
+
+type ShellHistoryArchiveDossierRetryBatchResult = {
+	archiveName: string;
+	archiveDir: string;
+	label: string;
+	command: string;
+	startedAt?: string;
+	completedAt?: string;
+	status: ShellHistoryArchiveDossierRetryBatchResultStatus;
+	statusDetail: string;
+	actionReportPath?: string;
+	actionJsonPath?: string;
+	expectedResultMarkdownPath?: string;
+	expectedResultJsonPath?: string;
+	commandError?: string;
+	recordError?: string;
+};
+
+type ShellHistoryArchiveDossierRetryBatchReport = {
+	generatedAt: Date;
+	completedAt: Date;
+	status: ShellHistoryArchiveDossierRetryBatchStatus;
+	statusDetail: string;
+	queue: ShellHistoryArchiveDossierRetryQueueItem[];
+	results: ShellHistoryArchiveDossierRetryBatchResult[];
+};
+
 type ShellHistoryArchiveBundleFile = {
 	path: string;
 	bytes: number;
@@ -335,6 +365,8 @@ const SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH = ".wanix/qjs-shell/archive/invent
 const SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH = ".wanix/qjs-shell/archive/inventory.json";
 const SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH = ".wanix/qjs-shell/archive/retryable-dossier-actions.md";
 const SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH = ".wanix/qjs-shell/archive/retryable-dossier-actions.json";
+const SHELL_HISTORY_ARCHIVE_RETRY_BATCH_MD_PATH = ".wanix/qjs-shell/archive/retryable-dossier-actions-run.md";
+const SHELL_HISTORY_ARCHIVE_RETRY_BATCH_JSON_PATH = ".wanix/qjs-shell/archive/retryable-dossier-actions-run.json";
 const SHELL_HISTORY_ARCHIVE_PRUNE_MD_PATH = ".wanix/qjs-shell/archive/pruned.md";
 const SHELL_HISTORY_ARCHIVE_PRUNE_JSON_PATH = ".wanix/qjs-shell/archive/pruned.json";
 const SHELL_HISTORY_ARCHIVE_BUNDLE_MD_NAME = "bundle.md";
@@ -586,6 +618,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runShellHistoryArchiveDossierAction', async (action?: ShellHistoryArchiveDossierAction) => {
 			try {
 				await runShellHistoryArchiveDossierAction(fsys, bridge, systemView, action);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.runAllShellHistoryArchiveDossierActions', async () => {
+			try {
+				await runAllShellHistoryArchiveDossierActions(fsys, bridge, systemView);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -1234,6 +1274,19 @@ async function runShellHistoryArchiveDossierAction(
 	if (choice !== "Run Action") {
 		return;
 	}
+	const result = await executeShellHistoryArchiveDossierPreparedAction(fsys, bridge, systemView, prepared);
+	if (result.commandError) {
+		throw new Error(result.commandError);
+	}
+}
+
+async function executeShellHistoryArchiveDossierPreparedAction(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+	prepared: ShellHistoryArchiveDossierPreparedAction,
+	options: { quiet?: boolean } = {},
+): Promise<{ commandError?: string; actionStatus: ShellHistoryArchiveDossierActionStatus; statusDetail: string }> {
 	const before = await shellHistoryArchiveDossierActionResultSnapshot(fsys, prepared);
 	let commandError: string | undefined;
 	try {
@@ -1241,10 +1294,141 @@ async function runShellHistoryArchiveDossierAction(
 	} catch (error) {
 		commandError = error instanceof Error ? error.message : String(error);
 	}
-	await recordShellHistoryArchiveDossierAction(fsys, bridge, systemView, prepared, before, new Date(), commandError);
-	if (commandError) {
-		throw new Error(commandError);
+	const recorded = await recordShellHistoryArchiveDossierAction(fsys, bridge, systemView, prepared, before, new Date(), commandError, options);
+	return { commandError, actionStatus: recorded.status, statusDetail: recorded.statusDetail };
+}
+
+async function runAllShellHistoryArchiveDossierActions(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const generatedAt = new Date();
+	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
+	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	publishShellHistoryArchiveRetryQueueReport(systemView, inventory, inventoryPaths);
+	const queue = shellHistoryArchiveDossierRetryQueueItems(inventory.archives);
+	if (queue.length === 0) {
+		const completedAt = new Date();
+		const batchPaths = await writeShellHistoryArchiveDossierRetryBatchReport(fsys, {
+			generatedAt,
+			completedAt,
+			status: "empty",
+			statusDetail: "No retryable dossier actions are currently recorded.",
+			queue,
+			results: [],
+		});
+		publishShellHistoryArchiveRetryBatchReport(systemView, batchPaths, "empty");
+		systemView.filesystemActivity("shell archive retry queue empty", {
+			description: "no retryable dossier actions",
+			path: SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH,
+			paths: [...inventoryPaths, ...batchPaths],
+		});
+		await refreshWanixPaths(bridge, [SHELL_HISTORY_ARCHIVE_DIR, ...inventoryPaths, ...batchPaths]);
+		await openWanixPath(SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH);
+		vscode.window.showInformationMessage("No retryable qjs shell archive dossier actions are currently recorded.");
+		return;
 	}
+	const choice = await vscode.window.showWarningMessage(
+		`Run ${queue.length} retryable qjs shell archive dossier ${queue.length === 1 ? "action" : "actions"}?`,
+		{
+			modal: true,
+			detail: shellHistoryArchiveDossierRetryBatchPreviewLines(queue).join("\n"),
+		},
+		"Run All Actions",
+	);
+	if (choice !== "Run All Actions") {
+		const completedAt = new Date();
+		const batchPaths = await writeShellHistoryArchiveDossierRetryBatchReport(fsys, {
+			generatedAt,
+			completedAt,
+			status: "cancelled",
+			statusDetail: "User cancelled before running the retry queue.",
+			queue,
+			results: [],
+		});
+		publishShellHistoryArchiveRetryBatchReport(systemView, batchPaths, "cancelled");
+		systemView.filesystemActivity("shell archive retry batch cancelled", {
+			description: `${queue.length} actions skipped`,
+			path: SHELL_HISTORY_ARCHIVE_RETRY_BATCH_MD_PATH,
+			paths: [...inventoryPaths, ...batchPaths],
+		});
+		await refreshWanixPaths(bridge, [SHELL_HISTORY_ARCHIVE_DIR, ...inventoryPaths, ...batchPaths]);
+		vscode.window.showInformationMessage(`Cancelled qjs shell archive retry batch: ${queue.length} actions skipped`);
+		return;
+	}
+
+	const results: ShellHistoryArchiveDossierRetryBatchResult[] = [];
+	for (const item of queue) {
+		const startedAt = new Date();
+		let prepared: ShellHistoryArchiveDossierPreparedAction;
+		try {
+			prepared = shellHistoryArchiveDossierPreparedAction(item.retryAction);
+		} catch (error) {
+			results.push(shellHistoryArchiveDossierRetryBatchResult(item, {
+				startedAt,
+				completedAt: new Date(),
+				status: "skipped",
+				statusDetail: error instanceof Error ? error.message : String(error),
+			}));
+			continue;
+		}
+		try {
+			const result = await executeShellHistoryArchiveDossierPreparedAction(fsys, bridge, systemView, prepared, { quiet: true });
+			results.push(shellHistoryArchiveDossierRetryBatchResult(item, {
+				startedAt,
+				completedAt: new Date(),
+				status: result.actionStatus,
+				statusDetail: result.statusDetail,
+				commandError: result.commandError,
+				expectedResultMarkdownPath: prepared.resultMarkdownPath,
+				expectedResultJsonPath: prepared.resultJsonPath,
+			}));
+		} catch (error) {
+			results.push(shellHistoryArchiveDossierRetryBatchResult(item, {
+				startedAt,
+				completedAt: new Date(),
+				status: "failed",
+				statusDetail: "Action could not be recorded after execution.",
+				recordError: error instanceof Error ? error.message : String(error),
+				expectedResultMarkdownPath: prepared.resultMarkdownPath,
+				expectedResultJsonPath: prepared.resultJsonPath,
+			}));
+		}
+	}
+
+	const completedAt = new Date();
+	const finalInventory = await shellHistoryArchiveInventory(fsys, completedAt);
+	const finalInventoryPaths = await writeShellHistoryArchiveInventory(fsys, finalInventory);
+	publishShellArchiveInventoryToSystemView(systemView, finalInventory.archives);
+	publishShellHistoryArchiveRetryQueueReport(systemView, finalInventory, finalInventoryPaths);
+	const failedCount = results.filter(shellHistoryArchiveDossierRetryBatchResultNeedsAttention).length;
+	const status: ShellHistoryArchiveDossierRetryBatchStatus = failedCount > 0 ? "partial" : "completed";
+	const batchPaths = await writeShellHistoryArchiveDossierRetryBatchReport(fsys, {
+		generatedAt,
+		completedAt,
+		status,
+		statusDetail: failedCount > 0
+			? `${results.length - failedCount} actions completed, ${failedCount} still need attention.`
+			: `${results.length} actions completed.`,
+		queue,
+		results,
+	});
+	publishShellHistoryArchiveRetryBatchReport(systemView, batchPaths, status);
+	const paths = uniqueReportPaths([...finalInventoryPaths, ...batchPaths, ...results.flatMap(shellHistoryArchiveDossierRetryBatchResultPaths)]);
+	systemView.filesystemActivity("shell archive retry batch completed", {
+		description: failedCount > 0 ? `${results.length - failedCount}/${results.length} completed` : `${results.length} actions completed`,
+		path: SHELL_HISTORY_ARCHIVE_RETRY_BATCH_MD_PATH,
+		paths,
+	});
+	await refreshWanixPaths(bridge, [SHELL_HISTORY_ARCHIVE_DIR, ...paths]);
+	await openWanixPath(SHELL_HISTORY_ARCHIVE_RETRY_BATCH_MD_PATH);
+	vscode.window.showInformationMessage(
+		failedCount > 0
+			? `Ran qjs shell archive retry batch with ${failedCount} actions still needing attention`
+			: `Ran qjs shell archive retry batch: ${results.length} actions completed`,
+	);
 }
 
 function shellHistoryArchiveDossierPreparedAction(action?: ShellHistoryArchiveDossierAction): ShellHistoryArchiveDossierPreparedAction {
@@ -1294,13 +1478,14 @@ async function recordShellHistoryArchiveDossierAction(
 	before: ShellHistoryArchiveDossierActionResultSnapshot,
 	generatedAt: Date,
 	commandError?: string,
-): Promise<void> {
+	options: { quiet?: boolean } = {},
+): Promise<{ status: ShellHistoryArchiveDossierActionStatus; statusDetail: string }> {
 	if (!prepared.archiveDir) {
-		return;
+		return { status: "failed", statusDetail: "Prepared action did not target a shell archive." };
 	}
 	const archive = await shellHistoryArchiveInfoForTarget(fsys, { archiveDir: prepared.archiveDir });
 	if (!archive) {
-		return;
+		return { status: "failed", statusDetail: `Shell history archive not found: ${shellHistoryAbsolutePath(prepared.archiveDir)}` };
 	}
 	const outcome = await shellHistoryArchiveDossierActionOutcome(fsys, prepared, before, commandError);
 	const result: ShellHistoryArchiveDossierActionResult = {
@@ -1337,7 +1522,10 @@ async function recordShellHistoryArchiveDossierAction(
 		...(prepared.resultMarkdownPath ? [prepared.resultMarkdownPath] : []),
 		...(prepared.resultJsonPath ? [prepared.resultJsonPath] : []),
 	]);
-	vscode.window.showInformationMessage(`Recorded qjs shell archive dossier action: ${prepared.label}`);
+	if (!options.quiet) {
+		vscode.window.showInformationMessage(`Recorded qjs shell archive dossier action: ${prepared.label}`);
+	}
+	return { status: outcome.status, statusDetail: outcome.statusDetail };
 }
 
 async function shellHistoryArchiveDossierActionResultSnapshot(
@@ -2345,6 +2533,157 @@ function shellHistoryArchiveDossierRetryActionForArchive(archive: ShellHistoryAr
 		reason: `Previous dossier action was ${status}${detail}`,
 		archiveTarget: shellHistoryArchiveDossierCommandTarget(archive),
 	};
+}
+
+function shellHistoryArchiveDossierRetryBatchPreviewLines(items: ShellHistoryArchiveDossierRetryQueueItem[]): string[] {
+	const shown = items.slice(0, 8);
+	return [
+		"This runs only archive-targeted retry actions from the generated retry queue. Each archive still writes its own dossier action result, and this batch writes a separate summary report.",
+		"",
+		...shown.map((item, index) => `${index + 1}. ${item.archive.name}: ${item.retryAction.label} (${item.status})`),
+		...(items.length > shown.length ? [`...${items.length - shown.length} more actions`] : []),
+	];
+}
+
+function shellHistoryArchiveDossierRetryBatchResult(
+	item: ShellHistoryArchiveDossierRetryQueueItem,
+	options: {
+		startedAt?: Date;
+		completedAt?: Date;
+		status: ShellHistoryArchiveDossierRetryBatchResultStatus;
+		statusDetail: string;
+		expectedResultMarkdownPath?: string;
+		expectedResultJsonPath?: string;
+		commandError?: string;
+		recordError?: string;
+	},
+): ShellHistoryArchiveDossierRetryBatchResult {
+	return {
+		archiveName: item.archive.name,
+		archiveDir: item.archive.archiveDir,
+		label: item.retryAction.label,
+		command: item.retryAction.command,
+		startedAt: options.startedAt?.toISOString(),
+		completedAt: options.completedAt?.toISOString(),
+		status: options.status,
+		statusDetail: options.statusDetail,
+		actionReportPath: item.archive.dossierActionMarkdownPath,
+		actionJsonPath: item.archive.dossierActionJsonPath,
+		expectedResultMarkdownPath: options.expectedResultMarkdownPath,
+		expectedResultJsonPath: options.expectedResultJsonPath,
+		commandError: options.commandError,
+		recordError: options.recordError,
+	};
+}
+
+function shellHistoryArchiveDossierRetryBatchResultPaths(result: ShellHistoryArchiveDossierRetryBatchResult): string[] {
+	return [
+		result.actionReportPath,
+		result.actionJsonPath,
+		result.expectedResultMarkdownPath,
+		result.expectedResultJsonPath,
+	].filter((path): path is string => Boolean(path));
+}
+
+function shellHistoryArchiveDossierRetryBatchResultNeedsAttention(result: ShellHistoryArchiveDossierRetryBatchResult): boolean {
+	return result.status === "skipped" || shellHistoryArchiveDossierActionNeedsRetry(result.status);
+}
+
+async function writeShellHistoryArchiveDossierRetryBatchReport(
+	fsys: any,
+	report: ShellHistoryArchiveDossierRetryBatchReport,
+): Promise<string[]> {
+	await fsys.makeDirAll(SHELL_HISTORY_ARCHIVE_DIR);
+	await fsys.writeFile(SHELL_HISTORY_ARCHIVE_RETRY_BATCH_JSON_PATH, shellHistoryArchiveDossierRetryBatchJson(report));
+	await fsys.writeFile(SHELL_HISTORY_ARCHIVE_RETRY_BATCH_MD_PATH, shellHistoryArchiveDossierRetryBatchMarkdown(report));
+	return [SHELL_HISTORY_ARCHIVE_RETRY_BATCH_MD_PATH, SHELL_HISTORY_ARCHIVE_RETRY_BATCH_JSON_PATH];
+}
+
+function shellHistoryArchiveDossierRetryBatchJson(report: ShellHistoryArchiveDossierRetryBatchReport): string {
+	return `${JSON.stringify({
+		schema: "wanix.qjs-shell.archive-dossier-retry-batch.v1",
+		generatedAt: report.generatedAt.toISOString(),
+		completedAt: report.completedAt.toISOString(),
+		status: report.status,
+		statusDetail: report.statusDetail,
+		retryQueueMarkdownPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH),
+		retryQueueJsonPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH),
+		batchMarkdownPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_RETRY_BATCH_MD_PATH),
+		batchJsonPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_RETRY_BATCH_JSON_PATH),
+		plannedCount: report.queue.length,
+		completedCount: report.results.filter((result) => !shellHistoryArchiveDossierRetryBatchResultNeedsAttention(result)).length,
+		needsAttentionCount: report.results.filter(shellHistoryArchiveDossierRetryBatchResultNeedsAttention).length,
+		failedCount: report.results.filter((result) => result.status === "failed").length,
+		skippedCount: report.results.filter((result) => result.status === "skipped").length,
+		planned: report.queue.map(shellHistoryArchiveDossierRetryQueueItemJson),
+		results: report.results.map(shellHistoryArchiveDossierRetryBatchResultJson),
+	}, null, 2)}\n`;
+}
+
+function shellHistoryArchiveDossierRetryBatchResultJson(result: ShellHistoryArchiveDossierRetryBatchResult): Record<string, unknown> {
+	return {
+		archiveName: result.archiveName,
+		archiveDir: shellHistoryAbsolutePath(result.archiveDir),
+		label: result.label,
+		command: result.command,
+		startedAt: result.startedAt,
+		completedAt: result.completedAt,
+		status: result.status,
+		statusDetail: result.statusDetail,
+		actionReportPath: result.actionReportPath ? shellHistoryAbsolutePath(result.actionReportPath) : undefined,
+		actionJsonPath: result.actionJsonPath ? shellHistoryAbsolutePath(result.actionJsonPath) : undefined,
+		expectedResultMarkdownPath: result.expectedResultMarkdownPath ? shellHistoryAbsolutePath(result.expectedResultMarkdownPath) : undefined,
+		expectedResultJsonPath: result.expectedResultJsonPath ? shellHistoryAbsolutePath(result.expectedResultJsonPath) : undefined,
+		commandError: result.commandError,
+		recordError: result.recordError,
+	};
+}
+
+function shellHistoryArchiveDossierRetryBatchMarkdown(report: ShellHistoryArchiveDossierRetryBatchReport): string {
+	return [
+		"# qjs Shell Archive Dossier Retry Batch",
+		"",
+		"Schema: wanix.qjs-shell.archive-dossier-retry-batch.v1",
+		`Generated: ${report.generatedAt.toISOString()}`,
+		`Completed: ${report.completedAt.toISOString()}`,
+		`Status: ${report.status} - ${report.statusDetail}`,
+		`JSON: ${shellHistoryWanixLink(shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_RETRY_BATCH_JSON_PATH), SHELL_HISTORY_ARCHIVE_RETRY_BATCH_JSON_PATH)}`,
+		`Retry queue: ${shellHistoryWanixLink(shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH), SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH)}`,
+		"",
+		"## Counts",
+		"",
+		`- Planned actions: ${report.queue.length}`,
+		`- Completed: ${report.results.filter((result) => !shellHistoryArchiveDossierRetryBatchResultNeedsAttention(result)).length}`,
+		`- Needs attention: ${report.results.filter(shellHistoryArchiveDossierRetryBatchResultNeedsAttention).length}`,
+		`- Failed: ${report.results.filter((result) => result.status === "failed").length}`,
+		`- Skipped: ${report.results.filter((result) => result.status === "skipped").length}`,
+		"",
+		"## Results",
+		"",
+		...shellHistoryArchiveDossierRetryBatchRows(report),
+		"",
+		"This batch report is written before cancellation or after the queue completes. Individual archives still keep their own dossier action reports, so a later agent can inspect each retry independently.",
+		"",
+	].join("\n");
+}
+
+function shellHistoryArchiveDossierRetryBatchRows(report: ShellHistoryArchiveDossierRetryBatchReport): string[] {
+	if (report.results.length === 0) {
+		return report.status === "empty"
+			? ["No retryable dossier actions were present."]
+			: ["The retry queue was not run."];
+	}
+	return [
+		"| Archive | Action | Status | Detail | Report |",
+		"| --- | --- | --- | --- | --- |",
+		...report.results.map((result) => {
+			const archive = shellHistoryWanixLink(result.archiveName, `${result.archiveDir}/index.md`);
+			const reportLink = result.actionReportPath
+				? shellHistoryWanixLink("action report", result.actionReportPath)
+				: "";
+			return `| ${archive} | ${shellHistoryMarkdownCell(result.label)} | ${result.status} | ${shellHistoryMarkdownCell(result.statusDetail)} | ${reportLink} |`;
+		}),
+	];
 }
 
 function shellHistoryArchiveInfoJson(archive: ShellHistoryArchiveInfo): Record<string, unknown> {
@@ -4537,6 +4876,19 @@ function publishShellHistoryArchiveRetryQueueReport(
 		description: `${retryableCount} retryable dossier ${retryableCount === 1 ? "action" : "actions"}`,
 		icon: retryableCount > 0 ? "warning" : "pass",
 		artifacts: [SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH, SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH, ...paths],
+	});
+}
+
+function publishShellHistoryArchiveRetryBatchReport(
+	systemView: WanixSystemView,
+	paths: string[],
+	status: ShellHistoryArchiveDossierRetryBatchStatus,
+): void {
+	systemView.reportPublished("qjs Shell Archive Retry Batch", SHELL_HISTORY_ARCHIVE_RETRY_BATCH_MD_PATH, {
+		kind: "shell",
+		description: `batch ${status}`,
+		icon: status === "completed" || status === "empty" ? "pass" : "warning",
+		artifacts: paths,
 	});
 }
 

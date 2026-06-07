@@ -708,6 +708,18 @@ without scraping sidebar labels.
 
 ![Shell archive retry queue report](assets/wanix-workbench-browser-dx/96-shell-archive-retry-queue.png)
 
+The queue can be run as a batch now, but it still behaves like an auditable
+operating-system action rather than a hidden loop. The System Actions section
+adds `Run Retryable Archive Actions`, and the retryable archive group adds a
+`Run All Retryable Actions` child. Both routes show a modal preview before
+execution, run each queued item through the same dossier action recorder, keep
+going across per-archive failures, and write
+`/.wanix/qjs-shell/archive/retryable-dossier-actions-run.md` plus `.json` with
+status `completed`, `partial`, `cancelled`, or `empty`. Cancelled runs leave a
+breadcrumb too, which is exactly the kind of small mercy a future agent needs.
+
+![Shell archive retry batch](assets/wanix-workbench-browser-dx/97-shell-archive-retry-batch.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1457,8 +1469,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Let the retry queue feed a safe `run all retryable actions` preview with
-  per-archive progress and cancellation breadcrumbs.
+- Add a resume-from-batch-report command that reruns only failed or skipped
+  retry batch rows.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

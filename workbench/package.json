@@ -253,6 +253,12 @@
         "icon": "$(notebook)"
       },
       {
+        "command": "workbench.runAllShellHistoryArchiveDossierActions",
+        "title": "Run Retryable Shell Archive Actions",
+        "category": "Wanix",
+        "icon": "$(run-all)"
+      },
+      {
         "command": "workbench.exportShellHistoryArchiveBundle",
         "title": "Export Shell Archive Bundle",
         "category": "Wanix",
