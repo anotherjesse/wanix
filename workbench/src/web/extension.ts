@@ -6,7 +6,7 @@ import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } fro
 import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
-import { WanixSystemView } from './system-view.js';
+import { WanixSystemView, type WanixServiceTask, type WanixServiceTerminal } from './system-view.js';
 import { openDirectV86, openV86SharedDemo, type V86SharedConfig } from './v86-shared-demo.js';
 import { ensureWasmStarter, installWasmStarter, WASM_STARTER_OUTPUT_PATH, WASM_STARTER_PATH } from './wasm-starter.js';
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
@@ -68,6 +68,7 @@ const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = 
 };
 const TASK_OUTPUT_DIR = ".wanix/tasks";
 const TASK_OUTPUT_MAX_CHARS = 512 * 1024;
+const SERVICE_STATE_POLL_MS = 1000;
 
 export async function activate(context: vscode.ExtensionContext) {
 	if (typeof navigator !== 'object') {	// do not run under node.js
@@ -129,6 +130,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			vscode.languages.registerDocumentLinkProvider({ scheme: WANIX_INSPECT_SCHEME }, serviceInspector),
 		);
 		systemView.configure(config);
+		context.subscriptions.push(startWanixServiceStatePolling(fsys, config, systemView));
 		revealWanixSystemView();
 		fsys.logger = (...args: any[]) => {
 			// console.log(...args);
@@ -486,6 +488,130 @@ function bridgeMutationActivity(mutation: WanixBridgeMutation): Required<Filesys
 		case "write":
 			return { label: `saved ${baseName(target)}`, openPath, paths };
 	}
+}
+
+function startWanixServiceStatePolling(fsys: any, config: Config, systemView: WanixSystemView): vscode.Disposable {
+	let disposed = false;
+	let inFlight = false;
+	let warned = false;
+	const poll = async () => {
+		if (disposed || inFlight || !config.ns?.task || !config.ns?.term) {
+			return;
+		}
+		inFlight = true;
+		try {
+			systemView.observeServiceState(await readWanixServiceState(fsys, config));
+			warned = false;
+		} catch (error) {
+			if (!warned) {
+				console.warn("Wanix service state poll failed", error);
+				warned = true;
+			}
+		} finally {
+			inFlight = false;
+		}
+	};
+	const interval = setInterval(() => {
+		void poll();
+	}, SERVICE_STATE_POLL_MS);
+	void poll();
+	return new vscode.Disposable(() => {
+		disposed = true;
+		clearInterval(interval);
+	});
+}
+
+async function readWanixServiceState(fsys: any, config: Config): Promise<{ tasks: WanixServiceTask[]; terminals: WanixServiceTerminal[] }> {
+	const [tasks, terminals] = await Promise.all([
+		readWanixServiceTasks(fsys, config.ns?.task),
+		readWanixServiceTerminals(fsys, config.ns?.term),
+	]);
+	return { tasks, terminals };
+}
+
+async function readWanixServiceTasks(fsys: any, taskRoot: string | undefined): Promise<WanixServiceTask[]> {
+	if (!taskRoot) {
+		return [];
+	}
+	let names: string[];
+	try {
+		names = serviceEntryNames(await fsys.readDir(taskRoot));
+	} catch {
+		return [];
+	}
+	const ids = names.filter((name) => /^\d+$/.test(name));
+	const tasks = await Promise.all(ids.map((id) => readWanixServiceTask(fsys, taskRoot, id)));
+	return tasks.filter((task): task is WanixServiceTask => Boolean(task));
+}
+
+async function readWanixServiceTask(fsys: any, taskRoot: string, id: string): Promise<WanixServiceTask | undefined> {
+	const taskPath = `${taskRoot}/${id}`;
+	try {
+		const [kindText, cmdText, exitText] = await Promise.all([
+			readWanixServiceText(fsys, `${taskPath}/kind`),
+			readWanixServiceText(fsys, `${taskPath}/cmd`),
+			readWanixServiceText(fsys, `${taskPath}/exit`),
+		]);
+		const kind = kindText.trim() || "task";
+		const cmd = cmdText.trim();
+		const exit = exitText.trim();
+		return {
+			id,
+			kind,
+			label: serviceTaskLabel(kind, cmd),
+			exit,
+			exitCode: parseTerminalExitCode(exit),
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+async function readWanixServiceTerminals(fsys: any, termRoot: string | undefined): Promise<WanixServiceTerminal[]> {
+	if (!termRoot) {
+		return [];
+	}
+	let names: string[];
+	try {
+		names = serviceEntryNames(await fsys.readDir(termRoot));
+	} catch {
+		return [];
+	}
+	return names
+		.filter((name) => /^\d+$/.test(name))
+		.map((id) => ({ id, label: `term ${id}` }));
+}
+
+async function readWanixServiceText(fsys: any, path: string): Promise<string> {
+	const value = await fsys.readText(path);
+	return typeof value === "string" ? value : String(value);
+}
+
+function serviceEntryNames(entries: unknown): string[] {
+	if (!Array.isArray(entries)) {
+		return [];
+	}
+	return entries
+		.map((entry) => {
+			if (typeof entry === "string") {
+				return entry.replace(/\/$/, "");
+			}
+			if (entry && typeof entry === "object") {
+				const candidate = entry as { Name?: string; name?: string };
+				return (candidate.Name || candidate.name || "").replace(/\/$/, "");
+			}
+			return "";
+		})
+		.filter((name) => name.length > 0)
+		.sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+}
+
+function serviceTaskLabel(kind: string, cmd: string): string {
+	const words = shellWords(cmd);
+	if (words[0]) {
+		return baseName(words[0]);
+	}
+	return kind;
 }
 
 function taskIdFromArgument(task: string | { taskId?: string } | undefined): string | undefined {

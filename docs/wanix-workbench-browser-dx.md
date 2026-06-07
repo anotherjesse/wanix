@@ -49,6 +49,14 @@ drivers, observed tasks, terminal resources, namespace roots, and recent
 activity. That turns the browser from "an editor attached to Wanix" into a small
 cockpit for the system.
 
+That sidebar now checks the service files too. A conservative browser poll reads
+`#task` and `#term` directory state, then reads only safe task metadata files
+like `kind`, `cmd`, and `exit`. Rows confirmed from the service surface are
+marked with `· #task` or `· #term`, so a reload or shell startup can still show
+live Wanix objects instead of only extension-remembered events.
+
+![Service-backed task row in the Wanix sidebar](assets/wanix-workbench-browser-dx/47-service-backed-task-sidebar.png)
+
 Namespace roots are now active inspection points. Click `#task` or `#term` in
 the Wanix sidebar and the workbench opens a generated `wanix-inspect:` document
 that lists the real service directory without reading files that allocate
@@ -500,6 +508,9 @@ The generated snapshot now links safe files and child directories too, so the
 user can walk from task object to service metadata without memorizing paths.
 When a service file is deliberately not linked, the row now explains whether it
 is an allocator, control file, stream, or unspecified service file.
+The sidebar also polls those service directories carefully. It does not touch
+allocator, control, or stream files; it only reads task directory names and safe
+metadata fields, then annotates confirmed rows with `· #task` or `· #term`.
 Finally, each direct qjs/wasm task writes a metadata JSON artifact next to its
 transcript, giving agents and humans the same stable handle for cwd, argv,
 env, source, output, exit, and capture state.
@@ -633,6 +644,11 @@ The clear-finished action makes the same sidebar usable during a long browser
 session. The OS cockpit should accumulate evidence, not make every stale row
 compete with the running shell.
 
+Service-backed task rows are the same idea applied to reloads and shell startup.
+When the browser can see a task through `#task`, the row says so. The cockpit is
+not merely remembering that it launched something; it is checking Wanix's own
+object table.
+
 The v86 shared-files starter is the same principle applied to the Linux proof.
 It does not hide the unprepared-root state; it shows the missing boot markers,
 the direct-v86 URL, and the shared files Linux should read and write.
@@ -665,7 +681,8 @@ The current loop is:
    of toolbar icons.
 9. Run a qjs task from the play button or `New qjs Script` action.
 10. Run a `.wasm` module from Explorer.
-11. Watch tasks, terminals, exits, and filesystem refreshes in the Wanix sidebar.
+11. Watch tasks, terminals, exits, and filesystem refreshes in the Wanix sidebar;
+    rows marked `· #task` have been confirmed from Wanix service files.
 12. Click `#task` or `#term` in the sidebar to inspect real service directories.
 13. Right-click a task row and inspect its `#task/<id>` service directory.
 14. Follow a safe service entry like `#task/1/kind` into the real Wanix file.

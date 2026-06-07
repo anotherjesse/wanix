@@ -42,12 +42,27 @@ type TaskRecord = {
 	sourcePath?: string;
 	outputPath?: string;
 	metadataPath?: string;
+	serviceObserved?: boolean;
 };
 
 type TerminalRecord = {
 	id: string;
 	label: string;
 	status: TerminalStatus;
+	serviceObserved?: boolean;
+};
+
+export type WanixServiceTask = {
+	id: string;
+	kind: string;
+	label: string;
+	exit?: string;
+	exitCode?: number;
+};
+
+export type WanixServiceTerminal = {
+	id: string;
+	label: string;
 };
 
 type NamespaceRecord = {
@@ -129,6 +144,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private routeRuns: RouteRunRecord[] = [];
 	private agent: AgentRecord[] = [];
 	private activity: ActivityRecord[] = [];
+	private serviceTaskIds = new Set<string>();
+	private serviceTerminalIds = new Set<string>();
 	private hasHttpApp = false;
 	private hasV86 = false;
 	private nextActivityId = 1;
@@ -169,7 +186,17 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	}
 
 	taskStarted(id: string, kind: string, label: string, options: { sourcePath?: string; outputPath?: string; metadataPath?: string } = {}): void {
-		this.tasks.set(id, { id, kind, label, status: "running", sourcePath: options.sourcePath, outputPath: options.outputPath, metadataPath: options.metadataPath });
+		const existing = this.tasks.get(id);
+		this.tasks.set(id, {
+			id,
+			kind,
+			label,
+			status: "running",
+			sourcePath: options.sourcePath || existing?.sourcePath,
+			outputPath: options.outputPath || existing?.outputPath,
+			metadataPath: options.metadataPath || existing?.metadataPath,
+			serviceObserved: existing?.serviceObserved,
+		});
 		this.addActivity(`${taskDisplayName({ kind, label })} started`);
 		this.refresh();
 	}
@@ -196,7 +223,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	}
 
 	terminalOpened(id: string, label: string): void {
-		this.terminals.set(id, { id, label, status: "attached" });
+		const existing = this.terminals.get(id);
+		this.terminals.set(id, { id, label, status: "attached", serviceObserved: existing?.serviceObserved });
 		this.addActivity(`terminal ${label} attached`);
 		this.refresh();
 	}
@@ -214,6 +242,15 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	filesystemActivity(label = "filesystem activity", options: { path?: string; paths?: string[] } = {}): void {
 		this.addActivity(label, options);
 		this.refresh();
+	}
+
+	observeServiceState(snapshot: { tasks: WanixServiceTask[]; terminals: WanixServiceTerminal[] }): void {
+		let changed = false;
+		changed = this.observeServiceTasks(snapshot.tasks) || changed;
+		changed = this.observeServiceTerminals(snapshot.terminals) || changed;
+		if (changed) {
+			this.refresh();
+		}
 	}
 
 	agentStarted(label: string): void {
@@ -347,9 +384,10 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			return [leaf("tasks:empty", "no observed tasks")];
 		}
 		return tasks.map((task) => {
-			const description = task.status === "exited"
+			const statusDescription = task.status === "exited"
 				? `exited ${formatExitCode(task.exitCode)}`
 				: task.status;
+			const description = task.serviceObserved ? `${statusDescription} · #task` : statusDescription;
 			const children = taskArtifactItems(task);
 			const contextValue = task.sourcePath || task.outputPath || task.metadataPath ? "wanixTaskWithArtifacts" : "wanixTask";
 			return leaf(`task:${task.id}`, `${task.id} ${taskDisplayName(task)}`, description, taskIcon(task.status), undefined, contextValue, {
@@ -421,8 +459,9 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		return terminals.map((terminal) => {
 			const label = terminal.id === "shell" ? terminal.label : `${terminal.id} ${terminal.label}`;
 			const path = terminal.id === "shell" ? undefined : `#term/${terminal.id}`;
+			const description = terminal.serviceObserved ? `${terminal.status} · #term` : terminal.status;
 			const contextValue = path ? "wanixTerminalService" : undefined;
-			return leaf(`terminal:${terminal.id}`, label, terminal.status, "terminal", undefined, contextValue, { path });
+			return leaf(`terminal:${terminal.id}`, label, description, "terminal", undefined, contextValue, { path });
 		});
 	}
 
@@ -459,6 +498,120 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}
 		this.activity.unshift({ id: this.nextActivityId++, label, path, paths });
 		this.activity = this.activity.slice(0, 12);
+	}
+
+	private observeServiceTasks(tasks: WanixServiceTask[]): boolean {
+		let changed = false;
+		const nextIds = new Set(tasks.map((task) => task.id));
+		for (const task of tasks) {
+			const status: TaskStatus = task.exit?.trim() ? "exited" : "running";
+			const existing = this.tasks.get(task.id);
+			if (!existing) {
+				this.tasks.set(task.id, {
+					id: task.id,
+					kind: task.kind,
+					label: task.label,
+					status,
+					exitCode: task.exitCode,
+					serviceObserved: true,
+				});
+				this.addActivity(`service task ${task.id} observed`);
+				changed = true;
+				continue;
+			}
+			if (shouldReplaceServiceKind(existing.kind, task.kind)) {
+				existing.kind = task.kind;
+				changed = true;
+			}
+			if (shouldReplaceServiceLabel(existing.label, existing.kind, task.label)) {
+				existing.label = task.label;
+				changed = true;
+			}
+			if (!existing.serviceObserved) {
+				existing.serviceObserved = true;
+				this.addActivity(`service task ${task.id} observed`);
+				changed = true;
+			}
+			if (existing.status !== status) {
+				existing.status = status;
+				this.addActivity(status === "exited"
+					? `service task ${task.id} exited ${formatExitCode(task.exitCode)}`
+					: `service task ${task.id} running`);
+				changed = true;
+			}
+			if (existing.exitCode !== task.exitCode) {
+				existing.exitCode = task.exitCode;
+				changed = true;
+			}
+		}
+		for (const id of this.serviceTaskIds) {
+			if (nextIds.has(id)) {
+				continue;
+			}
+			const existing = this.tasks.get(id);
+			if (!existing) {
+				continue;
+			}
+			if (existing.sourcePath || existing.outputPath || existing.metadataPath) {
+				if (existing.status !== "closed") {
+					existing.status = "closed";
+					this.addActivity(`service task ${id} closed`);
+					changed = true;
+				}
+			} else {
+				this.tasks.delete(id);
+				this.addActivity(`service task ${id} disappeared`);
+				changed = true;
+			}
+		}
+		this.serviceTaskIds = nextIds;
+		return changed;
+	}
+
+	private observeServiceTerminals(terminals: WanixServiceTerminal[]): boolean {
+		let changed = false;
+		const nextIds = new Set(terminals.map((terminal) => terminal.id));
+		for (const terminal of terminals) {
+			const existing = this.terminals.get(terminal.id);
+			if (!existing) {
+				this.terminals.set(terminal.id, {
+					id: terminal.id,
+					label: terminal.label,
+					status: "attached",
+					serviceObserved: true,
+				});
+				this.addActivity(`terminal ${terminal.id} observed`);
+				changed = true;
+				continue;
+			}
+			if (existing.label !== terminal.label) {
+				existing.label = terminal.label;
+				changed = true;
+			}
+			if (existing.status !== "attached") {
+				existing.status = "attached";
+				changed = true;
+			}
+			if (!existing.serviceObserved) {
+				existing.serviceObserved = true;
+				this.addActivity(`terminal ${terminal.id} observed`);
+				changed = true;
+			}
+		}
+		for (const id of this.serviceTerminalIds) {
+			if (nextIds.has(id)) {
+				continue;
+			}
+			const existing = this.terminals.get(id);
+			if (!existing || existing.status === "closed") {
+				continue;
+			}
+			existing.status = "closed";
+			this.addActivity(`terminal ${id} closed`);
+			changed = true;
+		}
+		this.serviceTerminalIds = nextIds;
+		return changed;
 	}
 
 	private refresh(): void {
@@ -755,4 +908,19 @@ function taskDisplayName(task: Pick<TaskRecord, "kind" | "label">): string {
 
 function formatExitCode(code: number | undefined): string {
 	return typeof code === "number" ? String(code) : "?";
+}
+
+function shouldReplaceServiceKind(existingKind: string, serviceKind: string): boolean {
+	return Boolean(serviceKind) && (existingKind === "" || existingKind === "task" || existingKind === "auto");
+}
+
+function shouldReplaceServiceLabel(existingLabel: string, kind: string, serviceLabel: string): boolean {
+	if (!serviceLabel || existingLabel === serviceLabel || isPlaceholderServiceLabel(serviceLabel)) {
+		return false;
+	}
+	return existingLabel === kind || existingLabel === "task" || existingLabel.startsWith(`${kind} `);
+}
+
+function isPlaceholderServiceLabel(label: string): boolean {
+	return label === "noop" || label === "task" || label === "auto";
 }
