@@ -1221,3 +1221,335 @@ The missing half of 9P is built, the boundary that confines it is built, and now
 the transport that carries both to the open internet is built. Wanix could always
 export; it can import; it imports *only what it grants*; and it does all of it
 across QUIC, addressed and authenticated by the same key. The mesh is real.
+
+---
+
+# Slice 4 — Service Devices on the Mesh: `#kv` and the Imported Service
+
+The first three slices built the *pipe*: a 9P client (import), a grant boundary
+(a capability is a bind), and a real transport (iroh QUIC, the key is the
+address). Each one proved itself against files and against the two service
+devices that already existed — `#term` and `#task`. But every demo so far carried
+the same quiet caveat: the services that crossed the wire were ones the branch
+*already had*. Slice 4 removes the caveat. It builds a **brand-new service device
+the branch lacked** — `#kv`, a key/value store where each key is a file — and
+then does *nothing special at all* to put it on the mesh. It binds into the
+served namespace exactly like `#term` and `#task`, and because it is a
+`FileSystem`, it imports for free. A node on the other side of a QUIC connection
+reads `/n/A/#kv/config` and writes `/n/A/#kv/result` and operates node A's key
+store as ordinary files — with no `#kv`-aware code anywhere in the client, the
+transport, or the protocol.
+
+That "for free" is the whole point of the slice, and the whole point of "the
+namespace is the integration layer." You do not write a network client for the
+key store. You wrote a 9P client once, in Slice 1, and a new file-shaped service
+becomes reachable across every node the moment it exists.
+
+## What We Built
+
+- **`#kv` as a served service device.** `wanix_kv::KvDevice` already existed as a
+  local device (an in-memory `BTreeMap<String, Vec<u8>>` where reading `#kv/<key>`
+  returns its value, writing it sets the value, removing it deletes it, and
+  listing `#kv` enumerates the keys). Slice 4 *binds it into the served mesh
+  namespace*: `services_namespace_for_root` now binds `#kv` alongside
+  `#term`/`#pipe`/`#agent`/`#task`, so `mesh-serve --wanix-services` exports a
+  node whose `/n/A/#kv` is a live, mountable key store.
+- **`mesh-serve --wanix-services`** — the CLI surface that exports the full Wanix
+  services namespace (host root plus `#term`/`#pipe`/`#kv`/`#agent`/`#task`) over
+  QUIC rather than a bare host directory, so a remote node operates node A's
+  service *devices* as files, not just its on-disk files.
+- **A streaming-honesty proof for a non-seekable service value.** A `#kv` value
+  file is a regular file by type (so the Slice 1 client marks it seekable) but is
+  *streamed* server-side — the server reads it from its own cursor and ignores
+  `Tread.offset`. `kv_round_trip.rs` (sync, iroh-free, straight against
+  `P9Server` over loopback TCP) and the QUIC tests in `mesh_quic.rs` pin that a
+  purely sequential read of such a value crosses 9P **byte-exact**, including a
+  40 000-byte value with position-dependent contents that would expose any
+  off-by-N in the streaming reassembly.
+- **The exec-device export gate (the security correction).** `--wanix-services`
+  also binds `#task`/`#agent` — the *real* QuickJS/Wasm exec devices. A remote
+  peer that could read `#task/new/qjs` and write `cmd`+`ctl` would run arbitrary
+  WASI guest code on the serving host. So the flag is **refused on the public
+  endpoint** regardless of `--peer`/`--grant`/`--insecure-open`, and allowed only
+  on a local direct-address-only `--addr IP:PORT` socket whose ticket is traded
+  out of band. Exec-device export stays local-trust only until public auth lands.
+
+## Why: `#kv` Descends From the Plan 9 Service Device, and `/n/` Carries It
+
+Plan 9's deepest move, the one every other idea hangs from, is that a *service*
+is a *file tree*. The clock, the network stack, the process table, the mouse, the
+authentication agent — `#c`, `#I`, the `/proc` files, `#m`, `factotum` — were not
+libraries with APIs. They were synthetic filesystems: directories full of files
+whose `read` and `write` *were* the operation. You did not call an API to read
+the time; you `cat`'d a file. You did not call an API to kill a process; you
+`echo`'d to `/proc/<pid>/ctl`. The "device" in "device file" is literal — a
+kernel driver that presents itself as files, registered under a `#x` name.
+
+`#kv` is exactly that pattern, applied to a key/value store. A key is a file. Its
+value is the file's contents. `read` gets the value, `write` sets it, `remove`
+deletes it, `ls` enumerates. There is no `kv_get`/`kv_set` API — there is a
+directory and the ordinary file verbs. This is *modeled on the device shape that
+already existed in the branch*: `#task` (where `#task/new/qjs` spawns and
+`#task/<id>/ctl` controls) and `#term` (where `#term/new` allocates and
+`#term/<id>/data` streams). `#kv` is the smallest possible new member of that
+family — "a real database inside Wanix" reduced to its file-shaped essence.
+
+And here the Plan 9 lineage pays off twice. Because `#kv` is a service device in
+the Plan 9 sense — a `FileSystem` — it inherits the *other* Plan 9 mechanism for
+free: `/n/`. Slice 1 made the point that "everything is a file" is load-bearing
+precisely so that **one** file-transport protocol plus **one** placement
+operation gives you network transparency *across every service at once*. `#kv` is
+the first slice to *spend* that promise on a service the import client never knew
+about. The terminal crossed the wire in Slice 1, the task table crossed in Slice
+1 — but those were the services the demo author already had in hand. `#kv` is the
+control experiment: a device written with no thought of the network, bound into a
+namespace, and reachable at `/n/A/#kv/<key>` from another machine over QUIC with
+not one line of `#kv`-specific code in the path. *That* is the proof that service
+files cross nodes, because the service is the variable and everything else is
+held fixed.
+
+This is also where the agent's reach becomes concrete rather than rhetorical. An
+agent that operates a key store as `cat`/`write`/`ls` over its *local* `#kv`
+operates a *remote* node's `#kv` with the identical vocabulary the moment `/n/A`
+is bound. "Read the config, compute, write the result" is the same four file
+operations whether the store is in this process or on a node behind a NAT in
+another building. Mount-there, run-here: the data stays put as files on node A;
+the operator works it from node B.
+
+## The How: Architecture
+
+### `#kv` is a `FileSystem`, so the mesh path is the empty diff
+
+The architectural heart of this slice is what it *did not* have to build. There is
+no `KvOverMesh` adapter, no `#kv` case in `RemoteFs`, no `#kv` opcode in
+`wanix-protocol`, no `#kv` branch in the QUIC handler. `KvDevice` implements
+`wanix_fs::FileSystem` — `open`/`metadata`/`read_dir`/`remove_file` — and the
+served namespace binds it:
+
+```rust
+namespace.bind(Arc::new(KvDevice::new()), ".", "#kv", BindOptions::default())?;
+```
+
+From there, every layer below is the unchanged stack from Slices 1–3. A client
+walk to `#kv/config` resolves through the imported `RemoteFs`, which encodes a
+`Twalk` + `Tlopen` + `Tread`, which rides the same `Arc<Mutex<P9Conn>>` over the
+same `BlockingDuplex` over the same iroh bidi stream that carried `greeting.txt`.
+The `#kv` device never learns it is on a network; the network never learns it is
+carrying a key store. The bind is the integration.
+
+### Where the Slice 1 seekability correction earns its keep
+
+Slice 1's correction #2 — *honest seekability vs. silent corruption* — was
+written for exactly this slice, and Slice 4 is where it gets spent. A `#kv` value
+file reports `FileType::File`, so the client's open-time `Tgetattr` marks it
+seekable and it tracks a client-side offset. But the server's `KvReadFile` is a
+*stream*: it serves bytes from its own internal cursor and does **not** honor
+`Tread.offset`. For a purely sequential read this is harmless — the client offset
+and the server cursor advance in lockstep, so the bytes are exact. The danger is
+the *seek*: the instant a client seeks such a file, its fictional local offset
+diverges from the server's ignored-offset stream and the read silently corrupts.
+
+The corrected client never invents that divergence on a sequential read, and the
+tests prove it the hard way: a 40 000-byte value whose byte *i* is `i % 251`. Any
+dropped, duplicated, or reordered byte across a chunk boundary shifts the pattern
+and fails the comparison. It passes — sequential streaming of a non-seekable
+service value is byte-exact across both loopback TCP and real QUIC.
+
+### The correction this slice carries: exec-device export is local-trust only
+
+The sharp finding in Slice 4 is a security one, and it is specific to *what*
+`--wanix-services` binds. The flag is attractive because it exports the whole
+service family — and that family includes `#task` and `#agent`, which are not
+inert data. `#task/new/qjs` plus a `cmd`/`ctl` write *runs a QuickJS or Wasm
+guest on the serving host*, with the served directory as its read-write
+namespace. Exported to the open internet, that is remote code execution for
+anyone holding the ticket.
+
+So the gate is deliberately strict and stated at parse time:
+
+- `--wanix-services` is **refused on the public endpoint** (no `--addr`),
+  *regardless of* `--peer`/`--grant` (a grant's backing is the same services
+  namespace, so even a grant-gated public serve would expose `#task` to the
+  granted peer) and *regardless of* `--insecure-open` (which is file-sharing, not
+  an exec backdoor).
+- It is **allowed only on `--addr IP:PORT`** — a direct-address-only socket with
+  relays/DNS disabled, whose ticket is exchanged out of band, i.e. local trust.
+- The `--insecure-open` warning and the `mesh-serve` help line both *name the
+  hazard*: `--insecure-open` exports file contents read-write, **not** the
+  `#task`/`#agent` exec devices, so an operator cannot mistake file sharing for
+  remote code execution.
+
+This is the blueprint's "defer agent/exec-export until a grant/jail layer exists"
+made concrete: the file-shaped key store crosses the public mesh; the
+file-shaped *exec* devices do not, until public auth lands. The live `#kv` demo
+below therefore runs on a `--addr` endpoint, which is exactly the local-trust
+shape the gate permits.
+
+## Copy-Paste: Input / Output
+
+Everything below is real, captured not fabricated, run from the repo root
+(`cd /Users/jesse/lw/wanix-qemu`). The live demo uses a local
+direct-address-only endpoint (`--addr 127.0.0.1:PORT`, relays/DNS disabled) — the
+local-trust shape the exec-device gate permits — so it needs no external network.
+
+### (a) The `#kv`-over-mesh tests pass
+
+Two suites pin the keystone. `mesh_quic.rs` drives two real `MeshNode`s over
+loopback QUIC — node A serves the services namespace, node B dials A's ticket,
+binds `RemoteFs` at `/n/A`, and operates `#kv`. `kv_round_trip.rs` drives the
+same `#kv` device straight against `P9Server` over loopback TCP, sync and
+iroh-free, isolating the seekability contract from the transport.
+
+```
+$ cargo test -p wanix-mesh --test mesh_quic
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/mesh_quic.rs (target/debug/deps/mesh_quic-fcb370b80190eff7)
+
+running 7 tests
+test regular_file_round_trips_through_quic_mount ... ok
+test service_devices_cross_quic_identically ... ok
+test kv_service_operated_over_quic_mount ... ok
+test default_deny_denies_an_ungranted_peer ... ok
+test verified_peer_id_keys_a_read_only_grant ... ok
+test large_kv_value_streams_across_quic_without_corruption ... ok
+test idle_mount_survives_past_the_op_deadline ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.36s
+```
+
+```
+$ cargo test -p wanix-9p-client --test kv_round_trip
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/kv_round_trip.rs (target/debug/deps/kv_round_trip-a1262931eca1c227)
+
+running 4 tests
+test kv_value_reports_file_type_over_9p ... ok
+test kv_value_streams_back_byte_exact ... ok
+test kv_write_commits_on_close_over_9p ... ok
+test large_kv_value_streams_without_fake_offset_corruption ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+```
+
+`kv_service_operated_over_quic_mount` is the slice's headline test and the
+deterministic form of the blueprint demo, run-here-equivalent to a qjs task:
+node A seeds `config`, node B mounts `/n/A` over QUIC, reads `#kv/config` (the
+streamed non-seekable value) back byte-exact, writes `#kv/result`, and the test
+asserts the bytes that crossed QUIC are the bytes node A's live store now holds,
+then reads `result` straight back over the mesh and lists `#kv` to see
+`["config", "result"]`. `large_kv_value_streams_across_quic_without_corruption`
+is the 40 000-byte position-dependent stream that would catch any seek-offset
+slip; `kv_value_streams_back_byte_exact` and
+`large_kv_value_streams_without_fake_offset_corruption` are its sync twins.
+
+### (b) A live two-process import: node B operates node A's `#kv` over QUIC
+
+Node A mesh-serves the Wanix **services** namespace (host root plus
+`#kv`/`#term`/`#pipe`/`#agent`/`#task`) on a local direct-address-only endpoint
+and prints its node id and a dialable ticket. The `#kv` store starts empty and
+in-memory; it becomes node A's live key store as soon as a value is written into
+it.
+
+Node A (terminal 1):
+
+```
+$ SROOT=$(mktemp -d)
+$ wanix-rust mesh-serve --root "$SROOT" --key "$SROOT/../A-node.key" \
+    --addr 127.0.0.1:5684 --wanix-services
+wanix-rust mesh-serve: node 986da0a25beef6984cb7c48c7b598ae7bec32b9e76329ca83ed5a8d8eee3ce95
+wanix-rust mesh-serve: mount iroh://986da0a25beef6984cb7c48c7b598ae7bec32b9e76329ca83ed5a8d8eee3ce95?addr=127.0.0.1:5684
+```
+
+Node B (terminal 2) mounts that exact ticket and operates node A's key store as
+files — every command a 9P exchange over the QUIC stream, resolving into the
+imported `#kv` device. (`mount-*` binds the remote at `n/remote`; the path
+`#kv/config` is the blueprint's `/n/A/#kv/config`.)
+
+```
+$ TICKET='iroh://986da0a25beef6984cb7c48c7b598ae7bec32b9e76329ca83ed5a8d8eee3ce95?addr=127.0.0.1:5684'
+
+# node A authors a config key in its store (the value A owns):
+$ wanix-rust mount-write "$TICKET" '#kv/config' 'region=us
+replicas=3'
+wrote 20 bytes to n/remote/#kv/config
+
+# node B reads node A's config over QUIC — the streamed, non-seekable value,
+# byte-exact:
+$ wanix-rust mount-cat "$TICKET" '#kv/config'
+region=us
+replicas=3
+
+# node B writes a result back into node A's key store over QUIC:
+$ wanix-rust mount-write "$TICKET" '#kv/result' 'status=ok
+built=42'
+wrote 18 bytes to n/remote/#kv/result
+
+# node B reads the result it just wrote, straight back over the mesh:
+$ wanix-rust mount-cat "$TICKET" '#kv/result'
+status=ok
+built=42
+
+# node B lists node A's key store:
+$ wanix-rust mount-ls "$TICKET" '#kv'
+config
+result
+```
+
+And the value **lives in node A's store**, not node B's session. A *fresh* client
+session (a new mount, a new QUIC connection) reads it straight back — proving the
+18 bytes B wrote persist in node A's in-memory `#kv` device, not in any client
+buffer:
+
+```
+$ wanix-rust mount-cat "$TICKET" '#kv/result'
+status=ok
+built=42
+```
+
+`#kv` is in-memory and reachable *only* through the mount, so those 18 bytes
+never existed on node B's disk. They were written through a namespace bind, across
+a QUIC connection that authenticated node A's ed25519 key on the way in, into a
+key store on node A that node B operates entirely as files. That is a service
+device — not a plain file, a *device* — crossing nodes for free, with no
+`#kv`-aware code anywhere on the path. Mount-there, run-here, realized.
+
+> **Note on scope.** The shipped live verbs are `mount-ls`/`mount-cat`/
+> `mount-write`, so the *live two-process* transcript drives `#kv` from the CLI
+> rather than from inside a qjs task; the qjs-task-equivalent — node B's task
+> resolving `/n/A/#kv` through its own namespace, reading `config` and writing
+> `result` — is proven deterministically over real QUIC by
+> `kv_service_operated_over_quic_mount` in (a). The CLI shows the files crossing
+> live across two processes; the test shows the same operations driven through a
+> bound namespace exactly as a task would. Together they cover both halves of the
+> blueprint's "an agent reads a remote key store" demo.
+
+## The Plan 9 Lineage, and What's Next
+
+Slice 4 spends the promise the first three slices built. 9P is unchanged. The
+import client is unchanged. The grant boundary is unchanged. The QUIC transport is
+unchanged. The *only* new thing is a new service device — `#kv`, the smallest new
+member of the `#task`/`#term` device family — and the discovery that putting it on
+the mesh is an empty diff, because a service that is a `FileSystem` rides `/n/`
+for free. The control experiment ran: hold the network fixed, vary the service,
+and watch it cross nodes with no special case. It crossed.
+
+What's next rides the same endpoint, the same identity, and now the same
+service-device-on-the-mesh pattern:
+
+- **venti — content-addressed blobs.** `#kv` proved a *small* value streams over
+  the 9P window honestly. The next device, `#cas`, references *large* data by
+  BLAKE3 hash and moves it on a second `iroh-blobs` ALPN on the same endpoint, so
+  a 50 MB world never crawls through the `msize` window. The 9P control plane
+  names content by hash; the blob data plane ships it.
+- **cpu — send the agent to the data.** A node that exports `#kv`/`#task` as files
+  is one reverse-exported namespace away from running the task *on* the node
+  holding the data. The exec-device gate this slice built — exec export is
+  local-trust only — is precisely the boundary cpu must respect when it lands.
+- **plumber — gossip.** A `#plumb` topic bus on a third ALPN routes typed events
+  between agents and tools across nodes, the same way `#kv` routes values: as
+  files, over the mesh, for free.
+
+Wanix could always export; it can import; it imports only what it grants; it does
+it across QUIC; and now a *new* file-shaped service crosses every node the moment
+it exists, with no network code of its own. The integration layer is the
+namespace. The mesh keeps its promise.
