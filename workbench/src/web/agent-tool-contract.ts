@@ -102,6 +102,7 @@ export async function writeAgentToolContract(
 		paths: [AGENT_TOOL_CONTRACT_JSON_PATH, AGENT_TOOL_CONTRACT_MD_PATH],
 	});
 	systemView.reportPublished("Agent Tool Contract", AGENT_TOOL_CONTRACT_MD_PATH, {
+		kind: "agent",
 		description: "agent tools",
 		icon: "symbol-method",
 		artifacts: [AGENT_TOOL_CONTRACT_MD_PATH, AGENT_TOOL_CONTRACT_JSON_PATH],

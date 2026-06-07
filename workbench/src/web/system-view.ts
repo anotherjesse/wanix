@@ -143,6 +143,7 @@ type ReportRecord = {
 	id: number;
 	label: string;
 	path: string;
+	kind?: string;
 	description?: string;
 	icon?: string;
 	artifacts?: string[];
@@ -385,11 +386,12 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
-	reportPublished(label: string, path: string, options: { description?: string; icon?: string; artifacts?: string[] } = {}): void {
+	reportPublished(label: string, path: string, options: { kind?: string; description?: string; icon?: string; artifacts?: string[] } = {}): void {
 		const artifacts = uniquePaths([path, ...(options.artifacts || [])]);
 		const existing = this.reports.find((entry) => entry.path === path);
 		if (existing) {
 			existing.label = label;
+			existing.kind = options.kind || existing.kind;
 			existing.description = options.description || existing.description;
 			existing.icon = options.icon || existing.icon;
 			existing.artifacts = artifacts;
@@ -398,6 +400,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				id: this.nextReportId++,
 				label,
 				path,
+				kind: options.kind,
 				description: options.description,
 				icon: options.icon,
 				artifacts,
@@ -406,6 +409,46 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}
 		this.addActivity(`report ${label} published`, { path, paths: artifacts });
 		this.refresh();
+	}
+
+	reportInventoryMarkdown(options: { generatedAt?: Date; markdownPath?: string; jsonPath?: string } = {}): string {
+		const generatedAt = options.generatedAt || new Date();
+		const byKind = new Map<string, ReportRecord[]>();
+		for (const report of this.reports) {
+			const kind = report.kind || "report";
+			const entries = byKind.get(kind) || [];
+			entries.push(report);
+			byKind.set(kind, entries);
+		}
+		return [
+			"# Wanix Cockpit Reports",
+			"",
+			`Generated: ${generatedAt.toISOString()}`,
+			"Schema: wanix.cockpit-reports.v1",
+			options.jsonPath ? `JSON: ${displayJournalPath(options.jsonPath)}` : undefined,
+			"",
+			"## Reports",
+			"",
+			...Array.from(byKind.entries()).flatMap(([kind, reports]) => [
+				`### ${kind}`,
+				"",
+				...reports.flatMap(reportInventoryMarkdownLines),
+			]),
+		].filter((line): line is string => line !== undefined).join("\n");
+	}
+
+	reportInventoryJson(options: { generatedAt?: Date; markdownPath?: string; jsonPath?: string } = {}): string {
+		const generatedAt = options.generatedAt || new Date();
+		const reports = this.reports.map(reportInventorySnapshot);
+		return `${JSON.stringify({
+			schema: "wanix.cockpit-reports.v1",
+			generatedAt: generatedAt.toISOString(),
+			markdownPath: options.markdownPath ? displayJournalPath(options.markdownPath) : undefined,
+			jsonPath: options.jsonPath ? displayJournalPath(options.jsonPath) : undefined,
+			reportCount: reports.length,
+			artifactPaths: uniquePaths(this.reports.flatMap((report) => report.artifacts || [report.path])).map(displayJournalPath),
+			reports,
+		}, null, 2)}\n`;
 	}
 
 	agentStarted(label: string): void {
@@ -779,6 +822,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			actionLeaf("action:run-cockpit-tour", "Run OS Cockpit Tour", "full demo", "run-all", "workbench.runCockpitTour"),
 			actionLeaf("action:run-self-check", "Run Cockpit Self Check", "diagnose", "checklist", "workbench.runCockpitSelfCheck"),
 			actionLeaf("action:prepare-cockpit", "Prepare Cockpit Reports", "make ready", "check-all", "workbench.prepareCockpitReports"),
+			actionLeaf("action:open-reports", "Open Report Inventory", "reports", "notebook", "workbench.openCockpitReports"),
 			actionLeaf("action:system-journal", "Open System Journal", "snapshot", "notebook", "workbench.openSystemJournal"),
 			actionLeaf("action:agent-tools", "Open Agent Tool Contract", "agent tools", "symbol-method", "workbench.openAgentToolContract"),
 			actionLeaf("action:install-agent-repair", "Install Agent Repair Demo", "agent", "bug", "workbench.installAgentRepairDemo"),
@@ -1314,6 +1358,7 @@ function reportSnapshot(entry: ReportRecord): object {
 	return {
 		id: entry.id,
 		label: entry.label,
+		kind: entry.kind,
 		description: entry.description,
 		path: displayJournalPath(entry.path),
 		artifacts: uniquePaths(entry.artifacts).map(displayJournalPath),
@@ -1325,6 +1370,27 @@ function reportJournalLines(entry: ReportRecord): string[] {
 		`- ${entry.label}${entry.description ? ` - ${entry.description}` : ""}`,
 		`  - path: ${displayJournalPath(entry.path)}`,
 		...uniquePaths(entry.artifacts).map((path) => `  - artifact: ${displayJournalPath(path)}`),
+	];
+}
+
+function reportInventorySnapshot(entry: ReportRecord): object {
+	return {
+		id: entry.id,
+		label: entry.label,
+		kind: entry.kind || "report",
+		description: entry.description,
+		path: displayJournalPath(entry.path),
+		artifacts: uniquePaths(entry.artifacts || [entry.path]).map(displayJournalPath),
+	};
+}
+
+function reportInventoryMarkdownLines(entry: ReportRecord): string[] {
+	return [
+		`- ${entry.label}: ${displayJournalPath(entry.path)}${entry.description ? ` - ${entry.description}` : ""}`,
+		...uniquePaths(entry.artifacts || [entry.path])
+			.filter((path) => path !== entry.path)
+			.map((path) => `  - ${displayJournalPath(path)}`),
+		"",
 	];
 }
 

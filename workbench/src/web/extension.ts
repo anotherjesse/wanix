@@ -76,13 +76,6 @@ type FilesystemActivity = {
 	paths?: string[];
 };
 
-type CockpitReportArtifact = {
-	label: string;
-	path: string;
-	kind: string;
-	description: string;
-};
-
 const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = {
 	qjs: { extension: ".js", label: "JavaScript" },
 	wasm: { extension: ".wasm", label: "WASM" },
@@ -245,6 +238,16 @@ export async function activate(context: vscode.ExtensionContext) {
 			try {
 				await prepareCockpitReports(fsys, bridge, config, systemView);
 				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openCockpitReports', async () => {
+			try {
+				await publishCockpitReportInventory(fsys, bridge, systemView);
+				await openWanixPath(COCKPIT_REPORT_INDEX_MD_PATH);
+				revealWanixSystemView();
+				vscode.window.showInformationMessage(`Opened Wanix cockpit report inventory`);
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -532,6 +535,7 @@ async function writeSystemJournal(
 	systemView.filesystemActivity("system state written", { path: SYSTEM_STATE_PATH });
 	systemView.filesystemActivity("system journal written", { path: SYSTEM_JOURNAL_PATH });
 	systemView.reportPublished("System Journal", SYSTEM_JOURNAL_PATH, {
+		kind: "state",
 		description: "live state snapshot",
 		icon: "notebook",
 		artifacts: [SYSTEM_JOURNAL_PATH, SYSTEM_STATE_PATH],
@@ -560,94 +564,44 @@ async function prepareCockpitReports(
 	systemView: WanixSystemView,
 ): Promise<void> {
 	systemView.filesystemActivity("cockpit preparation started");
-	const agent = await writeAgentToolContract(fsys, bridge, systemView);
+	await writeAgentToolContract(fsys, bridge, systemView);
 	await writeSystemJournal(fsys, bridge, systemView);
 	await runCockpitSelfCheck(fsys, bridge, config, systemView);
-	const reportArtifacts = cockpitReportArtifacts([
-		{ label: "Cockpit Report Index", path: COCKPIT_REPORT_INDEX_MD_PATH, kind: "manifest", description: "Markdown index of prepared cockpit reports" },
-		{ label: "Cockpit Report Index JSON", path: COCKPIT_REPORT_INDEX_JSON_PATH, kind: "manifest", description: "Machine-readable index of prepared cockpit reports" },
-		{ label: "Agent Tool Contract", path: agent.markdownPath, kind: "agent", description: "Agent-facing Wanix tool contract" },
-		{ label: "Agent Tool Contract JSON", path: agent.jsonPath, kind: "agent", description: "Machine-readable agent tool contract" },
-		{ label: "System Journal", path: SYSTEM_JOURNAL_PATH, kind: "state", description: "Markdown snapshot of the live cockpit state" },
-		{ label: "System State JSON", path: SYSTEM_STATE_PATH, kind: "state", description: "Machine-readable snapshot of the live cockpit state" },
-		{ label: "Cockpit Self Check", path: COCKPIT_SELF_CHECK_MD_PATH, kind: "diagnostic", description: "Markdown self-check report" },
-		{ label: "Cockpit Self Check JSON", path: COCKPIT_SELF_CHECK_JSON_PATH, kind: "diagnostic", description: "Machine-readable self-check report" },
-		{ label: "Self Check Probe", path: COCKPIT_SELF_CHECK_PROBE_PATH, kind: "diagnostic", description: "Read/write probe created by the self-check" },
-	]);
-	systemView.reportPublished("Cockpit Report Index", COCKPIT_REPORT_INDEX_MD_PATH, {
-		description: "prepared report inventory",
-		icon: "notebook",
-		artifacts: reportArtifacts.map((artifact) => artifact.path),
-	});
+	await publishCockpitReportInventory(fsys, bridge, systemView);
 	await writeSystemJournal(fsys, bridge, systemView);
-	await writeCockpitReportIndex(fsys, bridge, reportArtifacts);
+	await publishCockpitReportInventory(fsys, bridge, systemView);
 	systemView.filesystemActivity("cockpit reports prepared", {
 		path: COCKPIT_REPORT_INDEX_MD_PATH,
-		paths: reportArtifacts.map((artifact) => artifact.path),
+		paths: [COCKPIT_REPORT_INDEX_MD_PATH, COCKPIT_REPORT_INDEX_JSON_PATH],
 	});
 	await openWanixPath(COCKPIT_REPORT_INDEX_MD_PATH);
 	vscode.window.showInformationMessage(`Wanix cockpit reports prepared in ${COCKPIT_REPORT_INDEX_MD_PATH}`);
 }
 
-async function writeCockpitReportIndex(
+async function publishCockpitReportInventory(
 	fsys: any,
 	bridge: WanixBridge,
-	artifacts: CockpitReportArtifact[],
+	systemView: WanixSystemView,
 ): Promise<void> {
 	const generatedAt = new Date();
 	await fsys.makeDirAll(".wanix");
-	await fsys.writeFile(COCKPIT_REPORT_INDEX_JSON_PATH, cockpitReportIndexJson(generatedAt, artifacts));
-	await fsys.writeFile(COCKPIT_REPORT_INDEX_MD_PATH, cockpitReportIndexMarkdown(generatedAt, artifacts));
-	await refreshWanixPaths(bridge, [COCKPIT_REPORT_INDEX_MD_PATH, COCKPIT_REPORT_INDEX_JSON_PATH]);
-}
-
-function cockpitReportArtifacts(artifacts: CockpitReportArtifact[]): CockpitReportArtifact[] {
-	const seen = new Set<string>();
-	return artifacts.filter((artifact) => {
-		if (seen.has(artifact.path)) {
-			return false;
-		}
-		seen.add(artifact.path);
-		return true;
+	systemView.reportPublished("Cockpit Report Index", COCKPIT_REPORT_INDEX_MD_PATH, {
+		kind: "manifest",
+		description: "live report inventory",
+		icon: "notebook",
+		artifacts: [COCKPIT_REPORT_INDEX_MD_PATH, COCKPIT_REPORT_INDEX_JSON_PATH],
 	});
-}
-
-function cockpitReportIndexJson(generatedAt: Date, artifacts: CockpitReportArtifact[]): string {
-	return `${JSON.stringify({
-		schema: "wanix.cockpit-reports.v1",
-		generatedAt: generatedAt.toISOString(),
-		markdownPath: absoluteWanixPath(COCKPIT_REPORT_INDEX_MD_PATH),
-		jsonPath: absoluteWanixPath(COCKPIT_REPORT_INDEX_JSON_PATH),
-		reports: artifacts.map((artifact) => ({
-			...artifact,
-			path: absoluteWanixPath(artifact.path),
-		})),
-	}, null, 2)}\n`;
-}
-
-function cockpitReportIndexMarkdown(generatedAt: Date, artifacts: CockpitReportArtifact[]): string {
-	const byKind = new Map<string, CockpitReportArtifact[]>();
-	for (const artifact of artifacts) {
-		const entries = byKind.get(artifact.kind) || [];
-		entries.push(artifact);
-		byKind.set(artifact.kind, entries);
-	}
-	return [
-		"# Wanix Cockpit Reports",
-		"",
-		`Generated: ${generatedAt.toISOString()}`,
-		"Schema: wanix.cockpit-reports.v1",
-		`JSON: ${absoluteWanixPath(COCKPIT_REPORT_INDEX_JSON_PATH)}`,
-		"",
-		"## Reports",
-		"",
-		...Array.from(byKind.entries()).flatMap(([kind, entries]) => [
-			`### ${kind}`,
-			"",
-			...entries.map((entry) => `- ${entry.label}: ${absoluteWanixPath(entry.path)} - ${entry.description}`),
-			"",
-		]),
-	].join("\n");
+	await fsys.writeFile(COCKPIT_REPORT_INDEX_JSON_PATH, systemView.reportInventoryJson({
+		generatedAt,
+		markdownPath: COCKPIT_REPORT_INDEX_MD_PATH,
+		jsonPath: COCKPIT_REPORT_INDEX_JSON_PATH,
+	}));
+	await fsys.writeFile(COCKPIT_REPORT_INDEX_MD_PATH, systemView.reportInventoryMarkdown({
+		generatedAt,
+		markdownPath: COCKPIT_REPORT_INDEX_MD_PATH,
+		jsonPath: COCKPIT_REPORT_INDEX_JSON_PATH,
+	}));
+	await refreshWanixPaths(bridge, [COCKPIT_REPORT_INDEX_MD_PATH, COCKPIT_REPORT_INDEX_JSON_PATH]);
 }
 
 function wanixUri(path: string): vscode.Uri {
@@ -1180,6 +1134,7 @@ async function runCockpitTour(
 		systemView.tourStepCompleted("OS cockpit tour");
 		systemView.tourReport(reportPath, "complete");
 		systemView.reportPublished("Cockpit Tour", reportPath, {
+			kind: "demo",
 			description: "complete",
 			icon: "run-all",
 			artifacts: [reportPath, ...steps.flatMap((step) => step.artifacts)],
@@ -1193,6 +1148,7 @@ async function runCockpitTour(
 		systemView.tourStepFailed("OS cockpit tour", error);
 		systemView.tourReport(reportPath, "failed");
 		systemView.reportPublished("Cockpit Tour", reportPath, {
+			kind: "demo",
 			description: "failed",
 			icon: "run-all",
 			artifacts: [reportPath, ...steps.flatMap((step) => step.artifacts)],
@@ -1292,6 +1248,7 @@ async function repairWanixProgramTarget(
 		await fsys.writeFile(path, report);
 		bridge.refresh(path);
 		systemView.reportPublished("Agent Repair Report", path, {
+			kind: "agent",
 			description: status,
 			icon: "tools",
 			artifacts: agentRepairArtifacts({

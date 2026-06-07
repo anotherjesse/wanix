@@ -99,6 +99,7 @@ export async function runCockpitSelfCheck(
 	}
 	systemView.checkReport(COCKPIT_SELF_CHECK_MD_PATH, status, reportArtifacts);
 	systemView.reportPublished("Cockpit Self Check", COCKPIT_SELF_CHECK_MD_PATH, {
+		kind: "diagnostic",
 		description: `status ${status}`,
 		icon: "testing-view-icon",
 		artifacts: reportArtifacts,
