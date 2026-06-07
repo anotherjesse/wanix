@@ -36,6 +36,7 @@ pub(super) fn agent_endpoint(
         Ok(log) => StaticResponse {
             status: HttpStatus::Ok,
             content_type: "application/x-ndjson; charset=utf-8",
+            headers: Vec::new(),
             body: log,
         },
         Err(error) => StaticResponse::plain(HttpStatus::Conflict, &error),

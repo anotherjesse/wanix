@@ -71,6 +71,7 @@ pub(super) fn read_static_response(static_root: &Path, relative_path: &Path) -> 
         Ok(body) => StaticResponse {
             status: HttpStatus::Ok,
             content_type: content_type(&canonical),
+            headers: Vec::new(),
             body,
         },
         Err(_) => StaticResponse::plain(HttpStatus::NotFound, "not found"),

@@ -1,11 +1,14 @@
 use std::net::SocketAddr;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use super::super::ServeRoots;
+use super::super::WORKBENCH_FS9P_BUNDLE;
 use super::super::direct_v86::direct_v86_asset_response;
 use super::super::discovery::{rootfs_handoff_response, serve_discovery_response};
 use super::super::html::bundle_html;
-use super::{HttpStatus, StaticResponse, request_target};
+use super::{HttpStatus, StaticResponse, read_static_response, request_target};
+
+const LOCAL_BUNDLE_CACHE_CONTROL: &str = "no-store";
 
 pub(super) fn http_route_response(
     roots: &ServeRoots,
@@ -15,7 +18,33 @@ pub(super) fn http_route_response(
 ) -> Option<StaticResponse> {
     well_known_response(roots, relative_path, request, peer_addr)
         .or_else(|| bundle_response(roots, relative_path, request))
+        .or_else(|| workbench_asset_response(roots, relative_path))
         .or_else(|| direct_v86_asset_response(roots, relative_path))
+}
+
+// Serve the workbench bundle's static assets (vscode-web under workbench/code,
+// the compiled extension under workbench/dist, media, etc.) from the repo's
+// `workbench/` tree rather than the served user root, so a disposable root can
+// still boot the cockpit. Restored from the origin/rust cockpit work; no-store
+// keeps the browser from caching a stale extension.js across rebuilds.
+fn workbench_asset_response(roots: &ServeRoots, relative_path: &Path) -> Option<StaticResponse> {
+    if roots.bundle.as_deref() != Some(WORKBENCH_FS9P_BUNDLE) {
+        return None;
+    }
+    let asset_path = workbench_asset_path(relative_path)?;
+    let asset_root = workbench_asset_root()?;
+    Some(
+        read_static_response(&asset_root, asset_path)
+            .with_header("Cache-Control", LOCAL_BUNDLE_CACHE_CONTROL),
+    )
+}
+
+fn workbench_asset_path(relative_path: &Path) -> Option<&Path> {
+    relative_path.strip_prefix("workbench").ok()
+}
+
+fn workbench_asset_root() -> Option<PathBuf> {
+    std::fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../workbench")).ok()
 }
 
 enum WellKnownEndpoint {
@@ -187,6 +216,7 @@ fn bundle_html_response(bundle: &str) -> Option<StaticResponse> {
     Some(StaticResponse {
         status: HttpStatus::Ok,
         content_type: "text/html; charset=utf-8",
+        headers: Vec::new(),
         body: html.into_bytes(),
     })
 }

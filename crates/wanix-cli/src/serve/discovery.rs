@@ -26,6 +26,7 @@ pub(super) fn serve_discovery_response(
     StaticResponse {
         status: HttpStatus::Ok,
         content_type: "application/json",
+        headers: Vec::new(),
         body: serve_discovery_json(roots, request, peer_addr).into_bytes(),
     }
 }
@@ -95,6 +96,7 @@ pub(super) fn rootfs_handoff_response(roots: &ServeRoots, peer_addr: SocketAddr)
         Ok(body) => StaticResponse {
             status: HttpStatus::Ok,
             content_type: "application/json",
+            headers: Vec::new(),
             body: body.into_bytes(),
         },
         Err(error) if error.exit_code() == 2 => {

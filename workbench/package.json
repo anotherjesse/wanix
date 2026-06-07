@@ -37,6 +37,23 @@
     "@progrium/duplex": "^0.2.1"
   },
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wanix",
+          "title": "Wanix",
+          "icon": "media/wanix.svg"
+        }
+      ]
+    },
+    "views": {
+      "wanix": [
+        {
+          "id": "wanix.system",
+          "name": "System"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "workbench.createTerminal",
@@ -46,8 +63,482 @@
       {
         "command": "workbench.runQjsTask",
         "title": "Run Current JavaScript as qjs Task",
-        "category": "Wanix"
+        "category": "Wanix",
+        "icon": "$(play)"
+      },
+      {
+        "command": "workbench.runWasmTask",
+        "title": "Run Current WASM as wasm Task",
+        "category": "Wanix",
+        "icon": "$(play)"
+      },
+      {
+        "command": "workbench.newQjsScript",
+        "title": "New qjs Script",
+        "category": "Wanix",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "workbench.installWasmStarter",
+        "title": "Install WASM Starter",
+        "category": "Wanix",
+        "icon": "$(package)"
+      },
+      {
+        "command": "workbench.runWasmStarter",
+        "title": "Run WASM Starter",
+        "category": "Wanix",
+        "icon": "$(play)"
+      },
+      {
+        "command": "workbench.openV86SharedDemo",
+        "title": "Open v86 Shared Files Demo",
+        "category": "Wanix",
+        "icon": "$(vm)"
+      },
+      {
+        "command": "workbench.openDirectV86",
+        "title": "Open direct-v86 VM",
+        "category": "Wanix",
+        "icon": "$(vm-running)"
+      },
+      {
+        "command": "workbench.installAgentRepairDemo",
+        "title": "Install Agent Repair Demo",
+        "category": "Wanix",
+        "icon": "$(bug)"
+      },
+      {
+        "command": "workbench.runAgentRepairDemo",
+        "title": "Run Agent Repair Demo",
+        "category": "Wanix",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "workbench.fixCurrentWanixProgram",
+        "title": "Fix Current Wanix Program",
+        "category": "Wanix",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "workbench.openAgentToolContract",
+        "title": "Open Agent Tool Contract",
+        "category": "Wanix",
+        "icon": "$(symbol-method)"
+      },
+      {
+        "command": "workbench.clearFinishedSystemRows",
+        "title": "Clear Finished Rows",
+        "category": "Wanix",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "workbench.openWanixTaskSource",
+        "title": "Open Task Source",
+        "category": "Wanix",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "workbench.openWanixTaskOutput",
+        "title": "Open Task Output",
+        "category": "Wanix",
+        "icon": "$(output)"
+      },
+      {
+        "command": "workbench.openWanixTaskMetadata",
+        "title": "Open Task Metadata",
+        "category": "Wanix",
+        "icon": "$(json)"
+      },
+      {
+        "command": "workbench.openWanixPath",
+        "title": "Open Wanix Path",
+        "category": "Wanix",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "workbench.openWanixDiff",
+        "title": "Open Wanix Diff",
+        "category": "Wanix",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "workbench.focusTaskTerminal",
+        "title": "Focus Task Terminal",
+        "category": "Wanix",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "workbench.installDuetDemo",
+        "title": "Open JS and WASM Duet Demo",
+        "category": "Wanix",
+        "icon": "$(layers-active)"
+      },
+      {
+        "command": "workbench.resetDuetDemo",
+        "title": "Reset JS and WASM Duet Demo",
+        "category": "Wanix",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "workbench.runDuetDemo",
+        "title": "Run JS and WASM Duet Demo",
+        "category": "Wanix",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "workbench.runCockpitTour",
+        "title": "Run OS Cockpit Tour",
+        "category": "Wanix",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "workbench.runCockpitSelfCheck",
+        "title": "Run Cockpit Self Check",
+        "category": "Wanix",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "workbench.prepareCockpitReports",
+        "title": "Prepare Cockpit Reports",
+        "category": "Wanix",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "workbench.openCockpitReports",
+        "title": "Open Report Inventory",
+        "category": "Wanix",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "workbench.openDataStoreInventory",
+        "title": "Open Data Store Index",
+        "category": "Wanix",
+        "icon": "$(database)"
+      },
+      {
+        "command": "workbench.openSystemJournal",
+        "title": "Open System Journal",
+        "category": "Wanix",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "workbench.installHttpAppDemo",
+        "title": "Reset HTTP App Demo",
+        "category": "Wanix",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "workbench.openHttpAppHandler",
+        "title": "Open HTTP App Handler",
+        "category": "Wanix",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "workbench.openHttpAppDemo",
+        "title": "Preview HTTP App Demo",
+        "category": "Wanix",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "workbench.openHttpCounterDemo",
+        "title": "Preview HTTP Counter Demo",
+        "category": "Wanix",
+        "icon": "$(server-process)"
+      },
+      {
+        "command": "workbench.openHttpWasmDemo",
+        "title": "Preview HTTP WASM Demo",
+        "category": "Wanix",
+        "icon": "$(server-process)"
+      },
+      {
+        "command": "workbench.newHttpApp",
+        "title": "New HTTP App",
+        "category": "Wanix",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "workbench.previewCurrentHttpApp",
+        "title": "Preview Current HTTP App",
+        "category": "Wanix",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "workbench.openHttpAppCatalog",
+        "title": "Open HTTP App Catalog",
+        "category": "Wanix",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "workbench.previewHttpCatalogApp",
+        "title": "Preview HTTP App Route",
+        "category": "Wanix",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "workbench.openHttpAppSource",
+        "title": "Open HTTP App Source",
+        "category": "Wanix",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "workbench.openHttpAppPreview",
+        "title": "Open Latest HTTP App Preview",
+        "category": "Wanix",
+        "icon": "$(output)"
+      },
+      {
+        "command": "workbench.copyHttpAppUrl",
+        "title": "Copy HTTP App URL",
+        "category": "Wanix",
+        "icon": "$(copy)"
       }
-    ]
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "workbench.runQjsTask",
+          "when": "resourceScheme == wanix && resourceExtname == .js",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.previewCurrentHttpApp",
+          "when": "resourceScheme == wanix && resourceExtname == .js",
+          "group": "navigation@1"
+        },
+        {
+          "command": "workbench.fixCurrentWanixProgram",
+          "when": "resourceScheme == wanix && resourceExtname == .js",
+          "group": "navigation@2"
+        },
+        {
+          "command": "workbench.runWasmTask",
+          "when": "resourceScheme == wanix && resourceExtname == .wasm",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.previewCurrentHttpApp",
+          "when": "resourceScheme == wanix && resourceExtname == .wasm",
+          "group": "navigation@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "workbench.newQjsScript",
+          "when": "view == wanix.system",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.runWasmStarter",
+          "when": "view == wanix.system",
+          "group": "navigation@1"
+        },
+        {
+          "command": "workbench.installWasmStarter",
+          "when": "view == wanix.system",
+          "group": "navigation@2"
+        },
+        {
+          "command": "workbench.runDuetDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@3"
+        },
+        {
+          "command": "workbench.runCockpitTour",
+          "when": "view == wanix.system",
+          "group": "navigation@4"
+        },
+        {
+          "command": "workbench.runCockpitSelfCheck",
+          "when": "view == wanix.system",
+          "group": "navigation@5"
+        },
+        {
+          "command": "workbench.prepareCockpitReports",
+          "when": "view == wanix.system",
+          "group": "navigation@6"
+        },
+        {
+          "command": "workbench.openCockpitReports",
+          "when": "view == wanix.system",
+          "group": "navigation@7"
+        },
+        {
+          "command": "workbench.openDataStoreInventory",
+          "when": "view == wanix.system",
+          "group": "navigation@8"
+        },
+        {
+          "command": "workbench.openHttpAppCatalog",
+          "when": "view == wanix.system",
+          "group": "navigation@9"
+        },
+        {
+          "command": "workbench.installDuetDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@10"
+        },
+        {
+          "command": "workbench.resetDuetDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@11"
+        },
+        {
+          "command": "workbench.newHttpApp",
+          "when": "view == wanix.system",
+          "group": "navigation@12"
+        },
+        {
+          "command": "workbench.previewCurrentHttpApp",
+          "when": "view == wanix.system",
+          "group": "navigation@13"
+        },
+        {
+          "command": "workbench.openHttpAppDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@14"
+        },
+        {
+          "command": "workbench.openHttpCounterDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@15"
+        },
+        {
+          "command": "workbench.openHttpWasmDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@16"
+        },
+        {
+          "command": "workbench.openHttpAppHandler",
+          "when": "view == wanix.system",
+          "group": "navigation@17"
+        },
+        {
+          "command": "workbench.installAgentRepairDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@18"
+        },
+        {
+          "command": "workbench.runAgentRepairDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@19"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "workbench.openWanixTaskOutput",
+          "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openWanixTaskMetadata",
+          "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
+          "group": "navigation@1"
+        },
+        {
+          "command": "workbench.focusTaskTerminal",
+          "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
+          "group": "navigation@2"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixTaskWithArtifacts",
+          "group": "navigation@3"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixTask",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixTerminalService",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixNamespacePath",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixRouteRun",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixActivityPath",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openWanixPath",
+          "when": "view == wanix.system && viewItem == wanixDataStore",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openWanixDiff",
+          "when": "view == wanix.system && viewItem == wanixAgentDiff",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.openHttpAppPreview",
+          "when": "view == wanix.system && (viewItem == wanixHttpRouteWithPreview || viewItem == wanixHttpCatalogRouteWithPreview)",
+          "group": "navigation@0"
+        },
+        {
+          "command": "workbench.previewHttpCatalogApp",
+          "when": "view == wanix.system && (viewItem == wanixHttpCatalogRoute || viewItem == wanixHttpCatalogRouteWithPreview)",
+          "group": "navigation@1"
+        },
+        {
+          "command": "workbench.openHttpAppSource",
+          "when": "view == wanix.system && (viewItem == wanixHttpCatalogRoute || viewItem == wanixHttpCatalogRouteWithPreview)",
+          "group": "navigation@2"
+        },
+        {
+          "command": "workbench.openHttpAppDemo",
+          "when": "view == wanix.system && (viewItem == wanixHttpRoute || viewItem == wanixHttpRouteWithPreview)",
+          "group": "navigation@1"
+        },
+        {
+          "command": "workbench.openHttpCounterDemo",
+          "when": "view == wanix.system && (viewItem == wanixHttpRoute || viewItem == wanixHttpRouteWithPreview)",
+          "group": "navigation@2"
+        },
+        {
+          "command": "workbench.openHttpWasmDemo",
+          "when": "view == wanix.system && (viewItem == wanixHttpRoute || viewItem == wanixHttpRouteWithPreview)",
+          "group": "navigation@3"
+        },
+        {
+          "command": "workbench.openHttpAppHandler",
+          "when": "view == wanix.system && (viewItem == wanixHttpRoute || viewItem == wanixHttpRouteWithPreview)",
+          "group": "navigation@4"
+        },
+        {
+          "command": "workbench.copyHttpAppUrl",
+          "when": "view == wanix.system && (viewItem == wanixHttpRoute || viewItem == wanixHttpRouteWithPreview)",
+          "group": "navigation@5"
+        },
+        {
+          "command": "workbench.installHttpAppDemo",
+          "when": "view == wanix.system && (viewItem == wanixHttpRoute || viewItem == wanixHttpRouteWithPreview)",
+          "group": "reset@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "workbench.runQjsTask",
+          "when": "resourceScheme == wanix && resourceExtname == .js",
+          "group": "navigation"
+        },
+        {
+          "command": "workbench.runWasmTask",
+          "when": "resourceScheme == wanix && resourceExtname == .wasm",
+          "group": "navigation"
+        }
+      ]
+    }
   }
 }

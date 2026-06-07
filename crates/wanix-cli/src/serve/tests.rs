@@ -713,6 +713,52 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
 }
 
 #[test]
+fn serve_once_returns_workbench_assets_outside_served_root() {
+    let root = temp_dir("wanix-cli-serve-workbench-assets");
+    // A decoy under the served root must not satisfy /workbench/* requests; the
+    // workbench bundle serves its assets from the repo's workbench/ tree so a
+    // disposable root can still boot the cockpit.
+    fs::create_dir_all(root.join("workbench")).unwrap();
+    fs::write(root.join("workbench/package.json"), b"{\"decoy\":true}").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let command = ServeCommand {
+        root_path: root,
+        addr: addr.to_string(),
+        bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
+        wanix_services: false,
+        once: true,
+    };
+
+    let handle = thread::spawn(move || {
+        let mut stderr = Vec::new();
+        let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+        (exit_code, stderr)
+    });
+
+    let response = http_request(
+        addr,
+        b"GET /workbench/package.json HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    );
+    let (exit_code, _stderr) = handle.join().unwrap();
+
+    assert_eq!(exit_code, 0);
+    let response = String::from_utf8(response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(
+        response.contains("Content-Type: application/json\r\n"),
+        "{response}"
+    );
+    assert!(
+        response.contains("Cache-Control: no-store\r\n"),
+        "{response}"
+    );
+    // Resolved from the repo workbench/ manifest, not the served-root decoy.
+    assert!(response.contains("\"publisher\": \"wanix\""), "{response}");
+    assert!(!response.contains("decoy"), "{response}");
+}
+
+#[test]
 fn serve_once_returns_direct_v86_embedded_asset_over_static_collision() {
     let root = temp_dir("wanix-cli-serve-direct-v86-assets");
     fs::create_dir_all(root.join("v86/bundle")).unwrap();
