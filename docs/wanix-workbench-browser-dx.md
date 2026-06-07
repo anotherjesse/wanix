@@ -636,6 +636,17 @@ context from scratch.
 
 ![Shell archive dossier](assets/wanix-workbench-browser-dx/89-shell-archive-dossier.png)
 
+The dossier recommendations are not just labels anymore. Each recommended
+action is now a `command:` link with the selected archive target encoded into
+the URI, so the markdown can jump directly to compare, export, import, restore,
+or open-path commands for that archive. The same actions still exist in the
+System view tree and context menu, but the report itself now carries both the
+evidence and the next command. That is the browser-workbench shape we want:
+inspect something, understand it, and act without rebuilding the context in
+your head.
+
+![Shell archive dossier command links](assets/wanix-workbench-browser-dx/90-shell-archive-dossier-command-links.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1261,7 +1272,9 @@ The current loop is:
     reports, missing bundles, importable bundles, and restorable snapshots.
     Use `Open Shell Archive Dossier` to write `dossier.md/json` for one archive
     with health, evidence links, latest commands, compare state, bundle/import
-    state, restore state, and recommended next actions.
+    state, restore state, and recommended next actions. Use the dossier's
+    command links when you want to run those archive-specific actions from the
+    report itself.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1373,9 +1386,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Make archive dossier recommendations runnable from the report itself, so the
-  markdown can trigger compare/export/import/restore without returning to the
-  tree context menu.
+- Add a small trust/preview affordance for generated command links, so users can
+  see the archive target before launching a command from markdown.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

@@ -123,6 +123,13 @@ type ShellHistoryArchiveTarget = {
 	bundleJsonPath?: string;
 };
 
+type ShellHistoryArchiveDossierAction = {
+	label: string;
+	command: string;
+	reason: string;
+	args?: unknown[];
+};
+
 type ShellHistoryArchiveInfo = {
 	name: string;
 	archiveDir: string;
@@ -2268,7 +2275,7 @@ function shellHistoryArchiveDossierMarkdown(
 		"",
 		"## Recommended Next Actions",
 		"",
-		...shellHistoryArchiveDossierRecommendedActions(archive).map((action) => `- ${action.label}: run \`${action.command}\` - ${action.reason}`),
+		...shellHistoryArchiveDossierRecommendedActions(archive).map(shellHistoryArchiveDossierActionMarkdown),
 		"",
 		"## State",
 		"",
@@ -2287,13 +2294,15 @@ function shellHistoryArchiveDossierMarkdown(
 	].join("\n");
 }
 
-function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchiveInfo): Array<{ label: string; command: string; reason: string }> {
-	const actions: Array<{ label: string; command: string; reason: string }> = [];
+function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchiveInfo): ShellHistoryArchiveDossierAction[] {
+	const actions: ShellHistoryArchiveDossierAction[] = [];
+	const target = shellHistoryArchiveDossierCommandTarget(archive);
 	if (archive.manifestPresent === false) {
 		actions.push({
 			label: "Inspect the archive manifest",
 			command: "workbench.openWanixPath",
 			reason: `manifest metadata is missing at ${shellHistoryAbsolutePath(archive.manifestPath)}`,
+			args: [archive.manifestPath],
 		});
 	}
 	if (!archive.compareGeneratedAt) {
@@ -2301,12 +2310,14 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Compare with live history",
 			command: "workbench.compareShellHistoryArchive",
 			reason: "no archive-vs-live report exists yet",
+			args: [target],
 		});
 	} else if (archive.compareStale) {
 		actions.push({
 			label: "Refresh archive comparison",
 			command: "workbench.compareShellHistoryArchive",
 			reason: `live history changed after the last comparison${archive.liveLastObservedAt ? ` at ${archive.liveLastObservedAt}` : ""}`,
+			args: [target],
 		});
 	}
 	if (!archive.bundleGeneratedAt) {
@@ -2314,6 +2325,7 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Export a portable bundle",
 			command: "workbench.exportShellHistoryArchiveBundle",
 			reason: "the archive is not yet portable across browser sessions",
+			args: [target],
 		});
 	}
 	if (archive.bundleGeneratedAt && !archive.importGeneratedAt) {
@@ -2321,6 +2333,7 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Import bundle when rehydration is needed",
 			command: "workbench.importShellHistoryArchiveBundle",
 			reason: "bundle.json is available and can recreate the archive evidence files",
+			args: [target],
 		});
 	}
 	if (!archive.wasLastRestored) {
@@ -2328,6 +2341,7 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Restore into live shell history when useful",
 			command: "workbench.restoreShellHistoryArchive",
 			reason: "the archive has not been replayed into the live history artifacts",
+			args: [target],
 		});
 	}
 	if (actions.length === 0) {
@@ -2335,9 +2349,31 @@ function shellHistoryArchiveDossierRecommendedActions(archive: ShellHistoryArchi
 			label: "Open the archive index",
 			command: "workbench.openWanixPath",
 			reason: "archive health is clean and the dossier is informational",
+			args: [archive.indexPath],
 		});
 	}
 	return actions;
+}
+
+function shellHistoryArchiveDossierCommandTarget(archive: ShellHistoryArchiveInfo): ShellHistoryArchiveTarget {
+	return {
+		archiveDir: archive.archiveDir,
+		commandsPath: archive.commandsPath,
+		bundleJsonPath: archive.bundleJsonPath,
+	};
+}
+
+function shellHistoryArchiveDossierActionMarkdown(action: ShellHistoryArchiveDossierAction): string {
+	return `- ${shellHistoryCommandMarkdownLink(action.label, action.command, action.args)}: ${action.reason}`;
+}
+
+function shellHistoryCommandMarkdownLink(label: string, command: string, args: unknown[] = []): string {
+	return `[${shellHistoryMarkdownLabel(label)}](${shellHistoryCommandUri(command, args)})`;
+}
+
+function shellHistoryCommandUri(command: string, args: unknown[] = []): string {
+	const query = args.length > 0 ? `?${encodeURIComponent(JSON.stringify(args))}` : "";
+	return `command:${command}${query}`;
 }
 
 function shellHistoryArchiveDossierState(archive: ShellHistoryArchiveInfo): Record<string, unknown> {
