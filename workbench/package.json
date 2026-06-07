@@ -187,6 +187,12 @@
         "icon": "$(run-all)"
       },
       {
+        "command": "workbench.openSystemJournal",
+        "title": "Open System Journal",
+        "category": "Wanix",
+        "icon": "$(notebook)"
+      },
+      {
         "command": "workbench.installHttpAppDemo",
         "title": "Reset HTTP App Demo",
         "category": "Wanix",

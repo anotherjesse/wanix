@@ -81,6 +81,7 @@ const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = 
 const TASK_OUTPUT_DIR = ".wanix/tasks";
 const TASK_OUTPUT_MAX_CHARS = 512 * 1024;
 const COCKPIT_TOUR_REPORT_PATH = ".wanix/cockpit-tour.md";
+const SYSTEM_JOURNAL_PATH = ".wanix/system-journal.md";
 const SERVICE_STATE_POLL_MS = 1000;
 const SHARED_DIRECTORY_POLL_MS = 1500;
 
@@ -286,6 +287,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.clearFinishedSystemRows', () => {
 			systemView.clearFinishedRows();
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openSystemJournal', async () => {
+			try {
+				await openSystemJournal(fsys, bridge, systemView);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openWanixTaskSource', async (source?: string | { sourcePath?: string }) => {
 			try {
 				const sourcePath = taskSourcePath(source);
@@ -469,6 +478,18 @@ async function openWanixPathOrReveal(
 	}
 	await openWanixUri(uri);
 	systemView.filesystemActivity(`opened ${fsPath}`);
+}
+
+async function openSystemJournal(fsys: any, bridge: WanixBridge, systemView: WanixSystemView): Promise<void> {
+	await fsys.makeDirAll(".wanix");
+	systemView.filesystemActivity("system journal written", { path: SYSTEM_JOURNAL_PATH });
+	await fsys.writeFile(SYSTEM_JOURNAL_PATH, systemView.systemJournalMarkdown({
+		generatedAt: new Date(),
+		path: SYSTEM_JOURNAL_PATH,
+	}));
+	await refreshWanixPaths(bridge, [SYSTEM_JOURNAL_PATH]);
+	await openWanixPath(SYSTEM_JOURNAL_PATH);
+	vscode.window.showInformationMessage("Opened Wanix system journal");
 }
 
 function wanixUri(path: string): vscode.Uri {

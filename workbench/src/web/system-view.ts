@@ -362,6 +362,48 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
+	systemJournalMarkdown(options: { generatedAt?: Date; path?: string } = {}): string {
+		const generatedAt = options.generatedAt || new Date();
+		return [
+			"# Wanix System Journal",
+			"",
+			`Generated: ${generatedAt.toISOString()}`,
+			options.path ? `Path: ${displayJournalPath(options.path)}` : undefined,
+			"",
+			"## Drivers",
+			...journalList(this.drivers.map((driver) => `- ${driver}`)),
+			"",
+			"## Namespace",
+			...journalList(this.namespace.map((entry) => `- ${displayJournalPath(entry.path)} - ${entry.label}`)),
+			"",
+			"## Tasks",
+			...journalList([...this.tasks.values()]
+				.sort((left, right) => Number(left.id) - Number(right.id))
+				.flatMap(taskJournalLines)),
+			"",
+			"## Terminals",
+			...journalList([...this.terminals.values()]
+				.sort((left, right) => Number(left.id) - Number(right.id))
+				.map(terminalJournalLine)),
+			"",
+			"## Routes",
+			...journalList(this.routes.flatMap(routeJournalLines)),
+			"",
+			"## Route Runs",
+			...journalList(this.routeRuns.flatMap(routeRunJournalLines)),
+			"",
+			"## Tour",
+			...journalList(this.tour.flatMap(tourJournalLines)),
+			"",
+			"## Agent",
+			...journalList(this.agent.flatMap(agentJournalLines)),
+			"",
+			"## Recent Activity",
+			...journalList(this.activity.flatMap(activityJournalLines)),
+			"",
+		].filter((line): line is string => line !== undefined).join("\n");
+	}
+
 	getTreeItem(element: SystemTreeItem): vscode.TreeItem {
 		if (element.type === "category") {
 			const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Expanded);
@@ -552,6 +594,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			actionLeaf("action:install-wasm-starter", "Install WASM Starter", "wasm", "package", "workbench.installWasmStarter"),
 			actionLeaf("action:run-duet", "Run JS and WASM Duet Demo", "qjs + wasm", "run-all", "workbench.runDuetDemo"),
 			actionLeaf("action:run-cockpit-tour", "Run OS Cockpit Tour", "full demo", "run-all", "workbench.runCockpitTour"),
+			actionLeaf("action:system-journal", "Open System Journal", "snapshot", "notebook", "workbench.openSystemJournal"),
 			actionLeaf("action:install-agent-repair", "Install Agent Repair Demo", "agent", "bug", "workbench.installAgentRepairDemo"),
 			actionLeaf("action:run-agent-repair", "Run Agent Repair Demo", "one click", "tools", "workbench.runAgentRepairDemo"),
 			actionLeaf("action:fix-agent-repair", "Fix Current Wanix Program", "current file", "tools", "workbench.fixCurrentWanixProgram"),
@@ -886,6 +929,73 @@ function tourDescription(entry: TourRecord): string {
 	const status = entry.status === "ok" ? "ok" : entry.status;
 	const detail = entry.error || entry.description;
 	return detail ? `${status} · ${detail}` : status;
+}
+
+function journalList(lines: string[]): string[] {
+	return lines.length > 0 ? lines : ["- none"];
+}
+
+function taskJournalLines(task: TaskRecord): string[] {
+	const status = task.status === "exited" ? `exited ${formatExitCode(task.exitCode)}` : task.status;
+	return [
+		`- ${task.id} ${taskDisplayName(task)} - ${status}${task.serviceObserved ? " (#task observed)" : ""}`,
+		task.sourcePath ? `  - source: ${displayJournalPath(task.sourcePath)}` : undefined,
+		task.outputPath ? `  - transcript: ${displayJournalPath(task.outputPath)}` : undefined,
+		task.metadataPath ? `  - metadata: ${displayJournalPath(task.metadataPath)}` : undefined,
+		`  - service: #task/${task.id}`,
+	].filter((line): line is string => line !== undefined);
+}
+
+function terminalJournalLine(terminal: TerminalRecord): string {
+	const label = terminal.id === "shell" ? terminal.label : `${terminal.id} ${terminal.label}`;
+	return `- ${label} - ${terminal.status}${terminal.serviceObserved ? " (#term observed)" : ""}`;
+}
+
+function routeJournalLines(route: RouteRecord): string[] {
+	return [
+		`- ${route.label} - ${routeDescription(route)}`,
+		`  - protocol: ${route.protocol}`,
+		route.previewPath ? `  - latest preview: ${displayJournalPath(route.previewPath)}` : undefined,
+	].filter((line): line is string => line !== undefined);
+}
+
+function routeRunJournalLines(run: RouteRunRecord): string[] {
+	return [
+		`- ${run.id} ${run.label} - ${routeRunDescription(run)}`,
+		run.url ? `  - url: ${run.url}` : undefined,
+		run.previewPath ? `  - response: ${displayJournalPath(run.previewPath)}` : undefined,
+		run.sourcePath ? `  - handler: ${displayJournalPath(run.sourcePath)}` : undefined,
+		...(run.artifacts || []).map((artifact) => `  - ${artifact.label}: ${displayJournalPath(artifact.path)}`),
+	].filter((line): line is string => line !== undefined);
+}
+
+function tourJournalLines(entry: TourRecord): string[] {
+	return [
+		`- ${entry.label} - ${tourDescription(entry)}`,
+		entry.path ? `  - path: ${displayJournalPath(entry.path)}` : undefined,
+		...uniquePaths(entry.artifacts).map((path) => `  - artifact: ${displayJournalPath(path)}`),
+	].filter((line): line is string => line !== undefined);
+}
+
+function agentJournalLines(entry: AgentRecord): string[] {
+	return [
+		`- ${entry.label}${entry.description ? ` - ${entry.description}` : ""}`,
+		entry.path ? `  - path: ${displayJournalPath(entry.path)}` : undefined,
+		entry.beforePath ? `  - before: ${displayJournalPath(entry.beforePath)}` : undefined,
+		entry.afterPath ? `  - after: ${displayJournalPath(entry.afterPath)}` : undefined,
+	].filter((line): line is string => line !== undefined);
+}
+
+function activityJournalLines(entry: ActivityRecord): string[] {
+	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
+	return [
+		`- ${entry.label}`,
+		...paths.map((path) => `  - ${displayJournalPath(path)}`),
+	];
+}
+
+function displayJournalPath(path: string): string {
+	return path.startsWith("/") || path.startsWith("#") ? path : `/${path}`;
 }
 
 function pathDescription(path: string): string {
