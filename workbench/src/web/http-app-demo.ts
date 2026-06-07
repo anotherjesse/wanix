@@ -14,6 +14,8 @@ const WASM_ROUTE_NAME = "wasm";
 const WASM_ROUTE_PATH = `${APP_DIR}/${WASM_ROUTE_NAME}.wasm`;
 const WASM_ROUTE_PREVIEW_PATH = `${APP_DIR}/${WASM_ROUTE_NAME}.response.txt`;
 const WASM_ROUTE_BYTES_BASE64 = "AGFzbQEAAAABDAJgBH9/f38Bf2AAAAIjARZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxCGZkX3dyaXRlAAADAgEBBQMBAAEHEwIGbWVtb3J5AgAGX3N0YXJ0AAEKHQEbAEEAQQg2AgBBBEEONgIAQQFBAEEBQRgQABoLCxQBAEEICw53YXNtIHJvdXRlIG9rCg==";
+export const HTTP_APP_CATALOG_MD_PATH = ".wanix/http-apps.md";
+export const HTTP_APP_CATALOG_JSON_PATH = ".wanix/http-apps.json";
 
 export type HttpAppRouteConfig = {
 	url?: string;
@@ -45,6 +47,22 @@ type HttpAppTrace = {
 	taskId?: string;
 	stdoutPath?: string;
 	stderrPath?: string;
+};
+
+type HttpAppRuntime = "qjs" | "wasm";
+
+export type HttpAppCatalogEntry = {
+	name: string;
+	runtime: HttpAppRuntime;
+	sourcePath: string;
+	routeLabel: string;
+	previewPath?: string;
+	url?: string;
+};
+
+export type HttpAppCatalogTarget = {
+	name?: string;
+	sourcePath?: string;
 };
 
 const HELLO_PREVIEW: HttpAppPreviewTarget = {
@@ -251,6 +269,66 @@ export async function openHttpWasmDemo(
 	await previewHttpApp(fsys, bridge, config, systemView, WASM_ROUTE_PREVIEW);
 }
 
+export async function openHttpAppCatalog(
+	fsys: any,
+	bridge: WanixBridge,
+	config: HttpAppDemoConfig,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const entries = await publishHttpAppCatalog(fsys, bridge, config, systemView);
+	await openWanixFile(`/${HTTP_APP_CATALOG_MD_PATH}`);
+	vscode.window.showInformationMessage(`Opened Wanix HTTP app catalog with ${entries.length} app${entries.length === 1 ? "" : "s"}`);
+}
+
+export async function publishHttpAppCatalog(
+	fsys: any,
+	bridge: WanixBridge,
+	config: HttpAppDemoConfig,
+	systemView: WanixSystemView,
+): Promise<HttpAppCatalogEntry[]> {
+	const generatedAt = new Date();
+	await fsys.makeDirAll(".wanix");
+	const entries = await publishHttpAppsToSystemView(fsys, config, systemView);
+	systemView.reportPublished("HTTP App Catalog", HTTP_APP_CATALOG_MD_PATH, {
+		kind: "apps",
+		description: "discovered Wanix HTTP programs",
+		icon: "globe",
+		artifacts: [HTTP_APP_CATALOG_MD_PATH, HTTP_APP_CATALOG_JSON_PATH],
+	});
+	await fsys.writeFile(HTTP_APP_CATALOG_JSON_PATH, httpAppCatalogJson(generatedAt, config, entries));
+	await fsys.writeFile(HTTP_APP_CATALOG_MD_PATH, httpAppCatalogMarkdown(generatedAt, config, entries));
+	refreshWanixFile(bridge, HTTP_APP_CATALOG_MD_PATH);
+	refreshWanixFile(bridge, HTTP_APP_CATALOG_JSON_PATH);
+	return entries;
+}
+
+export async function publishHttpAppsToSystemView(
+	fsys: any,
+	config: HttpAppDemoConfig,
+	systemView: WanixSystemView,
+): Promise<HttpAppCatalogEntry[]> {
+	const entries = await discoverHttpApps(fsys, config);
+	systemView.httpAppCatalogPublished(entries);
+	return entries;
+}
+
+export async function previewHttpCatalogApp(
+	fsys: any,
+	bridge: WanixBridge,
+	config: HttpAppDemoConfig,
+	systemView: WanixSystemView,
+	target?: HttpAppCatalogTarget,
+): Promise<void> {
+	const app = await resolveHttpAppTarget(fsys, config, target);
+	await previewHttpApp(fsys, bridge, config, systemView, {
+		name: app.name,
+		sourcePath: app.sourcePath,
+		previewPath: httpAppPreviewPath(app.name),
+		message: `Previewed Wanix HTTP app ${app.name}`,
+		errorLabel: `Wanix HTTP app ${app.name}`,
+	});
+}
+
 async function previewHttpApp(
 	fsys: any,
 	bridge: WanixBridge,
@@ -266,6 +344,14 @@ async function previewHttpApp(
 		...(target.artifacts || []),
 		...httpAppTraceArtifacts(trace),
 	];
+	const runtime = httpAppRuntimeForPath(target.sourcePath);
+	systemView.httpAppIndexed({
+		name: target.name,
+		runtime,
+		sourcePath: target.sourcePath,
+		routeLabel: `/.wanix/app/${target.name}`,
+		previewPath: target.previewPath,
+	});
 	const preview = httpAppPreviewReport({
 		url,
 		status: response.status,
@@ -280,7 +366,7 @@ async function previewHttpApp(
 	for (const artifact of artifacts) {
 		refreshWanixFile(bridge, artifact.path);
 	}
-	systemView.routePreviewed("http-app", {
+	systemView.routePreviewed(httpAppRouteId(target.name), {
 		status: response.status,
 		statusText: response.statusText,
 		previewPath: target.previewPath,
@@ -314,6 +400,158 @@ function httpAppDemoUrl(config: HttpAppDemoConfig, name = APP_NAME): string {
 		throw new Error("Wanix HTTP app route was not advertised by serve");
 	}
 	return template.replace("{name}", encodeURIComponent(name));
+}
+
+async function discoverHttpApps(fsys: any, config: HttpAppDemoConfig): Promise<HttpAppCatalogEntry[]> {
+	let rawEntries: unknown[] = [];
+	try {
+		rawEntries = typeof fsys.readDirEntries === "function"
+			? await fsys.readDirEntries(APP_DIR)
+			: await fsys.readDir(APP_DIR);
+	} catch {
+		return [];
+	}
+	const byName = new Map<string, HttpAppCatalogEntry>();
+	for (const rawEntry of rawEntries) {
+		const name = appEntryName(rawEntry);
+		if (!name || name.endsWith("/")) {
+			continue;
+		}
+		const runtime = httpAppRuntimeForFilename(name);
+		if (!runtime) {
+			continue;
+		}
+		const appName = name.replace(/\.(js|wasm)$/i, "");
+		const sourcePath = `${APP_DIR}/${name}`;
+		const previewPath = httpAppPreviewPath(appName);
+		const entry = httpAppCatalogEntry(config, appName, runtime, sourcePath, await wanixPathExists(fsys, previewPath) ? previewPath : undefined);
+		const existing = byName.get(appName);
+		if (!existing || runtime === "qjs") {
+			byName.set(appName, entry);
+		}
+	}
+	return [...byName.values()].sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }));
+}
+
+async function resolveHttpAppTarget(
+	fsys: any,
+	config: HttpAppDemoConfig,
+	target?: HttpAppCatalogTarget,
+): Promise<HttpAppCatalogEntry> {
+	const sourcePath = target?.sourcePath;
+	if (sourcePath) {
+		const name = target.name || appNameFromPath(sourcePath);
+		const runtime = httpAppRuntimeForPath(sourcePath);
+		return httpAppCatalogEntry(config, name, runtime, sourcePath);
+	}
+	if (target?.name) {
+		const entries = await discoverHttpApps(fsys, config);
+		const entry = entries.find((candidate) => candidate.name === target.name);
+		if (entry) {
+			return entry;
+		}
+	}
+	throw new Error("No HTTP app handler is available for this route");
+}
+
+function httpAppCatalogEntry(config: HttpAppDemoConfig, name: string, runtime: HttpAppRuntime, sourcePath: string, previewPath?: string): HttpAppCatalogEntry {
+	return {
+		name,
+		runtime,
+		sourcePath,
+		routeLabel: `/.wanix/app/${name}`,
+		previewPath,
+		url: optionalHttpAppUrl(config, name),
+	};
+}
+
+function httpAppCatalogMarkdown(generatedAt: Date, config: HttpAppDemoConfig, entries: HttpAppCatalogEntry[]): string {
+	return [
+		"# Wanix HTTP Apps",
+		"",
+		`Generated: ${generatedAt.toISOString()}`,
+		"Schema: wanix.http-apps.v1",
+		`JSON: /${HTTP_APP_CATALOG_JSON_PATH}`,
+		`Route Template: ${config.httpApp?.url || "unadvertised"}`,
+		"",
+		"## Apps",
+		"",
+		...(entries.length > 0
+			? entries.flatMap(httpAppCatalogMarkdownLines)
+			: ["- none"]),
+	].join("\n");
+}
+
+function httpAppCatalogMarkdownLines(entry: HttpAppCatalogEntry): string[] {
+	return [
+		`- ${entry.name} (${entry.runtime}): ${entry.sourcePath}`,
+		`  - route: ${entry.routeLabel}`,
+		entry.previewPath ? `  - latest preview: ${entry.previewPath}` : `  - next preview writes: ${httpAppPreviewPath(entry.name)}`,
+		entry.url ? `  - url: ${entry.url}` : undefined,
+		"",
+	].filter((line): line is string => line !== undefined);
+}
+
+function httpAppCatalogJson(generatedAt: Date, config: HttpAppDemoConfig, entries: HttpAppCatalogEntry[]): string {
+	return `${JSON.stringify({
+		schema: "wanix.http-apps.v1",
+		generatedAt: generatedAt.toISOString(),
+		markdownPath: `/${HTTP_APP_CATALOG_MD_PATH}`,
+		jsonPath: `/${HTTP_APP_CATALOG_JSON_PATH}`,
+		routeTemplate: config.httpApp?.url,
+		appCount: entries.length,
+		apps: entries,
+	}, null, 2)}\n`;
+}
+
+function optionalHttpAppUrl(config: HttpAppDemoConfig, name: string): string | undefined {
+	try {
+		return httpAppDemoUrl(config, name);
+	} catch {
+		return undefined;
+	}
+}
+
+function appEntryName(entry: unknown): string | undefined {
+	if (typeof entry === "string") {
+		return entry;
+	}
+	if (!entry || typeof entry !== "object") {
+		return undefined;
+	}
+	const candidate = entry as { Name?: string; IsDir?: boolean };
+	if (!candidate.Name) {
+		return undefined;
+	}
+	return candidate.IsDir ? `${candidate.Name}/` : candidate.Name;
+}
+
+function appNameFromPath(path: string): string {
+	const slash = path.lastIndexOf("/");
+	const basename = slash >= 0 ? path.slice(slash + 1) : path;
+	return basename.replace(/\.(js|wasm)$/i, "");
+}
+
+function httpAppPreviewPath(name: string): string {
+	return `${APP_DIR}/${name}.response.txt`;
+}
+
+function httpAppRuntimeForFilename(name: string): HttpAppRuntime | undefined {
+	if (/\.js$/i.test(name)) {
+		return "qjs";
+	}
+	if (/\.wasm$/i.test(name)) {
+		return "wasm";
+	}
+	return undefined;
+}
+
+function httpAppRuntimeForPath(path: string): HttpAppRuntime {
+	return /\.wasm$/i.test(path) ? "wasm" : "qjs";
+}
+
+function httpAppRouteId(name: string): string {
+	return `http-app:${name}`;
 }
 
 function refreshWanixFile(bridge: WanixBridge, path: string): void {

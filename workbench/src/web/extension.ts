@@ -5,7 +5,7 @@ import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairQjsProgram } from './a
 import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
 import { COCKPIT_SELF_CHECK_JSON_PATH, COCKPIT_SELF_CHECK_MD_PATH, COCKPIT_SELF_CHECK_PROBE_PATH, runCockpitSelfCheck } from './cockpit-self-check.js';
 import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
-import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, publishHttpAppDataStores, type HttpAppRouteConfig } from './http-app-demo.js';
+import { copyHttpAppUrl, installHttpAppDemo, openHttpAppCatalog, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, previewHttpCatalogApp, publishHttpAppDataStores, publishHttpAppsToSystemView, type HttpAppCatalogTarget, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView, type WanixServiceTask, type WanixServiceTerminal } from './system-view.js';
@@ -340,7 +340,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openSystemJournal', async () => {
 			try {
-				await openSystemJournal(fsys, bridge, systemView);
+				await openSystemJournal(fsys, bridge, config, systemView);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -452,6 +452,34 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openHttpAppCatalog', async () => {
+			try {
+				await openHttpAppCatalog(fsys, bridge, config, systemView);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.previewHttpCatalogApp', async (target?: HttpAppCatalogTarget) => {
+			try {
+				await previewHttpCatalogApp(fsys, bridge, config, systemView, target);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openHttpAppSource', async (target?: string | { sourcePath?: string }) => {
+			try {
+				const sourcePath = taskSourcePath(target);
+				if (!sourcePath) {
+					throw new Error("HTTP app source is not available");
+				}
+				await openWanixPath(sourcePath);
+				systemView.filesystemActivity(`opened http app source ${baseName(sourcePath)}`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.openHttpAppPreview', async (target?: string | { path?: string }) => {
 			try {
 				const path = wanixPathTarget(target);
@@ -531,8 +559,8 @@ async function openWanixPathOrReveal(
 	systemView.filesystemActivity(`opened ${fsPath}`);
 }
 
-async function openSystemJournal(fsys: any, bridge: WanixBridge, systemView: WanixSystemView): Promise<void> {
-	await writeSystemJournal(fsys, bridge, systemView);
+async function openSystemJournal(fsys: any, bridge: WanixBridge, config: Config, systemView: WanixSystemView): Promise<void> {
+	await writeSystemJournal(fsys, bridge, config, systemView);
 	await openWanixPath(SYSTEM_JOURNAL_PATH);
 	vscode.window.showInformationMessage("Opened Wanix system journal");
 }
@@ -540,10 +568,12 @@ async function openSystemJournal(fsys: any, bridge: WanixBridge, systemView: Wan
 async function writeSystemJournal(
 	fsys: any,
 	bridge: WanixBridge,
+	config: Config,
 	systemView: WanixSystemView,
 ): Promise<{ journalPath: string; statePath: string }> {
 	await fsys.makeDirAll(".wanix");
 	const generatedAt = new Date();
+	await publishHttpAppsToSystemView(fsys, config, systemView);
 	await publishHttpAppDataStores(fsys, systemView);
 	systemView.filesystemActivity("system state written", { path: SYSTEM_STATE_PATH });
 	systemView.filesystemActivity("system journal written", { path: SYSTEM_JOURNAL_PATH });
@@ -578,10 +608,10 @@ async function prepareCockpitReports(
 ): Promise<void> {
 	systemView.filesystemActivity("cockpit preparation started");
 	await writeAgentToolContract(fsys, bridge, systemView);
-	await writeSystemJournal(fsys, bridge, systemView);
+	await writeSystemJournal(fsys, bridge, config, systemView);
 	await runCockpitSelfCheck(fsys, bridge, config, systemView);
 	await publishCockpitReportInventory(fsys, bridge, systemView);
-	await writeSystemJournal(fsys, bridge, systemView);
+	await writeSystemJournal(fsys, bridge, config, systemView);
 	await publishCockpitReportInventory(fsys, bridge, systemView);
 	systemView.filesystemActivity("cockpit reports prepared", {
 		path: COCKPIT_REPORT_INDEX_MD_PATH,

@@ -79,6 +79,9 @@ type RouteRecord = {
 	contextValue?: string;
 	previewStatus?: string;
 	previewPath?: string;
+	name?: string;
+	runtime?: string;
+	sourcePath?: string;
 };
 
 type RouteRunRecord = {
@@ -425,6 +428,24 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
+	httpAppCatalogPublished(entries: Array<{ name: string; runtime: string; sourcePath: string; routeLabel?: string; previewPath?: string }>): void {
+		const ids = new Set(entries.map((entry) => httpAppRouteId(entry.name)));
+		this.routes = this.routes.filter((route) => !isIndexedHttpAppRoute(route) || ids.has(route.id));
+		for (const entry of entries) {
+			this.upsertHttpAppRoute(entry);
+		}
+		this.addActivity(entries.length > 0
+			? `http app catalog indexed ${formatClearCount(entries.length, "app")}`
+			: "http app catalog found no apps");
+		this.refresh();
+	}
+
+	httpAppIndexed(entry: { name: string; runtime: string; sourcePath: string; routeLabel?: string; previewPath?: string }): void {
+		this.upsertHttpAppRoute(entry);
+		this.addActivity(`http app ${entry.name} indexed`, { path: entry.sourcePath });
+		this.refresh();
+	}
+
 	reportInventoryMarkdown(options: { generatedAt?: Date; markdownPath?: string; jsonPath?: string } = {}): string {
 		const generatedAt = options.generatedAt || new Date();
 		const byKind = new Map<string, ReportRecord[]>();
@@ -569,6 +590,9 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}
 		route.previewStatus = formatHttpStatus(preview.status, preview.statusText);
 		route.previewPath = preview.previewPath;
+		if (isIndexedHttpAppRoute(route)) {
+			route.contextValue = "wanixHttpCatalogRouteWithPreview";
+		}
 		const label = preview.label || route.label;
 		this.routeRuns.unshift({
 			id: this.nextRouteRunId++,
@@ -727,7 +751,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 						route.id === "direct-v86" ? "vm" : "globe",
 						route.command,
 						route.contextValue || (route.previewPath ? "wanixHttpRouteWithPreview" : "wanixHttpRoute"),
-						{ path: route.previewPath },
+						{ path: route.previewPath, sourcePath: route.sourcePath },
 					))
 					: [leaf("routes:empty", "no routes advertised")];
 			case "routeRuns":
@@ -951,6 +975,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				actionLeaf("action:preview-http", "Preview HTTP App Demo", "http", "globe", "workbench.openHttpAppDemo"),
 				actionLeaf("action:preview-http-counter", "Preview HTTP Counter Demo", "stateful http", "server-process", "workbench.openHttpCounterDemo"),
 				actionLeaf("action:preview-http-wasm", "Preview HTTP WASM Demo", "wasm http", "server-process", "workbench.openHttpWasmDemo"),
+				actionLeaf("action:open-http-catalog", "Open HTTP App Catalog", "apps", "globe", "workbench.openHttpAppCatalog"),
 				actionLeaf("action:open-http-handler", "Open HTTP App Handler", "http", "go-to-file", "workbench.openHttpAppHandler"),
 			);
 		}
@@ -1118,6 +1143,42 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}
 		this.serviceTerminalIds = nextIds;
 		return changed;
+	}
+
+	private upsertHttpAppRoute(entry: { name: string; runtime: string; sourcePath: string; routeLabel?: string; previewPath?: string }): void {
+		const id = httpAppRouteId(entry.name);
+		const label = entry.routeLabel || `/.wanix/app/${entry.name}`;
+		const description = `${entry.runtime} handler · ${displayJournalPath(entry.sourcePath)}`;
+		const command = {
+			command: "workbench.previewHttpCatalogApp",
+			title: "Preview HTTP App Route",
+			arguments: [{ name: entry.name, sourcePath: entry.sourcePath }],
+		};
+		const existing = this.routes.find((route) => route.id === id);
+		if (existing) {
+			existing.label = label;
+			existing.description = description;
+			existing.protocol = "wanix-http-app.v1";
+			existing.command = command;
+			existing.contextValue = entry.previewPath || existing.previewPath ? "wanixHttpCatalogRouteWithPreview" : "wanixHttpCatalogRoute";
+			existing.name = entry.name;
+			existing.runtime = entry.runtime;
+			existing.sourcePath = entry.sourcePath;
+			existing.previewPath = entry.previewPath || existing.previewPath;
+			return;
+		}
+		this.routes.push({
+			id,
+			label,
+			description,
+			protocol: "wanix-http-app.v1",
+			command,
+			contextValue: entry.previewPath ? "wanixHttpCatalogRouteWithPreview" : "wanixHttpCatalogRoute",
+			name: entry.name,
+			runtime: entry.runtime,
+			sourcePath: entry.sourcePath,
+			previewPath: entry.previewPath,
+		});
 	}
 
 	private refresh(): void {
@@ -1420,6 +1481,9 @@ function routeSnapshot(route: RouteRecord): object {
 		label: route.label,
 		description: routeDescription(route),
 		protocol: route.protocol,
+		name: route.name,
+		runtime: route.runtime,
+		sourcePath: route.sourcePath ? displayJournalPath(route.sourcePath) : undefined,
 		previewStatus: route.previewStatus,
 		previewPath: route.previewPath ? displayJournalPath(route.previewPath) : undefined,
 	};
@@ -1429,6 +1493,7 @@ function routeJournalLines(route: RouteRecord): string[] {
 	return [
 		`- ${route.label} - ${routeDescription(route)}`,
 		`  - protocol: ${route.protocol}`,
+		route.sourcePath ? `  - source: ${displayJournalPath(route.sourcePath)}` : undefined,
 		route.previewPath ? `  - latest preview: ${displayJournalPath(route.previewPath)}` : undefined,
 	].filter((line): line is string => line !== undefined);
 }
@@ -1737,6 +1802,14 @@ function routeRecords(config: WanixSystemConfig): RouteRecord[] {
 		});
 	}
 	return routes;
+}
+
+function httpAppRouteId(name: string): string {
+	return `http-app:${name}`;
+}
+
+function isIndexedHttpAppRoute(route: RouteRecord): boolean {
+	return route.id.startsWith("http-app:");
 }
 
 function routeDescription(route: RouteRecord): string {

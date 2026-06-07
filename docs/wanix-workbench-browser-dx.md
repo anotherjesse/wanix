@@ -238,6 +238,16 @@ tribal knowledge:
 
 ![HTTP route in the Wanix sidebar](assets/wanix-workbench-browser-dx/11-http-route-sidebar.png)
 
+The app surface is discoverable now too. `Open HTTP App Catalog` scans the real
+Wanix `/apps` directory for `.js` and `.wasm` handlers, publishes concrete
+route rows such as `/.wanix/app/custom`, and writes
+`/.wanix/http-apps.md` plus `/.wanix/http-apps.json` with schema
+`wanix.http-apps.v1`. Click a discovered app row and it runs through the same
+preview path as the demos, saving `/apps/<name>.response.txt` and recording the
+route run in the System view.
+
+![Wanix HTTP app catalog](assets/wanix-workbench-browser-dx/63-http-app-catalog.png)
+
 One more pass made the preview stay inside the cockpit. The globe action now
 installs the handler if needed, fetches the HTTP app route from the workbench,
 writes a small response report to `/apps/hello.response.txt`, and opens that
@@ -540,6 +550,9 @@ But the first browser pass had several small breaks in the loop:
   a browser-triggered app could mutate Wanix state.
 - Stateful route files were inspectable only from the route execution that
   happened to create them, not from a durable data-store inventory.
+- HTTP apps were still mostly demo-command-shaped; a user-created
+  `/apps/custom.js` did not become a concrete cockpit route until somebody knew
+  what command to run.
 - The complete OS story existed, but only if the user knew which demo buttons
   to press and in what order.
 
@@ -657,6 +670,12 @@ is not a fake sample hidden in the extension. It is a normal Wanix file under
 Finally, the route itself is visible in the Wanix system panel. That matters
 because the cockpit should explain the OS shape as you use it: drivers,
 services, namespace, and now served programs.
+
+The app catalog makes that route model file-driven. Instead of only showing the
+advertised template route and the canned demo buttons, the workbench can scan
+`/apps`, publish `wanix.http-apps.v1` markdown/JSON, and add concrete route
+rows for the handlers it found. The same row can then run the app, open the
+response report, and leave a route-run/task trace.
 
 The preview action closes the browser loop: edit a Wanix handler, run it as an
 HTTP app, and inspect a status-bearing response report without leaving the
@@ -902,57 +921,61 @@ The current loop is:
 33. Open
     `/.wanix/app/hello?from=browser` to get an HTTP response from a Wanix task.
 34. See the HTTP app route contract in the Wanix sidebar.
-35. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
+35. Create or edit a handler under `/apps`, then click `Open HTTP App Catalog`
+    to publish `/.wanix/http-apps.md` and `/.wanix/http-apps.json`.
+36. Click a discovered route row such as `/.wanix/app/custom` to run that
+    handler and open `/apps/custom.response.txt`.
+37. Click `Preview HTTP App Demo` to fetch the route and open a status-bearing
     `/apps/hello.response.txt` report inside the workbench.
-36. Click the `/.wanix/app/<name>` route row itself to run the same preview from
+38. Click the `/.wanix/app/<name>` route row itself to run the same preview from
     the visible system contract.
-37. Edit `/apps/hello.js`, preview again, and see the changed handler output
+39. Edit `/apps/hello.js`, preview again, and see the changed handler output
     without losing the edit or reopening the report.
-38. Open the HTTP handler source directly, and reset the demo only through the
+40. Open the HTTP handler source directly, and reset the demo only through the
     explicit reset command.
-39. Right-click the route row to preview, open source, copy the route URL, or
+41. Right-click the route row to preview, open source, copy the route URL, or
     intentionally reset the demo handler.
-40. Click `Preview HTTP WASM Demo` to install `/apps/wasm.wasm`, run it through
+42. Click `Preview HTTP WASM Demo` to install `/apps/wasm.wasm`, run it through
     `/.wanix/app/wasm`, and inspect the route response plus wasm task trace.
-41. After previewing, read the route row's latest HTTP status and reopen the
+43. After previewing, read the route row's latest HTTP status and reopen the
     saved response report from `Open Latest HTTP App Preview`.
-42. Expand `Route Runs` to see the previewed HTTP route execution and reopen
+44. Expand `Route Runs` to see the previewed HTTP route execution and reopen
     its response report or handler source.
-43. Click `Preview HTTP Counter Demo` twice to run a stateful qjs-backed HTTP
+45. Click `Preview HTTP Counter Demo` twice to run a stateful qjs-backed HTTP
     app, then inspect `apps/counter.response.txt` and `apps/counter.count.txt`.
-44. Expand the counter route run and open the `State File` child directly from
+46. Expand the counter route run and open the `State File` child directly from
     the execution row.
-45. Click `Open Data Store Index` to publish `/.wanix/data-stores.md` and
+47. Click `Open Data Store Index` to publish `/.wanix/data-stores.md` and
     `/.wanix/data-stores.json`, then inspect `/apps/counter.count.txt` as a
     stateful Wanix data store.
-46. Expand the same route run and inspect `Task Stdout` or `Task Stderr` from
+48. Expand the same route run and inspect `Task Stdout` or `Task Stderr` from
     the exact HTTP execution that produced the response.
-47. Notice that `Routes` and `Route Runs` stay near the top of the System view,
+49. Notice that `Routes` and `Route Runs` stay near the top of the System view,
     and hover truncated rows to see their full backing paths.
-48. Run either HTTP preview action again and see the response report open while
+50. Run either HTTP preview action again and see the response report open while
     the sidebar stays on Wanix System.
-49. Click `New qjs Script` to create a unique runnable scratch script without
+51. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-50. Run that script, then expand its task row to reopen the source, transcript,
+52. Run that script, then expand its task row to reopen the source, transcript,
     metadata, terminal output, or `#task/<id>` service directory.
-51. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+53. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-52. Click `Clear Finished Rows` when old exited tasks and closed terminals are
+54. Click `Clear Finished Rows` when old exited tasks and closed terminals are
     crowding the sidebar.
-53. Click `Open Agent Tool Contract` to write `/.wanix/agent-tools.md` and
+55. Click `Open Agent Tool Contract` to write `/.wanix/agent-tools.md` and
     `/.wanix/agent-tools.json`.
-54. Click `Run Agent Repair Demo` to install `/agent/broken.js`, run it, repair
+56. Click `Run Agent Repair Demo` to install `/agent/broken.js`, run it, repair
     it, rerun it, and open the generated report.
-55. Watch the `Agent` section list the repair loop: read, run, observe, edit,
+57. Watch the `Agent` section list the repair loop: read, run, observe, edit,
     rerun, capture transcripts, and verify `agent/out/result.txt`.
-56. Click an Agent row with an artifact to reopen the source, transcript, or
+58. Click an Agent row with an artifact to reopen the source, transcript, or
     result file from the same system panel.
-57. Click `diff broken.js` to reopen the before/after repair diff from
+59. Click `diff broken.js` to reopen the before/after repair diff from
     `/agent/out`.
-58. Click `write repair report` or open
+60. Click `write repair report` or open
     `/agent/out/broken.repair-report.md` to inspect the complete repair trace:
     operation list, task ids, transcript paths, snapshots, result, and status.
-59. Use the System action row `Fix Current Wanix Program` when the current
+61. Use the System action row `Fix Current Wanix Program` when the current
     editor is a qjs file and you want to apply the same repair contract outside
     the canned demo.
 

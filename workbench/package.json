@@ -253,6 +253,24 @@
         "icon": "$(server-process)"
       },
       {
+        "command": "workbench.openHttpAppCatalog",
+        "title": "Open HTTP App Catalog",
+        "category": "Wanix",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "workbench.previewHttpCatalogApp",
+        "title": "Preview HTTP App Route",
+        "category": "Wanix",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "workbench.openHttpAppSource",
+        "title": "Open HTTP App Source",
+        "category": "Wanix",
+        "icon": "$(go-to-file)"
+      },
+      {
         "command": "workbench.openHttpAppPreview",
         "title": "Open Latest HTTP App Preview",
         "category": "Wanix",
@@ -330,44 +348,49 @@
           "group": "navigation@8"
         },
         {
-          "command": "workbench.installDuetDemo",
+          "command": "workbench.openHttpAppCatalog",
           "when": "view == wanix.system",
           "group": "navigation@9"
         },
         {
-          "command": "workbench.resetDuetDemo",
+          "command": "workbench.installDuetDemo",
           "when": "view == wanix.system",
           "group": "navigation@10"
         },
         {
-          "command": "workbench.openHttpAppDemo",
+          "command": "workbench.resetDuetDemo",
           "when": "view == wanix.system",
           "group": "navigation@11"
         },
         {
-          "command": "workbench.openHttpCounterDemo",
+          "command": "workbench.openHttpAppDemo",
           "when": "view == wanix.system",
           "group": "navigation@12"
         },
         {
-          "command": "workbench.openHttpWasmDemo",
+          "command": "workbench.openHttpCounterDemo",
           "when": "view == wanix.system",
           "group": "navigation@13"
         },
         {
-          "command": "workbench.openHttpAppHandler",
+          "command": "workbench.openHttpWasmDemo",
           "when": "view == wanix.system",
           "group": "navigation@14"
         },
         {
-          "command": "workbench.installAgentRepairDemo",
+          "command": "workbench.openHttpAppHandler",
           "when": "view == wanix.system",
           "group": "navigation@15"
         },
         {
-          "command": "workbench.runAgentRepairDemo",
+          "command": "workbench.installAgentRepairDemo",
           "when": "view == wanix.system",
           "group": "navigation@16"
+        },
+        {
+          "command": "workbench.runAgentRepairDemo",
+          "when": "view == wanix.system",
+          "group": "navigation@17"
         }
       ],
       "view/item/context": [
@@ -428,8 +451,18 @@
         },
         {
           "command": "workbench.openHttpAppPreview",
-          "when": "view == wanix.system && viewItem == wanixHttpRouteWithPreview",
+          "when": "view == wanix.system && (viewItem == wanixHttpRouteWithPreview || viewItem == wanixHttpCatalogRouteWithPreview)",
           "group": "navigation@0"
+        },
+        {
+          "command": "workbench.previewHttpCatalogApp",
+          "when": "view == wanix.system && (viewItem == wanixHttpCatalogRoute || viewItem == wanixHttpCatalogRouteWithPreview)",
+          "group": "navigation@1"
+        },
+        {
+          "command": "workbench.openHttpAppSource",
+          "when": "view == wanix.system && (viewItem == wanixHttpCatalogRoute || viewItem == wanixHttpCatalogRouteWithPreview)",
+          "group": "navigation@2"
         },
         {
           "command": "workbench.openHttpAppDemo",
