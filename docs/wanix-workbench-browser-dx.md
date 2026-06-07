@@ -656,6 +656,16 @@ making the target explicit enough to trust.
 
 ![Shell archive command preview](assets/wanix-workbench-browser-dx/91-shell-archive-command-preview.png)
 
+The link leaves a breadcrumb now too. After a dossier action runs, the workbench
+writes `dossier-action.md` and `dossier-action.json` beside the archive,
+refreshes `dossier.md`, and records the action in the System view. The refreshed
+dossier has a `Last Dossier Action` section with the launched command, reason,
+archive, and expected result report, while the standalone action report keeps
+the original preview lines. That means a click from markdown no longer feels
+like a context jump; the archive remembers what was launched from it.
+
+![Shell archive action result breadcrumb](assets/wanix-workbench-browser-dx/92-shell-archive-action-result.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1284,7 +1294,8 @@ The current loop is:
     state, restore state, and recommended next actions. Use the dossier's
     command links when you want to run those archive-specific actions from the
     report itself; each generated command link previews the archive target
-    before dispatching.
+    before dispatching, then writes `dossier-action.md/json` and refreshes the
+    dossier with a `Last Dossier Action` breadcrumb after the action launches.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1396,8 +1407,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Feed archive command-link results back into the dossier, so an action launched
-  from markdown leaves an obvious result breadcrumb.
+- Give dossier action breadcrumbs a tiny status check for whether the expected
+  result report was actually generated or the inner command was cancelled.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.
