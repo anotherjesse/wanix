@@ -1250,6 +1250,72 @@ fn serve_wanix_services_binds_cas_data_plane_device() {
 }
 
 #[test]
+fn serve_wanix_services_binds_plumb_bus_device() {
+    // The `#plumb` plumber bus is bound into the served namespace alongside the
+    // other devices, so a direct 9P client publishes and receives typed envelopes
+    // as ordinary files. This drives a full publish-then-receive over the served
+    // namespace: subscribe to `build/recv`, write an envelope to `build/send`,
+    // then read it back from the subscription — the same bytes, line-delimited.
+    let root = temp_dir("wanix-cli-serve-plumb-device");
+    let roots = ServeRoots::new(&root, "127.0.0.1:7655".parse().unwrap(), None, true).unwrap();
+
+    let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
+    assert_eq!(
+        server
+            .handle_frame(&p9_tattach(1, 1, 0xffff_ffff, "plumb", "", 0).unwrap())
+            .unwrap()
+            .message_type(),
+        P9_RATTACH
+    );
+
+    // Subscribe first (fid 2 -> build/recv), opened read-only so the device
+    // registers the subscription before any publish.
+    let response = server
+        .handle_frame(&p9_twalk(2, 1, 2, &["#plumb", "build", "recv"]).unwrap())
+        .unwrap();
+    assert_eq!(response.message_type(), P9_RWALK);
+    assert_eq!(p9_decode_rwalk(&response).unwrap().len(), 3);
+    assert_eq!(
+        server
+            .handle_frame(&p9_tlopen(3, 2, 0))
+            .unwrap()
+            .message_type(),
+        P9_RLOPEN
+    );
+
+    // Publish (fid 4 -> build/send), opened write-only, then write one envelope.
+    let response = server
+        .handle_frame(&p9_twalk(4, 1, 4, &["#plumb", "build", "send"]).unwrap())
+        .unwrap();
+    assert_eq!(response.message_type(), P9_RWALK);
+    assert_eq!(
+        server
+            .handle_frame(&p9_tlopen(5, 4, 1))
+            .unwrap()
+            .message_type(),
+        P9_RLOPEN
+    );
+    let envelope = br#"{"kind":"task.done","from":"client"}"#;
+    let response = server
+        .handle_frame(&p9_twrite(6, 4, 0, envelope).unwrap())
+        .unwrap();
+    assert_eq!(response.message_type(), P9_RWRITE);
+    assert_eq!(
+        p9_decode_rwrite(&response).unwrap() as usize,
+        envelope.len()
+    );
+
+    // Read the received envelope back from the subscription (fid 2). The device
+    // re-serialized it with a trailing newline, so the kind crosses intact.
+    let response = server.handle_frame(&p9_tread(7, 2, 0, 256)).unwrap();
+    assert_eq!(response.message_type(), P9_RREAD);
+    let received = p9_decode_rread(&response).unwrap();
+    let text = std::str::from_utf8(&received).unwrap();
+    assert!(text.contains("task.done"), "received: {text}");
+    assert!(text.ends_with('\n'), "received: {text}");
+}
+
+#[test]
 fn discovery_services_advertises_every_registered_driver() {
     // Drift guard: the advertised drivers must derive from the task-driver
     // registry, not a hand-maintained literal. Previously discovery hardcoded

@@ -22,11 +22,15 @@ mod exec_server;
 mod fake;
 mod files;
 mod path;
+mod remote;
+mod router;
 
 pub use codex::CodexEngine;
 pub use engine::{AgentEngine, AgentSession, EventStream};
 pub use exec_server::{ExecServer, ProcessRunner};
 pub use fake::FakeEngine;
+pub use remote::{RemoteEngine, RemoteSession};
+pub use router::RouterEngine;
 
 use files::{BytesFile, CtlFile, EventsFile, NewAgentFile, PromptFile, require_read_only};
 use path::{AgentPath, parse_path};

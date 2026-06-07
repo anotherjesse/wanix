@@ -227,6 +227,42 @@ impl MeshNode {
         self.router = Some(router);
     }
 
+    /// Builds a [`crate::GossipPlumbPort`] over this node's endpoint and runtime.
+    ///
+    /// `bootstrap` are dialable peer addresses ([`EndpointAddr`] tickets) a
+    /// freshly joined topic dials to enter the swarm (pass the [`Self::ticket`]
+    /// of nodes already on the bus); an empty list still serves same-node
+    /// subscribers and accepts inbound gossip once the gossip ALPN is registered
+    /// with [`Self::serve_with_plumb`]. The returned port backs a
+    /// [`wanix_plumb::PlumbDevice`] so a `#plumb/<topic>` write crosses the mesh.
+    #[must_use]
+    pub fn plumb_port(&self, bootstrap: Vec<EndpointAddr>) -> crate::GossipPlumbPort {
+        crate::GossipPlumbPort::new(
+            self.endpoint.clone(),
+            self.runtime.handle().clone(),
+            bootstrap,
+        )
+    }
+
+    /// Starts serving 9P (`config`) on [`crate::WANIX_9P_ALPN`] *and* the gossip
+    /// coordination plane (`plumb`) on [`crate::GOSSIP_ALPN`] from one [`Router`].
+    ///
+    /// This adds the third plane to the node: control (9P), and now coordination
+    /// (gossip). Unlike the exec planes, gossip grants no filesystem or code
+    /// capability, so it is safe to advertise on the public endpoint alongside a
+    /// grant-gated 9P serve.
+    pub fn serve_with_plumb(&mut self, config: ServeConfig, plumb: &crate::GossipPlumbPort) {
+        let handler = self.p9_handler(config);
+        let gossip = plumb.protocol();
+        let router = self.runtime.block_on(async {
+            Router::builder(self.endpoint.clone())
+                .accept(crate::WANIX_9P_ALPN, handler)
+                .accept(crate::GOSSIP_ALPN, gossip)
+                .spawn()
+        });
+        self.router = Some(router);
+    }
+
     /// Starts serving the cpu exec plane (`acceptor`) on [`crate::WANIX_CPU_ALPN`].
     ///
     /// The cpu plane runs grant-allowlisted remote tasks against a caller's

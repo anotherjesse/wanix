@@ -8,6 +8,7 @@ use wanix_cas::{CasDevice, LocalCasStore};
 use wanix_fs::{FileSystem, LocalFs};
 use wanix_kv::KvDevice;
 use wanix_pipe::PipeDevice;
+use wanix_plumb::PlumbDevice;
 use wanix_qjs::QuickJsTaskDriver;
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
@@ -87,8 +88,8 @@ fn serve_services_root(
 }
 
 /// Builds the full `--wanix-services` namespace (host root + #term/#pipe/#kv/
-/// #agent + #task) rooted at `root_path`, for use as an agent's confined world
-/// so the agent operates the Wanix service devices as files.
+/// #plumb/#cas/#agent + #task) rooted at `root_path`, for use as an agent's
+/// confined world so the agent operates the Wanix service devices as files.
 ///
 /// # Errors
 ///
@@ -128,6 +129,17 @@ fn bind_host_and_terminal(
         Arc::new(KvDevice::new()),
         ".",
         "#kv",
+        BindOptions::default(),
+    )?;
+    // `#plumb` is the plumber bus: `#plumb/<topic>/send` publishes a JSON
+    // envelope and `#plumb/<topic>/recv` reads received ones. Served here over a
+    // single-node `LocalPlumbPort`; the mesh swaps in a `GossipPlumbPort` so a
+    // topic crosses nodes. Like `#kv` it is a plain `FileSystem`, so it imports
+    // for free across the mesh (`/n/A/#plumb/<topic>/recv`).
+    namespace.bind(
+        Arc::new(PlumbDevice::local()),
+        ".",
+        "#plumb",
         BindOptions::default(),
     )?;
     // `#cas` is the data plane as files: `#cas/<hash>` reads a blob,

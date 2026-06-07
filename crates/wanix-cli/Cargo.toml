@@ -24,6 +24,7 @@ wanix-id = { path = "../wanix-id" }
 wanix-kv = { path = "../wanix-kv" }
 wanix-mesh = { path = "../wanix-mesh" }
 wanix-pipe = { path = "../wanix-pipe" }
+wanix-plumb = { version = "0.1.0", path = "../wanix-plumb" }
 wanix-protocol = { path = "../wanix-protocol" }
 wanix-qjs = { path = "../wanix-qjs" }
 wanix-task = { path = "../wanix-task" }

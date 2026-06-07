@@ -10,6 +10,7 @@ version.workspace = true
 workspace = true
 
 [dependencies]
+blake3 = "1.8.5"
 # iroh and iroh-blobs are version-locked: iroh-blobs 0.102 depends on iroh
 # 1.0.0-rc.1, and the blob data plane must share one endpoint/Router with the 9P
 # control plane, so both planes are pinned to the same iroh wave. (The blueprint
@@ -19,6 +20,8 @@ workspace = true
 bytes = "1.11.1"
 iroh = "=1.0.0-rc.1"
 iroh-blobs = "0.102.0"
+iroh-gossip = "0.100.0"
+n0-future = "0.3.2"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "sync", "io-util", "time", "macros"] }
 wanix-9p = { path = "../wanix-9p" }
 wanix-9p-client = { path = "../wanix-9p-client" }
@@ -26,9 +29,14 @@ wanix-cas = { path = "../wanix-cas" }
 wanix-cpu = { path = "../wanix-cpu" }
 wanix-fs = { path = "../wanix-fs" }
 wanix-id = { path = "../wanix-id" }
+wanix-plumb = { version = "0.1.0", path = "../wanix-plumb" }
 wanix-task = { path = "../wanix-task" }
 wanix-vfs = { path = "../wanix-vfs" }
 
 [dev-dependencies]
+serde_json = "1"
+wanix-agent = { path = "../wanix-agent" }
 wanix-kv = { path = "../wanix-kv" }
+wanix-plumb = { path = "../wanix-plumb" }
 wanix-term = { path = "../wanix-term" }
+wanix-vfs = { path = "../wanix-vfs" }

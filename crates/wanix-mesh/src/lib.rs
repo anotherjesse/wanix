@@ -38,6 +38,8 @@ mod error;
 mod handler;
 mod identity;
 mod node;
+mod plumb;
+mod streaming;
 
 pub use cas::{IrohCasStore, blob_hash, blobs_protocol, content_hash};
 pub use cpu::{CpuAcceptor, CpuDialer, CpuJobReport, TaskTableFactory, WANIX_CPU_ALPN};
@@ -47,6 +49,8 @@ pub use error::{MeshError, MeshResult};
 pub use handler::{P9ProtocolHandler, ServeConfig};
 pub use identity::{endpoint_id_for, peer_id_for, secret_key_for};
 pub use node::{DEFAULT_OP_DEADLINE, MeshNode};
+pub use plumb::{GOSSIP_ALPN, GossipPlumbPort};
+pub use streaming::{StreamPredicate, StreamingImportFs, default_blocking_stream};
 
 /// Re-export of iroh's dialable peer address, the mesh "ticket" form.
 pub use iroh::EndpointAddr;

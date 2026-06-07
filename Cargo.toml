@@ -12,6 +12,7 @@ members = [
     "crates/wanix-mesh",
     "crates/wanix-module-cache",
     "crates/wanix-pipe",
+    "crates/wanix-plumb",
     "crates/wanix-protocol",
     "crates/wanix-qjs",
     "crates/wanix-qjs-engine",

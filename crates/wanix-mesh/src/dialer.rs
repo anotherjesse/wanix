@@ -81,6 +81,35 @@ impl MeshDialer {
         Ok(Arc::new(remote))
     }
 
+    /// Dials `addr`/`aname` and wraps the import so blocking streaming opens get
+    /// their own bidi stream, returning a [`crate::StreamingImportFs`].
+    ///
+    /// This is the deadlock-safe form for importing a peer's service namespace:
+    /// the everyday-ops connection serves walk/stat/readdir/mutation and short
+    /// reads, while an open of a never-EOF service file (an `#agent` event/reply
+    /// stream, a `#plumb` recv stream — see [`crate::default_blocking_stream`])
+    /// dials a fresh stream so it cannot freeze the rest of the import.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MeshError::Dial`]/[`MeshError::Session`] when the everyday-ops
+    /// connection cannot be established or negotiated.
+    pub fn dial_streaming(
+        &self,
+        addr: EndpointAddr,
+        aname: &str,
+        predicate: crate::StreamPredicate,
+    ) -> MeshResult<crate::StreamingImportFs> {
+        let shared = self.dial_attach(addr.clone(), aname)?;
+        Ok(crate::StreamingImportFs::new(
+            shared,
+            self.clone(),
+            addr,
+            aname,
+            predicate,
+        ))
+    }
+
     /// Connects and opens one bidi stream, returning the bridged duplex.
     fn open_stream(&self, addr: EndpointAddr) -> MeshResult<BlockingDuplex> {
         let endpoint = self.endpoint.clone();

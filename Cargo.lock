@@ -1150,6 +1150,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
+name = "fixedbitset"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1222,6 +1228,19 @@ checksum = "07bbe89c50d7a535e539b8c17bc0b49bdb77747034daa8087407d655f3f7cc1d"
 dependencies = [
  "futures-core",
  "futures-sink",
+]
+
+[[package]]
+name = "futures-concurrency"
+version = "7.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "175cd8cca9e1d45b87f18ffa75088f2099e3c4fe5e2f83e42de112560bea8ea6"
+dependencies = [
+ "fixedbitset",
+ "futures-core",
+ "futures-lite",
+ "pin-project",
+ "smallvec",
 ]
 
 [[package]]
@@ -2062,6 +2081,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroh-gossip"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f5cada641f84a2ff3d1acbd43e16490cf3b2a4f675e580c5c2caa5d68ee63b5"
+dependencies = [
+ "blake3",
+ "bytes",
+ "constant_time_eq",
+ "data-encoding",
+ "derive_more",
+ "ed25519-dalek 3.0.0-pre.7",
+ "futures-concurrency",
+ "hex",
+ "indexmap",
+ "iroh",
+ "iroh-base",
+ "iroh-metrics",
+ "irpc",
+ "n0-error",
+ "n0-future",
+ "postcard",
+ "rand 0.10.1",
+ "serde",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "iroh-io"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2452,6 +2500,7 @@ version = "1.0.0-rc.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "223e946a84aa91644507a6b7865cfebbb9a231ace499041c747ab0fd30408212"
 dependencies = [
+ "anyhow",
  "n0-error-macros",
  "spez",
 ]
@@ -4700,6 +4749,7 @@ dependencies = [
  "base64",
  "serde_json",
  "wanix-fs",
+ "wanix-vfs",
 ]
 
 [[package]]
@@ -4732,6 +4782,7 @@ dependencies = [
  "wanix-kv",
  "wanix-mesh",
  "wanix-pipe",
+ "wanix-plumb",
  "wanix-protocol",
  "wanix-qjs",
  "wanix-task",
@@ -4778,17 +4829,23 @@ dependencies = [
 name = "wanix-mesh"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "bytes",
  "iroh",
  "iroh-blobs",
+ "iroh-gossip",
+ "n0-future",
+ "serde_json",
  "tokio",
  "wanix-9p",
  "wanix-9p-client",
+ "wanix-agent",
  "wanix-cas",
  "wanix-cpu",
  "wanix-fs",
  "wanix-id",
  "wanix-kv",
+ "wanix-plumb",
  "wanix-task",
  "wanix-term",
  "wanix-vfs",
@@ -4808,6 +4865,15 @@ dependencies = [
 name = "wanix-pipe"
 version = "0.1.0"
 dependencies = [
+ "wanix-fs",
+]
+
+[[package]]
+name = "wanix-plumb"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "wanix-fs",
 ]
 
