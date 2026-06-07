@@ -56,6 +56,11 @@ type TaskArtifacts = {
 	metadataPath: string;
 };
 
+type FilesystemActivity = {
+	label?: string;
+	paths?: string[];
+};
+
 const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = {
 	qjs: { extension: ".js", label: "JavaScript" },
 	wasm: { extension: ".wasm", label: "WASM" },
@@ -76,9 +81,14 @@ export async function activate(context: vscode.ExtensionContext) {
 	const bridge = new WanixBridge(wanix, "");
 	const systemView = new WanixSystemView();
 	systemView.register(context);
-	const refreshFiles = async () => {
+	const refreshFiles = async (activity?: FilesystemActivity) => {
+		if (activity?.paths?.length) {
+			await refreshWanixPaths(bridge, activity.paths);
+			systemView.filesystemActivity(activity.label || "filesystem refreshed");
+			return;
+		}
 		await refreshWorkbenchFiles(bridge);
-		systemView.filesystemActivity("filesystem refreshed");
+		systemView.filesystemActivity(activity?.label || "filesystem refreshed");
 	};
 	const activeTaskTerminals = new Map<TaskRunKind, vscode.Terminal>();
 	const taskTerminals = new Map<string, vscode.Terminal>();
@@ -972,6 +982,21 @@ async function refreshWorkbenchFiles(bridge: WanixBridge): Promise<void> {
 	});
 }
 
+async function refreshWanixPaths(bridge: WanixBridge, paths: string[]): Promise<void> {
+	const refreshPaths = new Set<string>();
+	for (const path of paths) {
+		const normalized = normalizeWanixPath(path);
+		refreshPaths.add(normalized);
+		refreshPaths.add(parentPath(normalized) || "/");
+	}
+	for (const path of refreshPaths) {
+		bridge.refresh(path);
+	}
+	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
+		console.warn("Wanix explorer refresh failed", error);
+	});
+}
+
 function revealWanixSystemView(): void {
 	Promise.resolve(vscode.commands.executeCommand("workbench.view.extension.wanix")).catch((error: unknown) => {
 		console.warn("Wanix system view focus failed", error);
@@ -1059,7 +1084,7 @@ function delay(ms: number): Promise<void> {
 const DIRECT_TASK_EXIT_POLL_MS = 100;
 const DIRECT_TASK_EXIT_DRAIN_MS = 100;
 
-function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => void, systemView?: WanixSystemView) {
+function createQjsShellTerminal(config: Config, onFilesystemActivity?: (activity?: FilesystemActivity) => void, systemView?: WanixSystemView) {
 	const writeEmitter = new vscode.EventEmitter<string>();
 	const closeEmitter = new vscode.EventEmitter<number | void>();
 	const dec = new TextDecoder();
@@ -1068,6 +1093,7 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => voi
 	let opened = false;
 	let closed = false;
 	let shellTaskId: string | undefined;
+	const shellInput = newShellInputState(config);
 	const pending: Uint8Array[] = [];
 	let pendingResize: vscode.TerminalDimensions | undefined;
 	const qjsShellUrl = () => {
@@ -1175,8 +1201,13 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: () => voi
 			socket?.close();
 		},
 		handleInput: (data: string) => {
+			const activities = trackShellInput(shellInput, data);
 			sendInput(enc.encode(data));
-			if (data.includes('\r') || data.includes('\n')) {
+			if (activities.length > 0) {
+				for (const activity of activities) {
+					notifyFilesystemActivity(onFilesystemActivity, activity);
+				}
+			} else if (data.includes('\r') || data.includes('\n')) {
 				notifyFilesystemActivity(onFilesystemActivity);
 			}
 		},
@@ -1198,7 +1229,7 @@ type TerminalOptions = {
 	onTerminalClosed?: (event: { id: string }) => void;
 }
 
-async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: () => void, options: TerminalOptions = {}) {
+async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: (activity?: FilesystemActivity) => void, options: TerminalOptions = {}) {
 	await fsys.waitFor(config.ns?.task, 30000);
 	const termID = (await fsys.readText(`${config.ns?.term}/new`)).trim();
 	const termPath = [config.ns?.term, termID].join("/");
@@ -1228,6 +1259,7 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 	let taskExitObserved = false;
 	let terminalClosed = false;
 	let buffer = '';
+	const shellInput = newShellInputState(config);
 	let lastOutputAt = Date.now();
 	const markTerminalClosed = () => {
 		if (terminalClosed) {
@@ -1376,16 +1408,25 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 				return;
 			}
 			if (config.raw) {
+				const activities = trackShellInput(shellInput, data);
 				writable.write(enc.encode(data));
+				if (activities.length > 0) {
+					for (const activity of activities) {
+						notifyFilesystemActivity(onFilesystemActivity, activity);
+					}
+				} else if (data.includes('\r') || data.includes('\n')) {
+					notifyFilesystemActivity(onFilesystemActivity);
+				}
 				return;
 			}
 			// may add line discipline as mode to terminals but for now we
 			// do as plan 9 and handle it here in "userspace"
 			if (data === '\r') {
+				const activity = shellLineActivity(buffer, shellInput);
 				writeEmitter.fire('\r\n');           // echo newline
 				writable.write(enc.encode(buffer+"\n"));
 				buffer = '';
-				notifyFilesystemActivity(onFilesystemActivity);
+				notifyFilesystemActivity(onFilesystemActivity, activity);
 			} else if (data === '\x7f') {   // backspace
 				if (buffer.length > 0) {
 					buffer = buffer.slice(0, -1);
@@ -1402,14 +1443,177 @@ async function createTerminal(fsys: any, config: Config, onFilesystemActivity?: 
 	};
 }
 
-function notifyFilesystemActivity(callback?: () => void): void {
+type ShellInputState = {
+	cwd: string;
+	line: string;
+};
+
+function newShellInputState(config: Config): ShellInputState {
+	return {
+		cwd: resolveWanixPath(".", config.shell?.wd || "."),
+		line: "",
+	};
+}
+
+function trackShellInput(state: ShellInputState, data: string): FilesystemActivity[] {
+	const activities: FilesystemActivity[] = [];
+	for (const char of data) {
+		if (char === "\r" || char === "\n") {
+			const activity = shellLineActivity(state.line, state);
+			if (activity) {
+				activities.push(activity);
+			}
+			state.line = "";
+		} else if (char === "\x7f" || char === "\b") {
+			state.line = state.line.slice(0, -1);
+		} else if (char === "\x03") {
+			state.line = "";
+		} else if (char >= " ") {
+			state.line += char;
+		}
+	}
+	return activities;
+}
+
+function shellLineActivity(line: string, state: ShellInputState): FilesystemActivity | undefined {
+	const words = shellWords(line.trim());
+	if (words.length === 0) {
+		return undefined;
+	}
+	const command = words[0];
+	if (command === "cd") {
+		state.cwd = resolveWanixPath(state.cwd, words[1] || ".");
+		return undefined;
+	}
+	const redirected = shellRedirectionPaths(words, state.cwd);
+	switch (command) {
+		case "write":
+			return shellPathActivity("write", words.length >= 3 && words[1] ? [resolveWanixPath(state.cwd, words[1])] : redirected);
+		case "mkdir":
+		case "rm":
+		case "rmdir":
+			return shellPathActivity(command, words[1] ? [resolveWanixPath(state.cwd, words[1])] : redirected);
+		case "cp":
+			return shellPathActivity("cp", words[2] ? [resolveWanixPath(state.cwd, words[2])] : redirected);
+		case "mv":
+			return shellPathActivity("mv", [
+				...(words[1] ? [resolveWanixPath(state.cwd, words[1])] : []),
+				...(words[2] ? [resolveWanixPath(state.cwd, words[2])] : []),
+				...redirected,
+			]);
+		case "ln":
+			return words[1] === "-s"
+				? shellPathActivity("ln -s", words[3] ? [resolveWanixPath(state.cwd, words[3])] : redirected)
+				: shellPathActivity("ln", redirected);
+		default:
+			return shellPathActivity("redirect", redirected);
+	}
+}
+
+function shellPathActivity(command: string, paths: string[]): FilesystemActivity | undefined {
+	const unique = [...new Set(paths.filter((path) => path && !path.startsWith("#")))];
+	if (unique.length === 0) {
+		return undefined;
+	}
+	const label = command === "mv" && unique.length >= 2
+		? `shell mv ${displayWanixPath(unique[0])} -> ${displayWanixPath(unique[1])}`
+		: `shell ${command} ${displayWanixPath(unique[unique.length - 1])}`;
+	return { label, paths: unique };
+}
+
+function shellRedirectionPaths(words: string[], cwd: string): string[] {
+	const paths: string[] = [];
+	for (let index = 0; index < words.length; index += 1) {
+		const word = words[index];
+		if (word === ">" || word === "1>" || word === "2>" || word === ">>" || word === "1>>" || word === "2>>") {
+			if (words[index + 1]) {
+				paths.push(resolveWanixPath(cwd, words[index + 1]));
+			}
+		} else if (word.startsWith("2>") && word.length > 2) {
+			paths.push(resolveWanixPath(cwd, word.slice(2)));
+		} else if (word.startsWith(">") && word.length > 1) {
+			paths.push(resolveWanixPath(cwd, word.slice(1)));
+		}
+	}
+	return paths;
+}
+
+function shellWords(line: string): string[] {
+	const words: string[] = [];
+	let current = "";
+	let quote: "'" | "\"" | undefined;
+	let escaping = false;
+	for (const char of line) {
+		if (escaping) {
+			current += char;
+			escaping = false;
+			continue;
+		}
+		if (char === "\\" && quote !== "'") {
+			escaping = true;
+			continue;
+		}
+		if (quote) {
+			if (char === quote) {
+				quote = undefined;
+			} else {
+				current += char;
+			}
+			continue;
+		}
+		if (char === "'" || char === "\"") {
+			quote = char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (current.length > 0) {
+				words.push(current);
+				current = "";
+			}
+			continue;
+		}
+		current += char;
+	}
+	if (current.length > 0) {
+		words.push(current);
+	}
+	return words;
+}
+
+function resolveWanixPath(cwd: string, path: string): string {
+	if (path.startsWith("#")) {
+		return path;
+	}
+	const rooted = path.startsWith("/");
+	const prefix = rooted || cwd === "." ? "" : cwd;
+	const raw = rooted ? path : (prefix ? `${prefix}/${path}` : path);
+	const parts: string[] = [];
+	for (const part of raw.split("/")) {
+		if (!part || part === ".") {
+			continue;
+		}
+		if (part === "..") {
+			parts.pop();
+		} else {
+			parts.push(part);
+		}
+	}
+	const normalized = parts.join("/");
+	return rooted ? `/${normalized}` || "/" : normalized || ".";
+}
+
+function displayWanixPath(path: string): string {
+	return path === "." ? "/" : path;
+}
+
+function notifyFilesystemActivity(callback?: (activity?: FilesystemActivity) => void, activity?: FilesystemActivity): void {
 	if (!callback) {
 		return;
 	}
-	delay(250).then(callback).catch((error) => {
+	delay(250).then(() => callback(activity)).catch((error) => {
 		console.warn("Wanix filesystem refresh failed", error);
 	});
-	delay(1000).then(callback).catch((error) => {
+	delay(1000).then(() => callback(activity)).catch((error) => {
 		console.warn("Wanix filesystem refresh failed", error);
 	});
 }
@@ -1437,6 +1641,10 @@ function parentPath(path: string): string {
 	const parts = splitPath(path);
 	parts.pop();
 	return parts.join("/");
+}
+
+function normalizeWanixPath(path: string): string {
+	return resolveWanixPath(".", path);
 }
 
 function baseName(path: string): string {
