@@ -80,6 +80,7 @@ const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = 
 };
 const TASK_OUTPUT_DIR = ".wanix/tasks";
 const TASK_OUTPUT_MAX_CHARS = 512 * 1024;
+const COCKPIT_TOUR_REPORT_PATH = ".wanix/cockpit-tour.md";
 const SERVICE_STATE_POLL_MS = 1000;
 const SHARED_DIRECTORY_POLL_MS = 1500;
 
@@ -207,6 +208,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runDuetDemo', async () => {
 			try {
 				await runDuetDemo(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.runCockpitTour', async () => {
+			try {
+				await runCockpitTour(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context, sharedWatcher);
+				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -902,6 +911,102 @@ async function runWasmStarter(
 	vscode.window.showInformationMessage("Wanix WASM starter completed");
 }
 
+type CockpitTourStep = {
+	label: string;
+	status: "ok" | "failed";
+	description: string;
+	artifacts: string[];
+	error?: string;
+};
+
+async function runCockpitTour(
+	fsys: any,
+	bridge: WanixBridge,
+	config: Config,
+	systemView: WanixSystemView,
+	activeTaskTerminals: Map<TaskRunKind, vscode.Terminal>,
+	taskTerminals: Map<string, vscode.Terminal>,
+	context: vscode.ExtensionContext,
+	sharedWatcher?: WanixSharedDirectoryWatcher,
+): Promise<void> {
+	const startedAt = new Date();
+	const steps: CockpitTourStep[] = [];
+	const runStep = async (
+		label: string,
+		description: string,
+		artifacts: string[],
+		action: () => Promise<void>,
+	): Promise<void> => {
+		systemView.filesystemActivity(`cockpit tour ${label}`);
+		try {
+			await action();
+			steps.push({ label, description, artifacts, status: "ok" });
+		} catch (error) {
+			steps.push({
+				label,
+				description,
+				artifacts,
+				status: "failed",
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
+		}
+	};
+
+	systemView.filesystemActivity("cockpit tour started");
+	try {
+		await runStep(
+			"seed v86 shared files",
+			"Create the Linux/v86 shared-file workspace and arm the browser-side shared directory watcher.",
+			["/shared/README.md", "/shared/message.txt", V86_SHARED_LINUX_PATH],
+			async () => {
+				await openV86SharedDemo(fsys, bridge, config, systemView, { openReadme: false, notify: false });
+				await sharedWatcher?.resetBaseline();
+				sharedWatcher?.start();
+				systemView.filesystemActivity("v86 shared watch armed", {
+					path: V86_SHARED_LINUX_PATH,
+					paths: [V86_SHARED_DIR, V86_SHARED_LINUX_PATH],
+				});
+			},
+		);
+		await runStep(
+			"run JS and WASM duet",
+			"Run qjs producer, compiled WASM transform, and qjs verifier through one Wanix namespace.",
+			["/duet/producer.js", "/duet/transform.wasm", "/duet/verify.js", DUET_OUTPUT_PATH],
+			() => runDuetDemo(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context),
+		);
+		await runStep(
+			"preview stateful HTTP route",
+			"Run a qjs-backed Wanix HTTP route and preserve its response plus state file.",
+			["/apps/counter.js", "/apps/counter.response.txt", "/apps/counter.count.txt"],
+			() => openHttpCounterDemo(fsys, bridge, config, systemView),
+		);
+		await runStep(
+			"preview WASM HTTP route",
+			"Run a compiled WASM handler through the same Wanix HTTP route contract.",
+			["/apps/wasm.wasm", "/apps/wasm.response.txt"],
+			() => openHttpWasmDemo(fsys, bridge, config, systemView),
+		);
+		await runStep(
+			"run agent repair",
+			"Install, fail, repair, rerun, and report the broken qjs program using Wanix-visible operations.",
+			["/agent/broken.js", "/agent/out/broken.repair-report.md", "/agent/out/result.txt"],
+			() => runAgentRepairDemo(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context),
+		);
+		const reportPath = await writeCockpitTourReport(fsys, bridge, startedAt, new Date(), "complete", steps);
+		systemView.filesystemActivity("cockpit tour report written", { path: reportPath });
+		await refreshWanixPaths(bridge, [reportPath]);
+		await openWanixPath(reportPath);
+		vscode.window.showInformationMessage("Wanix OS cockpit tour completed");
+	} catch (error) {
+		const reportPath = await writeCockpitTourReport(fsys, bridge, startedAt, new Date(), "failed", steps, error);
+		systemView.filesystemActivity("cockpit tour failure report written", { path: reportPath });
+		await refreshWanixPaths(bridge, [reportPath]);
+		await openWanixPath(reportPath);
+		throw error;
+	}
+}
+
 async function fixCurrentWanixProgram(
 	fsys: any,
 	bridge: WanixBridge,
@@ -1500,6 +1605,75 @@ function uniqueReportPaths(paths: string[]): string[] {
 
 function displayWanixReportPath(path: string): string {
 	return absoluteWanixPath(path);
+}
+
+async function writeCockpitTourReport(
+	fsys: any,
+	bridge: WanixBridge,
+	startedAt: Date,
+	completedAt: Date,
+	status: "complete" | "failed",
+	steps: CockpitTourStep[],
+	error?: unknown,
+): Promise<string> {
+	await fsys.makeDirAll(parentPath(COCKPIT_TOUR_REPORT_PATH));
+	const report = cockpitTourReportMarkdown({
+		startedAt,
+		completedAt,
+		status,
+		steps,
+		reportPath: COCKPIT_TOUR_REPORT_PATH,
+		error: error instanceof Error ? error.message : error ? String(error) : undefined,
+	});
+	await fsys.writeFile(COCKPIT_TOUR_REPORT_PATH, report);
+	bridge.refresh(COCKPIT_TOUR_REPORT_PATH);
+	return COCKPIT_TOUR_REPORT_PATH;
+}
+
+function cockpitTourReportMarkdown(report: {
+	startedAt: Date;
+	completedAt: Date;
+	status: "complete" | "failed";
+	steps: CockpitTourStep[];
+	reportPath: string;
+	error?: string;
+}): string {
+	const artifacts = uniqueReportPaths(report.steps.flatMap((step) => step.artifacts));
+	return [
+		"# Wanix OS Cockpit Tour",
+		"",
+		`Status: ${report.status}`,
+		"Arc: This is an OS. It runs multiple runtimes. Linux can mount it. It can serve apps. Agents can operate it.",
+		`Started: ${report.startedAt.toISOString()}`,
+		`Completed: ${report.completedAt.toISOString()}`,
+		`Report: ${displayWanixReportPath(report.reportPath)}`,
+		report.error ? `Error: ${report.error}` : undefined,
+		"",
+		"## Tour Steps",
+		"",
+		...report.steps.flatMap((step, index) => cockpitTourStepLines(step, index + 1)),
+		"## Key Artifacts",
+		"",
+		...artifacts.map((path) => `- ${displayWanixReportPath(path)}`),
+		"",
+		"## What To Inspect Next",
+		"",
+		"- Expand Tasks to inspect qjs and wasm task rows, transcripts, metadata, and #task service directories.",
+		"- Expand Route Runs to inspect HTTP route response reports and task stdout/stderr traces.",
+		"- Expand Agent to reopen the repair report, result file, transcript captures, and before/after diff.",
+		"- Open Namespace entries for #task and #term to inspect Wanix service files directly.",
+		"",
+	].filter((line): line is string => line !== undefined).join("\n");
+}
+
+function cockpitTourStepLines(step: CockpitTourStep, index: number): string[] {
+	return [
+		`${index}. ${step.label} (${step.status})`,
+		`   - ${step.description}`,
+		...step.artifacts.map((path) => `   - ${displayWanixReportPath(path)}`),
+		step.error ? `   - error: ${step.error}` : undefined,
+		"",
+	].filter((line): line is string => line !== undefined);
 }
 
 async function refreshWorkbenchFiles(bridge: WanixBridge): Promise<void> {

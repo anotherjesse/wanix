@@ -455,6 +455,15 @@ repair the qjs file the user is already looking at.
 
 ![One-click Wanix agent repair demo](assets/wanix-workbench-browser-dx/52-one-click-agent-repair.png)
 
+The cockpit now has a capstone button too. `Run OS Cockpit Tour` runs the story
+as one visible system operation: it seeds the v86 shared-files workspace, runs
+the qjs -> WASM -> qjs duet, previews a stateful qjs HTTP route, previews a
+WASM HTTP route, runs the agent repair, and writes
+`/.wanix/cockpit-tour.md`. The report is not a marketing page; it is a Wanix
+file that points at the exact artifacts the tour created.
+
+![Wanix OS cockpit tour report](assets/wanix-workbench-browser-dx/53-os-cockpit-tour.png)
+
 ## Why These Fixes Matter
 
 The browser workbench is interesting because it makes the Rust port tangible. The runtime is no longer hidden behind CLI demos. You can browse a Wanix namespace, edit files, run qjs tasks, and watch the task output in one place.
@@ -484,6 +493,8 @@ But the first browser pass had several small breaks in the loop:
   first-class row in the system panel.
 - HTTP route previews could prove a qjs handler returned text, but not yet that
   a browser-triggered app could mutate Wanix state.
+- The complete OS story existed, but only if the user knew which demo buttons
+  to press and in what order.
 
 None of those are huge by themselves. Together, they make the browser experience feel like a prototype you have to babysit. The point of this pass was to remove enough of that babysitting that the system starts to feel direct.
 
@@ -710,14 +721,21 @@ coordination: no command palette, no title-bar hunting, no active-editor
 assumption. The system view can bootstrap the broken program, operate it, and
 leave the report behind.
 
+The cockpit tour does the same thing for the whole sprint arc. It makes the
+system prove itself in one pass, then leaves a report that tells people where to
+inspect the actual files, task transcripts, route traces, and agent artifacts.
+
 ## The Feeling Now
 
 The current loop is:
 
 1. Start `wanix-rust serve`.
 2. Open the printed URL.
-3. Edit or create a file in `wanix:/`.
-4. Create a file from the shell, for example
+3. Click `Run OS Cockpit Tour` when you want the whole story at once: v86
+   shared files, JS/WASM duet, qjs HTTP route, WASM HTTP route, agent repair,
+   and `/.wanix/cockpit-tour.md`.
+4. Edit or create a file in `wanix:/`.
+5. Create a file from the shell, for example
    `write shellmade hello from shell activity`, and see Explorer plus Activity
    update around that exact path.
 5. Click that Activity row to reopen the changed Wanix file.
