@@ -1,0 +1,3592 @@
+[
+  {
+    "slug": "home",
+    "title": "Wanix — Plan 9 Reincarnated for the Age of Agents",
+    "section": "home",
+    "pageType": "home",
+    "audience": "all",
+    "persona": "all four personas (Maya, Devraj, Theo, Aria)",
+    "oneLiner": "A Rust-native, Plan 9-style OS core that runs outside Chrome: everything is a file, every process has its own namespace, and one 9P contract reaches local services and remote machines alike.",
+    "outline": [
+      "The 30-second hero: wanix qjs examples/qjs-demo.js -> 'outside Chrome: true'",
+      "The one-line thesis and what it means",
+      "Four persona on-ramps: 'I want to run JS', 'I want to wire machines together', 'I'm extending the core', 'I want the deep idea'",
+      "What Wanix is (and is not): native runtime, browser is a client, not the foundation",
+      "Quickstart commands block",
+      "Where to go next (Learn / Concepts / Recipes / Find)"
+    ],
+    "prerequisites": [],
+    "relatedConcepts": [
+      "everything-is-a-file",
+      "per-process-namespaces",
+      "missing-half-of-9p",
+      "agents-as-operators"
+    ],
+    "demoRefs": [
+      "wanix qjs examples/qjs-demo.js",
+      "serve --bundle workbench-fs9p --wanix-services"
+    ],
+    "sourceRefs": [
+      "README.md",
+      "AGENTS.md",
+      "rust-walkthrough.md:57-89",
+      "docs/rust-vs-go-wanix.md:13-17"
+    ],
+    "targetWords": 700
+  },
+  {
+    "slug": "learn/index",
+    "title": "Learn Wanix — Guided Flows",
+    "section": "home",
+    "pageType": "overview",
+    "audience": "all, newcomers first",
+    "persona": "all four personas",
+    "oneLiner": "A catalog of nine persona-shaped learning flows that thread the canonical concept, device, and recipe pages in order — pick your goal and be carried.",
+    "outline": [
+      "How flows differ from concepts (hand-held sequence vs canonical reference)",
+      "Flow: JavaScript outside Chrome in 10 minutes (Maya)",
+      "Flow: Wire two machines into a mesh (Devraj)",
+      "Flow: Build an HTTP app backed by #kv (Maya, builder mode)",
+      "Flow: Add a service device (Theo)",
+      "Flow: Add a task driver or a transport (Theo)",
+      "Flow: The agent on your files (Kemi)",
+      "Flow: The Plan 9 ideas tour (Aria)",
+      "Flow: Contribute to the Wanix core (Priya)",
+      "Prerequisite badges and estimated times"
+    ],
+    "prerequisites": [],
+    "relatedConcepts": [
+      "everything-is-a-file",
+      "per-process-namespaces",
+      "missing-half-of-9p"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "AGENTS.md",
+      "README.md",
+      "docs/integration/plan.md"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/everything-is-a-file",
+    "title": "Everything Is a File",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "Every capability — storage, tasks, terminals, key/value, agents — is exposed as a FileSystem you read, write, and list, so one file protocol reaches them all.",
+    "outline": [
+      "The one-liner: a task is a process Wanix owns; a namespace is its private file view",
+      "Why one trait is the universal currency",
+      "Concrete: cat/write/ls a #kv key, a #task, an #agent session",
+      "Under the hood: the FileSystem + File traits, NormalizedPath, #-named devices hidden from union listings",
+      "Payoff: because every device is a plain FileSystem, it imports across the mesh for free",
+      "Status / honest limits: device-aware semantics (read_ready, is_seekable, content_hash) are opt-in, not magic"
+    ],
+    "prerequisites": [],
+    "relatedConcepts": [
+      "the-filesystem-trait",
+      "service-devices",
+      "per-process-namespaces",
+      "devices-import-for-free"
+    ],
+    "demoRefs": [
+      "wanix qjs examples/qjs-demo.js"
+    ],
+    "sourceRefs": [
+      "crates/wanix-fs/src/traits.rs:153-334",
+      "crates/wanix-fs/src/lib.rs:14-31",
+      "AGENTS.md:59-60",
+      "docs/mesh-the-missing-half-of-9p.md:81-89"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/the-filesystem-trait",
+    "title": "The FileSystem Trait",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "One Rust trait (open/metadata/read_dir/mutations) is the universal currency of the whole system; implement it and you are a Wanix capability.",
+    "outline": [
+      "The one-liner and the trait shape (open, metadata, read_dir, mutations)",
+      "Walk #kv as the canonical minimal FileSystem implementation",
+      "parse_path single-segment rule, snapshot-on-open reads, commit-on-close writes",
+      "Which methods default to NotSupported (symlink, hard_link, content_hash, confine_to_prefix)",
+      "Device-aware hooks: read_ready/write_ready, is_seekable, content_hash, confine_to_prefix",
+      "Status / honest limits: this is the template Theo copies; keep modules under 250-350 lines"
+    ],
+    "prerequisites": [
+      "everything-is-a-file"
+    ],
+    "relatedConcepts": [
+      "everything-is-a-file",
+      "normalizedpath",
+      "content-addressed-data-plane",
+      "subtreefs-confine-to-prefix",
+      "kv-key-value-device"
+    ],
+    "demoRefs": [
+      "#kv-backed HTTP counter"
+    ],
+    "sourceRefs": [
+      "crates/wanix-fs/src/traits.rs:153-334",
+      "crates/wanix-fs/src/traits.rs:66-150",
+      "crates/wanix-kv/src/lib.rs:1-177",
+      "crates/wanix-kv/src/files.rs:7-76"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "concepts/normalizedpath",
+    "title": "NormalizedPath",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "Wanix paths are relative, slash-separated, no . or .. components, with '.' as the root — the Go io/fs.ValidPath shape — so paths can never escape upward.",
+    "outline": [
+      "The one-liner and the rule set",
+      "Why no '..' is a security property, not a limitation",
+      "'.' as the root and how service devices (#name) sit alongside",
+      "Under the hood: validation, rejection, and where it is re-applied (capsule materialize, subtree re-rooting)",
+      "Status / honest limits: path string rewriting alone does not stop symlink escapes — see confine_to_prefix"
+    ],
+    "prerequisites": [],
+    "relatedConcepts": [
+      "the-filesystem-trait",
+      "subtreefs-confine-to-prefix",
+      "capability-is-a-bind"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-fs/src/path.rs:5-78",
+      "crates/wanix-cas/src/capsule.rs"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/per-process-namespaces",
+    "title": "Per-Process Namespaces",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "Each task carries its own private, rearrangeable view of the filesystem tree; a child clones the parent's view rather than sharing one global root.",
+    "outline": [
+      "The one-liner: Plan 9's deepest idea, not 'everything is a file' for its own sake",
+      "A Namespace is itself a FileSystem (BTreeMap of destination -> bind targets)",
+      "Per-process: Namespace is Clone, so a child gets a private copy of the parent's binding table",
+      "Why this is the real source of isolation and network transparency",
+      "Under the hood: where the auto-bound #task view lands in a new task's namespace",
+      "Status / honest limits: the 9P session/namespace seam still resolves through one shared P9Server.root in the plain path"
+    ],
+    "prerequisites": [
+      "everything-is-a-file"
+    ],
+    "relatedConcepts": [
+      "namespace-binding",
+      "namespace-resolution",
+      "missing-half-of-9p",
+      "capability-is-a-bind",
+      "trust-boundary-gaps"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-vfs/src/lib.rs:33-52",
+      "crates/wanix-task/src/table.rs:99-101",
+      "docs/mesh-the-missing-half-of-9p.md:63-79",
+      "docs/rust-vs-go-wanix.md:50-56"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/namespace-binding",
+    "title": "Namespace Binding (bind / mount)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "bind() splices any FileSystem into the namespace at a chosen path with first/replace/last ordering, giving Plan 9 union mounts.",
+    "outline": [
+      "The one-liner and BindPosition::{First, Replace, Last}",
+      "Union mounting: multiple targets at one destination",
+      "Worked example: binding a host LocalFs, a service device, a remote peer",
+      "Under the hood: BindOptions, the binding table structure",
+      "Status / honest limits: do not hold a namespace lock while calling into another filesystem"
+    ],
+    "prerequisites": [
+      "per-process-namespaces"
+    ],
+    "relatedConcepts": [
+      "namespace-resolution",
+      "per-process-namespaces",
+      "import-export-and-n",
+      "capability-is-a-bind"
+    ],
+    "demoRefs": [
+      "Explicit host mount"
+    ],
+    "sourceRefs": [
+      "crates/wanix-vfs/src/binding.rs:60-103",
+      "crates/wanix-vfs/src/lib.rs:55-94",
+      "rust-walkthrough.md:141-178"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "concepts/namespace-resolution",
+    "title": "Namespace Resolution (longest-prefix, union)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "A path resolves against all bindings whose destination is a prefix, most-specific binding first, merging directories into one synthesized view.",
+    "outline": [
+      "The one-liner and longest-destination-first ordering",
+      "How open/metadata/mutations iterate candidates and take the first that resolves",
+      "How read_dir merges entries across all bindings into one synthesized view",
+      "Worked example: a union directory with files from two backing filesystems",
+      "Status / honest limits: resolution is per-operation; there is no cached merged tree"
+    ],
+    "prerequisites": [
+      "namespace-binding"
+    ],
+    "relatedConcepts": [
+      "namespace-binding",
+      "per-process-namespaces",
+      "the-filesystem-trait"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-vfs/src/resolution.rs:10-29",
+      "crates/wanix-vfs/src/lib.rs:55-98",
+      "crates/wanix-vfs/src/readdir.rs:101-103"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "concepts/service-devices",
+    "title": "Service Devices (#name)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "Named '#' devices (#task, #term, #kv, #pipe, #plumb, #cas, #agent) are file trees you operate by read/write/ls instead of bespoke APIs.",
+    "outline": [
+      "The one-liner: a device is a FileSystem with a leading # name",
+      "The shipped set and the single INSPECTABLE_SERVICE_DEVICES source",
+      "The 'what file ops this really is' reveal for the four cockpit demos",
+      "Why #-devices are hidden from union directory listings but resolvable from the namespace root",
+      "Under the hood: how --wanix-services binds them; how WASI guests reach #name from any cwd",
+      "Status / honest limits: served #agent is FakeEngine; #kv is in-memory; exec devices are local-trust"
+    ],
+    "prerequisites": [
+      "everything-is-a-file"
+    ],
+    "relatedConcepts": [
+      "devices-import-for-free",
+      "the-task-device",
+      "wanix-services-device-set",
+      "blocking-stream-eof-contract"
+    ],
+    "demoRefs": [
+      "--wanix-services bind set",
+      "Click through the four cockpit demos"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cli/src/serve/roots.rs:119-172",
+      "crates/wanix-vfs/src/readdir.rs:101-103",
+      "crates/wanix-wasi/src/ctx.rs:137",
+      "AGENTS.md:180-187"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/tasks-own-process-identity",
+    "title": "Tasks Own Process Identity",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "Wanix — not the engine — owns task id, parent, kind, cmd/env/cwd, exit status, namespace, and fds; QuickJS/wasm are just engines a task chooses.",
+    "outline": [
+      "The one-liner: Task = Arc<Mutex<TaskState>>, identity independent of any engine",
+      "TaskState fields: id, parent, kind, cmd/cmd_argv/env/dir, exit, private Namespace, FdTable",
+      "TaskId is NonZeroU64; root tasks start at 1",
+      "Why the engine never owns identity (ADR 0001/0002 boundary)",
+      "Under the hood: TaskTable registry, driver map, auto-bound #task view",
+      "Status / honest limits: snapshots are VM images, not task checkpoints; identity is reattached on restore"
+    ],
+    "prerequisites": [
+      "everything-is-a-file"
+    ],
+    "relatedConcepts": [
+      "the-fd-table",
+      "the-task-device",
+      "task-drivers",
+      "quickjs-snapshots-are-vm-images",
+      "wasmtime-as-substrate"
+    ],
+    "demoRefs": [
+      "Create and control a child task via #task"
+    ],
+    "sourceRefs": [
+      "crates/wanix-task/src/task.rs:16-211",
+      "crates/wanix-task/src/task/state.rs:10-22",
+      "docs/adrs/0002-quickjs-wasi-task-runtime.md",
+      "AGENTS.md:133-138"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/the-fd-table",
+    "title": "The fd Table",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "Each task has an fd table reserving 0/1/2 for stdio and allocating dynamic fds from 3, holding shared open-file handles that survive a closing source task.",
+    "outline": [
+      "The one-liner: reserved 0/1/2, dynamic from 3",
+      "OpenFile wraps Arc<Mutex<Box<dyn File>>> — an fd bind captures a shared handle",
+      "Why a service-file handoff stays usable after the source task closes its fd",
+      "Under the hood: dynamic regular-file WASI fds mirrored into the table; directory fds stay WASI-internal",
+      "Status / honest limits: fd mirroring is the shared contract, not reimplemented per runtime"
+    ],
+    "prerequisites": [
+      "tasks-own-process-identity"
+    ],
+    "relatedConcepts": [
+      "tasks-own-process-identity",
+      "shared-wasi-fd-contract",
+      "the-task-device"
+    ],
+    "demoRefs": [
+      "Use the QuickJS fd API"
+    ],
+    "sourceRefs": [
+      "crates/wanix-task/src/fd.rs:128-231",
+      "rust-walkthrough.md:180-209",
+      "docs/adrs/0002-quickjs-wasi-task-runtime.md:54-59"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "devices/task",
+    "title": "#task — The Task Device",
+    "section": "devices",
+    "pageType": "reference",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "Allocate, configure, start, and observe processes purely through files: #task/new/<kind>, #task/<id>/{cmd,env,dir,exit,fd/<n>}, and #task/self.",
+    "outline": [
+      "#task/new/<kind> — allocate a task of kind noop/qjs/wasm/auto",
+      "#task/<id>/cmd, /env, /dir — file-oriented task control",
+      "#task/<id>/ctl — bind commands (bind ... fd/0|1|2), start",
+      "#task/<id>/exit — observable exit status",
+      "#task/self — every task sees its own view (auto-bound at allocation)",
+      "#task/self/fd/<n> — selected dynamic fds visible",
+      "The blocking-stream EOF contract reference",
+      "Status / honest limits: exec is local-trust only; no signals/process-groups; child launches are synchronous foreground"
+    ],
+    "prerequisites": [
+      "tasks-own-process-identity",
+      "the-fd-table"
+    ],
+    "relatedConcepts": [
+      "tasks-own-process-identity",
+      "task-drivers",
+      "the-fd-table",
+      "blocking-stream-eof-contract"
+    ],
+    "demoRefs": [
+      "Create and control a child task via #task",
+      "Child task launches"
+    ],
+    "sourceRefs": [
+      "crates/wanix-task/src/task_fs.rs:48-110",
+      "crates/wanix-task/src/table.rs:122-192",
+      "rust-walkthrough.md:211-246"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/task-drivers",
+    "title": "Task Drivers",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "A driver's check() auto-selects a runtime by program suffix (.js->qjs, .wasm->wasm) and start() runs it; runtimes register from above so the task core stays engine-free.",
+    "outline": [
+      "The one-liner: TaskDriver check() and start()",
+      "check() auto-selects by program suffix; start() launches",
+      "Why wanix-task must not depend on wanix-wasi/qjs/wasm — drivers register from the orchestration layer",
+      "Worked example: writing a new driver, reusing task_wasi_config",
+      "Under the hood: the driver registry and dispatch",
+      "Status / honest limits: drivers are noop/qjs/wasm today; discovery derives the list from the registry"
+    ],
+    "prerequisites": [
+      "tasks-own-process-identity"
+    ],
+    "relatedConcepts": [
+      "tasks-own-process-identity",
+      "shared-wasi-fd-contract",
+      "qjs-task",
+      "compiled-wasm-task-driver",
+      "crate-layering"
+    ],
+    "demoRefs": [
+      "wanix-rust wasm FILE.wasm"
+    ],
+    "sourceRefs": [
+      "crates/wanix-task/src/driver.rs",
+      "crates/wanix-task/src/table.rs:122-154",
+      "docs/adrs/0002-quickjs-wasi-task-runtime.md:31-45"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/shared-wasi-fd-contract",
+    "title": "The Shared WASI / fd Contract",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "task_wasi_config builds the live WASI config (namespace, cwd preopen, argv/env, stdio fds) once for both runtimes, mirroring dynamic file fds into the task table.",
+    "outline": [
+      "The one-liner: one builder for both qjs and wasm",
+      "What task_wasi_config wires: namespace backs WASI, cwd is the root preopen, argv/env from wanix_task, fds 0/1/2",
+      "WasiFdObserver / TaskWasiFdMirror: regular-file fds mirrored, released on guest close",
+      "is_rooted_service_path: a guest opens any #name device from the namespace root regardless of cwd",
+      "What the two runtimes share (WasiCtx, task_wasi_config) and do NOT share (the linker)",
+      "Status / honest limits: qjs keeps its own engine-local host import path; wasm uses wanix-wasi-host"
+    ],
+    "prerequisites": [
+      "the-fd-table",
+      "task-drivers"
+    ],
+    "relatedConcepts": [
+      "wanix-backed-wasi",
+      "command-style-wasm-linker",
+      "task-drivers",
+      "wasmtime-as-substrate"
+    ],
+    "demoRefs": [
+      "Two WASI tiers on one shared FS"
+    ],
+    "sourceRefs": [
+      "crates/wanix-wasi/src/task_config.rs",
+      "crates/wanix-wasi/src/lib.rs",
+      "crates/wanix-wasi/src/ctx.rs:137",
+      "docs/adrs/0002-quickjs-wasi-task-runtime.md:54-59"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/wasmtime-as-substrate",
+    "title": "Wasmtime as the Execution Substrate",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "Wasmtime hosts guest runtimes but inherits no host filesystem or process semantics by default; Wanix supplies live WASI backed by its own namespaces.",
+    "outline": [
+      "The one-liner: substrate, not the foundation that defines semantics",
+      "Why Wasmtime is not allowed to inherit host fs/process semantics (ADR 0001)",
+      "Two WASI guests (qjs, compiled wasm), neither a second process model",
+      "WASI inverted: an adapter INTO Wanix-owned semantics, not a delegation to the host",
+      "Under the hood: the compiled-artifact cache as a trust boundary",
+      "Status / honest limits: per-room memory isolation is real; hard CPU/memory limits (epoch/fuel, linear-memory caps) are NOT wired yet"
+    ],
+    "prerequisites": [
+      "everything-is-a-file"
+    ],
+    "relatedConcepts": [
+      "wanix-backed-wasi",
+      "host-not-ambient-authority",
+      "two-tiers-one-substrate",
+      "rooms-not-houses",
+      "safe-for-untrusted-not-claimable"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "docs/adrs/0001-rust-native-wasmtime-runtime.md:25-43",
+      "docs/adrs/0002-quickjs-wasi-task-runtime.md:47-52",
+      "docs/rust-vs-go-wanix.md:228-256",
+      "docs/scaling-eli5.md:89-95"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/wanix-backed-wasi",
+    "title": "Wanix-Backed WASI (not host WASI)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "Preview 1 syscalls resolve through Wanix namespaces and WASI fds instead of the host OS; #name device paths resolve from the namespace root regardless of cwd.",
+    "outline": [
+      "The one-liner: Preview 1 backed by Wanix, not the host OS",
+      "Root and cwd mapping, service paths, fd ops, rights projection, clocks",
+      "resolve_path and is_rooted_service_path",
+      "Why this keeps the authority boundary at Wanix",
+      "Under the hood: WasiCtx, deliberate unsupported errors for behavior with no Wanix contract",
+      "Status / honest limits: command-style subset for wasm (poll_oneoff NOSYS); qjs has richer readiness"
+    ],
+    "prerequisites": [
+      "shared-wasi-fd-contract"
+    ],
+    "relatedConcepts": [
+      "shared-wasi-fd-contract",
+      "wasmtime-as-substrate",
+      "host-not-ambient-authority",
+      "command-style-wasm-linker"
+    ],
+    "demoRefs": [
+      "Exercise more Wanix-owned WASI filesystem calls"
+    ],
+    "sourceRefs": [
+      "crates/wanix-wasi/src/ctx.rs",
+      "crates/wanix-wasi/src/lib.rs",
+      "rust-walkthrough.md:247-285"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/host-not-ambient-authority",
+    "title": "Host Files Are Not Ambient Authority",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "Host directories enter Wanix only through an explicit rooted LocalFs mount with escape checks; there is no ambient host path in the default namespace.",
+    "outline": [
+      "The one-liner gently: the task sees a Wanix path, the host boundary is enforced",
+      "Worked example: --mount /tmp/wanix-host=host",
+      "How LocalFs roots and protects the host boundary; confine_to_prefix canonicalizes and rejects escapes",
+      "Why this matters for agents and untrusted code",
+      "Status / honest limits: snapshots do not store ambient host capabilities; mounts are supplied again on resume"
+    ],
+    "prerequisites": [
+      "namespace-binding"
+    ],
+    "relatedConcepts": [
+      "namespace-binding",
+      "wanix-backed-wasi",
+      "subtreefs-confine-to-prefix",
+      "capability-is-a-bind"
+    ],
+    "demoRefs": [
+      "Explicit host mount"
+    ],
+    "sourceRefs": [
+      "docs/adrs/0001-rust-native-wasmtime-runtime.md:37-38",
+      "rust-walkthrough.md:141-178",
+      "crates/wanix-fs/src/localfs.rs",
+      "crates/wanix-fs/src/traits.rs:207-231"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/qjs-task",
+    "title": "qjs Task — JavaScript Outside Chrome",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "QuickJS-NG compiled to a WASI reactor on Wasmtime runs .js as a first-class Wanix task with live namespace, fds, argv/env/cwd, and observable exit.",
+    "outline": [
+      "The one-liner and the founding proof",
+      "QuickJsTaskDriver::check claims .js; start reads the script and runs it",
+      "Module vs eval (uses_module_syntax), CONSOLE_PRELUDE, scriptArgs/env/cwd",
+      "Guest JS uses qjs:std, qjs:os, scriptArgs, stdio, env, service files — no globalThis.Wanix",
+      "Under the hood: bounded event-loop work, set_exit, the warm module cache",
+      "Status / honest limits: bounded-execution knobs are host policy, not a scheduler/cancellation model"
+    ],
+    "prerequisites": [
+      "tasks-own-process-identity",
+      "wasmtime-as-substrate"
+    ],
+    "relatedConcepts": [
+      "compiled-wasm-task-driver",
+      "two-tiers-one-substrate",
+      "guest-js-guardrails",
+      "quickjs-snapshots-are-vm-images",
+      "bounded-execution-policy"
+    ],
+    "demoRefs": [
+      "wanix-rust qjs main.js",
+      "Pass process context into a task"
+    ],
+    "sourceRefs": [
+      "crates/wanix-qjs/src/driver.rs",
+      "crates/wanix-qjs/src/runner.rs",
+      "crates/wanix-qjs/src/lib.rs",
+      "crates/wanix-qjs-engine/docs/architecture.md"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "concepts/compiled-wasm-task-driver",
+    "title": "Compiled wasm Task Driver",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "Any wasm32-wasi command module (Rust/C/Zig/Go) runs as a Wanix .wasm task at near-native speed, sharing the same sandbox and VFS as qjs.",
+    "outline": [
+      "The one-liner: the second WASI task runtime",
+      "WasmTaskDriver::check matches .wasm; start reads module bytes from the task namespace",
+      "WasiRunner::from_bytes_cached, live WasiConfig, _start, proc_exit recovery",
+      "Uses the standalone linker wanix-wasi-host (add_to_linker)",
+      "Under the hood: shared task_wasi_config path, distinct module cache subdir",
+      "Status / honest limits: command-style only — poll_oneoff is NOSYS, no readiness/async I/O"
+    ],
+    "prerequisites": [
+      "task-drivers",
+      "shared-wasi-fd-contract"
+    ],
+    "relatedConcepts": [
+      "qjs-task",
+      "two-tiers-one-substrate",
+      "command-style-wasm-linker",
+      "compiled-artifact-cache"
+    ],
+    "demoRefs": [
+      "wanix-rust wasm FILE.wasm",
+      "shared_vfs differential"
+    ],
+    "sourceRefs": [
+      "crates/wanix-wasm/src/driver.rs",
+      "crates/wanix-wasm/src/runner.rs",
+      "crates/wanix-wasm/src/lib.rs",
+      "crates/wanix-cli/tests/shared_vfs_differential.rs"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/command-style-wasm-linker",
+    "title": "Command-Style wasm Linker (poll_oneoff = NOSYS)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "wanix-wasi-host is a generic WASI Preview 1 linker for command guests; poll_oneoff returns ERRNO_NOSYS, so there is no readiness polling — qjs keeps its own richer host path.",
+    "outline": [
+      "The one-liner and what 'command-style' means",
+      "The registered subset: _start, fd/path I/O, args/env, clock, exit",
+      "Why poll_oneoff returns ERRNO_NOSYS",
+      "Generic over a WasiHost backing, no engine or task coupling",
+      "Under the hood: process.rs proc_exit hook and trap",
+      "Status / honest limits: two host paths, not one; only the wasm runner uses this linker"
+    ],
+    "prerequisites": [
+      "compiled-wasm-task-driver"
+    ],
+    "relatedConcepts": [
+      "compiled-wasm-task-driver",
+      "wanix-backed-wasi",
+      "shared-wasi-fd-contract"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-wasi-host/src/lib.rs",
+      "crates/wanix-wasi-host/src/core.rs:37",
+      "crates/wanix-wasi-host/src/process.rs"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/two-tiers-one-substrate",
+    "title": "Two Tiers, One Substrate",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "visionary",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "Interpreted (qjs) and compiled (wasm) tasks built from one Namespace share a filesystem — a write by one is visible to the other.",
+    "outline": [
+      "The one-liner: choose easy or fast per task, same security story",
+      "Same Wasmtime substrate, same shared FS, peer task drivers",
+      "The differential proof: a wasm task and a qjs task observe identical filesystem state",
+      "Pick the engine in the same secure room (qjs / compiled wasm / VM)",
+      "Status / honest limits: real-world workloads beyond fixtures and demos are not demonstrated in-tree"
+    ],
+    "prerequisites": [
+      "qjs-task",
+      "compiled-wasm-task-driver"
+    ],
+    "relatedConcepts": [
+      "qjs-task",
+      "compiled-wasm-task-driver",
+      "rooms-not-houses",
+      "shared-wasi-fd-contract"
+    ],
+    "demoRefs": [
+      "shared_vfs differential",
+      "qjs->wasm->qjs duet on one shared FS"
+    ],
+    "sourceRefs": [
+      "crates/wanix-wasm/src/lib.rs",
+      "crates/wanix-cli/tests/shared_vfs_differential.rs",
+      "docs/scaling-eli5.md:49-66"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/compiled-artifact-cache",
+    "title": "Compiled-Artifact Cache",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "sha256-keyed on-disk cache of Wasmtime-serialized modules cuts qjs cold start ~1000x; the cache dir is an fd-verified owner-private trust boundary.",
+    "outline": [
+      "The one-liner and the ~550ms -> ~0.5ms win",
+      "Cache key = sha256(wasm-bytes); advisory recompile-on-mismatch",
+      "Why the cache dir is a trust boundary (unsafe Module::deserialize == native code loading)",
+      "Hardened fd-based verification (Unix): O_NOFOLLOW, fstat owner/mode, openat, renameat",
+      "Per-runtime policy: WANIX_QJS_CACHE_DIR vs WANIX_WASM_CACHE_DIR",
+      "Status / honest limits: strong verification is Unix-only; non-Unix degrades to 'is a directory'"
+    ],
+    "prerequisites": [
+      "wasmtime-as-substrate"
+    ],
+    "relatedConcepts": [
+      "qjs-task",
+      "compiled-wasm-task-driver",
+      "wasmtime-as-substrate"
+    ],
+    "demoRefs": [
+      "Module cache warm-vs-cold"
+    ],
+    "sourceRefs": [
+      "crates/wanix-module-cache/src/lib.rs",
+      "crates/wanix-module-cache/src/trust.rs",
+      "docs/adrs/0002-quickjs-wasi-task-runtime.md:83-138"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/quickjs-snapshots-are-vm-images",
+    "title": "QuickJS Snapshots Are VM Images",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "Snapshots capture WebAssembly linear memory + pointers, not serialized task state; live Wanix host state (namespace, fds, providers) must be reattached on restore.",
+    "outline": [
+      "The one-liner: VM image, not a task checkpoint",
+      "What is captured (linear memory + pointers) and what is not (task id, namespace, fds, cwd, env, mounts)",
+      "Restore reattaches host state explicitly; task id changes 1->2",
+      "Open dynamic descriptors block snapshot — keeps the boundary explicit",
+      "Under the hood: qjs-restore, qjs-snapshot/qjs-resume across CLI invocations",
+      "Status / honest limits: snapshots are tied to the exact QuickJS WASM module identity"
+    ],
+    "prerequisites": [
+      "qjs-task"
+    ],
+    "relatedConcepts": [
+      "qjs-task",
+      "wanix-capsule",
+      "tasks-own-process-identity"
+    ],
+    "demoRefs": [
+      "Snapshot and restore a qjs VM",
+      "QuickJS engine snapshot/restore examples"
+    ],
+    "sourceRefs": [
+      "crates/wanix-qjs-engine/docs/architecture.md",
+      "docs/adrs/0002-quickjs-wasi-task-runtime.md:71-81",
+      "rust-walkthrough.md:481-575"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "concepts/bounded-execution-policy",
+    "title": "Bounded Execution Policy (not a scheduler)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "qjs driver knobs (event-loop wait budget, ready-IO turns, interrupt poll budget, memory limit) bound guest execution but are not a general scheduler, signal system, or cancellation model.",
+    "outline": [
+      "The one-liner and the four knobs",
+      "What each knob bounds and why they exist for deterministic demos/tests",
+      "Why they are explicitly NOT a scheduler/signal/cancellation/checkpoint format",
+      "Under the hood: where the knobs live in the driver/runner",
+      "Status / honest limits: hard CPU/memory preemption (Wasmtime epoch/fuel) is not wired yet"
+    ],
+    "prerequisites": [
+      "qjs-task"
+    ],
+    "relatedConcepts": [
+      "qjs-task",
+      "wasmtime-as-substrate",
+      "safe-for-untrusted-not-claimable",
+      "rooms-not-houses"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-qjs/src/driver.rs",
+      "crates/wanix-qjs/src/runner.rs",
+      "crates/wanix-qjs-engine/docs/architecture.md",
+      "docs/scaling-eli5.md:89-95"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/guest-js-guardrails",
+    "title": "Guest-JS Guardrails",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "Guest code uses qjs:std, qjs:os, scriptArgs, stdio, env, and service files — never globalThis.Wanix helpers or a read-only virtual-file bridge.",
+    "outline": [
+      "The one-liner and the allowed surface",
+      "Why the globalThis.Wanix bridge is gone",
+      "Engine read-only virtual files are fixture support only",
+      "Control bytes (0x03/0x04) are terminal input, not task cancellation",
+      "Status / honest limits: runtime paths must use live WASI providers"
+    ],
+    "prerequisites": [
+      "qjs-task"
+    ],
+    "relatedConcepts": [
+      "qjs-task",
+      "wanix-backed-wasi",
+      "raw-vs-cooked-input"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "docs/adrs/0002-quickjs-wasi-task-runtime.md:140-149",
+      "crates/wanix-qjs/src/host_api.rs",
+      "crates/wanix-qjs-engine/README.md"
+    ],
+    "targetWords": 800
+  },
+  {
+    "slug": "devices/term",
+    "title": "#term — The Terminal Device",
+    "section": "devices",
+    "pageType": "reference",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "Plan 9-style terminal service: new allocates a resource exposing id/ctl/data/program/winch; data<->program cross-feed with \\n->\\r\\n, winch broadcasts 'cols rows'.",
+    "outline": [
+      "#term/new — allocate an incrementing resource id",
+      "#term/<id>/id — report the resource id",
+      "#term/<id>/data — terminal/client side",
+      "#term/<id>/program — program/task side (task binds fd 0/1/2 here)",
+      "#term/<id>/winch — broadcasts 'columns rows\\n'",
+      "#term/<id>/ctl — only command is close (resource cleanup, not task signalling)",
+      "Queue-aware read readiness",
+      "Status / honest limits: ctl supports only close; no signal/process-group; resize wakeups not yet stdin-independent"
+    ],
+    "prerequisites": [
+      "service-devices"
+    ],
+    "relatedConcepts": [
+      "qjs-shell",
+      "raw-vs-cooked-input",
+      "resize-winch-lifecycle",
+      "blocking-stream-eof-contract"
+    ],
+    "demoRefs": [
+      "Terminal-backed shell",
+      "qjs-shell terminal in the cockpit"
+    ],
+    "sourceRefs": [
+      "crates/wanix-term/src/lib.rs",
+      "crates/wanix-term/src/files/stream.rs",
+      "crates/wanix-term/src/files/winch.rs",
+      "docs/adrs/0003-terminal-device-and-shell-lifecycle.md:21-46"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/qjs-shell",
+    "title": "qjs-shell (Shell as a Guest Program)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "The bundled interactive shell is JavaScript inside a Wanix task driving #term and #task service files — not a separate process model.",
+    "outline": [
+      "The one-liner: the shell is a guest JS program (examples/qjs-term-shell-demo.js)",
+      "Builtins: cd ls cat write mkdir rm rmdir mv cp ln -s readlink stat lstat; env/setenv/unsetenv; ps; pwd id status size echo later exit",
+      "Child task launches: #task/new/qjs then cmd/env/dir/ctl bind+start, with < > 2> redirection",
+      "Reads #task/self/dir as cwd, opens #term/<id>/winch, registers os.setReadHandler(0, ...)",
+      "Served sessions (QjsShellSession) pump ready-IO turns and release the terminal on drop",
+      "Status / honest limits: no pipes, no job control, no external-program execution beyond the qjs launcher"
+    ],
+    "prerequisites": [
+      "term-device",
+      "qjs-task"
+    ],
+    "relatedConcepts": [
+      "term-device",
+      "raw-vs-cooked-input",
+      "resize-winch-lifecycle",
+      "the-task-device"
+    ],
+    "demoRefs": [
+      "wanix-rust qjs-shell / qjs-term",
+      "QjsShellSession (served shell)"
+    ],
+    "sourceRefs": [
+      "examples/qjs-term-shell-demo.js",
+      "crates/wanix-cli/src/qjs_term.rs",
+      "crates/wanix-cli/src/qjs_term/session.rs",
+      "docs/adrs/0003-terminal-device-and-shell-lifecycle.md"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "concepts/raw-vs-cooked-input",
+    "title": "Raw vs Cooked Input & Control Bytes",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "In raw mode the guest shell owns echo, backspace, Ctrl-C line cancel and Ctrl-D exit; clients forward 0x03/0x04 as terminal input, never as task cancellation.",
+    "outline": [
+      "The one-liner: raw vs cooked",
+      "Raw mode (--raw, WANIX_QJS_SHELL_RAW=1): guest owns echo/editing/Ctrl-C/Ctrl-D",
+      "Cooked mode buffers lines",
+      "Browser/editor/VM clients forward control bytes as terminal input",
+      "Status / honest limits: control bytes are not kernel signals; no task cancellation semantics"
+    ],
+    "prerequisites": [
+      "qjs-shell"
+    ],
+    "relatedConcepts": [
+      "qjs-shell",
+      "term-device",
+      "resize-winch-lifecycle",
+      "guest-js-guardrails"
+    ],
+    "demoRefs": [
+      "wanix-rust qjs-shell / qjs-term"
+    ],
+    "sourceRefs": [
+      "examples/qjs-term-shell-demo.js",
+      "docs/adrs/0003-terminal-device-and-shell-lifecycle.md:50-57"
+    ],
+    "targetWords": 800
+  },
+  {
+    "slug": "concepts/resize-winch-lifecycle",
+    "title": "Resize / winch Lifecycle",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "Resize travels as 'columns rows\\n' through #term/<id>/winch; queued resizes are drained on read-handler turns; sessions release the terminal via ctl close on drop.",
+    "outline": [
+      "The one-liner and the wire form",
+      "winch broadcasts to subscribers; the shell drains queued resizes before command dispatch",
+      "Sessions release the owned terminal via #term/<id>/ctl close on drop",
+      "Discovery advertises resize message forms",
+      "Status / honest limits: true resize wakeups independent of stdin handling are a queued follow-up"
+    ],
+    "prerequisites": [
+      "term-device"
+    ],
+    "relatedConcepts": [
+      "term-device",
+      "qjs-shell",
+      "raw-vs-cooked-input"
+    ],
+    "demoRefs": [
+      "qjs-term-winch-demo"
+    ],
+    "sourceRefs": [
+      "crates/wanix-term/src/files/winch.rs",
+      "crates/wanix-cli/src/qjs_term/session.rs",
+      "examples/qjs-term-shell-demo.js"
+    ],
+    "targetWords": 800
+  },
+  {
+    "slug": "concepts/the-9p-contract",
+    "title": "The 9P Contract",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "9P2000.L (plus Google.1/.2 extensions) is the one wire protocol that lets Linux, v86, editors, browsers, and the mesh browse and mutate any Wanix namespace.",
+    "outline": [
+      "The one-liner: one protocol for every external client and the mesh",
+      "The supported op set (version/attach/walk/walkgetattr/lopen/lcreate/read/write/...)",
+      "Version negotiation rejects unsupported versions",
+      "Tauth is deliberately ENOSYS — identity is a transport property, not in-band",
+      "Errors map to Linux errnos; the same server runs over stdio/TCP/WebSocket/serve",
+      "Status / honest limits: no in-band auth; the session/namespace seam discards uname/aname in the plain path"
+    ],
+    "prerequisites": [
+      "everything-is-a-file"
+    ],
+    "relatedConcepts": [
+      "protocol-vs-server-split",
+      "remotefs-import-half",
+      "tauth-is-enosys",
+      "missing-half-of-9p",
+      "trust-boundary-gaps"
+    ],
+    "demoRefs": [
+      "p9-stdio / p9-listen / p9-ws"
+    ],
+    "sourceRefs": [
+      "docs/adrs/0004-rust-9p-protocol-and-server-contract.md",
+      "crates/wanix-9p/src/dispatch.rs",
+      "crates/wanix-9p/src/lib.rs:85-93",
+      "crates/wanix-9p/src/session.rs:71-74"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "concepts/protocol-vs-server-split",
+    "title": "Protocol vs Server Split",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "wanix-protocol is dependency-free wire codecs; wanix-9p maps fids to FileSystem objects and Linux errnos — transports are thin adapters over the same server.",
+    "outline": [
+      "The one-liner and the two crates",
+      "wanix-protocol: frame split, tag extraction, version negotiation, typed op codecs",
+      "wanix-9p: fid->FileSystem mapping, open-file state, errno mapping",
+      "Transports preserve binary frame boundaries; diagnostics kept out of binary streams",
+      "Why a new transport is a thin adapter, not a fork",
+      "Status / honest limits: Rust Wanix does not fake auth/xattr/device semantics beyond the FileSystem contract"
+    ],
+    "prerequisites": [
+      "the-9p-contract"
+    ],
+    "relatedConcepts": [
+      "the-9p-contract",
+      "remotefs-import-half",
+      "crate-layering"
+    ],
+    "demoRefs": [
+      "p9-stdio / p9-listen / p9-ws"
+    ],
+    "sourceRefs": [
+      "crates/wanix-protocol/src/p9.rs:1-39",
+      "crates/wanix-9p/src/lib.rs:1-50",
+      "docs/adrs/0004-rust-9p-protocol-and-server-contract.md:19-29"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "concepts/remotefs-import-half",
+    "title": "RemoteFs — the Import Half of 9P",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "A synchronous wanix_fs::FileSystem that speaks 9P to a remote server, so binding it splices a remote namespace (files and #-devices alike) into your own.",
+    "outline": [
+      "The one-liner: the photographic negative of serve_stream",
+      "Reuses the existing wanix-protocol codecs (no new wire format), depends only on wanix-fs + wanix-protocol",
+      "Concurrency: Arc<Mutex<P9Conn>>, one request outstanding",
+      "The five hostile-peer corrections: frame-size ceiling, honest seekability, RAII fid guards, bounded read_dir, server-side O_APPEND",
+      "Offers 9P2000.L.Google.2 to collapse walk+stat into one Twalkgetattr",
+      "Status / honest limits: read_dir is O(n^2) over WAN, best-effort non-atomic snapshot"
+    ],
+    "prerequisites": [
+      "the-9p-contract",
+      "protocol-vs-server-split"
+    ],
+    "relatedConcepts": [
+      "missing-half-of-9p",
+      "import-export-and-n",
+      "five-hostile-peer-corrections",
+      "streaming-import-fs",
+      "9p-over-iroh-quic"
+    ],
+    "demoRefs": [
+      "Loopback / two-process import",
+      "Mesh import across two processes"
+    ],
+    "sourceRefs": [
+      "crates/wanix-9p-client/src/remote.rs",
+      "docs/mesh-the-missing-half-of-9p.md:451-496"
+    ],
+    "targetWords": 1400
+  },
+  {
+    "slug": "concepts/missing-half-of-9p",
+    "title": "The Missing Half of 9P",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "visionary",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "Wanix could always export a namespace; the mesh adds the 9P client so it can also import one — bind a remote node at /n/<node> and its files and devices become local.",
+    "outline": [
+      "The one-liner stated as a proof: export vs import",
+      "Why everything-is-a-file makes one protocol + one bind buy network transparency across every service at once",
+      "The argument: write a 9P client once, every file-shaped service any node exports becomes reachable",
+      "For a long time Wanix had only half of 9P",
+      "The full Plan 9 cast recreated: factotum->QUIC handshake, venti->#cas, cpu(1)->#cpu, plumber->#plumb",
+      "Status / honest limits: the mesh/agent layer has no ADRs yet; contracts are fast-moving"
+    ],
+    "prerequisites": [
+      "per-process-namespaces",
+      "the-9p-contract"
+    ],
+    "relatedConcepts": [
+      "remotefs-import-half",
+      "import-export-and-n",
+      "devices-import-for-free",
+      "agents-as-operators",
+      "wanix-as-host"
+    ],
+    "demoRefs": [
+      "Loopback / two-process import"
+    ],
+    "sourceRefs": [
+      "docs/mesh-the-missing-half-of-9p.md:1-18",
+      "docs/mesh-the-missing-half-of-9p.md:63-96",
+      "docs/mesh-the-missing-half-of-9p.md:451-496"
+    ],
+    "targetWords": 1400
+  },
+  {
+    "slug": "concepts/import-export-and-n",
+    "title": "Import / Export and /n/",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "Export served files long ago; RemoteFs is the missing 9P client — bind a peer at /n/<node> and its whole namespace (files and # devices) becomes local.",
+    "outline": [
+      "The one-liner and the two operations",
+      "bind(remote, '.', 'n/<node>', ...) mounts a remote namespace",
+      "Reading /n/A/#kv/<key> drives a peer's device with one client and zero per-service code",
+      "Honest caveat: shipped mount-* binds at /n/remote (single slot); peer-id lives in the ticket",
+      "Per-peer /n/<peer-id> mounts are a queued follow-up (the 9P session/namespace seam)",
+      "Status / honest limits: blocking streaming opens use StreamingImportFs (one stream per open)"
+    ],
+    "prerequisites": [
+      "remotefs-import-half"
+    ],
+    "relatedConcepts": [
+      "remotefs-import-half",
+      "devices-import-for-free",
+      "9p-over-iroh-quic",
+      "streaming-import-fs",
+      "key-is-the-address"
+    ],
+    "demoRefs": [
+      "Mount a remote peer and run a #cpu job on it"
+    ],
+    "sourceRefs": [
+      "docs/mesh-the-missing-half-of-9p.md:63-96",
+      "crates/wanix-cli/src/mount.rs",
+      "docs/recipes/02-mount-remote-peer.md:151-158",
+      "AGENTS.md:220-226"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/9p-over-iroh-quic",
+    "title": "9P over iroh QUIC under One ALPN",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "One iroh Endpoint per node carries 9P (ALPN wanix/9p/1) over QUIC bidi streams; the synchronous 9P core runs unchanged behind a held-runtime blocking bridge.",
+    "outline": [
+      "The one-liner and the ALPN",
+      "MeshNode binds one Endpoint per node from the persisted secret key",
+      "Public (n0 preset) vs bind_local/Minimal (testable/LAN)",
+      "Concurrency cap: MAX_CONCURRENT_SESSIONS=512, per-op deadline DEFAULT_OP_DEADLINE=30s, idle read not deadline-bound",
+      "The iroh version reality: pinned =1.0.0-rc.1, iroh-blobs 0.102, iroh-gossip 0.100",
+      "Status / honest limits: iroh is a release-candidate wave; blob plane upstream-flagged experimental"
+    ],
+    "prerequisites": [
+      "import-export-and-n"
+    ],
+    "relatedConcepts": [
+      "async-sync-bridge",
+      "key-is-the-address",
+      "one-identity-two-planes",
+      "streaming-import-fs"
+    ],
+    "demoRefs": [
+      "Live two-process import over QUIC"
+    ],
+    "sourceRefs": [
+      "crates/wanix-mesh/src/lib.rs",
+      "crates/wanix-mesh/src/node.rs",
+      "crates/wanix-mesh/src/handler.rs",
+      "crates/wanix-mesh/Cargo.toml"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/async-sync-bridge",
+    "title": "The async/sync Bridge Confined to One Seam",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "iroh and tokio live only in wanix-mesh; BlockingDuplex drives async QUIC streams on a held runtime Handle (never block_on on a worker), so the whole 9P core stays transport-free.",
+    "outline": [
+      "The one-liner and the single-edge rule",
+      "BlockingReader/BlockingWriter/BlockingDuplex on a held runtime Handle",
+      "Why never Handle::current().block_on on a worker thread (it panics)",
+      "Inbound in spawn_blocking; outbound FileSystem calls on non-runtime threads",
+      "Under the hood: duplex.rs is the single seam",
+      "Status / honest limits: this is why every other crate stays sync and iroh-free"
+    ],
+    "prerequisites": [
+      "9p-over-iroh-quic",
+      "crate-layering"
+    ],
+    "relatedConcepts": [
+      "9p-over-iroh-quic",
+      "crate-layering",
+      "remotefs-import-half"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-mesh/src/duplex.rs",
+      "crates/wanix-mesh/src/lib.rs",
+      "AGENTS.md:135-138"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "concepts/streaming-import-fs",
+    "title": "StreamingImportFs — One Stream per Blocking Open",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "A near-never-EOF read like #agent/<id>/events would freeze the serial connection, so each blocking streaming open dials its own dedicated bidi stream.",
+    "outline": [
+      "The one-liner and the deadlock it avoids",
+      "Which opens need it: #agent/<id>/events, #agent/<id>/reply, #plumb/<topic>/recv",
+      "Each such open dials its own dedicated bidi stream",
+      "Under the hood: streaming.rs",
+      "Status / honest limits: this is the mesh analogue of the single-frame serve caveat"
+    ],
+    "prerequisites": [
+      "9p-over-iroh-quic",
+      "blocking-stream-eof-contract"
+    ],
+    "relatedConcepts": [
+      "9p-over-iroh-quic",
+      "blocking-stream-eof-contract",
+      "import-export-and-n",
+      "agent-device"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-mesh/src/streaming.rs",
+      "docs/mesh-the-missing-half-of-9p.md"
+    ],
+    "targetWords": 800
+  },
+  {
+    "slug": "concepts/five-hostile-peer-corrections",
+    "title": "Five Hostile-Peer Corrections",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "Frame-size ceiling vs OOM, honest seekability vs silent corruption, RAII fid/tag guards vs leaks, bounded read_dir, and server-side append — the difference between a client that demos and one you'd trust.",
+    "outline": [
+      "The one-liner and why a hostile server is the threat model",
+      "1. Frame-size ceiling <= negotiated msize before allocating a body",
+      "2. Honest seekability: a Tgetattr at open decides regular-file; service streams refuse seek",
+      "3. RAII ScratchFid/RemoteFile guards that clunk on every drop path including panic",
+      "4. Bounded read_dir cookie loops (max entries, max iterations, bail on non-advancing cookie)",
+      "5. O_APPEND delegated to the server, never raced client-side",
+      "Status / honest limits: these harden the importer against a hostile peer, not against a hostile transport"
+    ],
+    "prerequisites": [
+      "remotefs-import-half"
+    ],
+    "relatedConcepts": [
+      "remotefs-import-half",
+      "the-9p-contract",
+      "capability-is-a-bind"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-9p-client/src/remote.rs",
+      "docs/mesh-the-missing-half-of-9p.md"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/key-is-the-address",
+    "title": "The Key Is the Address",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "A node's persisted ed25519 public key is simultaneously its identity and its dialable iroh EndpointId, so 'mount this node' and 'trust this node' are the same bytes.",
+    "outline": [
+      "The one-liner: the same 32 bytes authorize and locate",
+      "~/.wanix/node.key (0600, stable across restarts), raw seed",
+      "PeerId is the raw 32-byte public key; equality by key; hex is the 64-char display",
+      "Public key = identity AND iroh EndpointId (dialable address)",
+      "Why this makes /n/<node> workable on the open internet",
+      "Status / honest limits: in-band Tauth stays ENOSYS forever; identity is proven by the QUIC handshake"
+    ],
+    "prerequisites": [
+      "9p-over-iroh-quic"
+    ],
+    "relatedConcepts": [
+      "persisted-ed25519-identity",
+      "tauth-is-enosys",
+      "capability-is-a-bind",
+      "attach-policy"
+    ],
+    "demoRefs": [
+      "Mount a remote peer and run a #cpu job on it"
+    ],
+    "sourceRefs": [
+      "crates/wanix-id/src/identity.rs",
+      "crates/wanix-id/src/peer.rs",
+      "docs/mesh-the-missing-half-of-9p.md:913-944",
+      "README.md:42-46"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/persisted-ed25519-identity",
+    "title": "Persisted ed25519 Node Identity",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "A 32-byte ed25519 seed at ~/.wanix/node.key (0600, stable across restarts) is the node identity; the QUIC handshake authenticates it so in-band Tauth stays ENOSYS.",
+    "outline": [
+      "The one-liner and NodeIdentity::load_or_create",
+      "The seed is serialized raw (not via an iroh re-export)",
+      "Why the file is 0600 and stable across restarts",
+      "The server never trusts a client-claimed uname (reads connection.remote_id()); 0-RTT never used",
+      "Status / honest limits: no public multi-user auth; per-principal namespaces unfinished"
+    ],
+    "prerequisites": [
+      "key-is-the-address"
+    ],
+    "relatedConcepts": [
+      "key-is-the-address",
+      "tauth-is-enosys",
+      "attach-policy",
+      "trust-boundary-gaps"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-id/src/identity.rs",
+      "crates/wanix-mesh/src/handler.rs",
+      "docs/recipes/02-mount-remote-peer.md:25-31"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/tauth-is-enosys",
+    "title": "Tauth Is ENOSYS (Identity Is a Transport Property)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "In-band 9P authentication is deliberately unimplemented; the QUIC handshake authenticates the peer's key in the transport, so factotum becomes a property of the connection.",
+    "outline": [
+      "The one-liner: identity is below 9P, not inside it",
+      "Why Plan 9's factotum maps to the QUIC handshake",
+      "handle_attach decodes uname/aname but the trust gate is keyed on the verified PeerId",
+      "Tauth returns ENOSYS in session.rs",
+      "Status / honest limits: over plain stdio/TCP there is no transport identity at all — local-trust only"
+    ],
+    "prerequisites": [
+      "key-is-the-address"
+    ],
+    "relatedConcepts": [
+      "key-is-the-address",
+      "attach-policy",
+      "the-9p-contract",
+      "trust-boundary-gaps"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-9p/src/session.rs:71-74",
+      "crates/wanix-mesh/src/handler.rs",
+      "AGENTS.md:246-247"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/capability-is-a-bind",
+    "title": "A Capability Is a Bind",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "visionary",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "A grant is not an ACL; it re-roots the peer's namespace at a subpath via SubtreeFs gated by read/write rights, so there is no 'outside' for them to name.",
+    "outline": [
+      "The one-liner: authorization is a re-rooted namespace, not an ACL",
+      "A matching Grant::authorize() materializes into a SubtreeFs at the grant prefix with Rights",
+      "'They cannot name a path outside it because, in their namespace, there is no outside'",
+      "The symlink-escape fix: confine_to_prefix canonicalizes and rejects out-of-prefix targets",
+      "Default-deny, keyed by the cryptographically verified key",
+      "Status / honest limits: exec/agent devices stay local-trust until public auth lands; single-attach-per-connection"
+    ],
+    "prerequisites": [
+      "attach-policy",
+      "subtreefs-confine-to-prefix"
+    ],
+    "relatedConcepts": [
+      "attach-policy",
+      "subtreefs-confine-to-prefix",
+      "key-is-the-address",
+      "trust-boundary-gaps",
+      "send-agent-to-the-data"
+    ],
+    "demoRefs": [
+      "Capability grant enforced over the wire",
+      "Capability is a bind, enforced over TCP and QUIC"
+    ],
+    "sourceRefs": [
+      "crates/wanix-vfs/src/subtree.rs:58-176",
+      "crates/wanix-id/src/grant.rs",
+      "docs/mesh-the-missing-half-of-9p.md:511-518",
+      "docs/mesh-the-missing-half-of-9p.md:562-573"
+    ],
+    "targetWords": 1500
+  },
+  {
+    "slug": "concepts/attach-policy",
+    "title": "AttachPolicy — the Trust Boundary as One Pure Function",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "evaluate(peer, aname) -> Option<Authorization> is the entire attach gate; None denies, and the boundary lives in one auditable place out of the wire code.",
+    "outline": [
+      "The one-liner and the signature",
+      "GrantTablePolicy consults a default-deny GrantTable matched exactly by (peer, aname), no wildcards",
+      "Arc<RwLock<Vec<Grant>>> shared across clones so it is live-editable",
+      "P9Server::with_policy installs the scoped root at attach or denies with EACCES; with_policy(None) is byte-for-byte the old server",
+      "Why one pure function is auditable",
+      "Status / honest limits: grant lifecycle / #grant device not yet wired; revocation denies the next attach"
+    ],
+    "prerequisites": [
+      "capability-is-a-bind"
+    ],
+    "relatedConcepts": [
+      "capability-is-a-bind",
+      "subtreefs-confine-to-prefix",
+      "key-is-the-address",
+      "tauth-is-enosys"
+    ],
+    "demoRefs": [
+      "Capability grant enforced over the wire"
+    ],
+    "sourceRefs": [
+      "crates/wanix-id/src/policy.rs",
+      "crates/wanix-id/src/grant.rs",
+      "docs/mesh-the-missing-half-of-9p.md:663-687"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/subtreefs-confine-to-prefix",
+    "title": "SubtreeFs / confine_to_prefix",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "SubtreeFs re-roots a backing FS at a prefix and gates every method through one central require(right) check; confine_to_prefix closes the symlink-escape hole.",
+    "outline": [
+      "The one-liner and the central require(Read|Write) check",
+      "Re-rooting only rewrites the path string, which is why a symlink could escape",
+      "confine_to_prefix: host-backed FS canonicalizes and rejects out-of-prefix; opaque MemFs is a no-op",
+      "Even code holding a SubtreeFs cannot mutate past its grant",
+      "Under the hood: where SubtreeFs lives (wanix-vfs, not wanix-id)",
+      "Status / honest limits: the confinement is per-filesystem; opaque symlink stores cannot suffer the escape"
+    ],
+    "prerequisites": [
+      "namespace-binding",
+      "normalizedpath"
+    ],
+    "relatedConcepts": [
+      "capability-is-a-bind",
+      "attach-policy",
+      "host-not-ambient-authority",
+      "normalizedpath"
+    ],
+    "demoRefs": [
+      "Capability is a bind, enforced over TCP and QUIC"
+    ],
+    "sourceRefs": [
+      "crates/wanix-vfs/src/subtree.rs:58-176",
+      "crates/wanix-fs/src/traits.rs:207-231"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/devices-import-for-free",
+    "title": "Devices Import Across the Mesh for Free",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "Because every service device is a plain FileSystem, /n/A/#kv/<key> and /n/A/#agent work through the one 9P client with no special-cased code.",
+    "outline": [
+      "The one-liner: the namespace is the integration layer",
+      "Read /n/A/#kv/<key> and drive a peer's #cas with one 9P client, zero per-service network code",
+      "The control experiment: #kv crosses the mesh with no #kv-aware code anywhere on the path",
+      "The full Plan 9 cast slice by slice (each impl FileSystem + one bind)",
+      "Why a brand-new device gets mesh import + 9P export + cockpit inspector for free",
+      "Status / honest limits: blocking streaming devices need StreamingImportFs; exec devices stay local-trust"
+    ],
+    "prerequisites": [
+      "import-export-and-n",
+      "service-devices"
+    ],
+    "relatedConcepts": [
+      "import-export-and-n",
+      "service-devices",
+      "kv-key-value-device",
+      "send-agent-to-the-data",
+      "missing-half-of-9p"
+    ],
+    "demoRefs": [
+      "#kv service device crossing the mesh for free",
+      "An agent reads a remote key store over the mesh"
+    ],
+    "sourceRefs": [
+      "docs/mesh-the-missing-half-of-9p.md:1237-1246",
+      "docs/mesh-the-missing-half-of-9p.md:1319-1338",
+      "crates/wanix-kv/src/lib.rs:120",
+      "docs/mesh-blueprint.md"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/one-identity-two-planes",
+    "title": "One Identity, Two Planes (9P Control + iroh-blobs Data)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "The 9P control plane and the BLAKE3 bulk data plane (iroh-blobs) accept on the same identity-bound endpoint, so a peer reaches both over one QUIC path.",
+    "outline": [
+      "The one-liner and the two ALPNs",
+      "Control plane: 9P over wanix/9p/1; data plane: iroh-blobs over its ALPN",
+      "IrohCasStore fetches blobs from provider tickets on the same shared endpoint",
+      "BLAKE3-verified end-to-end while streaming, clamped to MAX_BLOB_SIZE",
+      "Why content_hash is the offload hook",
+      "Status / honest limits: most filesystems return Ok(None); the blob-fetch path is not fully wired in default serve; blob plane experimental"
+    ],
+    "prerequisites": [
+      "9p-over-iroh-quic",
+      "content-addressed-data-plane"
+    ],
+    "relatedConcepts": [
+      "content-addressed-data-plane",
+      "cas-content-addressed-store",
+      "wanix-capsule",
+      "9p-over-iroh-quic"
+    ],
+    "demoRefs": [
+      "Capsule round-trip with dedup and tamper-detection"
+    ],
+    "sourceRefs": [
+      "crates/wanix-mesh/src/node.rs",
+      "crates/wanix-mesh/src/cas.rs",
+      "crates/wanix-fs/src/traits.rs:182-205"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "concepts/content-addressed-data-plane",
+    "title": "Content-Addressed Data Plane (content_hash)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "A FileSystem can expose a BLAKE3 content_hash so CAS-aware clients fetch large files as verified blobs peer-to-peer instead of crawling them through bounded 9P reads.",
+    "outline": [
+      "The one-liner and the 256 KiB threshold",
+      "content_hash is the ONLY hook by which the 9P control plane offloads bulk bytes",
+      "Default Ok(None); a CasFs decorator overrides; must return None when open for write",
+      "The hash is carried out of band (never appended to a fixed-shape 9P response)",
+      "Status / honest limits: most filesystems return Ok(None); offload is a hook, not a fully wired path in default serve"
+    ],
+    "prerequisites": [
+      "the-filesystem-trait",
+      "the-9p-contract"
+    ],
+    "relatedConcepts": [
+      "cas-content-addressed-store",
+      "one-identity-two-planes",
+      "end-to-end-hash-verification",
+      "the-filesystem-trait"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-fs/src/traits.rs:182-205",
+      "crates/wanix-fs/src/lib.rs:22-31",
+      "crates/wanix-cas/src/casfs.rs"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "devices/kv",
+    "title": "#kv — Key/Value Store",
+    "section": "devices",
+    "pageType": "reference",
+    "audience": "developer",
+    "persona": "Maya, the curious app developer (builder mode)",
+    "oneLiner": "#kv/<key> is a file: read returns the value (snapshot-on-open), write commits the whole buffer on close, listing #kv enumerates keys.",
+    "outline": [
+      "#kv/<key> RDONLY -> KvReadFile serving a snapshot taken at open",
+      "#kv/<key> WRONLY|CREAT|TRUNC -> KvWriteFile, buffers and commits on close under one write lock",
+      "ensure_key creates the key eagerly at open (the Tlcreate flow)",
+      "list #kv (read_dir) enumerates keys; remove deletes the entry",
+      "Path rule: single segment is a key; any / -> NotFound. Modes: value 0o666, dir 0o555",
+      "Status / honest limits: in-memory Arc<RwLock<BTreeMap>>; values do not survive a serve restart — persist via a capsule"
+    ],
+    "prerequisites": [
+      "service-devices",
+      "the-filesystem-trait"
+    ],
+    "relatedConcepts": [
+      "kv-smallest-database",
+      "blocking-stream-eof-contract",
+      "devices-import-for-free",
+      "wanix-capsule"
+    ],
+    "demoRefs": [
+      "#kv-backed HTTP counter (Recipe 04)"
+    ],
+    "sourceRefs": [
+      "crates/wanix-kv/src/lib.rs:1-177",
+      "crates/wanix-kv/src/files.rs:7-76",
+      "docs/recipes/04-tiny-http-app-with-kv.md:186-211"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/kv-smallest-database",
+    "title": "#kv as the Smallest Database",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "visionary",
+    "persona": "Maya, the curious app developer (builder mode)",
+    "oneLiner": "In-process BTreeMap state that the mesh, handler, and cockpit all treat as a file; durable backing is a capsule, not a blur.",
+    "outline": [
+      "The one-liner: the smallest 'real database inside Wanix' because it is a filesystem, not a database",
+      "Read-modify-write a counter; the handler is stateless, only #kv survives",
+      "Why files-under-apps would degrade (write churn, durability clarity, mesh transparency)",
+      "State lives only while serve lives; freeze interesting keys into a capsule for durability",
+      "Status / honest limits: in-memory only; durability is an explicit follow-up"
+    ],
+    "prerequisites": [
+      "kv-device"
+    ],
+    "relatedConcepts": [
+      "kv-device",
+      "wanix-capsule",
+      "http-app-route",
+      "devices-import-for-free"
+    ],
+    "demoRefs": [
+      "#kv-backed HTTP counter (Recipe 04)"
+    ],
+    "sourceRefs": [
+      "crates/wanix-kv/src/lib.rs:6-21",
+      "docs/recipes/04-tiny-http-app-with-kv.md:186-211"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "devices/pipe",
+    "title": "#pipe — In-Memory Byte Channels",
+    "section": "devices",
+    "pageType": "reference",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "#pipe/new allocates a channel; <id>/data is a unidirectional read/write end with EOF on last-writer drop, composing tasks like a Unix pipe.",
+    "outline": [
+      "#pipe/new RDONLY -> allocates a channel on first read, returns <id>\\n",
+      "#pipe/<id>/id RDONLY snapshot of the id",
+      "#pipe/<id>/data: exactly one direction per handle; both read+write -> NotSupported; create|truncate rejected",
+      "Read end drains buffered bytes blocking until data or EOF; write end appends, decrements writer count on Drop",
+      "EOF only when no buffered bytes AND last writer dropped; 50ms re-check is not an EOF signal",
+      "The blocking-stream EOF contract reference",
+      "Status / honest limits: in-memory; unidirectional handles only"
+    ],
+    "prerequisites": [
+      "service-devices",
+      "blocking-stream-eof-contract"
+    ],
+    "relatedConcepts": [
+      "blocking-stream-eof-contract",
+      "plumb-device",
+      "service-devices"
+    ],
+    "demoRefs": [
+      "#pipe Unix-pipe composition"
+    ],
+    "sourceRefs": [
+      "crates/wanix-pipe/src/lib.rs:1-89",
+      "crates/wanix-pipe/src/channel.rs:7-96",
+      "crates/wanix-pipe/src/open.rs:14-44",
+      "crates/wanix-pipe/src/files.rs:90-145"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "devices/plumb",
+    "title": "#plumb — Plumber Bus",
+    "section": "devices",
+    "pageType": "reference",
+    "audience": "developer",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "#plumb/<topic>/send publishes a newline-JSON {kind,from,to,body} envelope; <topic>/recv reads envelopes received since it opened.",
+    "outline": [
+      "A topic directory exists on demand; any name is a valid topic, no allocation step",
+      "#plumb/<topic>/send write-only: one write = one envelope, kind required, deny_unknown_fields, 64 KiB cap",
+      "#plumb/<topic>/recv read-only: blocking stream of newline-JSON envelopes received since open",
+      "Delivery is best-effort epidemic, NOT a durable queue: a late subscriber misses earlier messages, no ack",
+      "LocalPlumbPort (single-node) vs GossipPlumbPort (iroh-gossip topic per topic)",
+      "recv LineBuffer capped at 16x MAX_ENVELOPE_LEN, drops oldest under flood; topic names <= 255 bytes",
+      "Status / honest limits: live recv over a single serve connection deadlocks — cockpit self-check probes publish only"
+    ],
+    "prerequisites": [
+      "service-devices",
+      "blocking-stream-eof-contract"
+    ],
+    "relatedConcepts": [
+      "best-effort-epidemic-delivery",
+      "blocking-stream-eof-contract",
+      "single-frame-serve-caveat",
+      "send-agent-to-the-data"
+    ],
+    "demoRefs": [
+      "Two agents, two machines, one conversation"
+    ],
+    "sourceRefs": [
+      "crates/wanix-plumb/src/lib.rs:1-148",
+      "crates/wanix-plumb/src/files.rs:31-94",
+      "crates/wanix-plumb/src/envelope.rs:1-42",
+      "crates/wanix-plumb/src/buffer.rs:16-79"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/best-effort-epidemic-delivery",
+    "title": "Best-Effort Epidemic Delivery (not a queue)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "#plumb has no durability or ack: a late subscriber misses earlier messages; durable handoff belongs in #kv or a capsule.",
+    "outline": [
+      "The one-liner: epidemic, broker-less, best-effort",
+      "Why this is the right shape for agent coordination (typed messages by kind)",
+      "What it is NOT: no durability, no acknowledgement, lossy under flood",
+      "Where to put durable handoff instead (#kv or a capsule)",
+      "Status / honest limits: the GossipPlumbPort maps each topic to an iroh-gossip topic"
+    ],
+    "prerequisites": [
+      "plumb-device"
+    ],
+    "relatedConcepts": [
+      "plumb-device",
+      "kv-device",
+      "send-agent-to-the-data",
+      "single-frame-serve-caveat"
+    ],
+    "demoRefs": [
+      "Two agents, two machines, one conversation"
+    ],
+    "sourceRefs": [
+      "crates/wanix-plumb/src/envelope.rs:1-10",
+      "crates/wanix-plumb/src/local.rs:139-147",
+      "docs/mesh-the-missing-half-of-9p.md:2229-2234"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/blocking-stream-eof-contract",
+    "title": "The Blocking-Stream EOF Contract",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "#pipe, #plumb recv, and #agent events block until data or true EOF (Ok(0)); a periodic 50ms re-check never falsely signals end-of-stream.",
+    "outline": [
+      "The one-liner: Ok(0) only at true end-of-stream",
+      "The shared rule across all live-stream devices",
+      "Why the 50ms wait_timeout re-check bounds a missed wakeup but is not an EOF signal",
+      "How to implement it correctly in a new device",
+      "Status / honest limits: a blocking recv over the single-frame serve connection cannot interleave with a write"
+    ],
+    "prerequisites": [
+      "service-devices"
+    ],
+    "relatedConcepts": [
+      "pipe-device",
+      "plumb-device",
+      "agent-device",
+      "single-frame-serve-caveat",
+      "streaming-import-fs"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-pipe/src/channel.rs:7-15",
+      "crates/wanix-agent/src/engine.rs:139-166",
+      "crates/wanix-plumb/src/buffer.rs:16-30"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "devices/cas",
+    "title": "#cas — Content-Addressed Store (venti)",
+    "section": "devices",
+    "pageType": "reference",
+    "audience": "developer",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "#cas/<hash> reads a verified blob, #cas/ingest is write-then-read-hash, #cas/have/<hash> returns 1\\n or 0\\n.",
+    "outline": [
+      "#cas/<hash> read-only: returns the store-verified bytes, ContentHash::from_hex validates input",
+      "#cas/ingest: write bytes + close stores a blob (commit on Drop); a subsequent read returns the hex hash of the last ingest",
+      "#cas/have/<hash> read-only presence probe: 1\\n if present, 0\\n if not",
+      "The keyspace is NOT enumerable by design: root lists only ingest and have/; have/ lists nothing",
+      "Every read re-hashes bytes end-to-end; equal bytes dedup to one entry; owner-private local store",
+      "#cas also backs .wcap capsules",
+      "Status / honest limits: ingest capped at MAX_BLOB_SIZE (256 MiB); over-cap poisons the handle; reading ingest before any ingest returns empty string"
+    ],
+    "prerequisites": [
+      "service-devices",
+      "content-addressed-data-plane"
+    ],
+    "relatedConcepts": [
+      "end-to-end-hash-verification",
+      "content-addressed-data-plane",
+      "wanix-capsule",
+      "one-identity-two-planes"
+    ],
+    "demoRefs": [
+      "#cas write-then-read-hash round trip"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cas/src/device.rs:1-179",
+      "crates/wanix-cas/src/device/files.rs:47-125",
+      "crates/wanix-cas/src/store.rs:113-132",
+      "crates/wanix-cas/src/local.rs"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/end-to-end-hash-verification",
+    "title": "End-to-End Hash Verification",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "Every #cas read re-hashes bytes so a hostile peer cannot serve content under a wrong address; ingest is size-capped at write time.",
+    "outline": [
+      "The one-liner: a tampered blob is rejected with HashMismatch, never served under the wrong address",
+      "verify_hash on every get; the content address IS the integrity check",
+      "Ingest size cap at write time; over-cap stream poisons the handle so no truncated blob is published",
+      "Over the mesh: IrohCasStore verifies while streaming",
+      "Status / honest limits: BLAKE3 content addressing; the blob plane is upstream-experimental"
+    ],
+    "prerequisites": [
+      "cas-device",
+      "content-addressed-data-plane"
+    ],
+    "relatedConcepts": [
+      "cas-device",
+      "wanix-capsule",
+      "one-identity-two-planes",
+      "content-addressed-data-plane"
+    ],
+    "demoRefs": [
+      "Capsule round-trip with dedup and tamper-detection"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cas/src/store.rs:113-132",
+      "crates/wanix-cas/src/device/files.rs:90-100",
+      "crates/wanix-mesh/src/cas.rs"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/wanix-capsule",
+    "title": "wanix capsule — CAS-Backed World Snapshots",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "Freeze a world into content-addressed blobs whose deterministic manifest-blob hash is the capsule id; dedup, integrity-verified, fetchable over the mesh blob plane.",
+    "outline": [
+      "The one-liner: venti applied to a whole world",
+      "Every file becomes a blob (identical bytes dedup); a sorted WorldManifest is itself a blob; its hash is the capsule id",
+      "save DIR / load CAPSULE_ID DIR; --store DIR",
+      "Defenses: MAX_MANIFEST_ENTRIES, CAPSULE_MANIFEST_MAX_BYTES, MAX_BLOB_SIZE, NormalizedPath re-validation, re-hash on every get",
+      "Over the mesh: IrohCasStore resolves blobs from provider tickets",
+      "Status / honest limits: there is NO .wcap archive file in the shipped CLI; not portable: live peers/tickets, ephemeral fds, live #kv state, symlinks/perms/xattrs"
+    ],
+    "prerequisites": [
+      "cas-device",
+      "end-to-end-hash-verification"
+    ],
+    "relatedConcepts": [
+      "cas-device",
+      "end-to-end-hash-verification",
+      "one-identity-two-planes",
+      "kv-smallest-database",
+      "portable-worlds"
+    ],
+    "demoRefs": [
+      "Freeze and restore a world to a capsule"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cas/src/capsule.rs",
+      "crates/wanix-cli/src/capsule.rs",
+      "docs/recipes/03-freeze-world-to-capsule.md",
+      "crates/wanix-mesh/src/cas.rs"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "devices/cpu",
+    "title": "#cpu — Exec Plane (cpu(1) over the Mesh)",
+    "section": "devices",
+    "pageType": "reference",
+    "audience": "developer",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "A caller reverse-exports a scoped read-only namespace and a remote acceptor runs a task whose world is that export — Plan 9 cpu(1) over QUIC, grant-allowlisted.",
+    "outline": [
+      "Dial a node (ALPN wanix/cpu/1), open two role-sorted bidi streams (control + export, 1-byte role discriminator first)",
+      "Reverse-export a scoped namespace; the acceptor runs run_job: allocate_root -> task.bind(world,'.','.') -> configure -> start",
+      "ExportScope: job subtree as a SubtreeFs, read-only by default (--write to opt in), only explicitly granted services",
+      "CpuAcceptor is grant-allowlisted: a non-allowlisted peer's connection is closed before any stream is accepted",
+      "The wanix-rust cpu CLI grammar (--node, --, --cwd, --write)",
+      "Status / honest limits: v1 output is a single batch after start returns (not streamed); CpuEvent::Cancel stops the caller draining, not the remote computation"
+    ],
+    "prerequisites": [
+      "import-export-and-n",
+      "capability-is-a-bind"
+    ],
+    "relatedConcepts": [
+      "send-agent-to-the-data",
+      "capability-is-a-bind",
+      "subtreefs-confine-to-prefix",
+      "the-task-device"
+    ],
+    "demoRefs": [
+      "Mount a remote peer and run a #cpu job on it"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cpu/src/lib.rs",
+      "crates/wanix-cpu/src/scope.rs",
+      "crates/wanix-cpu/src/acceptor.rs",
+      "crates/wanix-mesh/src/cpu/handler.rs",
+      "crates/wanix-cli/src/cpu/run.rs"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "concepts/send-agent-to-the-data",
+    "title": "Send the Agent to the Data (Mesh Reach)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "visionary",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "Instead of dragging files to the compute, run the job ON the node holding the data against its fast local namespace, reverse-exporting the caller's files — Plan 9 cpu(1) over the open internet.",
+    "outline": [
+      "The one-liner: mount there, run here",
+      "Bind /n/<peer> and the agent's cat/write/ls extend unchanged to a peer's #kv/#cas/files",
+      "#cpu sends the agent to the data; #plumb lets two agents on two machines hand off by typed message",
+      "The composition #agent + #cpu + mesh = agents and compute that compose across machines",
+      "Default read-only jail; opt into --write",
+      "Status / honest limits: exec/agent devices are local-trust only; #cpu cancel doesn't stop remote computation"
+    ],
+    "prerequisites": [
+      "cpu-device",
+      "agent-device",
+      "devices-import-for-free"
+    ],
+    "relatedConcepts": [
+      "cpu-device",
+      "agent-device",
+      "devices-import-for-free",
+      "plumb-device",
+      "capability-is-a-bind"
+    ],
+    "demoRefs": [
+      "Two agents, two machines, one conversation",
+      "An agent reads a remote key store over the mesh"
+    ],
+    "sourceRefs": [
+      "docs/mesh-the-missing-half-of-9p.md:1824-1917",
+      "docs/mesh-the-missing-half-of-9p.md:2092-2199",
+      "crates/wanix-cpu/src/scope.rs"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "devices/agent",
+    "title": "#agent — an LLM Session as Files",
+    "section": "devices",
+    "pageType": "reference",
+    "audience": "all",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "new/prompt/events/reply/pending/ctl/status — the entire LLM contract reduces to read/write on a small file tree, with approvals as files.",
+    "outline": [
+      "#agent/new RDONLY: first read allocates a session, returns <id>\\n",
+      "#agent/<id>/id, /prompt (write a turn), /events (streaming JSONL), /reply (single final message + EOF), /status",
+      "#agent/<id>/pending (JSON array of open approvals), /ctl (close, approve <req>, deny <req>)",
+      "Approvals are files: a powerful action parks in pending; nothing runs until a human writes approve <id> to ctl",
+      "Engine duality: served #agent uses deterministic FakeEngine; CLI wanix agent defaults to CodexEngine (local-trust); identical wire shape",
+      "Delegation: RouterEngine/RemoteEngine; POST /agent exposes the agent as a loopback network service",
+      "Status / honest limits: served #agent is NOT a real LLM; ctl supports only close/approve/deny; reply/events use StreamingImportFs over the mesh"
+    ],
+    "prerequisites": [
+      "service-devices",
+      "approvals-as-files"
+    ],
+    "relatedConcepts": [
+      "approvals-as-files",
+      "fakeengine-vs-codex",
+      "agents-as-operators",
+      "send-agent-to-the-data",
+      "blocking-stream-eof-contract"
+    ],
+    "demoRefs": [
+      "Agent repair demo (Recipe 01)",
+      "Two agents collaborate (Recipe 05)",
+      "Run Agent Repair Demo"
+    ],
+    "sourceRefs": [
+      "crates/wanix-agent/src/lib.rs:56-231",
+      "crates/wanix-agent/src/files.rs:23-185",
+      "crates/wanix-agent/src/engine.rs:27-166",
+      "crates/wanix-agent/src/path.rs:3-26"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "concepts/approvals-as-files",
+    "title": "Approvals as Files (the Trust Gate)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "Powerful actions park in #agent/<id>/pending; nothing runs until a human writes approve <req> to #agent/<id>/ctl.",
+    "outline": [
+      "The one-liner: the trust boundary is a file",
+      "A powerful action (edit/command) parks as an approval request visible in pending",
+      "Resolution flows through CtlFile::write -> AgentDevice::resolve -> AgentSession::resolve",
+      "The FakeEngine's approve:-prefixed prompt contract exercises the gate deterministically",
+      "Why approvals-as-files is the legibility story for agents",
+      "Status / honest limits: ctl currently supports only close/approve/deny; any other verb is NotSupported"
+    ],
+    "prerequisites": [
+      "agent-device"
+    ],
+    "relatedConcepts": [
+      "agent-device",
+      "fakeengine-vs-codex",
+      "agents-as-operators",
+      "traceable-namespaces"
+    ],
+    "demoRefs": [
+      "Agent repair demo (Recipe 01)",
+      "Two agents collaborate (Recipe 05)"
+    ],
+    "sourceRefs": [
+      "crates/wanix-agent/src/files.rs:155-185",
+      "crates/wanix-agent/src/fake.rs:84-161",
+      "docs/recipes/01-repair-broken-qjs.md:226-234"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "concepts/agents-as-operators",
+    "title": "Agents Are the Operators Namespaces Always Needed",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "visionary",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "Per-process namespaces and file-shaped services were too fiddly for humans but native to an LLM that reads by cat, mutates by write, and lists by ls.",
+    "outline": [
+      "The one-liner and the core insight",
+      "'The thing humans found too sharp to hold all the time is the thing an agent reaches for naturally'",
+      "Wanix already had the agent; what it lacked was reach — the mesh supplies it",
+      "cat state, write to mutate, ls capabilities, write a control file to spawn work",
+      "Why this is the strongest 'why now'",
+      "Status / honest limits: served #agent = FakeEngine; this is a thesis, the mesh/agent layer has no ADRs yet"
+    ],
+    "prerequisites": [
+      "per-process-namespaces",
+      "agent-device"
+    ],
+    "relatedConcepts": [
+      "agent-device",
+      "approvals-as-files",
+      "send-agent-to-the-data",
+      "missing-half-of-9p",
+      "traceable-namespaces"
+    ],
+    "demoRefs": [
+      "Agent repair demo (Recipe 01)"
+    ],
+    "sourceRefs": [
+      "docs/mesh-the-missing-half-of-9p.md:98-122",
+      "docs/mesh-the-missing-half-of-9p.md:2162-2192"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/fakeengine-vs-codex",
+    "title": "FakeEngine vs codex (Exec Local-Trust-Only)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "The served #agent uses the deterministic FakeEngine; the real codex app-server engine is local-trust only on the CLI path; the file shape is identical.",
+    "outline": [
+      "The one-liner: two engines, one wire shape",
+      "Served #agent binds FakeEngine because real codex requires auth + unattended execution",
+      "FakeEngine replies 'you said: <prompt>'; an approve:-prefixed prompt parks an approval",
+      "CLI wanix agent defaults to CodexEngine (codex app-server subprocess against a confined world), --fake falls back",
+      "Why the file shape is identical, so anything learned against the fake transfers",
+      "Status / honest limits: do not claim the served cockpit runs a real LLM; the agent-repair demo also keeps an in-process deterministic fallback"
+    ],
+    "prerequisites": [
+      "agent-device"
+    ],
+    "relatedConcepts": [
+      "agent-device",
+      "approvals-as-files",
+      "trust-boundary-gaps",
+      "fakeengine-vs-codex"
+    ],
+    "demoRefs": [
+      "Run Agent Repair Demo"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cli/src/serve/roots.rs:163-170",
+      "crates/wanix-cli/src/agent.rs:42-90",
+      "crates/wanix-agent/src/codex.rs:48-90",
+      "crates/wanix-agent/src/fake.rs"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "concepts/rooms-not-houses",
+    "title": "Rooms, Not Houses (Cheap Scalable Isolation)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "all",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "Each program runs in a ~0.25 MB WebAssembly sandbox instead of a ~10 MB OS process — ~40x smaller — so thousands of isolated programs run cheaply, scaling with your cores.",
+    "outline": [
+      "The one-liner: a locked room inside a shared building",
+      "~0.25 MB wasm vs ~10 MB process; 1,000 programs in a few hundred MB",
+      "Throughput scales with cores then holds flat; ~500k file ops/sec single, ~9M at 50",
+      "Per task pick the engine in the same secure room (qjs / compiled wasm / VM)",
+      "Status / honest limits: per-room memory isolation is real, but hard CPU/memory limits for arbitrary untrusted code are NOT wired yet — say 'cheap, scalable isolation', not 'safe for arbitrary untrusted code'"
+    ],
+    "prerequisites": [
+      "wasmtime-as-substrate",
+      "two-tiers-one-substrate"
+    ],
+    "relatedConcepts": [
+      "two-tiers-one-substrate",
+      "wasmtime-as-substrate",
+      "safe-for-untrusted-not-claimable",
+      "bounded-execution-policy"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "docs/scaling-eli5.md:9-66",
+      "docs/scaling-eli5.md:89-95"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "concepts/safe-for-untrusted-not-claimable",
+    "title": "Safe-for-Untrusted-Code Is Not Claimable Yet",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "Per-room memory isolation is real today, but Wasmtime CPU/memory hard limits (epoch/fuel preemption, linear-memory caps) are not wired up — so do not claim 'safe for arbitrary untrusted code'.",
+    "outline": [
+      "The one-liner stated as an honest limit",
+      "What IS true: per-room memory isolation, the WebAssembly sandbox boundary",
+      "What is NOT wired: epoch/fuel preemption, linear-memory caps",
+      "Why this matters for the agent/untrusted-code story",
+      "The correct public copy: 'cheap, scalable isolation'",
+      "Status / honest limits: this is the headline caveat for the whole scaling/agent narrative"
+    ],
+    "prerequisites": [
+      "rooms-not-houses"
+    ],
+    "relatedConcepts": [
+      "rooms-not-houses",
+      "bounded-execution-policy",
+      "wasmtime-as-substrate",
+      "trust-boundary-gaps"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "docs/scaling-eli5.md:89-95",
+      "crates/wanix-qjs/src/driver.rs"
+    ],
+    "targetWords": 800
+  },
+  {
+    "slug": "concepts/traceable-namespaces",
+    "title": "Traceable / Forkable Namespaces (Provenance, Rewind)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "visionary",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "Make agent work legible: every mutation points back to the command/task/agent-turn that caused it, and the past becomes a place you can mount, diff, fork, or restore.",
+    "outline": [
+      "The one-liner and the chain: prompt -> plan -> command -> task -> terminal log -> filesystem mutation -> result",
+      "'Managed Wanix state can rewind. External effects can be traced'",
+      "Show me what the agent changed; restore to before task 42",
+      "The first shipped slice: #plumb provenance + the qjs-shell mutation frame",
+      "Status / honest limits: EXPLORATORY product vision, NOT shipped; the doc is explicitly 'not an ADR'"
+    ],
+    "prerequisites": [
+      "agents-as-operators",
+      "plumb-device"
+    ],
+    "relatedConcepts": [
+      "agents-as-operators",
+      "approvals-as-files",
+      "wanix-capsule",
+      "plumb-device"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "docs/traceable-dynamic-namespaces.md:15-117",
+      "docs/traceable-dynamic-namespaces.md:189-198",
+      "docs/traceable-dynamic-namespaces.md:272-275"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "concepts/wanix-as-host",
+    "title": "Wanix-as-Host, not Browser-as-Host",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "The Rust port moves the runtime boundary out of Chrome: Wanix is a native OS core, and the browser becomes one excellent client of it.",
+    "outline": [
+      "The one-liner and the deliberate host-boundary move",
+      "If the tab is the kernel, the runtime dies when the tab dies — no long-running agents, scheduled jobs, scale-out, durable terminals",
+      "'Cloud when you need durability, local/browser when you need immediacy'",
+      "WASI inverted: an adapter INTO Wanix-owned semantics, not a delegation to the host",
+      "Status / honest limits: the Go Wanix is still BROADER as a browser web-OS; the Rust port is narrower but deeper — no parity claim"
+    ],
+    "prerequisites": [
+      "wasmtime-as-substrate"
+    ],
+    "relatedConcepts": [
+      "wasmtime-as-substrate",
+      "host-not-ambient-authority",
+      "missing-half-of-9p",
+      "browser-cockpit"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "docs/rust-vs-go-wanix.md:13-17",
+      "docs/rust-vs-go-wanix.md:104-135",
+      "docs/rust-vs-go-wanix.md:643-652"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/serve-composition-surface",
+    "title": "Serve as One Local Composition Surface",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "wanix-rust serve combines static HTTP, the discovery doc, direct 9P over WebSocket, the qjs-shell WebSocket, and the HTTP-app route on one listener without making the 9P server own HTTP/browser policy.",
+    "outline": [
+      "The one-liner and what serve composes",
+      "The four 9P transports (p9-stdio, p9-listen, p9-ws) plus serve",
+      "Default 127.0.0.1:7654; flags --root/positional, --addr/--listen, --bundle, --wanix-services, --once",
+      "Normal mode accepts concurrent HTTP + 9P WebSocket; --once is the deterministic test mode",
+      "One filesystem, many adapters — there is no per-route filesystem",
+      "Status / honest limits: no shutdown signal; uncapped detached thread per connection; single-frame-at-a-time WebSocket"
+    ],
+    "prerequisites": [
+      "the-9p-contract"
+    ],
+    "relatedConcepts": [
+      "discovery-document",
+      "wanix-services-device-set",
+      "three-serve-bundles",
+      "single-frame-serve-caveat",
+      "http-app-route"
+    ],
+    "demoRefs": [
+      "p9-stdio / p9-listen / p9-ws"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cli/src/serve.rs",
+      "crates/wanix-cli/src/serve/command.rs",
+      "crates/wanix-cli/src/serve/concurrent.rs",
+      "docs/adrs/0005-serve-and-client-handoffs.md"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/discovery-document",
+    "title": "Discovery Document (/.well-known/wanix.json)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "A single JSON contract advertising p9/rootfs/qjsShell/httpApp/ethernet routes, the v86 block, services, and bundle — clients consume it instead of hard-coding routes.",
+    "outline": [
+      "The one-liner and the contract role",
+      "routes.p9 (ws direct-binary-websocket, 9p2000.L, supportedProtocols), routes.rootfs/qjsShell/httpApp/ethernet",
+      "The v86 block, services.devices, services.drivers, selected bundle",
+      "Other well-known routes: /.well-known/export9p, /.well-known/rootfs.json (loopback-only)",
+      "Why clients consume discovery rather than hard-code",
+      "Status / honest limits: still hand-built format! JSON (typed-struct cleanup queued); ethernet status not-implemented"
+    ],
+    "prerequisites": [
+      "serve-composition-surface"
+    ],
+    "relatedConcepts": [
+      "serve-composition-surface",
+      "wanix-services-device-set",
+      "three-serve-bundles",
+      "loopback-only-handoffs",
+      "browser-cockpit"
+    ],
+    "demoRefs": [
+      "serve --bundle direct-v86"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cli/src/serve/discovery.rs",
+      "docs/adrs/0005-serve-and-client-handoffs.md:25-40"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/wanix-services-device-set",
+    "title": "--wanix-services Device Set",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "Binds #task, #term, #kv, #pipe, #plumb, #cas, #agent into the served namespace from one INSPECTABLE_SERVICE_DEVICES source, advertised as services.devices.",
+    "outline": [
+      "The one-liner and the single source of truth",
+      "serve_services_namespace binds the host root plus the service devices and #task",
+      "INSPECTABLE_SERVICE_DEVICES is advertised as services.devices; drivers derived from the registry as services.drivers",
+      "#agent here uses FakeEngine; qjs-shell WebSocket + HTTP-app route only available with --wanix-services",
+      "How to add a device to the bind set (for the add-a-device flow)",
+      "Status / honest limits: --wanix-services is refused on the public mesh endpoint (exec is local-trust)"
+    ],
+    "prerequisites": [
+      "service-devices",
+      "serve-composition-surface"
+    ],
+    "relatedConcepts": [
+      "service-devices",
+      "serve-composition-surface",
+      "discovery-document",
+      "fakeengine-vs-codex",
+      "extension-points"
+    ],
+    "demoRefs": [
+      "--wanix-services bind set"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cli/src/serve/roots.rs:119-172",
+      "crates/wanix-cli/src/mesh/serve.rs"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "concepts/three-serve-bundles",
+    "title": "Three Serve Bundles",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "user",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "fs9p (plain browser filesystem), workbench-fs9p (the cockpit / Code OSS shell), and direct-v86 (browser emulator handoff), each a generated HTML page that reads discovery.",
+    "outline": [
+      "The one-liner and the three names",
+      "fs9p: browser filesystem client over direct 9P",
+      "workbench-fs9p: the cockpit; static assets served from workbench/ tree (not the served root)",
+      "direct-v86: built-in v86 assets + a boot JSON with kernel/initrd/init readiness markers",
+      "Each page reads the discovery document",
+      "Status / honest limits: the bundle is still named workbench-fs9p (Slice 8 --bundle cockpit rename queued)"
+    ],
+    "prerequisites": [
+      "discovery-document"
+    ],
+    "relatedConcepts": [
+      "discovery-document",
+      "browser-cockpit",
+      "loopback-only-handoffs",
+      "serve-composition-surface"
+    ],
+    "demoRefs": [
+      "serve --bundle fs9p",
+      "serve --bundle direct-v86",
+      "serve --bundle workbench-fs9p"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cli/src/serve/html.rs",
+      "crates/wanix-cli/src/serve/direct_v86.rs:10",
+      "crates/wanix-cli/src/serve/http/routes.rs"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/browser-cockpit",
+    "title": "The Browser Cockpit (Operator Surface)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "visionary",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "A VS Code web extension that browses the namespace and drives every service device over direct 9P — inspect, agent-repair, duet, HTTP apps, self-check — as the human operator surface for the Rust runtime.",
+    "outline": [
+      "The one-liner and the WANIX: SYSTEM activity-bar tree",
+      "Direct-9P operator surface: every op is a 9P read/write through WanixP9Handle, no MessagePort/CBOR bridge",
+      "The service inspector (wanix-inspect:) and the allocator/metadata/control/stream classifier",
+      "The five live-wired features (inspect, agent repair, duet, HTTP apps, self-check)",
+      "Live-stream vs one-shot 9P access (walk+open at offset 0 for #term/#pipe/#plumb/#agent)",
+      "Status / honest limits: mesh panel/browser-as-peer queued; v86-shared-demo is a stub; #plumb recv publish-only; STATUS.md early FAIL sections superseded"
+    ],
+    "prerequisites": [
+      "three-serve-bundles",
+      "service-devices"
+    ],
+    "relatedConcepts": [
+      "direct-9p-operator-surface",
+      "live-stream-vs-one-shot",
+      "http-app-route",
+      "wanix-as-host",
+      "trust-boundary-gaps"
+    ],
+    "demoRefs": [
+      "serve --bundle workbench-fs9p --wanix-services (the cockpit)",
+      "Inspect service devices (wanix-inspect:)",
+      "Run Cockpit Self Check"
+    ],
+    "sourceRefs": [
+      "workbench/src/wanix/p9.ts",
+      "workbench/src/web/system-view.ts",
+      "workbench/src/web/service-inspector.ts",
+      "docs/integration/STATUS.md"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "concepts/direct-9p-operator-surface",
+    "title": "Direct-9P Operator Surface (No Side Channel)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "Every cockpit operation is a 9P file read or write through WanixP9Handle; there is no MessagePort/CBOR bridge and no globalThis.Wanix in the Rust-hosted path.",
+    "outline": [
+      "The one-liner and the no-side-channel rule",
+      "WanixP9Handle implements readDir/readFile/writeFile/mkdir/rename/copy/symlink/removeAll",
+      "The bootstrap passes the discovered direct-9P route into the extension",
+      "Negotiates Google.2 walkgetattr when available; preserves symlink metadata",
+      "Status / honest limits: the legacy MessagePort/CBOR bridge remains browser-embedded compatibility only"
+    ],
+    "prerequisites": [
+      "browser-cockpit",
+      "the-9p-contract"
+    ],
+    "relatedConcepts": [
+      "browser-cockpit",
+      "live-stream-vs-one-shot",
+      "discovery-document",
+      "the-9p-contract"
+    ],
+    "demoRefs": [
+      "serve --bundle workbench-fs9p --wanix-services (the cockpit)"
+    ],
+    "sourceRefs": [
+      "workbench/src/wanix/p9.ts",
+      "docs/adrs/0005-serve-and-client-handoffs.md:44-49"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/live-stream-vs-one-shot",
+    "title": "Live-Stream vs One-Shot 9P Access",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "p9.ts routes #term/#pipe/#plumb/#agent stream paths through walk+open at offset 0 instead of one-shot readFile/writeFile, because allocator-owned files reject create and subscriptions must not drain to EOF.",
+    "outline": [
+      "The one-liner and isLiveServiceStream()",
+      "Which paths are streaming: #term/*, #pipe/*/data, #plumb/*/send|recv, #agent/*/events",
+      "Live writable streams open O_WRONLY (pipe/plumb strictly unidirectional; term tolerates write-only)",
+      "Why one-shot readFile/writeFile would either allocate or drain to EOF",
+      "Status / honest limits: the same blocking-stream EOF reasoning the devices enforce, on the client side"
+    ],
+    "prerequisites": [
+      "browser-cockpit",
+      "blocking-stream-eof-contract"
+    ],
+    "relatedConcepts": [
+      "browser-cockpit",
+      "direct-9p-operator-surface",
+      "blocking-stream-eof-contract",
+      "streaming-import-fs"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "workbench/src/wanix/p9.ts:388-471",
+      "workbench/src/web/service-inspector.ts:182-387"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/http-app-route",
+    "title": "/.wanix/app/<name> HTTP Route",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Maya, the curious app developer (builder mode)",
+    "oneLiner": "A loopback HTTP route that resolves apps/<name>.{js,wasm}, allocates a #task, binds fds to trace files, runs it, and returns stdout with X-Wanix-Task-Id tracing headers.",
+    "outline": [
+      "The one-liner and the resolution path",
+      "Resolves apps/<name>.{js,wasm}, allocates #task/new/{qjs,wasm}, binds fd/1 and fd/2 to trace files under .wanix/http/",
+      "Sets cmd/dir/env (WANIX_HTTP_APP, WANIX_HTTP_TARGET), writes start, reads exit, returns stdout",
+      "X-Wanix-Task-Id / X-Wanix-Stdout-Path / X-Wanix-Stderr-Path headers",
+      "Loopback-only and --wanix-services-gated; WASI guests resolve #kv from the namespace root",
+      "Status / honest limits: on the cpu branch this route may lag; POST /agent is the structurally-identical shipped endpoint"
+    ],
+    "prerequisites": [
+      "wanix-services-device-set",
+      "kv-device",
+      "the-task-device"
+    ],
+    "relatedConcepts": [
+      "kv-device",
+      "kv-smallest-database",
+      "the-task-device",
+      "loopback-only-handoffs",
+      "serve-composition-surface"
+    ],
+    "demoRefs": [
+      "HTTP counter app + #kv"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cli/src/serve/http/app.rs",
+      "crates/wanix-cli/src/serve/http/agent.rs",
+      "workbench/src/web/http-app-demo.ts"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "concepts/loopback-only-handoffs",
+    "title": "Loopback-Only VM and App Handoffs",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "rootfs.json, the HTTP-app route, and direct-v86 are gated to loopback clients and prepared-root boot markers — launch contracts, not a VM supervisor.",
+    "outline": [
+      "The one-liner: launch/attachment contracts, not VM lifecycle",
+      "/.well-known/rootfs.json returns wanix-rootfs.v1 only to loopback when boot markers satisfied (403 otherwise)",
+      "Why the manifest is trusted-local (absolute host paths and launch argv)",
+      "The HTTP-app route and direct-v86 are loopback-gated too",
+      "Status / honest limits: QEMU/v86 are validated handoffs, not a supervisor; rootfs build and VM lifecycle out of scope; ethernet/vnet not-implemented"
+    ],
+    "prerequisites": [
+      "discovery-document"
+    ],
+    "relatedConcepts": [
+      "discovery-document",
+      "http-app-route",
+      "three-serve-bundles",
+      "wanix-as-host"
+    ],
+    "demoRefs": [
+      "serve --bundle direct-v86"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cli/src/serve/discovery.rs:93-152",
+      "crates/wanix-cli/src/serve/http/app.rs:61-66",
+      "docs/adrs/0005-serve-and-client-handoffs.md:56-61"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "concepts/single-frame-serve-caveat",
+    "title": "Single-Frame Serve Caveat (Live recv)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "The single-connection serve handles one frame at a time, so a blocking #plumb recv cannot interleave with a send; live delivery needs a second connection.",
+    "outline": [
+      "The one-liner and why it deadlocks",
+      "The serve 9P WebSocket handles one frame at a time per connection",
+      "A blocking Tread on #plumb/<topic>/recv cannot interleave with a write on the same connection",
+      "The cockpit self-check therefore probes only the publish path",
+      "The fix needs a second 9P connection or concurrent frame handling",
+      "Status / honest limits: this is the same shape StreamingImportFs solves on the mesh side; serve concurrency has no shutdown signal yet"
+    ],
+    "prerequisites": [
+      "plumb-device",
+      "serve-composition-surface"
+    ],
+    "relatedConcepts": [
+      "plumb-device",
+      "best-effort-epidemic-delivery",
+      "streaming-import-fs",
+      "browser-cockpit",
+      "trust-boundary-gaps"
+    ],
+    "demoRefs": [
+      "Run Cockpit Self Check"
+    ],
+    "sourceRefs": [
+      "docs/integration/STATUS.md:471-474",
+      "AGENTS.md:242-247",
+      "docs/mesh-blueprint.md:143"
+    ],
+    "targetWords": 800
+  },
+  {
+    "slug": "concepts/trust-boundary-gaps",
+    "title": "Trust-Boundary Gaps (Do Not Overclaim)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "The honest 'not yet' page: single-attach-per-connection, the discarded uname/aname seam, no public multi-user auth, no ethernet/vnet, #cpu cancel doesn't stop remote computation, blob plane experimental.",
+    "outline": [
+      "The one-liner: an inventory of the real limits",
+      "No ethernet/vnet, no public multi-user auth",
+      "Exec devices (#task/#agent/#cpu) are local-trust only; mesh-serve --wanix-services refused on the public endpoint; ungranted public serve refused outright",
+      "The 9P session/namespace seam: handle_attach discards uname/aname; one shared P9Server.root in the plain path",
+      "Single-attach-per-connection; #grant device not yet wired; grant lifecycle unfinished",
+      "Single-frame serve blocks live pub/sub; #cpu cancel doesn't stop remote computation; blob plane upstream-experimental",
+      "Status / honest limits: the mesh/agent layer has NO ADRs yet — fast-moving, not frozen API"
+    ],
+    "prerequisites": [
+      "attach-policy",
+      "tauth-is-enosys"
+    ],
+    "relatedConcepts": [
+      "attach-policy",
+      "tauth-is-enosys",
+      "single-frame-serve-caveat",
+      "safe-for-untrusted-not-claimable",
+      "fakeengine-vs-codex"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "AGENTS.md:240-247",
+      "AGENTS.md:357-380",
+      "crates/wanix-cli/src/mesh/serve.rs",
+      "crates/wanix-9p/src/session.rs:71-74"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "reference/adr-index",
+    "title": "ADR Index & Workflow",
+    "section": "reference",
+    "pageType": "reference",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "The active ADRs 0001-0005 plus the ADR-vs-commit-message workflow — review the related ADRs before touching any boundary.",
+    "outline": [
+      "ADR 0001: Rust-native Wasmtime runtime (host/microkernel boundary, Go is an oracle, layered crates)",
+      "ADR 0002: WASI task runtime boundary (qjs + wasm; fd-mirroring; cache as trust boundary)",
+      "ADR 0003: terminal device and shell lifecycle (#term, raw/cooked, ctl close)",
+      "ADR 0004: Rust 9P protocol and server contract (protocol/server split, Tauth ENOSYS)",
+      "ADR 0005: serve and client handoffs (discovery, bundles, loopback handoffs)",
+      "The ADR workflow: treat ADRs like code; durable boundaries only; prefer revising over adding",
+      "Status / honest limits: the mesh/agent layer has no ADRs yet — design lives in mesh-blueprint.md and the slices doc"
+    ],
+    "prerequisites": [],
+    "relatedConcepts": [
+      "crate-layering",
+      "the-9p-contract",
+      "wasmtime-as-substrate",
+      "serve-composition-surface",
+      "trust-boundary-gaps"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "docs/adrs/0001-rust-native-wasmtime-runtime.md",
+      "docs/adrs/0002-quickjs-wasi-task-runtime.md",
+      "docs/adrs/0003-terminal-device-and-shell-lifecycle.md",
+      "docs/adrs/0004-rust-9p-protocol-and-server-contract.md",
+      "docs/adrs/0005-serve-and-client-handoffs.md"
+    ],
+    "targetWords": 1500
+  },
+  {
+    "slug": "reference/crate-map-and-layering",
+    "title": "Crate Map & Dependency Direction",
+    "section": "reference",
+    "pageType": "developer",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "Strict downward layering keeps core fs/namespace/protocol crates free of Wasmtime, and confines all async/iroh to the single wanix-mesh edge crate.",
+    "outline": [
+      "The layered diagram (wanix-fs at the base up to wanix-cli orchestration)",
+      "Core crates: wanix-fs, wanix-vfs, wanix-task, wanix-protocol, wanix-9p",
+      "Runtime crates above Wasmtime: wanix-qjs(-engine), wanix-wasm, wanix-wasi(-host), wanix-module-cache",
+      "Service devices as plain FileSystems: wanix-kv/-pipe/-plumb/-cas/-agent/-id",
+      "The 9P import half + mesh: wanix-9p-client, wanix-cpu, wanix-mesh (the single async/iroh edge)",
+      "No-upward-deps rules (wanix-task must not depend on wanix-wasi/qjs/wasm); keep tokio/iroh out of every crate but wanix-mesh",
+      "Status / honest limits: the module-line health guardrails and the over-limit baseline"
+    ],
+    "prerequisites": [],
+    "relatedConcepts": [
+      "async-sync-bridge",
+      "task-drivers",
+      "protocol-vs-server-split",
+      "extension-points",
+      "code-quality-guardrails"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "AGENTS.md:100-138",
+      "docs/adrs/0001-rust-native-wasmtime-runtime.md:44-48",
+      "Cargo.toml",
+      "crates/wanix-mesh/Cargo.toml"
+    ],
+    "targetWords": 1500
+  },
+  {
+    "slug": "reference/filesystem-trait",
+    "title": "The FileSystem / File Trait Reference",
+    "section": "reference",
+    "pageType": "developer",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "The trait at hand: method-by-method, the defaults, device-aware semantics, and which methods default to NotSupported.",
+    "outline": [
+      "FileSystem: open, metadata, metadata_with_lookup, read_dir, mutations",
+      "File: read/write/seek, read_ready/write_ready, is_seekable",
+      "content_hash (the bulk-offload hook, default Ok(None))",
+      "confine_to_prefix (the symlink-escape hook, default Ok(()))",
+      "Which methods default to NotSupported (symlink, hard_link, ...)",
+      "OpenOptions, MetadataLookup, FileSeekFrom, NormalizedPath, Metadata, FsError",
+      "Status / honest limits: device-aware methods are opt-in; do not hold a fs lock while calling into another fs"
+    ],
+    "prerequisites": [
+      "the-filesystem-trait"
+    ],
+    "relatedConcepts": [
+      "the-filesystem-trait",
+      "normalizedpath",
+      "content-addressed-data-plane",
+      "subtreefs-confine-to-prefix"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-fs/src/traits.rs:1-334",
+      "crates/wanix-fs/src/path.rs:5-78",
+      "crates/wanix-fs/src/metadata.rs",
+      "crates/wanix-fs/src/error.rs"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "reference/extension-points",
+    "title": "Extending Wanix from the Edges",
+    "section": "reference",
+    "pageType": "developer",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "Three extension points — a service device is a FileSystem, a task driver is a TaskDriver, a transport is a 9P adapter — so you do not need to fork the core.",
+    "outline": [
+      "The one-liner and the three points",
+      "Service device = impl FileSystem (template: #kv); get mesh import + 9P export + cockpit inspector for free",
+      "Task driver = impl TaskDriver check/start, registered from the orchestration layer",
+      "Transport = thin adapter over P9Server (export) or RemoteFs (import) preserving frame boundaries",
+      "How each fits the layering rules and just check",
+      "Status / honest limits: honor Tauth ENOSYS, single-frame serve, exec-stays-local-trust"
+    ],
+    "prerequisites": [
+      "crate-map-and-layering",
+      "the-filesystem-trait"
+    ],
+    "relatedConcepts": [
+      "the-filesystem-trait",
+      "task-drivers",
+      "protocol-vs-server-split",
+      "devices-import-for-free",
+      "wanix-services-device-set"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-kv/src/lib.rs:1-177",
+      "crates/wanix-task/src/driver.rs",
+      "crates/wanix-9p/src/lib.rs:1-93",
+      "crates/wanix-9p-client/src/remote.rs"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "reference/serve-and-discovery",
+    "title": "Serve, Discovery, and Handoff JSON",
+    "section": "reference",
+    "pageType": "developer",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "The serve command surface, the discovery document shape, the well-known routes, and the rootfs/qemu/v86 handoff JSON contracts.",
+    "outline": [
+      "serve flags and modes (default addr, --bundle, --wanix-services, --once)",
+      "/.well-known/wanix.json shape (routes, v86 block, services, bundle)",
+      "/.well-known/export9p and /.well-known/rootfs.json (loopback-only)",
+      "--wanix-services bind set and INSPECTABLE_SERVICE_DEVICES",
+      "Handoff kinds: wanix-rootfs.v1, wanix-qemu-virtio9p.v1",
+      "Status / honest limits: discovery/handoff JSON is still hand-built format! (typed-struct cleanup queued)"
+    ],
+    "prerequisites": [
+      "serve-composition-surface",
+      "discovery-document"
+    ],
+    "relatedConcepts": [
+      "serve-composition-surface",
+      "discovery-document",
+      "wanix-services-device-set",
+      "loopback-only-handoffs",
+      "three-serve-bundles"
+    ],
+    "demoRefs": [
+      "serve --bundle direct-v86",
+      "p9-stdio / p9-listen / p9-ws"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cli/src/serve/command.rs",
+      "crates/wanix-cli/src/serve/discovery.rs",
+      "crates/wanix-cli/src/serve/roots.rs:119-172"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "reference/quality-gates",
+    "title": "Quality Gates (just check)",
+    "section": "reference",
+    "pageType": "developer",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "fmt, module-lines, clippy -D warnings, test, and the composite just check; stay under the 250-350 line module limit; use explicit newtypes over raw i32 flags.",
+    "outline": [
+      "The just recipes: fmt, module-lines, clippy, test, check",
+      "The 250-350 line module limit and the over-limit baseline (tools/module-line-baseline.txt)",
+      "Use explicit Rust types for public contracts; avoid raw i32 flags/fds/rights/modes",
+      "Cycle rules: commit each cycle; a review/cleanup pass every ~five feature commits",
+      "Do not hold a namespace or filesystem lock while calling into another filesystem",
+      "Status / honest limits: strong fd-ownership verification is Unix-only"
+    ],
+    "prerequisites": [
+      "crate-map-and-layering"
+    ],
+    "relatedConcepts": [
+      "crate-layering",
+      "code-quality-guardrails",
+      "queued-follow-ups"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "Justfile",
+      "tools/check-module-lines.sh",
+      "tools/module-line-baseline.txt",
+      "AGENTS.md:249-260"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "reference/contributor-landing",
+    "title": "Contributor Landing — This Is the Rust Port",
+    "section": "reference",
+    "pageType": "developer",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "Orient: this is the Rust port, not the Go tree — ignore the Go Makefile/CONTRIBUTING; build with cargo and gate with just check.",
+    "outline": [
+      "The one-liner: ignore the Go Makefile/CONTRIBUTING.md; the Rust workspace is the active port",
+      "Build: cargo build --locked --package wanix-cli; the wanix-rust binary",
+      "Where core semantics live (the crates) vs where composition lives (wanix-cli)",
+      "The walkthrough path and the recipes",
+      "How to pick a first task (queued follow-ups)",
+      "Status / honest limits: the Go tree remains a semantic oracle, not a structure to copy"
+    ],
+    "prerequisites": [],
+    "relatedConcepts": [
+      "crate-layering",
+      "quality-gates",
+      "adr-index",
+      "queued-follow-ups",
+      "wanix-as-host"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "AGENTS.md",
+      "README.md:23-93",
+      "rust-walkthrough.md:1-55",
+      "CONTRIBUTING.md"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "reference/cli-command-index",
+    "title": "CLI Command Index",
+    "section": "reference",
+    "pageType": "reference",
+    "audience": "developer",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "Every wanix-rust subcommand at a glance: qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-*, serve, rootfs, qemu, direct-v86, mesh-serve, mount-*, cpu, agent, capsule.",
+    "outline": [
+      "Task runtimes: qjs, qjs-term, qjs-shell, wasm",
+      "Snapshot family: qjs-snapshot, qjs-resume, qjs-restore",
+      "9P transports: p9-stdio, p9-listen, p9-ws",
+      "Composition: serve (--bundle, --wanix-services, --once)",
+      "VM handoffs: rootfs, qemu, direct-v86",
+      "Mesh: mesh-serve, mount-ls/-cat/-write, cpu, capsule",
+      "Agent: agent (CodexEngine / --fake)",
+      "Status / honest limits: deep-link each command to its dedicated reference/recipe page"
+    ],
+    "prerequisites": [],
+    "relatedConcepts": [
+      "qjs-task",
+      "compiled-wasm-task-driver",
+      "serve-composition-surface",
+      "import-export-and-n",
+      "cpu-device",
+      "wanix-capsule"
+    ],
+    "demoRefs": [
+      "wanix-rust qjs main.js",
+      "wanix-rust wasm FILE.wasm",
+      "Mount a remote peer and run a #cpu job on it"
+    ],
+    "sourceRefs": [
+      "crates/wanix-cli/src/lib.rs:16-18",
+      "crates/wanix-cli/src/help.rs",
+      "rust-walkthrough.md:36-51"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "reference/cli-rootfs-qemu-v86",
+    "title": "CLI: rootfs, qemu, direct-v86 (VM Handoffs)",
+    "section": "reference",
+    "pageType": "reference",
+    "audience": "developer",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "rootfs prepares/validates a guest root, qemu emits a wanix-qemu-virtio9p.v1 argv handoff, and direct-v86 generates a browser emulator page — launch contracts, not a VM supervisor.",
+    "outline": [
+      "rootfs --archive --out: prepare a guest root, reject unsafe paths, validate boot markers (executable /bin/init), emit shell or wanix-rootfs.v1 JSON",
+      "qemu --root: validate guest-root shape, emit shell or wanix-qemu-virtio9p.v1 JSON; --exec foreground launch; --initrd, --p9-msize, --mount-tag, --cmdline",
+      "direct-v86 bundle: serves built-in v86 assets and a boot JSON with kernel/initrd/init readiness",
+      "/.well-known/rootfs.json for loopback clients on a prepared root",
+      "Status / honest limits: these are validated handoffs, not a VM lifecycle manager; rootfs build is out of scope; ethernet/vnet unimplemented"
+    ],
+    "prerequisites": [
+      "loopback-only-handoffs"
+    ],
+    "relatedConcepts": [
+      "loopback-only-handoffs",
+      "three-serve-bundles",
+      "discovery-document",
+      "wanix-as-host"
+    ],
+    "demoRefs": [
+      "serve --bundle direct-v86"
+    ],
+    "sourceRefs": [
+      "rust-walkthrough.md:386-479",
+      "crates/wanix-cli/src/serve/direct_v86.rs",
+      "docs/adrs/0005-serve-and-client-handoffs.md:56-61"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "reference/queued-follow-ups",
+    "title": "Queued Follow-Ups (Pick a First Cleanup)",
+    "section": "reference",
+    "pageType": "developer",
+    "audience": "developer",
+    "persona": "Priya, the Rust core contributor",
+    "oneLiner": "The current backlog: split over-limit modules, port the v86-shared-demo stub, wire #plumb live recv, add serve shutdown+cap, typed discovery JSON, the per-principal namespace seam.",
+    "outline": [
+      "Module-line health: codex.rs (~307), exec_server.rs (~283), app.rs (~273) above the warn limit",
+      "Cockpit follow-ups: v86-shared-demo stub; #plumb live receive needs a second connection; Slice 8 --bundle cockpit rename",
+      "Serve concurrency: shutdown signal + connection cap together as one cycle",
+      "Typed discovery/handoff JSON cleanup",
+      "The 9P session/namespace seam (per-principal NamespaceProvider + per-fid root)",
+      "Status / honest limits: each item has a documented reason it is queued, not abandoned"
+    ],
+    "prerequisites": [
+      "quality-gates",
+      "crate-map-and-layering"
+    ],
+    "relatedConcepts": [
+      "code-quality-guardrails",
+      "trust-boundary-gaps",
+      "single-frame-serve-caveat",
+      "browser-cockpit"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "AGENTS.md:340-410",
+      "docs/integration/plan.md",
+      "workbench/src/web/extension.ts"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "use-cases/personal-compute-mesh",
+    "title": "Your Personal Compute Mesh",
+    "section": "use-cases",
+    "pageType": "use-case",
+    "audience": "visionary",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "Your laptop, phone, and a cloud node each run a Wanix node; mount any one at /n/<peer> and operate its files and devices as your own, NAT-crossed over iroh QUIC, gated by per-peer grants.",
+    "outline": [
+      "The outcome: one mesh of your own machines, each a node",
+      "How it rests on import/export, the key-is-the-address, capability binds",
+      "The two-terminal hero (recipe 02) and the cockpit-as-operator-dashboard story",
+      "Send compute to the data with #cpu",
+      "Status / honest limits: mount-* binds at /n/remote (single slot); mesh panel / browser-as-peer / per-peer mounts queued; no public multi-user auth",
+      "Runnable recipe: link recipe 02"
+    ],
+    "prerequisites": [
+      "import-export-and-n",
+      "key-is-the-address",
+      "capability-is-a-bind"
+    ],
+    "relatedConcepts": [
+      "import-export-and-n",
+      "key-is-the-address",
+      "capability-is-a-bind",
+      "send-agent-to-the-data",
+      "devices-import-for-free"
+    ],
+    "demoRefs": [
+      "Mount a remote peer and run a #cpu job on it",
+      "Live two-process import over QUIC"
+    ],
+    "sourceRefs": [
+      "README.md:42-49",
+      "docs/recipes/02-mount-remote-peer.md",
+      "docs/mesh-the-missing-half-of-9p.md:1089-1140"
+    ],
+    "targetWords": 1300
+  },
+  {
+    "slug": "use-cases/agents-on-your-files",
+    "title": "AI Agents Operating on Your Files Across Devices",
+    "section": "use-cases",
+    "pageType": "use-case",
+    "audience": "visionary",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "#agent repairs a broken program with approvals-as-files; over the mesh it reaches a peer's #kv/#cas/files; two agents on two machines collaborate via #plumb.",
+    "outline": [
+      "The outcome: an agent that operates your real files, safely, across machines",
+      "Why agents are the operators namespaces always needed",
+      "Approvals as files: the trust gate you can reason about",
+      "Reach: bind /n/<peer> and the agent's cat/write/ls extend unchanged; #cpu sends the agent to the data",
+      "Capability security: a grant is a re-rooted SubtreeFs (no outside to name)",
+      "Status / honest limits: served #agent = FakeEngine; exec/agent devices local-trust only; no live LLM by default in the cockpit",
+      "Runnable recipes: link recipes 01 and 05"
+    ],
+    "prerequisites": [
+      "agents-as-operators",
+      "agent-device",
+      "approvals-as-files"
+    ],
+    "relatedConcepts": [
+      "agents-as-operators",
+      "agent-device",
+      "approvals-as-files",
+      "send-agent-to-the-data",
+      "capability-is-a-bind",
+      "fakeengine-vs-codex"
+    ],
+    "demoRefs": [
+      "Agent repair demo (Recipe 01)",
+      "Two agents collaborate (Recipe 05)"
+    ],
+    "sourceRefs": [
+      "docs/recipes/01-repair-broken-qjs.md",
+      "docs/recipes/05-two-agents-collaborate.md",
+      "docs/mesh-the-missing-half-of-9p.md:98-122",
+      "docs/integration/STATUS.md:445-449"
+    ],
+    "targetWords": 1400
+  },
+  {
+    "slug": "use-cases/portable-worlds",
+    "title": "Portable Worlds via Capsules",
+    "section": "use-cases",
+    "pageType": "use-case",
+    "audience": "decision-maker",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "wanix capsule save freezes a whole world (the directory an agent built) into a CAS-backed, BLAKE3-verified, deduplicated set of blobs; hand someone one hash and they materialize the entire world, verifying every blob.",
+    "outline": [
+      "The outcome: ship a whole world by one hash",
+      "venti for the mesh: file blobs + a deterministic manifest blob whose hash IS the capsule id",
+      "Dedup across worlds; integrity-verified on every get",
+      "Fetchable over the mesh blob plane (IrohCasStore)",
+      "Status / honest limits: no .wcap archive file in the shipped CLI; not portable: live peers/tickets, ephemeral fds, live #kv state, symlinks/perms/xattrs",
+      "Runnable recipe: link recipe 03"
+    ],
+    "prerequisites": [
+      "wanix-capsule",
+      "end-to-end-hash-verification"
+    ],
+    "relatedConcepts": [
+      "wanix-capsule",
+      "cas-device",
+      "end-to-end-hash-verification",
+      "one-identity-two-planes",
+      "quickjs-snapshots-are-vm-images"
+    ],
+    "demoRefs": [
+      "Freeze and restore a world to a capsule",
+      "Capsule round-trip with dedup and tamper-detection"
+    ],
+    "sourceRefs": [
+      "docs/recipes/03-freeze-world-to-capsule.md",
+      "crates/wanix-cas/src/capsule.rs",
+      "docs/mesh-the-missing-half-of-9p.md:1559-1672"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "use-cases/browser-cockpit",
+    "title": "A Browser-Native Operator Cockpit",
+    "section": "use-cases",
+    "pageType": "use-case",
+    "audience": "visionary",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "A Code OSS / VS Code web extension drives the whole namespace over direct 9P: inspect the service devices, run the agent repair demo, run a qjs->wasm->qjs duet on one shared FS, serve HTTP apps backed by #kv, and self-check the device set.",
+    "outline": [
+      "The outcome: a human operator surface for the Rust runtime, in the browser",
+      "Boot it: serve --bundle workbench-fs9p --wanix-services",
+      "The five live-wired features and the 'what file ops this really is' reveal",
+      "Inspect devices, agent repair, duet, HTTP counter, self-check",
+      "Status / honest limits: bundle still named workbench-fs9p; mesh panel / browser-as-peer queued; v86-shared-demo stub; #plumb recv publish-only; served #agent is FakeEngine",
+      "Runnable path: the cockpit demos + recipe 01/04"
+    ],
+    "prerequisites": [
+      "browser-cockpit",
+      "service-devices"
+    ],
+    "relatedConcepts": [
+      "browser-cockpit",
+      "direct-9p-operator-surface",
+      "http-app-route",
+      "service-devices",
+      "wanix-as-host"
+    ],
+    "demoRefs": [
+      "serve --bundle workbench-fs9p --wanix-services (the cockpit)",
+      "Run Agent Repair Demo",
+      "Run JS and WASM Duet Demo",
+      "HTTP counter app + #kv",
+      "Run Cockpit Self Check"
+    ],
+    "sourceRefs": [
+      "docs/integration/STATUS.md",
+      "docs/integration/cockpit-meets-mesh.md",
+      "workbench/src/web/extension.ts",
+      "README.md:51-57"
+    ],
+    "targetWords": 1400
+  },
+  {
+    "slug": "use-cases/distributed-dev-environments",
+    "title": "Distributed Dev Environments",
+    "section": "use-cases",
+    "pageType": "use-case",
+    "audience": "decision-maker",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "#cpu runs your task on the node holding the source against its fast local namespace, outputs returning over the wire — Plan 9 cpu(1) over the open internet, with a default read-only jail.",
+    "outline": [
+      "The outcome: edit here, build there, against the fast local namespace of the data node",
+      "Reverse-export your cwd (read-only by default, --write to opt in)",
+      "The acceptor runs the exact local launch pattern, only the world is a RemoteFs over the export stream",
+      "Compute travels to the data; grant-allowlisted acceptor",
+      "Status / honest limits: v1 output is a single batch after start returns (not streamed); #cpu cancel doesn't stop remote computation; exec is local-trust",
+      "Runnable recipe: link recipe 02 (the #cpu job section)"
+    ],
+    "prerequisites": [
+      "cpu-device",
+      "send-agent-to-the-data"
+    ],
+    "relatedConcepts": [
+      "cpu-device",
+      "send-agent-to-the-data",
+      "capability-is-a-bind",
+      "subtreefs-confine-to-prefix",
+      "import-export-and-n"
+    ],
+    "demoRefs": [
+      "Mount a remote peer and run a #cpu job on it"
+    ],
+    "sourceRefs": [
+      "docs/recipes/02-mount-remote-peer.md:159-231",
+      "crates/wanix-cpu/src/scope.rs",
+      "docs/mesh-the-missing-half-of-9p.md:1884-1913"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "use-cases/traceable-namespaces",
+    "title": "Traceable, Forkable, Rewindable Namespaces (Exploratory)",
+    "section": "use-cases",
+    "pageType": "use-case",
+    "audience": "visionary",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "An agentic runtime should make the chain prompt->plan->command->task->log->mutation->result visible, addressable, and forkable, so you can ask 'what changed, and why?' and rewind or fork the world.",
+    "outline": [
+      "The outcome (vision): legibility, not just permission prompts",
+      "The causal chain made visible and addressable",
+      "'Managed Wanix state can rewind. External effects can be traced'",
+      "The first shipped slice: #plumb provenance + the qjs-shell mutation frame",
+      "Status / honest limits: EXPLORATORY product vision, clearly labeled; the doc is explicitly NOT an ADR; only a first slice exists"
+    ],
+    "prerequisites": [
+      "traceable-namespaces",
+      "agents-as-operators"
+    ],
+    "relatedConcepts": [
+      "traceable-namespaces",
+      "agents-as-operators",
+      "approvals-as-files",
+      "wanix-capsule",
+      "plumb-device"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "docs/traceable-dynamic-namespaces.md:1-13",
+      "docs/traceable-dynamic-namespaces.md:15-117",
+      "docs/traceable-dynamic-namespaces.md:517-527"
+    ],
+    "targetWords": 1200
+  },
+  {
+    "slug": "recipes/walkthrough-1-run-js",
+    "title": "Walkthrough 1 — Run JavaScript Outside Chrome",
+    "section": "recipes",
+    "pageType": "flow-step",
+    "audience": "user",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "Copy 'wanix qjs examples/qjs-demo.js' and see 'outside Chrome: true' — JavaScript running as a Wanix task, not in a browser.",
+    "outline": [
+      "Build the CLI once (cargo build --locked --package wanix-cli)",
+      "Run wanix qjs examples/qjs-demo.js",
+      "Read the expected output and what each line proves",
+      "What happened: QuickJS hosted by Wasmtime, std.loadFile from the namespace, #task/self/id",
+      "Next: what just happened (the everything-is-a-file concept)"
+    ],
+    "prerequisites": [],
+    "relatedConcepts": [
+      "qjs-task",
+      "everything-is-a-file",
+      "wasmtime-as-substrate"
+    ],
+    "demoRefs": [
+      "wanix-rust qjs main.js"
+    ],
+    "sourceRefs": [
+      "rust-walkthrough.md:57-89",
+      "examples/qjs-demo.js",
+      "examples/qjs-demo-lib.js"
+    ],
+    "targetWords": 700
+  },
+  {
+    "slug": "recipes/walkthrough-2-process-context",
+    "title": "Walkthrough 2 — Feed env, cwd, stdin, and argv into a Script",
+    "section": "recipes",
+    "pageType": "flow-step",
+    "audience": "user",
+    "persona": "Maya, the curious app developer",
+    "oneLiner": "Pass --env/--cwd/--stdin and -- argv and watch scriptArgs, std.getenv, fd 0, and #task/self/id flow in as task state — no globalThis.Wanix bridge.",
+    "outline": [
+      "Write a tiny context.js using qjs:std / qjs:os",
+      "Run it with --env, --cwd, --stdin, and -- argv",
+      "Read the expected output",
+      "What happened: all of it is Wanix task state flowing into QuickJS via live WASI and service files",
+      "Next: mount a host directory explicitly"
+    ],
+    "prerequisites": [
+      "recipes/walkthrough-1-run-js"
+    ],
+    "relatedConcepts": [
+      "qjs-task",
+      "tasks-own-process-identity",
+      "wanix-backed-wasi",
+      "guest-js-guardrails"
+    ],
+    "demoRefs": [
+      "Pass process context into a task"
+    ],
+    "sourceRefs": [
+      "rust-walkthrough.md:91-139"
+    ],
+    "targetWords": 700
+  },
+  {
+    "slug": "recipes/01-repair-broken-qjs",
+    "title": "Recipe 01 — Repair a Broken qjs Program with an Agent",
+    "section": "recipes",
+    "pageType": "use-case",
+    "audience": "user",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "Hand a crashing qjs program to a Wanix-backed agent from inside the cockpit and watch it propose a patch, ask for approval, and write the fix back — all as plain reads and writes on the #agent service.",
+    "outline": [
+      "Set up a tiny project with one broken file",
+      "Start wanix serve with the cockpit bundle and --wanix-services",
+      "Open the cockpit and trigger the repair (or do the file ops by hand over 9P)",
+      "Under the hood: new -> prompt -> events -> pending -> ctl approve -> close",
+      "Inspect the result and the repair report",
+      "What you exercised: the #agent device shape and the trust-boundary handoff",
+      "Status / honest limits: served #agent is FakeEngine; the real codex path is wanix agent on the CLI"
+    ],
+    "prerequisites": [
+      "agent-device",
+      "approvals-as-files"
+    ],
+    "relatedConcepts": [
+      "agent-device",
+      "approvals-as-files",
+      "fakeengine-vs-codex",
+      "browser-cockpit"
+    ],
+    "demoRefs": [
+      "Agent repair demo (Recipe 01)",
+      "Run Agent Repair Demo"
+    ],
+    "sourceRefs": [
+      "docs/recipes/01-repair-broken-qjs.md",
+      "crates/wanix-agent/src/files.rs:23-185",
+      "workbench/src/web/agent-repair-demo.ts"
+    ],
+    "targetWords": 900
+  },
+  {
+    "slug": "recipes/02-mount-remote-peer",
+    "title": "Recipe 02 — Mount a Remote Wanix Peer and Run a Job on It",
+    "section": "recipes",
+    "pageType": "use-case",
+    "audience": "power user",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "Stand up two nodes, have A dial B over iroh QUIC, mount B's directory as a Plan 9 namespace, and send a #cpu job so the code runs on B against B's local data.",
+    "outline": [
+      "Each node gets a persistent ed25519 identity (~/.wanix/node.key)",
+      "Start node B with wanix-rust mesh-serve (the data node) and copy its iroh:// ticket",
+      "From node A, mount B's root with mount-ls/mount-cat/mount-write",
+      "Run a #cpu job on B from A's CLI (read-only by default, --write to opt in)",
+      "Trust boundary in one line: both transports authenticate B as B first",
+      "Status / honest limits: mount-* binds at /n/remote (single slot); --wanix-services refused on the public endpoint"
+    ],
+    "prerequisites": [
+      "import-export-and-n",
+      "key-is-the-address",
+      "cpu-device"
+    ],
+    "relatedConcepts": [
+      "import-export-and-n",
+      "key-is-the-address",
+      "cpu-device",
+      "capability-is-a-bind",
+      "send-agent-to-the-data"
+    ],
+    "demoRefs": [
+      "Mount a remote peer and run a #cpu job on it"
+    ],
+    "sourceRefs": [
+      "docs/recipes/02-mount-remote-peer.md",
+      "crates/wanix-cli/src/mesh/serve.rs",
+      "crates/wanix-cli/src/cpu/run.rs",
+      "crates/wanix-cli/src/mount.rs"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "recipes/03-freeze-world-to-capsule",
+    "title": "Recipe 03 — Freeze a Wanix World to a Portable Capsule",
+    "section": "recipes",
+    "pageType": "use-case",
+    "audience": "power user",
+    "persona": "Devraj, the personal-compute-mesh power user",
+    "oneLiner": "Freeze a directory the agent (or you) just built onto the content-addressed plane so the same world can be reconstructed deterministically anywhere the same capsule id is reachable.",
+    "outline": [
+      "Set up a small world",
+      "Freeze with wanix capsule save (capture the 64-hex capsule id)",
+      "Inspect the CAS-backed structure (flat blob dir, the manifest blob)",
+      "Load the capsule elsewhere (same machine, ship the blobs, over the mesh)",
+      "What is portable and what is not",
+      "Try the round-trip yourself",
+      "Status / honest limits: no .wcap archive file; live #kv state and ephemeral handles are not portable"
+    ],
+    "prerequisites": [
+      "wanix-capsule",
+      "cas-device"
+    ],
+    "relatedConcepts": [
+      "wanix-capsule",
+      "cas-device",
+      "end-to-end-hash-verification",
+      "one-identity-two-planes"
+    ],
+    "demoRefs": [
+      "Freeze and restore a world to a capsule"
+    ],
+    "sourceRefs": [
+      "docs/recipes/03-freeze-world-to-capsule.md",
+      "crates/wanix-cli/src/capsule.rs",
+      "crates/wanix-cas/src/capsule.rs"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "recipes/04-tiny-http-app-with-kv",
+    "title": "Recipe 04 — A Tiny HTTP App with #kv-Backed Counter State",
+    "section": "recipes",
+    "pageType": "use-case",
+    "audience": "user",
+    "persona": "Maya, the curious app developer (builder mode)",
+    "oneLiner": "A single-file qjs handler at apps/counter.js increments a per-request counter held in #kv/counter — nothing about the state lives in the handler, only in #kv.",
+    "outline": [
+      "The handler: read #kv/counter RDONLY, parse, increment, write WRONLY|CREAT|TRUNC",
+      "Run wanix serve with #kv bound (--wanix-services)",
+      "Invoke it (drive the same handler; the qjs CLI loop, the POST /agent shape)",
+      "Why #kv (not files under apps/): write churn, durability clarity, mesh transparency",
+      "The cockpit's role: the catalog and preview surface",
+      "Status / honest limits: a GET /apps/counter route is not yet wired on the cpu branch; #kv is in-process; state survives only while serve lives"
+    ],
+    "prerequisites": [
+      "kv-device",
+      "kv-smallest-database",
+      "http-app-route"
+    ],
+    "relatedConcepts": [
+      "kv-device",
+      "kv-smallest-database",
+      "http-app-route",
+      "wanix-capsule",
+      "devices-import-for-free"
+    ],
+    "demoRefs": [
+      "#kv-backed HTTP counter (Recipe 04)",
+      "HTTP counter app + #kv"
+    ],
+    "sourceRefs": [
+      "docs/recipes/04-tiny-http-app-with-kv.md",
+      "crates/wanix-kv/src/lib.rs:1-177",
+      "crates/wanix-cli/src/serve/http/app.rs",
+      "workbench/src/web/http-app-demo.ts"
+    ],
+    "targetWords": 1100
+  },
+  {
+    "slug": "recipes/05-two-agents-collaborate",
+    "title": "Recipe 05 — Two Agents Collaborate via #agent/<id>/reply",
+    "section": "recipes",
+    "pageType": "use-case",
+    "audience": "power user",
+    "persona": "Kemi Okafor, the AI-agent-infrastructure builder",
+    "oneLiner": "Agent A drives a rename refactor, spawns a second session B with a sub-goal, blocks on B's reply (single-read, EOF-terminating), and integrates the findings — all as files.",
+    "outline": [
+      "The setup: two sessions behind one AgentDevice; the #agent file tree",
+      "Agent A's goal and the prompt",
+      "A spawns Agent B with a sub-goal (open #agent/new again)",
+      "A blocks on cat #agent/B/reply (wait_reply: single-read, EOF-terminating)",
+      "Approvals flow while B works (pending + ctl approve)",
+      "A integrates B's reply and proceeds; close B",
+      "The file flow end to end",
+      "Status / honest limits: works whether B is local, routed (RouterEngine), or remote (RemoteEngine); the single-frame serve recv caveat applies live"
+    ],
+    "prerequisites": [
+      "agent-device",
+      "approvals-as-files",
+      "send-agent-to-the-data"
+    ],
+    "relatedConcepts": [
+      "agent-device",
+      "approvals-as-files",
+      "send-agent-to-the-data",
+      "plumb-device",
+      "best-effort-epidemic-delivery"
+    ],
+    "demoRefs": [
+      "Two agents collaborate (Recipe 05)",
+      "Two agents, two machines, one conversation"
+    ],
+    "sourceRefs": [
+      "docs/recipes/05-two-agents-collaborate.md",
+      "crates/wanix-agent/src/engine.rs:71-80",
+      "crates/wanix-agent/src/router.rs:27-83"
+    ],
+    "targetWords": 1000
+  },
+  {
+    "slug": "find/index",
+    "title": "Find — Search, Concept Index, Glossary, Tags",
+    "section": "find",
+    "pageType": "overview",
+    "audience": "all, expert-favoring",
+    "persona": "Dr. Aria Vance, the Plan 9 / distributed-systems thinker",
+    "oneLiner": "The findability hub: full-text typed search (hotkey '/'), the graph-backed Concept Index (A-Z + clustered visual map), the A-Z Glossary, and the Tag browser.",
+    "outline": [
+      "Full-text typed search and the '/' hotkey",
+      "The Concept Index: A-Z plus the clustered visual map of the concept graph",
+      "The A-Z Glossary (generated from concept one-liners)",
+      "The Tag browser (by audience / cluster / status)",
+      "How experts enter low-friction: land on a concept, a device anchor, an ADR, or a crate",
+      "Status / honest limits: this is a navigation surface, not new content"
+    ],
+    "prerequisites": [],
+    "relatedConcepts": [
+      "everything-is-a-file",
+      "missing-half-of-9p",
+      "capability-is-a-bind",
+      "agents-as-operators"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "AGENTS.md",
+      "docs/site"
+    ],
+    "targetWords": 600
+  }
+]
