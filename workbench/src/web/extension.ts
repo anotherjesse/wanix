@@ -1,7 +1,7 @@
 
 import * as vscode from 'vscode';
 import { installAgentRepairDemo, repairQjsProgram } from './agent-repair-demo.js';
-import { WanixBridge } from './bridge.js';
+import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
 import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
 import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
@@ -97,6 +97,13 @@ export async function activate(context: vscode.ExtensionContext) {
 	const activeTaskTerminals = new Map<TaskRunKind, vscode.Terminal>();
 	const taskTerminals = new Map<string, vscode.Terminal>();
 	context.subscriptions.push(bridge);
+	context.subscriptions.push(bridge.onDidWanixMutation((mutation) => {
+		const activity = bridgeMutationActivity(mutation);
+		systemView.filesystemActivity(activity.label, {
+			path: activity.openPath,
+			paths: activity.paths,
+		});
+	}));
 	rememberWanixEditor();
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
 		rememberWanixEditor(editor);
@@ -460,6 +467,25 @@ function wanixDiffTarget(target: { beforePath?: string; afterPath?: string } | u
 		beforePath: target.beforePath,
 		afterPath: target.afterPath,
 	};
+}
+
+function bridgeMutationActivity(mutation: WanixBridgeMutation): Required<FilesystemActivity> {
+	const paths = mutation.paths;
+	const openPath = mutation.openPath || paths[paths.length - 1] || "/";
+	const primary = paths[0] || openPath;
+	const target = paths[paths.length - 1] || openPath;
+	switch (mutation.kind) {
+		case "copy":
+			return { label: `copied ${baseName(primary)} -> ${baseName(target)}`, openPath, paths };
+		case "rename":
+			return { label: `renamed ${baseName(primary)} -> ${baseName(target)}`, openPath, paths };
+		case "delete":
+			return { label: `deleted ${baseName(primary)}`, openPath, paths };
+		case "mkdir":
+			return { label: `created directory ${baseName(target)}`, openPath, paths };
+		case "write":
+			return { label: `saved ${baseName(target)}`, openPath, paths };
+	}
 }
 
 function taskIdFromArgument(task: string | { taskId?: string } | undefined): string | undefined {

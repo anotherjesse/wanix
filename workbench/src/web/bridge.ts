@@ -315,11 +315,19 @@ export class Directory implements FileStat {
 
 export type Entry = File | Directory;
 
+export type WanixBridgeMutation = {
+	kind: "write" | "copy" | "rename" | "delete" | "mkdir";
+	paths: string[];
+	openPath?: string;
+};
+
 export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider, WanixTextSearchProvider, Disposable {
 	static scheme = 'wanix';
 
 	public wfsys: any;
 	public readonly ready: Promise<any>;
+	private readonly mutationEmitter = new EventEmitter<WanixBridgeMutation>();
+	readonly onDidWanixMutation: Event<WanixBridgeMutation> = this.mutationEmitter.event;
 	private readonly disposable: Disposable;
 	private root: string;
 
@@ -331,6 +339,7 @@ export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider,
 		this.root = root;
 		const disposables = [
 			workspace.registerFileSystemProvider(WanixBridge.scheme, this, { isCaseSensitive: true }),
+			this.mutationEmitter,
 		];
 		const searchWorkspace = workspace as WanixSearchWorkspace;
 		const fileSearch = searchWorkspace.registerFileSearchProvider?.(WanixBridge.scheme, this);
@@ -513,6 +522,11 @@ export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider,
 		} else {
 			this._fireSoon({ type: FileChangeType.Changed, uri });
 		}
+		this.mutationEmitter.fire({
+			kind: "write",
+			openPath: normalizeUriPath(uri.path),
+			paths: [normalizeUriPath(uri.path)],
+		});
 		this._fireSoon(
 			{ type: FileChangeType.Changed, uri: uri.with({ path: this._dirname(uri.path) }) }
 		);
@@ -538,6 +552,11 @@ export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider,
 			{ type: FileChangeType.Changed, uri: destination.with({ path: this._dirname(destination.path) }) },
 			{ type: FileChangeType.Created, uri: destination }
 		);
+		this.mutationEmitter.fire({
+			kind: "copy",
+			openPath: normalizeUriPath(destination.path),
+			paths: [normalizeUriPath(source.path), normalizeUriPath(destination.path)],
+		});
 	}
 
 	rename(oldUri: Uri, newUri: Uri, options: { overwrite: boolean }): Thenable<void> {
@@ -558,6 +577,11 @@ export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider,
 			{ type: FileChangeType.Changed, uri: newUri.with({ path: this._dirname(newUri.path) }) },
 			{ type: FileChangeType.Created, uri: newUri }
 		);
+		this.mutationEmitter.fire({
+			kind: "rename",
+			openPath: normalizeUriPath(newUri.path),
+			paths: [normalizeUriPath(oldUri.path), normalizeUriPath(newUri.path)],
+		});
 	}
 
 	delete(uri: Uri, options: {recursive: boolean}): Thenable<void> {
@@ -576,6 +600,11 @@ export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider,
 			{ type: FileChangeType.Changed, uri: uri.with({ path: this._dirname(uri.path) }) }, 
 			{ uri, type: FileChangeType.Deleted }
 		);
+		this.mutationEmitter.fire({
+			kind: "delete",
+			openPath: normalizeUriPath(this._dirname(uri.path)),
+			paths: [normalizeUriPath(uri.path)],
+		});
 	}
 
 	createDirectory(uri: Uri): Promise<void> {
@@ -589,6 +618,11 @@ export class WanixBridge implements FileSystemProvider, WanixFileSearchProvider,
 			{ type: FileChangeType.Changed, uri: uri.with({ path: this._dirname(uri.path) }) }, 
 			{ type: FileChangeType.Created, uri }
 		);
+		this.mutationEmitter.fire({
+			kind: "mkdir",
+			openPath: normalizeUriPath(uri.path),
+			paths: [normalizeUriPath(uri.path)],
+		});
 	}
 
 	private async _walkSearchFiles(base: Uri, token: CancellationToken, visit: (uri: Uri, relativePath: string, stat: RemoteEntry) => Promise<boolean>): Promise<void> {
