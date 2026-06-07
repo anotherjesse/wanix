@@ -91,6 +91,13 @@ export async function runCockpitSelfCheck(
 	for (const path of reportArtifacts) {
 		refreshWanixFile(bridge, path);
 	}
+	if (status === "failed") {
+		systemView.checkFailed("Wanix cockpit self-check", "overall status failed", { artifacts: reportArtifacts });
+	} else if (status === "warn") {
+		systemView.checkWarned("Wanix cockpit self-check", { description: "overall status warn", artifacts: reportArtifacts });
+	} else {
+		systemView.checkPassed("Wanix cockpit self-check", { description: "overall status ok", artifacts: reportArtifacts });
+	}
 	systemView.checkReport(COCKPIT_SELF_CHECK_MD_PATH, status, reportArtifacts);
 	for (const path of reportArtifacts) {
 		systemView.filesystemActivity(`self-check artifact ${baseName(path)}`, { path });

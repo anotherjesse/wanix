@@ -77,6 +77,16 @@ export async function openAgentToolContract(
 	bridge: WanixBridge,
 	systemView: WanixSystemView,
 ): Promise<void> {
+	await writeAgentToolContract(fsys, bridge, systemView);
+	await openWanixFile(AGENT_TOOL_CONTRACT_MD_PATH);
+	vscode.window.showInformationMessage("Opened Wanix agent tool contract");
+}
+
+export async function writeAgentToolContract(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<{ markdownPath: string; jsonPath: string }> {
 	const generatedAt = new Date();
 	systemView.agentStarted("publish agent tool contract");
 	systemView.agentStep("write agent-tools.json", { icon: "json", path: AGENT_TOOL_CONTRACT_JSON_PATH });
@@ -94,8 +104,10 @@ export async function openAgentToolContract(
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
 	});
-	await openWanixFile(AGENT_TOOL_CONTRACT_MD_PATH);
-	vscode.window.showInformationMessage("Opened Wanix agent tool contract");
+	return {
+		markdownPath: AGENT_TOOL_CONTRACT_MD_PATH,
+		jsonPath: AGENT_TOOL_CONTRACT_JSON_PATH,
+	};
 }
 
 function agentToolContractJson(generatedAt: Date): string {

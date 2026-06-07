@@ -1,6 +1,6 @@
 
 import * as vscode from 'vscode';
-import { openAgentToolContract } from './agent-tool-contract.js';
+import { openAgentToolContract, writeAgentToolContract } from './agent-tool-contract.js';
 import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairQjsProgram } from './agent-repair-demo.js';
 import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
 import { runCockpitSelfCheck } from './cockpit-self-check.js';
@@ -227,6 +227,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runCockpitSelfCheck', async () => {
 			try {
 				await runCockpitSelfCheck(fsys, bridge, config, systemView);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.prepareCockpitReports', async () => {
+			try {
+				await prepareCockpitReports(fsys, bridge, config, systemView);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -500,6 +508,16 @@ async function openWanixPathOrReveal(
 }
 
 async function openSystemJournal(fsys: any, bridge: WanixBridge, systemView: WanixSystemView): Promise<void> {
+	await writeSystemJournal(fsys, bridge, systemView);
+	await openWanixPath(SYSTEM_JOURNAL_PATH);
+	vscode.window.showInformationMessage("Opened Wanix system journal");
+}
+
+async function writeSystemJournal(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<{ journalPath: string; statePath: string }> {
 	await fsys.makeDirAll(".wanix");
 	const generatedAt = new Date();
 	systemView.filesystemActivity("system state written", { path: SYSTEM_STATE_PATH });
@@ -515,8 +533,27 @@ async function openSystemJournal(fsys: any, bridge: WanixBridge, systemView: Wan
 		statePath: SYSTEM_STATE_PATH,
 	}));
 	await refreshWanixPaths(bridge, [SYSTEM_JOURNAL_PATH, SYSTEM_STATE_PATH]);
-	await openWanixPath(SYSTEM_JOURNAL_PATH);
-	vscode.window.showInformationMessage("Opened Wanix system journal");
+	return {
+		journalPath: SYSTEM_JOURNAL_PATH,
+		statePath: SYSTEM_STATE_PATH,
+	};
+}
+
+async function prepareCockpitReports(
+	fsys: any,
+	bridge: WanixBridge,
+	config: Config,
+	systemView: WanixSystemView,
+): Promise<void> {
+	systemView.filesystemActivity("cockpit preparation started");
+	const agent = await writeAgentToolContract(fsys, bridge, systemView);
+	await writeSystemJournal(fsys, bridge, systemView);
+	await runCockpitSelfCheck(fsys, bridge, config, systemView);
+	const journal = await writeSystemJournal(fsys, bridge, systemView);
+	systemView.filesystemActivity("cockpit reports prepared", {
+		path: journal.statePath,
+		paths: [agent.markdownPath, agent.jsonPath, journal.journalPath, journal.statePath],
+	});
 }
 
 function wanixUri(path: string): vscode.Uri {

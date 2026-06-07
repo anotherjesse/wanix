@@ -783,6 +783,22 @@ what is ready, what is optional, and what artifact to inspect next.
 
 ![Wanix cockpit self-check](assets/wanix-workbench-browser-dx/58-cockpit-self-check.png)
 
+That immediately exposed the next small paper cut: a good diagnostic is useful,
+but a diagnostic that points at two setup actions still makes the operator do
+coordination work. The System view now has `Prepare Cockpit Reports`. It writes
+the agent tool contract, writes the system journal and JSON state sidecar, runs
+the cockpit self-check, and then writes the system snapshot again so the final
+state file includes the check result.
+
+On a fresh served root, that turns the missing report artifacts from warnings
+into ok checks. The remaining warning in this proof is the real environment
+state: direct-v86 is advertised, but this root has not been prepared with
+`/boot/bzImage` and executable `/bin/init`. That is a better warning. It is not
+"you forgot to run another cockpit command"; it is "this VM boot root is not
+ready yet."
+
+![Wanix cockpit prepare reports](assets/wanix-workbench-browser-dx/59-cockpit-prepare-reports.png)
+
 ## The Feeling Now
 
 The current loop is:
@@ -799,6 +815,8 @@ The current loop is:
 6. Click `Run Cockpit Self Check` to verify drivers, service roots, routes, and
    report storage, then inspect `/.wanix/cockpit-check.md` or
    `/.wanix/cockpit-check.json`.
+7. Click `Prepare Cockpit Reports` to publish the agent tool contract, system
+   journal, system-state JSON, self-check report, and probe file in one pass.
 6. Edit or create a file in `wanix:/`.
 7. Create a file from the shell, for example
    `write shellmade hello from shell activity`, and see Explorer plus Activity
