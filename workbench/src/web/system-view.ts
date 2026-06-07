@@ -86,6 +86,8 @@ type RouteRunArtifact = {
 type ActivityRecord = {
 	id: number;
 	label: string;
+	path?: string;
+	paths?: string[];
 };
 
 type AgentRecord = {
@@ -209,8 +211,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
-	filesystemActivity(label = "filesystem activity"): void {
-		this.addActivity(label);
+	filesystemActivity(label = "filesystem activity", options: { path?: string; paths?: string[] } = {}): void {
+		this.addActivity(label, options);
 		this.refresh();
 	}
 
@@ -328,7 +330,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				return this.agentItems();
 			case "activity":
 				return this.activity.length > 0
-					? this.activity.map((entry) => leaf(`activity:${entry.id}`, entry.label, undefined, "history"))
+					? this.activity.map((entry) => activityItem(entry))
 					: [leaf("activity:empty", "no activity yet")];
 		}
 	}
@@ -449,11 +451,13 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		return items;
 	}
 
-	private addActivity(label: string): void {
-		if (this.activity[0]?.label === label) {
+	private addActivity(label: string, options: { path?: string; paths?: string[] } = {}): void {
+		const paths = uniquePaths(options.paths || (options.path ? [options.path] : []));
+		const path = options.path || paths[paths.length - 1];
+		if (this.activity[0]?.label === label && samePaths(this.activity[0].paths, paths) && this.activity[0].path === path) {
 			return;
 		}
-		this.activity.unshift({ id: this.nextActivityId++, label });
+		this.activity.unshift({ id: this.nextActivityId++, label, path, paths });
 		this.activity = this.activity.slice(0, 12);
 	}
 
@@ -568,6 +572,32 @@ function routeRunArtifactItems(run: RouteRunRecord): SystemTreeItem[] {
 	return items;
 }
 
+function activityItem(entry: ActivityRecord): SystemTreeItem {
+	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
+	const path = entry.path || paths[paths.length - 1];
+	const children = paths.length > 1
+		? paths.map((candidate, index) => leaf(
+			`activity:${entry.id}:path:${index}`,
+			candidate,
+			candidate === path ? "open target" : "touched path",
+			candidate === path ? "go-to-file" : "file",
+		))
+		: undefined;
+	return leaf(
+		`activity:${entry.id}`,
+		entry.label,
+		path ? pathDescription(path) : undefined,
+		"history",
+		path ? {
+			command: "workbench.openWanixPath",
+			title: "Open Wanix Path",
+			arguments: [path],
+		} : undefined,
+		path ? "wanixActivityPath" : undefined,
+		{ path, children },
+	);
+}
+
 function routeRunDescription(run: RouteRunRecord): string {
 	return run.url ? `${run.status} · ${run.url}` : run.status;
 }
@@ -591,6 +621,18 @@ function removeMapEntries<K, V>(map: Map<K, V>, shouldRemove: (value: V) => bool
 
 function formatClearCount(count: number, noun: string): string {
 	return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function uniquePaths(paths: string[] | undefined): string[] {
+	return [...new Set((paths || []).filter((path) => path.length > 0))];
+}
+
+function samePaths(left: string[] | undefined, right: string[]): boolean {
+	const normalizedLeft = uniquePaths(left);
+	if (normalizedLeft.length !== right.length) {
+		return false;
+	}
+	return normalizedLeft.every((path, index) => path === right[index]);
 }
 
 function actionLeaf(

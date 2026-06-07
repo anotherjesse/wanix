@@ -58,6 +58,7 @@ type TaskArtifacts = {
 
 type FilesystemActivity = {
 	label?: string;
+	openPath?: string;
 	paths?: string[];
 };
 
@@ -84,7 +85,10 @@ export async function activate(context: vscode.ExtensionContext) {
 	const refreshFiles = async (activity?: FilesystemActivity) => {
 		if (activity?.paths?.length) {
 			await refreshWanixPaths(bridge, activity.paths);
-			systemView.filesystemActivity(activity.label || "filesystem refreshed");
+			systemView.filesystemActivity(activity.label || "filesystem refreshed", {
+				path: activity.openPath,
+				paths: activity.paths,
+			});
 			return;
 		}
 		await refreshWorkbenchFiles(bridge);
@@ -1515,10 +1519,21 @@ function shellPathActivity(command: string, paths: string[]): FilesystemActivity
 	if (unique.length === 0) {
 		return undefined;
 	}
+	const openPath = shellActivityOpenPath(command, unique);
 	const label = command === "mv" && unique.length >= 2
 		? `shell mv ${displayWanixPath(unique[0])} -> ${displayWanixPath(unique[1])}`
 		: `shell ${command} ${displayWanixPath(unique[unique.length - 1])}`;
-	return { label, paths: unique };
+	return { label, openPath, paths: unique };
+}
+
+function shellActivityOpenPath(command: string, paths: string[]): string {
+	if (command === "rm" || command === "rmdir") {
+		return parentPath(paths[0]) || "/";
+	}
+	if (command === "mv" && paths.length >= 2) {
+		return paths[1];
+	}
+	return paths[paths.length - 1];
 }
 
 function shellRedirectionPaths(words: string[], cwd: string): string[] {
