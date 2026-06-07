@@ -19,5 +19,6 @@ wanix-id = { path = "../wanix-id" }
 wanix-vfs = { path = "../wanix-vfs" }
 
 [dev-dependencies]
+wanix-kv = { path = "../wanix-kv" }
 wanix-task = { path = "../wanix-task" }
 wanix-term = { path = "../wanix-term" }

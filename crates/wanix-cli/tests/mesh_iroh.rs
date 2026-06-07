@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use wanix_fs::{File, FileSystem, FileType, MemFs, NormalizedPath, OpenOptions};
 use wanix_id::NodeIdentity;
+use wanix_kv::KvDevice;
 use wanix_mesh::{MeshNode, ServeConfig};
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
@@ -30,7 +31,7 @@ fn loopback() -> SocketAddr {
     SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)
 }
 
-/// Builds a services namespace: a `MemFs` host root plus `#term` and `#task`.
+/// Builds a services namespace: a `MemFs` host root plus `#kv`, `#term`, `#task`.
 fn services_namespace() -> (Namespace, Arc<MemFs>) {
     let host = Arc::new(MemFs::new());
     let mut namespace = Namespace::new();
@@ -42,6 +43,16 @@ fn services_namespace() -> (Namespace, Arc<MemFs>) {
             Arc::new(TermDevice::new()),
             ".",
             "#term",
+            BindOptions::default(),
+        )
+        .unwrap();
+    // `#kv` is a `FileSystem`, so it binds beside `#term`/`#task` and imports over
+    // the mesh for free: `/n/remote/#kv/<key>` is reachable through the client.
+    namespace
+        .bind(
+            Arc::new(KvDevice::new()),
+            ".",
+            "#kv",
             BindOptions::default(),
         )
         .unwrap();
@@ -154,6 +165,58 @@ fn service_devices_cross_iroh() {
         read_through(&client_ns, &mounted("#task/self/kind")),
         b"noop\n"
     );
+}
+
+#[test]
+fn kv_device_operated_over_iroh() {
+    // Slice 4 demo: a remote node operates node A's `#kv` store as files over the
+    // QUIC mount. We write `#kv/result` and read `#kv/config` purely through the
+    // mounted namespace — `mount-write`/`mount-cat` semantics against a service
+    // device. The values are non-seekable streams server-side, so this also
+    // exercises the honest-seekability read path with no fabricated offset.
+    let (server_ns, _host) = services_namespace();
+    let (client_ns, _server, _client) = mount_over_quic(Arc::new(server_ns));
+
+    // Seed `config` through the mount (the store starts empty), then mutate
+    // `result` — both keys are operated remotely as ordinary files.
+    for (key, value) in [
+        ("config", b"region=us\n".as_slice()),
+        ("result", b"status=ok\n".as_slice()),
+    ] {
+        let mut file = client_ns
+            .open(
+                &mounted(&format!("#kv/{key}")),
+                OpenOptions {
+                    read: false,
+                    write: true,
+                    create: true,
+                    truncate: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(file.write(value).unwrap(), value.len());
+        drop(file);
+    }
+
+    // Read both keys back over the mesh, byte-exact.
+    assert_eq!(
+        read_through(&client_ns, &mounted("#kv/config")),
+        b"region=us\n"
+    );
+    assert_eq!(
+        read_through(&client_ns, &mounted("#kv/result")),
+        b"status=ok\n"
+    );
+
+    // The `#kv` directory enumerates both keys through the imported listing.
+    let mut keys: Vec<String> = client_ns
+        .read_dir(&mounted("#kv"))
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.name().to_owned())
+        .collect();
+    keys.sort();
+    assert_eq!(keys, vec!["config".to_owned(), "result".to_owned()]);
 }
 
 /// A dialed mount that keeps its dialer node alive alongside the namespace, the

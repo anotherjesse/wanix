@@ -24,6 +24,7 @@ use std::thread;
 use wanix_9p::P9Server;
 use wanix_9p_client::RemoteFs;
 use wanix_fs::{File, FileSystem, FileType, MemFs, NormalizedPath, OpenOptions};
+use wanix_kv::KvDevice;
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
 use wanix_vfs::{BindOptions, BindPosition, Namespace};
@@ -40,7 +41,7 @@ fn mounted(relative: &str) -> NormalizedPath {
     path(&format!("{MOUNT_POINT}/{relative}"))
 }
 
-/// Builds a services namespace: a `MemFs` host root plus `#term` and `#task`.
+/// Builds a services namespace: a `MemFs` host root plus `#kv`, `#term`, `#task`.
 ///
 /// The host `MemFs` is returned so the caller can inspect server-side state. The
 /// `#task` root task is allocated with kind `noop`, so `#task/self/kind` is the
@@ -56,6 +57,15 @@ fn services_namespace() -> (Namespace, Arc<MemFs>) {
             Arc::new(TermDevice::new()),
             ".",
             "#term",
+            BindOptions::default(),
+        )
+        .unwrap();
+    // `#kv` binds as a service device beside `#term`/`#task` and imports for free.
+    namespace
+        .bind(
+            Arc::new(KvDevice::new()),
+            ".",
+            "#kv",
             BindOptions::default(),
         )
         .unwrap();
@@ -267,6 +277,59 @@ fn term_service_stream_reads_exact_server_bytes() {
     );
     let ctl_again = read_through(&client_ns, &mounted("#term/1/ctl"));
     assert!(ctl_again.is_empty());
+}
+
+#[test]
+fn kv_service_operated_over_the_wire() {
+    // Slice 4: a remote node operates node A's `#kv` store as files. We write
+    // `#kv/result` and `#kv/config` through the mount, then read them back — the
+    // `mount-write`/`mount-cat` verbs against a service device. A `#kv` value is a
+    // non-seekable stream server-side, so a large value also proves the read path
+    // stays byte-exact across many sequential `Tread`s with no fabricated offset.
+    let (server_ns, _host) = services_namespace();
+    let (client_ns, _remote) = mount_over_loopback(Arc::new(server_ns));
+
+    // A value larger than one read chunk, with position-dependent bytes so any
+    // off-by-N in the streaming reassembly fails the comparison.
+    let blob: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
+    for (key, value) in [
+        ("config", b"region=us\n".to_vec()),
+        ("result", b"status=ok\n".to_vec()),
+        ("blob", blob.clone()),
+    ] {
+        let mut file = client_ns
+            .open(
+                &mounted(&format!("#kv/{key}")),
+                OpenOptions {
+                    read: false,
+                    write: true,
+                    create: true,
+                    truncate: true,
+                },
+            )
+            .unwrap();
+        let mut written = 0;
+        while written < value.len() {
+            let n = file.write(&value[written..]).unwrap();
+            assert!(n > 0, "short write to #kv/{key}");
+            written += n;
+        }
+        drop(file);
+    }
+
+    assert_eq!(
+        read_through(&client_ns, &mounted("#kv/config")),
+        b"region=us\n"
+    );
+    assert_eq!(
+        read_through(&client_ns, &mounted("#kv/result")),
+        b"status=ok\n"
+    );
+    assert_eq!(
+        read_through(&client_ns, &mounted("#kv/blob")),
+        blob,
+        "a large non-seekable #kv value streamed back corrupted"
+    );
 }
 
 #[test]

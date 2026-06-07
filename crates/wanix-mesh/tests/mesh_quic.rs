@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use wanix_fs::{File, FileSystem, FileType, MemFs, NormalizedPath, OpenOptions};
 use wanix_id::{Grant, GrantTable, GrantTablePolicy, NodeIdentity};
+use wanix_kv::KvDevice;
 use wanix_mesh::{MeshNode, ServeConfig};
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
@@ -34,9 +35,26 @@ fn loopback() -> SocketAddr {
     SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)
 }
 
-/// Builds a services namespace: a `MemFs` host root plus `#term` and `#task`.
-fn services_namespace() -> (Namespace, Arc<MemFs>) {
+/// The served services namespace and the live device handles backing it.
+///
+/// The `host` and `kv` handles alias the filesystems bound into the namespace,
+/// so a test can observe server-side state directly after the client mutates it
+/// over the wire — proving the bytes that crossed QUIC are the bytes the server
+/// stored, with nothing lost or corrupted in transit.
+struct Services {
+    namespace: Namespace,
+    host: Arc<MemFs>,
+    kv: KvDevice,
+}
+
+/// Builds a services namespace: a `MemFs` host root plus `#kv`, `#term`, `#task`.
+///
+/// This is the Slice 4 served shape: the same service-device namespace that
+/// `wanix mesh-serve --wanix-services` exports, so importing `/n/A/#kv` over the
+/// mesh exercises exactly the device a remote node operates as files.
+fn services_namespace() -> Services {
     let host = Arc::new(MemFs::new());
+    let kv = KvDevice::new();
     let mut namespace = Namespace::new();
     namespace
         .bind(host.clone(), ".", ".", BindOptions::default())
@@ -48,6 +66,12 @@ fn services_namespace() -> (Namespace, Arc<MemFs>) {
             "#term",
             BindOptions::default(),
         )
+        .unwrap();
+    // `#kv` is a `FileSystem`, so it binds into the served namespace exactly like
+    // `#term`/`#task` and imports over the mesh for free: each key is a file under
+    // `/n/A/#kv/<key>` reachable through the unchanged 9P client.
+    namespace
+        .bind(Arc::new(kv.clone()), ".", "#kv", BindOptions::default())
         .unwrap();
     let table = TaskTable::new();
     table.register_noop_driver("noop").unwrap();
@@ -64,7 +88,11 @@ fn services_namespace() -> (Namespace, Arc<MemFs>) {
             },
         )
         .unwrap();
-    (namespace, host)
+    Services {
+        namespace,
+        host,
+        kv,
+    }
 }
 
 /// Reads a file handle to EOF with a bounded loop.
@@ -139,9 +167,9 @@ fn idle_mount_survives_past_the_op_deadline() {
     // mounted namespace. A healthy session that sits idle longer than the
     // deadline (9P has no keepalive: the server simply blocks on its next-request
     // read) must NOT be torn down, or the "open a mount, walk away" demo dies.
-    let (server_ns, host) = services_namespace();
-    let server_root: Arc<dyn FileSystem> = Arc::new(server_ns);
-    host.write_file("note.txt", b"still here").unwrap();
+    let services = services_namespace();
+    services.host.write_file("note.txt", b"still here").unwrap();
+    let server_root: Arc<dyn FileSystem> = Arc::new(services.namespace);
 
     let deadline = Duration::from_millis(300);
     let (client_ns, _a, _b) = connect_with_deadline(ServeConfig::open(server_root), deadline);
@@ -164,8 +192,9 @@ fn idle_mount_survives_past_the_op_deadline() {
 
 #[test]
 fn regular_file_round_trips_through_quic_mount() {
-    let (server_ns, host) = services_namespace();
-    let server_root: Arc<dyn FileSystem> = Arc::new(server_ns);
+    let services = services_namespace();
+    let host = services.host.clone();
+    let server_root: Arc<dyn FileSystem> = Arc::new(services.namespace);
     let (client_ns, _a, _b) = connect(ServeConfig::open(server_root), "");
 
     let payload = b"plan9 import over real QUIC";
@@ -200,8 +229,8 @@ fn regular_file_round_trips_through_quic_mount() {
 
 #[test]
 fn service_devices_cross_quic_identically() {
-    let (server_ns, _host) = services_namespace();
-    let server_root: Arc<dyn FileSystem> = Arc::new(server_ns);
+    let services = services_namespace();
+    let server_root: Arc<dyn FileSystem> = Arc::new(services.namespace);
     let (client_ns, _a, _b) = connect(ServeConfig::open(server_root), "");
 
     // The `#task` device crosses the wire, not just plain files.
@@ -213,12 +242,148 @@ fn service_devices_cross_quic_identically() {
     assert_eq!(read_through(&client_ns, &mounted("#term/new")), b"1\n");
 }
 
+/// Writes `value` to a `#kv` key over the mounted namespace by creating the key
+/// file, writing it, then dropping the handle so the close-time `Tclunk` commits
+/// the buffered value on the server.
+fn kv_write(namespace: &Namespace, key: &str, value: &[u8]) {
+    let mut file = namespace
+        .open(
+            &mounted(&format!("#kv/{key}")),
+            OpenOptions {
+                read: false,
+                write: true,
+                create: true,
+                truncate: true,
+            },
+        )
+        .unwrap();
+    let mut written = 0;
+    while written < value.len() {
+        let n = file.write(&value[written..]).unwrap();
+        assert!(n > 0, "unexpected short write to #kv/{key}");
+        written += n;
+    }
+    // Drop sends Tclunk; the server drops the KvWriteFile, committing the buffer.
+    drop(file);
+}
+
+#[test]
+fn kv_service_operated_over_quic_mount() {
+    // Slice 4: a remote node operates node A's `#kv` device as ordinary files
+    // over QUIC. Node B mounts `/n/A`, reads `/n/A/#kv/config`, and writes
+    // `/n/A/#kv/result` — no special-cased code, just the unchanged 9P client
+    // resolving into the imported `#kv` FileSystem. Mount-there, run-here.
+    let services = services_namespace();
+    let kv = services.kv.clone();
+    // Node A seeds `config`; the value lands in the server's live store.
+    kv.open(
+        &path("config"),
+        OpenOptions {
+            write: true,
+            create: true,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap()
+    .write(b"region=us\nreplicas=3\n")
+    .unwrap();
+    let server_root: Arc<dyn FileSystem> = Arc::new(services.namespace);
+    let (client_ns, _a, _b) = connect(ServeConfig::open(server_root), "");
+
+    // Node B reads node A's `config` key over the mesh. The value is a streamed,
+    // non-seekable `#kv` file on the server (it never honors `Tread.offset`), so
+    // this is exactly where Slice 1's honest-seekability correction earns its
+    // keep: a purely sequential read returns the exact bytes, uncorrupted.
+    assert_eq!(
+        read_through(&client_ns, &mounted("#kv/config")),
+        b"region=us\nreplicas=3\n"
+    );
+
+    // Node B writes a result back into node A's key store over the mesh.
+    kv_write(&client_ns, "result", b"status=ok\nbuilt=42\n");
+
+    // The bytes that crossed QUIC are the bytes node A's live store now holds.
+    let mut stored = kv.open(&path("result"), OpenOptions::read()).unwrap();
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 256];
+    loop {
+        let n = stored.read(&mut chunk).unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    assert_eq!(buf, b"status=ok\nbuilt=42\n");
+
+    // The new key is also visible to node B reading it straight back over the
+    // mesh, and `#kv` enumerates both keys through the imported directory.
+    assert_eq!(
+        read_through(&client_ns, &mounted("#kv/result")),
+        b"status=ok\nbuilt=42\n"
+    );
+    let mut keys: Vec<String> = client_ns
+        .read_dir(&mounted("#kv"))
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.name().to_owned())
+        .collect();
+    keys.sort();
+    assert_eq!(keys, vec!["config".to_owned(), "result".to_owned()]);
+}
+
+#[test]
+fn large_kv_value_streams_across_quic_without_corruption() {
+    // The seekability correction is only honest if a value larger than one read
+    // chunk still streams byte-exact. A `#kv` value is non-seekable on the
+    // server, so each `Tread` is served sequentially from the server's own
+    // cursor; the client must drive purely sequential reads and reassemble the
+    // value with nothing dropped, duplicated, or reordered across chunk
+    // boundaries — the precise failure a fictional client-side offset would hide.
+    let services = services_namespace();
+    let kv = services.kv.clone();
+
+    // A multi-kilobyte value with position-dependent bytes: any off-by-N in the
+    // streaming reassembly shifts the pattern and fails the comparison.
+    let value: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
+    {
+        let mut seed = kv
+            .open(
+                &path("blob"),
+                OpenOptions {
+                    write: true,
+                    create: true,
+                    ..OpenOptions::default()
+                },
+            )
+            .unwrap();
+        seed.write(&value).unwrap();
+    }
+
+    let server_root: Arc<dyn FileSystem> = Arc::new(services.namespace);
+    let (client_ns, _a, _b) = connect(ServeConfig::open(server_root), "");
+
+    // Read with a small buffer so the value spans many sequential reads.
+    let mut reader = client_ns
+        .open(&mounted("#kv/blob"), OpenOptions::read())
+        .unwrap();
+    let mut got = Vec::new();
+    let mut chunk = [0u8; 100];
+    loop {
+        let n = reader.read(&mut chunk).unwrap();
+        if n == 0 {
+            break;
+        }
+        got.extend_from_slice(&chunk[..n]);
+        assert!(got.len() <= value.len(), "stream over-read its value");
+    }
+    assert_eq!(got, value, "the streamed #kv value crossed QUIC corrupted");
+}
+
 #[test]
 fn verified_peer_id_keys_a_read_only_grant() {
     // Node B's identity is fixed, so node A can grant exactly that peer.
     let peer_b = NodeIdentity::from_secret_bytes([22u8; 32]).peer_id();
-    let (server_ns, _host) = services_namespace();
-    let server_root: Arc<dyn FileSystem> = Arc::new(server_ns);
+    let server_root: Arc<dyn FileSystem> = Arc::new(services_namespace().namespace);
 
     // Seed a read-only subtree the grant scopes to.
     let backing = Arc::new(MemFs::new());
@@ -259,8 +424,7 @@ fn verified_peer_id_keys_a_read_only_grant() {
 
 #[test]
 fn default_deny_denies_an_ungranted_peer() {
-    let (server_ns, _host) = services_namespace();
-    let server_root: Arc<dyn FileSystem> = Arc::new(server_ns);
+    let server_root: Arc<dyn FileSystem> = Arc::new(services_namespace().namespace);
     // An empty grant table denies everyone, regardless of attach name.
     let policy = Arc::new(GrantTablePolicy::new(GrantTable::new()));
     let config = ServeConfig::guarded(server_root.clone(), policy);

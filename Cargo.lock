@@ -4137,6 +4137,7 @@ version = "0.1.0"
 dependencies = [
  "wanix-9p",
  "wanix-fs",
+ "wanix-kv",
  "wanix-protocol",
 ]
 
@@ -4208,6 +4209,7 @@ dependencies = [
  "wanix-9p-client",
  "wanix-fs",
  "wanix-id",
+ "wanix-kv",
  "wanix-task",
  "wanix-term",
  "wanix-vfs",

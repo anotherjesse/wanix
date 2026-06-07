@@ -13,6 +13,7 @@ wanix-protocol = { path = "../wanix-protocol" }
 
 [dev-dependencies]
 wanix-9p = { path = "../wanix-9p" }
+wanix-kv = { path = "../wanix-kv" }
 
 [lib]
 name = "wanix_9p_client"
