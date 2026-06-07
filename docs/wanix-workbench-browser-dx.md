@@ -519,6 +519,15 @@ file path behind one command.
 
 ![Shell command history linked evidence](assets/wanix-workbench-browser-dx/78-shell-history-linked-evidence.png)
 
+The history can be compacted from the cockpit too. `Compact Shell Command
+History` offers count and age retention choices, confirms before it removes
+records, rewrites `commands.jsonl`, refreshes `latest.md` and `summary.md`,
+relinks `commands/*.md`, and drops stale `selected.md` evidence. That turns a
+long-lived browser session from "clear everything or live with the pile" into a
+deliberate retention workflow.
+
+![Shell command history compaction controls](assets/wanix-workbench-browser-dx/79-shell-history-compaction-controls.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1120,7 +1129,8 @@ The current loop is:
 17. Click `Open Shell History Summary` to generate the grouped
     `/.wanix/qjs-shell/summary.md` session view. Command rows link to
     `/.wanix/qjs-shell/commands/<n>.md`, and touched paths link back to
-    `wanix:/...`.
+    `wanix:/...`. Then use `Compact Shell Command History` to keep the latest
+    count or age window and regenerate the retained evidence set.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1232,8 +1242,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add shell history compaction controls by count or age now that each summary
-  run creates per-command evidence files.
+- Add an explicit shell-history export/archive action before compaction when a
+  session needs an audit artifact outside the live `.wanix/qjs-shell` surface.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

@@ -106,6 +106,12 @@ type ShellHistoryPick = vscode.QuickPickItem & {
 	entry: ShellHistoryEntry;
 };
 
+type ShellHistoryCompactPick = vscode.QuickPickItem & {
+	retentionKind: "count" | "age";
+	keepCount?: number;
+	ageMs?: number;
+};
+
 type ShellHistoryArtifact = {
 	entry: ShellHistoryEntry;
 	index: number;
@@ -129,6 +135,7 @@ const SHELL_HISTORY_MD_PATH = ".wanix/qjs-shell/latest.md";
 const SHELL_HISTORY_SELECTED_MD_PATH = ".wanix/qjs-shell/selected.md";
 const SHELL_HISTORY_SUMMARY_MD_PATH = ".wanix/qjs-shell/summary.md";
 const SHELL_HISTORY_COMMANDS_DIR = ".wanix/qjs-shell/commands";
+const SHELL_HISTORY_LATEST_MARKDOWN_LIMIT = 12;
 const SYSTEM_JOURNAL_PATH = ".wanix/system-journal.md";
 const SYSTEM_STATE_PATH = ".wanix/system-state.json";
 const SERVICE_STATE_POLL_MS = 1000;
@@ -333,6 +340,14 @@ export async function activate(context: vscode.ExtensionContext) {
 				await openShellHistorySummary(fsys, bridge, systemView);
 				revealWanixSystemView();
 				vscode.window.showInformationMessage(`Opened qjs shell history summary`);
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.compactShellCommandHistory', async () => {
+			try {
+				await compactShellCommandHistory(fsys, bridge, systemView);
+				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -827,6 +842,53 @@ async function openShellHistorySummary(
 	await openWanixPath(SHELL_HISTORY_SUMMARY_MD_PATH);
 }
 
+async function compactShellCommandHistory(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const entries = await readShellHistoryEntries(fsys);
+	if (entries.length === 0) {
+		throw new Error("No qjs shell command history entries yet. Run a served shell command first.");
+	}
+	const now = Date.now();
+	const pick = await vscode.window.showQuickPick(shellHistoryCompactPicks(entries, now), {
+		placeHolder: "Compact qjs shell command history",
+		matchOnDescription: true,
+		matchOnDetail: true,
+	});
+	if (!pick) {
+		return;
+	}
+	const retained = compactShellHistoryEntries(entries, pick, now);
+	const generatedAt = new Date();
+	if (retained.length < entries.length) {
+		const choice = await vscode.window.showWarningMessage(
+			`Compact qjs shell command history from ${entries.length} to ${retained.length} commands using "${pick.label}"? This rewrites the JSONL log and generated history artifacts.`,
+			{ modal: true },
+			"Compact History",
+		);
+		if (choice !== "Compact History") {
+			return;
+		}
+	}
+	const paths = await rewriteShellHistoryArtifacts(fsys, retained, generatedAt);
+	const description = retained.length < entries.length
+		? `${entries.length} -> ${retained.length} commands`
+		: `${entries.length} commands already fit`;
+	publishShellCommandHistoryReportFromPaths(systemView, paths, SHELL_HISTORY_SUMMARY_MD_PATH);
+	systemView.filesystemActivity(retained.length < entries.length ? "shell command history compacted" : "shell command history refreshed", {
+		description,
+		path: SHELL_HISTORY_SUMMARY_MD_PATH,
+		paths,
+	});
+	await refreshWanixPaths(bridge, [".wanix/qjs-shell", SHELL_HISTORY_SELECTED_MD_PATH, ...paths]);
+	await openWanixPath(SHELL_HISTORY_SUMMARY_MD_PATH);
+	vscode.window.showInformationMessage(retained.length < entries.length
+		? `Compacted qjs shell history: ${description}`
+		: `qjs shell history already fits ${pick.label}; refreshed history artifacts`);
+}
+
 async function clearShellCommandHistory(
 	fsys: any,
 	bridge: WanixBridge,
@@ -890,6 +952,119 @@ async function readShellHistoryEntries(fsys: any): Promise<ShellHistoryEntry[]> 
 		}
 	}
 	return entries;
+}
+
+function shellHistoryCompactPicks(entries: ShellHistoryEntry[], now: number): ShellHistoryCompactPick[] {
+	const countPick = (keepCount: number): ShellHistoryCompactPick => {
+		const retained = Math.min(entries.length, keepCount);
+		return {
+			label: `Keep latest ${keepCount} commands`,
+			description: shellHistoryCompactDescription(entries.length, retained),
+			detail: "Rewrite commands.jsonl, latest history, grouped summary, and per-command evidence files.",
+			retentionKind: "count",
+			keepCount,
+		};
+	};
+	const agePick = (label: string, ageMs: number): ShellHistoryCompactPick => {
+		const retained = compactShellHistoryEntries(entries, { label, retentionKind: "age", ageMs }, now).length;
+		return {
+			label,
+			description: shellHistoryCompactDescription(entries.length, retained),
+			detail: "Keep unknown timestamps plus entries observed inside this window; regenerate history artifacts.",
+			retentionKind: "age",
+			ageMs,
+		};
+	};
+	return [
+		countPick(25),
+		countPick(100),
+		countPick(250),
+		agePick("Keep last 24 hours", 24 * 60 * 60 * 1000),
+		agePick("Keep last 7 days", 7 * 24 * 60 * 60 * 1000),
+	];
+}
+
+function shellHistoryCompactDescription(total: number, retained: number): string {
+	const removed = total - retained;
+	return removed > 0 ? `${total} -> ${retained} commands, remove ${removed}` : `${total} commands already fit`;
+}
+
+function compactShellHistoryEntries(entries: ShellHistoryEntry[], pick: ShellHistoryCompactPick, now: number): ShellHistoryEntry[] {
+	if (pick.retentionKind === "count") {
+		const keepCount = Math.max(1, pick.keepCount ?? entries.length);
+		return entries.slice(Math.max(0, entries.length - keepCount));
+	}
+	const cutoff = now - Math.max(0, pick.ageMs ?? 0);
+	const retained = entries.filter((entry) => {
+		const observed = shellHistoryObservedMillis(entry);
+		return observed === undefined || observed >= cutoff;
+	});
+	return retained.length > 0 ? retained : entries.slice(-1);
+}
+
+async function rewriteShellHistoryArtifacts(fsys: any, entries: ShellHistoryEntry[], generatedAt: Date): Promise<string[]> {
+	await fsys.makeDirAll(parentPath(SHELL_HISTORY_JSONL_PATH));
+	await fsys.writeFile(SHELL_HISTORY_JSONL_PATH, shellHistoryJsonl(entries));
+	await fsys.writeFile(SHELL_HISTORY_JSON_PATH, shellHistoryLatestJson(entries, generatedAt));
+	await fsys.writeFile(SHELL_HISTORY_MD_PATH, shellHistoryLatestMarkdown(entries, generatedAt));
+	const artifacts = shellHistoryArtifacts(entries);
+	await writeShellHistoryCommandArtifacts(fsys, artifacts);
+	await fsys.writeFile(SHELL_HISTORY_SUMMARY_MD_PATH, shellHistorySummaryMarkdown(artifacts, generatedAt));
+	try {
+		await fsys.remove(SHELL_HISTORY_SELECTED_MD_PATH);
+	} catch {
+		// A stale selected command may point at an entry removed by compaction.
+	}
+	const paths = await existingShellHistoryPaths(fsys);
+	return paths.includes(SHELL_HISTORY_SUMMARY_MD_PATH) ? paths : [SHELL_HISTORY_SUMMARY_MD_PATH, ...paths];
+}
+
+function shellHistoryJsonl(entries: ShellHistoryEntry[]): string {
+	return entries.map((entry) => JSON.stringify(entry)).join("\n") + (entries.length > 0 ? "\n" : "");
+}
+
+function shellHistoryLatestJson(entries: ShellHistoryEntry[], generatedAt: Date): string {
+	return `${JSON.stringify({
+		schema: "wanix.qjs-shell.command-history.v1",
+		generatedAtUnixMillis: generatedAt.valueOf(),
+		historyPath: `/${SHELL_HISTORY_JSONL_PATH}`,
+		latestJsonPath: `/${SHELL_HISTORY_JSON_PATH}`,
+		latestMarkdownPath: `/${SHELL_HISTORY_MD_PATH}`,
+		entries: shellHistoryLatestEntries(entries),
+	}, null, 2)}\n`;
+}
+
+function shellHistoryLatestMarkdown(entries: ShellHistoryEntry[], generatedAt: Date): string {
+	return [
+		"# Wanix qjs Shell Command History",
+		"",
+		"Schema: `wanix.qjs-shell.command-history.v1`",
+		`Generated: ${generatedAt.toISOString()}`,
+		`JSONL: \`/${SHELL_HISTORY_JSONL_PATH}\``,
+		`Latest JSON: \`/${SHELL_HISTORY_JSON_PATH}\``,
+		"",
+		"## Latest Retained Commands",
+		"",
+		"| Command | Status | Changed | Target | Evidence |",
+		"| --- | --- | --- | --- | --- |",
+		...shellHistoryLatestEntries(entries).map(shellHistoryLatestMarkdownRow),
+		"",
+		`This file was regenerated by browser-side history compaction. The JSONL file keeps ${entries.length} retained commands; the grouped summary links each retained command to its evidence file.`,
+		"",
+	].join("\n");
+}
+
+function shellHistoryLatestEntries(entries: ShellHistoryEntry[]): ShellHistoryEntry[] {
+	return entries.slice(-SHELL_HISTORY_LATEST_MARKDOWN_LIMIT);
+}
+
+function shellHistoryLatestMarkdownRow(entry: ShellHistoryEntry): string {
+	const changed = typeof entry.outcome?.changed === "boolean" ? String(entry.outcome.changed) : "";
+	return `| ${shellHistoryMarkdownCell(shellHistoryCommand(entry))} | ${shellHistoryMarkdownCell(entry.outcome?.status || entry.operation?.status || "")} | ${shellHistoryMarkdownCell(changed)} | ${shellHistoryMarkdownCell(shellHistoryTarget(entry) || "")} | ${shellHistoryMarkdownCell(entry.outcome?.evidence || "")} |`;
+}
+
+function shellHistoryMarkdownCell(value: string): string {
+	return value.replace(/[\r\n]/g, " ").replace(/\|/g, "\\|");
 }
 
 function isShellHistoryEntry(value: unknown): value is ShellHistoryEntry {

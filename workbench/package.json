@@ -235,6 +235,12 @@
         "icon": "$(list-tree)"
       },
       {
+        "command": "workbench.compactShellCommandHistory",
+        "title": "Compact Shell Command History",
+        "category": "Wanix",
+        "icon": "$(list-filter)"
+      },
+      {
         "command": "workbench.clearShellCommandHistory",
         "title": "Clear Shell Command History",
         "category": "Wanix",
