@@ -1553,3 +1553,270 @@ Wanix could always export; it can import; it imports only what it grants; it doe
 it across QUIC; and now a *new* file-shaped service crosses every node the moment
 it exists, with no network code of its own. The integration layer is the
 namespace. The mesh keeps its promise.
+
+---
+
+# Slice 5 — The Data Plane: Content-Addressed Blobs (venti)
+
+Every slice so far moved bytes through the 9P window. That is right for walks,
+stats, small reads, directory listings, mutations, and streaming service files —
+the *control* plane, where being chatty buys you being simple. It is exactly
+wrong for bulk: a 50 MB rootfs crawling through the `msize` window, one bounded
+`Tread` at a time, over a serial connection, across a NAT, is a tax you pay on
+every byte and never stop paying. Plan 9 already knew the answer. **venti** split
+the archival store off from the file protocol: large, immutable data is named by
+the hash of its content, stored once, deduplicated globally, and fetched by score
+instead of by path. Slice 5 is venti for the mesh.
+
+The slice adds a second plane that runs beside 9P on the *same* endpoint and the
+*same* identity: a content-addressed blob store. Large file bytes, frozen worlds,
+and module inputs move as BLAKE3-addressed blobs, peer-to-peer, **verified
+end-to-end while they stream**. The 9P control plane keeps naming things; it just
+stops carrying the heavy ones. And the headline capability the plane unlocks is a
+**capsule**: freeze a whole Wanix world — a directory tree the agent built — onto
+the blob plane, get back one short token, and ship the entire world to another
+node by handing it that token. The other node fetches the world, verifies every
+blob, and materializes it, with shared files deduplicated automatically.
+
+## What We Built
+
+- **`ContentHash` — a BLAKE3 content address (venti's score).** A 32-byte newtype
+  living in `wanix-fs` (so it sits below everything and creates no dependency
+  cycle), with `from_hex`/`to_hex` for the 64-character share form. `hash_bytes`
+  is the one hashing entry point; a blob's name *is* the hash of its bytes, so
+  identical content always lands on the same name — dedup is not a feature you
+  add, it is what content addressing *is*.
+
+- **`ContentStore` + `LocalCasStore` — the venti store (sync core).** A
+  dependency-free trait — `put(bytes) -> ContentHash`, `get(&hash) -> bytes`,
+  `has(&hash)` — and an on-disk implementation that reuses
+  `wanix-module-cache`'s audited boundary verbatim: owner-private directory,
+  atomic write-then-rename, and an fd-based verification of the bytes before they
+  are trusted. `get` re-hashes on the way out, so a corrupted or substituted blob
+  is caught at read time, not assumed away. The store directory is
+  `$WANIX_CAS_DIR` or a per-user default; `--store DIR` overrides it.
+
+- **The `#cas` device — venti as files.** `#cas/<hash>` reads a blob,
+  `#cas/ingest` is write-then-read-the-hash, `#cas/have/<hash>` reports presence.
+  It is a `FileSystem` like every other device, so it binds into the served
+  `--wanix-services` namespace next to `#term`/`#task`/`#kv` and — by the now
+  familiar Slice 1 rule — imports across the mesh for free at `/n/A/#cas`.
+
+- **Capsules — venti applied to a whole world.** `Capsule::freeze(store, dir)`
+  walks a directory tree, ingests **each file as one blob** (so identical files
+  across the tree, or across worlds, collapse to a single blob), builds a
+  deterministic sorted `WorldManifest` mapping each world-relative path to its
+  blob hash, and ingests *that manifest* as a blob too. **The manifest blob's hash
+  is the capsule id** — the share token. `Capsule::load(store, id)` fetches the
+  manifest blob by id, parses it under the safety caps, and
+  `materialize(store, dir)` fetches every referenced file blob and writes the
+  world out. The manifest is the HashSeq: a flat, content-addressed listing of the
+  world. The capsule id is the BlobTicket's payload; in the local CLI it is the id
+  alone, and on the mesh `wanix-mesh` wraps it with A's direct addresses so a peer
+  can dial.
+
+- **The CAS-aware control/data split over 9P.** `FileSystem::content_hash(path)`
+  is a new default-`None` hook. The server surfaces it as a genuine `cas.hash`
+  synthetic xattr: a `Txattrwalk("cas.hash")` walks to a read-only fid over the 64
+  hex bytes (a file with no offloadable hash returns `ENODATA`, so the client
+  cleanly falls back to a plain `Tread`). The client's `RemoteFs::content_hash`
+  learns the hash over the wire through the iroh-free `wanix-9p-client::cas`
+  module. So a CAS-aware caller seeing a hash on a large file **skips the `Tread`
+  loop and pulls the bytes off the blob plane instead** — BLAKE3-verified — while
+  the 9P control plane only ever carried the 64-byte hash. This is the
+  control-references-content-by-hash, data-moves-peer-to-peer split, made real
+  over the actual wire rather than asserted as a local Rust API.
+
+- **`IrohCasStore` — the blob plane on QUIC.** In `wanix-mesh` (the one async
+  crate), the same `ContentStore` trait is backed by `iroh-blobs` on a second ALPN
+  registered on the *same* `Router` as `wanix/9p/1` — one endpoint, one identity,
+  two planes. A fetch is `endpoint.connect(peer, iroh_blobs::ALPN)` then
+  `store.remote().fetch(conn, HashAndFormat::raw(hash))`; a local read is
+  `store.get_bytes(hash)`. (The blueprint's earlier `downloader().download(...)`
+  shape was a fiction caught in review; the code and its docs now describe the API
+  that actually exists.)
+
+## Why: venti, the Content-Addressed Half Plan 9 Split Off
+
+Plan 9's file server (`fossil`) and its archival store (`venti`) were two
+different things on purpose. `fossil` spoke the file protocol — names, walks,
+mutable directories, the live tree you edit. `venti` spoke content: you handed it
+a block, it returned a 20-byte SHA-1 *score*, and that score was both the block's
+permanent name and the proof of its integrity. Write the same block twice and you
+got the same score and stored it once — dedup fell out of the addressing.
+Periodically `fossil` would freeze a snapshot of the whole tree *into* venti,
+turning a mutable world into an immutable, hash-named, shareable archive. The file
+protocol named the live; venti named the frozen-and-bulk.
+
+Slice 5 is that split, line for line, on the mesh — with BLAKE3 standing in for
+SHA-1 (modern, faster, and verifiable *while streaming* rather than only after):
+
+- **A blob is a venti block.** `ContentHash` is the score; `put`/`get` is
+  `write`/`read`; `has` is the presence probe. Storing the same bytes twice stores
+  one blob.
+- **A capsule is a fossil snapshot frozen into venti.** `freeze` turns a mutable
+  directory tree into an immutable manifest-of-hashes whose own hash names the
+  whole world. The two identical `lib.js` files in the demo collapse to one blob
+  exactly as venti would have collapsed two identical blocks.
+- **The capsule id is a venti score that also tells you where to fetch it.** A bare
+  score said *what* a block was but not *where*; iroh's `BlobTicket` carries the
+  hash *and* the provider's direct addresses, so the id is self-locating. Hand
+  someone the id and they have both the name and the route.
+- **The control/data split is fossil-vs-venti.** 9P stays the file protocol; it
+  references bulk by `cas.hash` and never drags it through the `msize` window. The
+  blob plane is the archival store; it moves the bytes, verified, on its own ALPN.
+
+And the through-line the whole document keeps pulling on holds again: the
+integration is the namespace. `#cas` is a `FileSystem`, so it crosses nodes for
+free; a capsule is just blobs in that store; shipping a world is handing over one
+hash.
+
+## The How: Architecture, and the Corrections
+
+The flow of `capsule save`:
+
+1. `Capsule::freeze` recursively reads the world tree. Each regular file's bytes
+   go through `store.put`, which returns the BLAKE3 hash; **symlinks are skipped**
+   (a capsule freezes content, not link topology, and dereferencing one could
+   escape the tree). Identical files return the same hash and so reference one
+   blob.
+2. The `{path -> hash}` map is sorted by path into a `WorldManifest`. Sorting makes
+   the serialized form — one `"<hex-hash> <path>\n"` line per file — independent of
+   directory-walk order, so the **same world always freezes to the same capsule
+   id**. That blob form is then itself `put`, and its hash is the capsule id.
+
+The flow of `capsule load <id>`:
+
+1. `Capsule::load` fetches the manifest blob by the capsule id and parses it.
+2. `materialize` fetches every referenced file blob from the store — locally from
+   `LocalCasStore`, or **over QUIC from a provider peer via `IrohCasStore`** — and
+   writes each one to its path under the target directory.
+
+Three corrections from the blueprint are load-bearing and are baked in:
+
+1. **Materialization is the trust boundary for an *incoming* world, so it is
+   defensive by construction.** Every manifest path is re-validated through
+   `wanix-fs`'s `NormalizedPath` and a `safe_join` that confines the result inside
+   the target directory — a hostile manifest naming `../../etc/...` or an absolute
+   path is rejected, not written. The sender's claim about a path is never trusted.
+
+2. **Whole-blob `get` loads a blob fully into memory, so size and fan-out are
+   capped.** A manifest is bounded at `MAX_MANIFEST_ENTRIES` (100k) entries and
+   `CAPSULE_MANIFEST_MAX_BYTES` (16 MiB) serialized, and every file blob is subject
+   to the store's `MAX_BLOB_SIZE` cap — enforced at *write* time in `#cas/ingest`
+   so a remote peer can't stream gigabytes into host memory before the cap fires.
+   One malicious ticket cannot OOM the loader or fill the disk.
+
+3. **Every blob is BLAKE3-verified on the way out, not trusted because it arrived.**
+   `get` re-hashes and compares against the requested hash; a substituted or
+   corrupted blob fails with a hash mismatch and the load aborts. This is what
+   "verifies every blob" means concretely, and the demo proves it by tampering with
+   one blob and watching the load refuse.
+
+The blueprint also forbade two tempting shortcuts that this code honors: the
+`cas.hash` value rides as a real synthetic xattr file, **not** as bytes appended
+to `Rgetattr` (this codebase's own `p9_decode_rgetattr` calls `cursor.finish()`,
+which errors on trailing bytes); and the freshness guard is *not* fid-mode
+scanning (`FidEntry` stores no mode) but a `CasFs` open-for-write invalidate plus
+hash-on-close.
+
+## Copy-Paste: Input / Output
+
+The CLI demo runs the full venti round-trip with no network: node A freezes a
+world and prints the capsule id; node B — a fresh, empty store that has received
+A's content-addressed blobs (the exact bytes the blob plane fetches and verifies
+over QUIC) — loads the world *by id alone*, verifying every blob and
+materializing it, with the shared file deduplicated.
+
+```sh
+# Node A builds a world: two byte-identical libs (so dedup is observable),
+# an executable init, and a main.js.
+$ md5 world/a/lib.js world/b/lib.js
+MD5 (world/a/lib.js) = 987f3cfa31d7d224eddecfe9a16bdeab
+MD5 (world/b/lib.js) = 987f3cfa31d7d224eddecfe9a16bdeab    # identical content
+
+# --- Node A: capsule save -> the capsule id (the BlobTicket payload) ---
+$ wanix-rust capsule save world --store store-A
+capsule ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df saved (4 files) from world
+load with: wanix capsule load ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df <DIR>
+
+# 4 world files, but only 4 blob OBJECTS on disk: 3 unique file blobs
+# (the two libs deduped to one) + 1 manifest blob.
+$ ls store-A
+4846acf69b223aef6b1d99daa51f0bdbfc2991330c7c8c6622a27012b188a78b
+66f858247deca4bbf5136d7417533195f91d1d0c79274701bf0347a4d8203e5e
+87212e4bec07dc7e83bb05eb722b1f37e53d30abbec2ace92df86ed95aad7390
+ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df   # == capsule id
+
+# The manifest blob IS the capsule id; it is the HashSeq — one
+# "<blob-hash> <path>" line per file. a/lib.js and b/lib.js carry the
+# SAME hash, so they share one blob.
+$ cat store-A/ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df
+87212e4bec07dc7e83bb05eb722b1f37e53d30abbec2ace92df86ed95aad7390 a/lib.js
+87212e4bec07dc7e83bb05eb722b1f37e53d30abbec2ace92df86ed95aad7390 b/lib.js
+66f858247deca4bbf5136d7417533195f91d1d0c79274701bf0347a4d8203e5e bin/init
+4846acf69b223aef6b1d99daa51f0bdbfc2991330c7c8c6622a27012b188a78b main.js
+
+# --- Node B: a different machine, empty store, given only A's blob objects
+#     (exactly the bytes iroh-blobs fetches+verifies over QUIC). It loads the
+#     world by the capsule id alone. ---
+$ wanix-rust capsule load ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df restored --store store-B
+capsule ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df restored (4 files, 124 bytes) to restored
+
+# The materialized world is byte-for-byte node A's world.
+$ diff -r world restored && echo IDENTICAL
+IDENTICAL
+
+# "Verifies every blob" is real: tamper with one blob and the load refuses.
+$ printf 'console.log("PWNED");\n' > store-evil/4846acf...main.js-blob
+$ wanix-rust capsule load ac8b46d6...e8df restored-evil --store store-evil
+capsule load: hash mismatch: requested 4846acf69b223aef6b1d99daa51f0bdbfc2991330c7c8c6622a27012b188a78b, got 141b7ff84dcebe1757a2b372449d4dca83893e55d5fefe55aa577490ee4dbdd5
+# exit status 1 — the corrupted world never materializes.
+```
+
+The over-QUIC half — the part the CLI demo stands in for — is proven end to end
+by `wanix-mesh`'s `mesh_blobs` test: two real iroh endpoints on loopback (relay
+and DNS disabled, direct-address only), node A serving the blob plane on
+`iroh_blobs::ALPN` from the *same* endpoint as its 9P service, node B fetching the
+capsule by id over QUIC with each blob BLAKE3-verified, then materializing the
+deduped world:
+
+```sh
+$ cargo test -p wanix-mesh --test mesh_blobs
+running 2 tests
+test put_and_get_round_trip_through_one_node_store ... ok
+test ship_a_world_by_capsule_id_over_the_blob_plane ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+```
+
+## The Plan 9 Lineage, and What's Next
+
+Slice 5 finishes the half of the mesh the file protocol was never meant to carry.
+9P stayed the control plane it has been since Slice 1 — it references bulk by a
+64-byte `cas.hash` and never drags the bytes through its window. Beside it now
+runs venti: an immutable, BLAKE3-named, globally-deduplicated blob store on a
+second ALPN on the same endpoint and the same identity. A capsule freezes a whole
+mutable world into that store the way `fossil` froze a snapshot into `venti`, and
+the manifest's own hash becomes the world's permanent, self-locating name. Ship
+the world by handing over that name; the far node fetches the HashSeq, verifies
+every blob, refuses any that fail, confines every path, and materializes the tree
+— shared files arriving once.
+
+What's next now has both planes to stand on:
+
+- **cpu — send the agent to the data.** With a world reducible to one hash and
+  fetchable peer-to-peer, `wanix cpu --world-ref <hash>` can pull a frozen world
+  onto the compute node before running the task — or reverse-export the caller's
+  namespace and run *on* the data node. The control/data split is the foundation;
+  cpu is the move it enables.
+- **plumber — gossip.** A `#plumb` topic bus on a third ALPN routes typed events
+  between agents and tools; durable handoff between them rides exactly the blob
+  plane built here — a capsule blob *is* the durable artifact a best-effort message
+  points at.
+
+Wanix could always export; it can import; it imports only what it grants; it does
+it across QUIC; a new file-shaped service crosses every node the moment it exists;
+and now a whole world is one verified, deduplicated hash you can hand to anyone.
+The control plane names; the data plane carries; the namespace is still the
+integration layer. The mesh keeps its promise.
