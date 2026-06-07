@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { openAgentToolContract } from './agent-tool-contract.js';
 import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairQjsProgram } from './agent-repair-demo.js';
 import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
+import { runCockpitSelfCheck } from './cockpit-self-check.js';
 import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
 import { copyHttpAppUrl, installHttpAppDemo, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
@@ -218,6 +219,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.runCockpitTour', async () => {
 			try {
 				await runCockpitTour(fsys, bridge, config, systemView, activeTaskTerminals, taskTerminals, context, sharedWatcher);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.runCockpitSelfCheck', async () => {
+			try {
+				await runCockpitSelfCheck(fsys, bridge, config, systemView);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));

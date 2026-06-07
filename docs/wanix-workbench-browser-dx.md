@@ -768,6 +768,21 @@ artifact children that open directly into the Wanix namespace.
 The system journal and JSON sidecar make the current cockpit state inspectable
 through the same file model, which is the shape agents can build on later.
 
+The newest slice gives the cockpit a way to diagnose itself before anyone asks
+an agent to build on top of it. `Run Cockpit Self Check` verifies the advertised
+qjs/wasm drivers, `#task` and `#term` service roots, shell route, HTTP app
+route, direct-v86 discovery, and the ability to write/read under `/.wanix`. It
+then writes `/.wanix/cockpit-check.md`, `/.wanix/cockpit-check.json`, and a
+small `/.wanix/checks/probe.txt` file.
+
+Warnings are not hidden as failures. If the session has not published
+`/.wanix/system-state.json` or the agent tool contract yet, the report says so
+and points at the action that creates them. That makes the browser cockpit feel
+less like a demo launcher and more like a tiny operator console: it can tell you
+what is ready, what is optional, and what artifact to inspect next.
+
+![Wanix cockpit self-check](assets/wanix-workbench-browser-dx/58-cockpit-self-check.png)
+
 ## The Feeling Now
 
 The current loop is:
@@ -781,6 +796,9 @@ The current loop is:
    created.
 5. Click `Open System Journal` to write `/.wanix/system-journal.md` and
    `/.wanix/system-state.json` from the live sidebar state.
+6. Click `Run Cockpit Self Check` to verify drivers, service roots, routes, and
+   report storage, then inspect `/.wanix/cockpit-check.md` or
+   `/.wanix/cockpit-check.json`.
 6. Edit or create a file in `wanix:/`.
 7. Create a file from the shell, for example
    `write shellmade hello from shell activity`, and see Explorer plus Activity

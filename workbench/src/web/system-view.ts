@@ -127,7 +127,19 @@ type TourRecord = {
 	error?: string;
 };
 
-type CategoryId = "actions" | "tour" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
+type CheckStatus = "running" | "ok" | "warn" | "failed" | "report";
+
+type CheckRecord = {
+	id: number;
+	label: string;
+	status: CheckStatus;
+	description?: string;
+	artifacts?: string[];
+	path?: string;
+	error?: string;
+};
+
+type CategoryId = "actions" | "tour" | "checks" | "drivers" | "tasks" | "terminals" | "namespace" | "routes" | "routeRuns" | "agent" | "activity";
 
 type SystemTreeItem =
 	| { type: "category"; id: CategoryId; label: string }
@@ -136,6 +148,7 @@ type SystemTreeItem =
 const CATEGORIES: Array<SystemTreeItem & { type: "category" }> = [
 	{ type: "category", id: "actions", label: "Actions" },
 	{ type: "category", id: "tour", label: "Tour" },
+	{ type: "category", id: "checks", label: "Checks" },
 	{ type: "category", id: "activity", label: "Activity" },
 	{ type: "category", id: "routes", label: "Routes" },
 	{ type: "category", id: "routeRuns", label: "Route Runs" },
@@ -156,6 +169,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private routes: RouteRecord[] = [];
 	private routeRuns: RouteRunRecord[] = [];
 	private tour: TourRecord[] = [];
+	private checks: CheckRecord[] = [];
 	private agent: AgentRecord[] = [];
 	private activity: ActivityRecord[] = [];
 	private serviceTaskIds = new Set<string>();
@@ -165,6 +179,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 	private nextActivityId = 1;
 	private nextRouteRunId = 1;
 	private nextTourId = 1;
+	private nextCheckId = 1;
 	private nextAgentId = 1;
 
 	readonly onDidChangeTreeData = this.emitter.event;
@@ -309,6 +324,55 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		this.refresh();
 	}
 
+	checksStarted(label: string): void {
+		this.checks = [];
+		this.nextCheckId = 1;
+		this.upsertCheck(label, "running", { description: "browser cockpit self-check" });
+		this.addActivity(`self-check ${label} started`);
+		this.refresh();
+	}
+
+	checkStarted(label: string, options: { description?: string; artifacts?: string[] } = {}): void {
+		this.upsertCheck(label, "running", options);
+		this.addActivity(`self-check ${label} started`);
+		this.refresh();
+	}
+
+	checkPassed(label: string, options: { description?: string; artifacts?: string[] } = {}): void {
+		this.upsertCheck(label, "ok", options);
+		this.addActivity(`self-check ${label} ok`);
+		this.refresh();
+	}
+
+	checkWarned(label: string, options: { description?: string; artifacts?: string[] } = {}): void {
+		this.upsertCheck(label, "warn", options);
+		this.addActivity(`self-check ${label} warning`);
+		this.refresh();
+	}
+
+	checkFailed(label: string, error: unknown, options: { description?: string; artifacts?: string[] } = {}): void {
+		this.upsertCheck(label, "failed", {
+			...options,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		this.addActivity(`self-check ${label} failed`);
+		this.refresh();
+	}
+
+	checkReport(path: string, status: "ok" | "warn" | "failed", artifacts: string[] = [path]): void {
+		const paths = uniquePaths([path, ...artifacts]);
+		this.checks.unshift({
+			id: this.nextCheckId++,
+			label: "Self Check Report",
+			status: "report",
+			description: status,
+			path,
+			artifacts: paths,
+		});
+		this.addActivity("self-check report written", { path, paths });
+		this.refresh();
+	}
+
 	agentStarted(label: string): void {
 		this.agent = [];
 		this.nextAgentId = 1;
@@ -396,6 +460,9 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			"## Tour",
 			...journalList(this.tour.flatMap(tourJournalLines)),
 			"",
+			"## Checks",
+			...journalList(this.checks.flatMap(checkJournalLines)),
+			"",
 			"## Agent",
 			...journalList(this.agent.flatMap(agentJournalLines)),
 			"",
@@ -426,6 +493,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			routes: this.routes.map(routeSnapshot),
 			routeRuns: this.routeRuns.map(routeRunSnapshot),
 			tour: this.tour.map(tourSnapshot),
+			checks: this.checks.map(checkSnapshot),
 			agent: this.agent.map(agentSnapshot),
 			activity: this.activity.map(activitySnapshot),
 		};
@@ -463,6 +531,8 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 				return this.actionItems();
 			case "tour":
 				return this.tourItems();
+			case "checks":
+				return this.checkItems();
 			case "drivers":
 				return this.drivers.length > 0
 					? this.drivers.map((driver) => leaf(`driver:${driver}`, driver, undefined, "symbol-method"))
@@ -551,6 +621,28 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		));
 	}
 
+	private checkItems(): SystemTreeItem[] {
+		if (this.checks.length === 0) {
+			return [leaf("checks:empty", "no self-check has run yet")];
+		}
+		return this.checks.map((entry) => leaf(
+			`check:${entry.id}`,
+			entry.label,
+			checkDescription(entry),
+			checkIcon(entry.status),
+			entry.path ? {
+				command: "workbench.openWanixPath",
+				title: "Open Wanix Path",
+				arguments: [entry.path],
+			} : undefined,
+			entry.path ? "wanixCheckArtifact" : undefined,
+			{
+				path: entry.path,
+				children: checkArtifactItems(entry),
+			},
+		));
+	}
+
 	private agentItems(): SystemTreeItem[] {
 		if (this.agent.length === 0) {
 			return [leaf("agent:empty", "no agent steps yet")];
@@ -622,6 +714,7 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 			actionLeaf("action:install-wasm-starter", "Install WASM Starter", "wasm", "package", "workbench.installWasmStarter"),
 			actionLeaf("action:run-duet", "Run JS and WASM Duet Demo", "qjs + wasm", "run-all", "workbench.runDuetDemo"),
 			actionLeaf("action:run-cockpit-tour", "Run OS Cockpit Tour", "full demo", "run-all", "workbench.runCockpitTour"),
+			actionLeaf("action:run-self-check", "Run Cockpit Self Check", "diagnose", "checklist", "workbench.runCockpitSelfCheck"),
 			actionLeaf("action:system-journal", "Open System Journal", "snapshot", "notebook", "workbench.openSystemJournal"),
 			actionLeaf("action:agent-tools", "Open Agent Tool Contract", "agent tools", "symbol-method", "workbench.openAgentToolContract"),
 			actionLeaf("action:install-agent-repair", "Install Agent Repair Demo", "agent", "bug", "workbench.installAgentRepairDemo"),
@@ -667,6 +760,25 @@ export class WanixSystemView implements vscode.TreeDataProvider<SystemTreeItem>,
 		}
 		this.tour.push({
 			id: this.nextTourId++,
+			label,
+			status,
+			description: options.description,
+			artifacts: options.artifacts,
+			error: options.error,
+		});
+	}
+
+	private upsertCheck(label: string, status: CheckStatus, options: { description?: string; artifacts?: string[]; error?: string } = {}): void {
+		const existing = this.checks.find((entry) => entry.label === label && entry.status !== "report");
+		if (existing) {
+			existing.status = status;
+			existing.description = options.description || existing.description;
+			existing.artifacts = options.artifacts || existing.artifacts;
+			existing.error = options.error || existing.error;
+			return;
+		}
+		this.checks.push({
+			id: this.nextCheckId++,
 			label,
 			status,
 			description: options.description,
@@ -916,6 +1028,22 @@ function tourArtifactItems(entry: TourRecord): SystemTreeItem[] {
 	));
 }
 
+function checkArtifactItems(entry: CheckRecord): SystemTreeItem[] {
+	return uniquePaths(entry.artifacts).map((path, index) => leaf(
+		`check:${entry.id}:artifact:${index}`,
+		path,
+		pathDescription(path),
+		path === entry.path ? "output" : "file",
+		{
+			command: "workbench.openWanixPath",
+			title: "Open Wanix Path",
+			arguments: [path],
+		},
+		"wanixCheckArtifact",
+		{ path },
+	));
+}
+
 function activityItem(entry: ActivityRecord): SystemTreeItem {
 	const paths = uniquePaths(entry.paths || (entry.path ? [entry.path] : []));
 	const path = entry.path || paths[paths.length - 1];
@@ -955,6 +1083,12 @@ function routeRunDescription(run: RouteRunRecord): string {
 }
 
 function tourDescription(entry: TourRecord): string {
+	const status = entry.status === "ok" ? "ok" : entry.status;
+	const detail = entry.error || entry.description;
+	return detail ? `${status} · ${detail}` : status;
+}
+
+function checkDescription(entry: CheckRecord): string {
 	const status = entry.status === "ok" ? "ok" : entry.status;
 	const detail = entry.error || entry.description;
 	return detail ? `${status} · ${detail}` : status;
@@ -1071,6 +1205,26 @@ function tourJournalLines(entry: TourRecord): string[] {
 	].filter((line): line is string => line !== undefined);
 }
 
+function checkSnapshot(entry: CheckRecord): object {
+	return {
+		id: entry.id,
+		label: entry.label,
+		status: entry.status,
+		description: entry.description,
+		error: entry.error,
+		path: entry.path ? displayJournalPath(entry.path) : undefined,
+		artifacts: uniquePaths(entry.artifacts).map(displayJournalPath),
+	};
+}
+
+function checkJournalLines(entry: CheckRecord): string[] {
+	return [
+		`- ${entry.label} - ${checkDescription(entry)}`,
+		entry.path ? `  - path: ${displayJournalPath(entry.path)}` : undefined,
+		...uniquePaths(entry.artifacts).map((path) => `  - artifact: ${displayJournalPath(path)}`),
+	].filter((line): line is string => line !== undefined);
+}
+
 function agentSnapshot(entry: AgentRecord): object {
 	return {
 		id: entry.id,
@@ -1165,6 +1319,8 @@ function categoryIcon(id: CategoryId): vscode.ThemeIcon {
 			return new vscode.ThemeIcon("run-all");
 		case "tour":
 			return new vscode.ThemeIcon("checklist");
+		case "checks":
+			return new vscode.ThemeIcon("testing-view-icon");
 		case "drivers":
 			return new vscode.ThemeIcon("symbol-method");
 		case "tasks":
@@ -1260,6 +1416,21 @@ function tourIcon(status: TourStatus): string {
 			return "loading";
 		case "ok":
 			return "pass";
+		case "failed":
+			return "error";
+		case "report":
+			return "notebook";
+	}
+}
+
+function checkIcon(status: CheckStatus): string {
+	switch (status) {
+		case "running":
+			return "loading";
+		case "ok":
+			return "pass";
+		case "warn":
+			return "warning";
 		case "failed":
 			return "error";
 		case "report":
