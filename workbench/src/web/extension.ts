@@ -2138,6 +2138,9 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: (activity
 						if (handleQjsShellSessionMessage(message)) {
 							return;
 						}
+						if (handleQjsShellMutationMessage(message)) {
+							return;
+						}
 						if (message.type === "error") {
 							writeEmitter.fire(`\r\n${message.message}\r\n`);
 						} else if (message.type === "exit") {
@@ -2174,15 +2177,7 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: (activity
 			socket?.close();
 		},
 		handleInput: (data: string) => {
-			const activities = trackShellInput(shellInput, data);
 			sendInput(enc.encode(data));
-			if (activities.length > 0) {
-				for (const activity of activities) {
-					notifyFilesystemActivity(onFilesystemActivity, activity);
-				}
-			} else if (data.includes('\r') || data.includes('\n')) {
-				notifyFilesystemActivity(onFilesystemActivity);
-			}
 		},
 		setDimensions: (dimensions: vscode.TerminalDimensions) => {
 			sendResize(dimensions);
@@ -2203,6 +2198,18 @@ function createQjsShellTerminal(config: Config, onFilesystemActivity?: (activity
 			systemView?.terminalOpened(shellTerminalId, "Shell");
 		}
 		systemView?.filesystemActivity(`shell session ${message.taskId} ready`, { path: `#task/${message.taskId}` });
+		return true;
+	}
+
+	function handleQjsShellMutationMessage(message: unknown): boolean {
+		if (!isQjsShellMutationMessage(message)) {
+			return false;
+		}
+		shellInput.cwd = resolveWanixPath(".", message.cwd);
+		const activity = shellMutationActivity(message.paths);
+		if (activity) {
+			notifyFilesystemActivity(onFilesystemActivity, activity);
+		}
 		return true;
 	}
 }
@@ -2228,6 +2235,44 @@ function isQjsShellSessionMessage(message: unknown): message is QjsShellSessionM
 		&& candidate.terminalId.length > 0
 		&& typeof candidate.cwd === "string"
 		&& candidate.cwd.length > 0;
+}
+
+type QjsShellMutationMessage = {
+	type: "mutation";
+	protocol: "wanix-qjs-shell.v1";
+	taskId: string;
+	terminalId: string;
+	cwd: string;
+	paths: string[];
+};
+
+function isQjsShellMutationMessage(message: unknown): message is QjsShellMutationMessage {
+	if (!message || typeof message !== "object") {
+		return false;
+	}
+	const candidate = message as Record<string, unknown>;
+	return candidate.type === "mutation"
+		&& candidate.protocol === "wanix-qjs-shell.v1"
+		&& typeof candidate.taskId === "string"
+		&& candidate.taskId.length > 0
+		&& typeof candidate.terminalId === "string"
+		&& candidate.terminalId.length > 0
+		&& typeof candidate.cwd === "string"
+		&& candidate.cwd.length > 0
+		&& Array.isArray(candidate.paths)
+		&& candidate.paths.every((path) => typeof path === "string" && path.length > 0);
+}
+
+function shellMutationActivity(paths: string[]): FilesystemActivity | undefined {
+	const unique = [...new Set(paths.filter((path) => path && !path.startsWith("#")))];
+	if (unique.length === 0) {
+		return undefined;
+	}
+	const openPath = unique[unique.length - 1];
+	const label = unique.length === 1
+		? `shell changed ${displayWanixPath(openPath)}`
+		: `shell changed ${unique.length} paths`;
+	return { label, openPath, paths: unique };
 }
 
 type TerminalOptions = {

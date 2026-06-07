@@ -1415,6 +1415,10 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
         qjs_shell["sessionMessage"],
         "{\"type\":\"session\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\"}"
     );
+    assert_eq!(
+        qjs_shell["mutationMessage"],
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"]}"
+    );
     assert_eq!(qjs_shell["exitMessage"], "{\"type\":\"exit\",\"code\":N}");
     assert_eq!(
         qjs_shell["terminalLifecycle"],
@@ -2303,15 +2307,43 @@ std.exit(6);
         ))
         .unwrap();
     match socket.read().unwrap() {
-            Message::Binary(bytes) => assert_eq!(
-                bytes.as_ref(),
-                b"pwd\r\napp\r\n$ ls\r\ninside.txt\r\n$ cat inside.txt\r\ninside app\r\n$ stat inside.txt\r\ninside.txt type file mode 100000 size 11\r\n$ size\r\nsize 100 40\r\n$ later idle\r\nscheduled\r\n"
-            ),
-            other => panic!("expected scheduled terminal output, got {other:?}"),
-        }
+        Message::Binary(bytes) => assert_eq!(
+            bytes.as_ref(),
+            b"pwd\r\napp\r\n$ ls\r\ninside.txt\r\n$ cat inside.txt\r\ninside app\r\n$ stat inside.txt\r\ninside.txt type file mode 100000 size 11\r\n$ size\r\nsize 100 40\r\n$ later idle\r\nscheduled\r\n"
+        ),
+        other => panic!("expected scheduled terminal output, got {other:?}"),
+    }
     match socket.read().unwrap() {
         Message::Binary(bytes) => assert_eq!(bytes.as_ref(), b"later: idle\r\n$ "),
         other => panic!("expected idle-pumped terminal output, got {other:?}"),
+    }
+
+    socket
+        .send(Message::binary(
+            b"write observed.txt observed from ws\n".as_slice(),
+        ))
+        .unwrap();
+    match socket.read().unwrap() {
+        Message::Binary(bytes) => assert_eq!(
+            bytes.as_ref(),
+            b"write observed.txt observed from ws\r\nwrote observed.txt\r\n$ "
+        ),
+        other => panic!("expected shell write output, got {other:?}"),
+    }
+    match socket.read().unwrap() {
+        Message::Text(text) => {
+            let mutation_json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(mutation_json["type"], "mutation");
+            assert_eq!(mutation_json["protocol"], "wanix-qjs-shell.v1");
+            assert_eq!(mutation_json["taskId"], "1");
+            assert_eq!(mutation_json["terminalId"], "1");
+            assert_eq!(mutation_json["cwd"], "app");
+            assert!(
+                qjs_shell_mutation_paths(&mutation_json).contains(&"/app/observed.txt".to_owned()),
+                "{mutation_json}"
+            );
+        }
+        other => panic!("expected shell mutation message, got {other:?}"),
     }
 
     socket
@@ -2328,16 +2360,24 @@ std.exit(6);
     }
 
     socket
-            .send(Message::binary(
-                b"qjs ../terminal-child.js\nsetenv MODE served-mode\nqjs ../child.js from ws < inside.txt > child-out.txt 2> child-err.txt\nstatus\ncat child-out.txt\ncat child-err.txt\nexit\n".as_slice(),
-            ))
-            .unwrap();
+        .send(Message::binary(
+            b"qjs ../terminal-child.js\nsetenv MODE served-mode\nqjs ../child.js from ws < inside.txt > child-out.txt 2> child-err.txt\nstatus\ncat child-out.txt\ncat child-err.txt\nexit\n".as_slice(),
+        ))
+        .unwrap();
     let mut transcript = Vec::new();
+    let mut mutations = Vec::new();
     let mut exit = None;
     while exit.is_none() {
         match socket.read().unwrap() {
             Message::Binary(bytes) => transcript.extend_from_slice(bytes.as_ref()),
-            Message::Text(text) => exit = Some(text.to_string()),
+            Message::Text(text) => {
+                let message: serde_json::Value = serde_json::from_str(&text).unwrap();
+                match message["type"].as_str() {
+                    Some("exit") => exit = Some(text.to_string()),
+                    Some("mutation") => mutations.push(message),
+                    other => panic!("unexpected terminal text frame {other:?}: {text}"),
+                }
+            }
             Message::Close(_) => break,
             Message::Ping(bytes) => socket.send(Message::Pong(bytes)).unwrap(),
             Message::Pong(_) | Message::Frame(_) => {}
@@ -2348,11 +2388,31 @@ std.exit(6);
     let stderr = String::from_utf8(stderr).unwrap();
 
     assert_eq!(exit_code, 0, "{stderr}");
-    assert_eq!(
-            transcript,
-            b"qjs ../terminal-child.js\r\nserved terminal child stdout\r\nserved terminal child stderr\r\n$ setenv MODE served-mode\r\n$ qjs ../child.js from ws < inside.txt > child-out.txt 2> child-err.txt\r\nqjs exit 6\r\n$ status\r\nstatus 6\r\n$ cat child-out.txt\r\nserved child task 4\r\nserved child cwd .\r\nserved child argv child.js|from|ws\r\nserved child stdin inside app\r\nserved child mode served-mode\r\n$ cat child-err.txt\r\nserved child stderr from\r\n$ exit\r\nbye\r\n"
-        );
+    let expected_transcript =
+        b"qjs ../terminal-child.js\r\nserved terminal child stdout\r\nserved terminal child stderr\r\n$ setenv MODE served-mode\r\n$ qjs ../child.js from ws < inside.txt > child-out.txt 2> child-err.txt\r\nqjs exit 6\r\n$ status\r\nstatus 6\r\n$ cat child-out.txt\r\nserved child task 4\r\nserved child cwd .\r\nserved child argv child.js|from|ws\r\nserved child stdin inside app\r\nserved child mode served-mode\r\n$ cat child-err.txt\r\nserved child stderr from\r\n$ exit\r\nbye\r\n";
+    assert_eq!(transcript, expected_transcript);
     assert_eq!(exit.as_deref(), Some("{\"type\":\"exit\",\"code\":0}"));
+    assert!(
+        mutations.iter().any(|mutation| {
+            let paths = qjs_shell_mutation_paths(mutation);
+            paths.contains(&"/app/child-out.txt".to_owned())
+                && paths.contains(&"/app/child-err.txt".to_owned())
+        }),
+        "{mutations:?}"
+    );
+}
+
+fn qjs_shell_mutation_paths(message: &serde_json::Value) -> Vec<String> {
+    message["paths"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing mutation paths: {message}"))
+        .iter()
+        .map(|path| {
+            path.as_str()
+                .unwrap_or_else(|| panic!("non-string mutation path: {message}"))
+                .to_owned()
+        })
+        .collect()
 }
 
 #[test]

@@ -66,6 +66,15 @@ prompt text.
 
 ![Shell session metadata in the System Journal](assets/wanix-workbench-browser-dx/66-shell-session-metadata.png)
 
+The same qjs-shell contract now reports confirmed filesystem mutations. After
+completed shell input, Rust compares the served root against its last snapshot
+and sends a `mutation` frame containing the changed Wanix paths. The workbench
+uses that frame to refresh Explorer and record Activity, so a shell write shows
+up as `shell changed /made.txt` because the server observed the change, not
+because the browser guessed from the typed command.
+
+![Confirmed shell mutation in the System Journal](assets/wanix-workbench-browser-dx/67-shell-mutation-event.png)
+
 Namespace roots are now active inspection points. Click `#task` or `#term` in
 the Wanix sidebar and the workbench opens a generated `wanix-inspect:` document
 that lists the real service directory without reading files that allocate
@@ -394,15 +403,20 @@ The execution labels are concrete now as well. The `Route Runs` list says
 `/.wanix/app/hello` and `/.wanix/app/counter`, not only the template
 `/.wanix/app/<name>`, so mixed route runs read like a log of what actually ran.
 
-Shell filesystem activity got the same treatment. When the browser shell sees
-common mutating commands like `write`, `mkdir`, `rm`, `mv`, `cp`, `ln -s`, or a
-stdout/stderr redirection, it refreshes the touched path and its parent instead
-of only refreshing the root. The Activity row names the concrete mutation, so a
-terminal command like `write shellmade hello from shell activity` immediately
-leaves a visible `shell write shellmade` trail while the new file opens normally
-in the editor.
+Shell filesystem activity got the same treatment first through a browser-side
+parser: common mutating commands like `write`, `mkdir`, `rm`, `mv`, `cp`,
+symbolic-link creation, and stdout/stderr redirection refreshed the touched path
+and its parent instead of only refreshing the root. That made shell writes
+visible, but it was still a guess made from terminal input.
 
 ![Shell write creates a concrete activity row](assets/wanix-workbench-browser-dx/43-shell-write-activity.png)
+
+The served qjs-shell path now uses confirmed mutation frames instead. A command
+like `write made.txt confirmed-event` creates `/made.txt`, Rust observes the
+changed path, and the browser records `shell changed /made.txt` in the System
+Journal.
+
+![Confirmed shell mutation in the System Journal](assets/wanix-workbench-browser-dx/67-shell-mutation-event.png)
 
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
@@ -595,11 +609,18 @@ The first fix was asset routing. `workbench-fs9p` now serves `/workbench/...` fr
 
 Then the Explorer learned to refresh after terminal activity and task exits. If a shell command writes a file, the browser UI catches up without a page reload.
 
-That refresh is now path-targeted for common shell mutations. The terminal input
-path tracks the shell's current working directory, recognizes simple built-ins
-and redirections, refreshes the touched Wanix paths plus their parents, and logs
-a concrete Activity label such as `shell write shellmade`. Unknown newline
-commands still fall back to the older broad refresh.
+That refresh became path-targeted for common shell mutations. The direct
+terminal input path still tracks the shell's current working directory,
+recognizes simple built-ins and redirections, refreshes the touched Wanix paths
+plus their parents, and logs a concrete Activity label such as `shell write
+shellmade`. Unknown newline commands still fall back to the older broad
+refresh.
+
+The qjs-shell websocket path has moved past that guesswork. Rust now advertises
+a `wanix-qjs-shell.v1` `mutation` message, snapshots the served root, and sends
+changed Wanix paths after completed shell input. The browser consumes those
+server-observed paths for refreshes and Activity, which is why the fresh
+verification journal says `shell changed /made.txt`.
 
 Activity records now preserve that path context too. When a filesystem event
 has a path, the row becomes an `Open Wanix Path` target; multi-path events keep
@@ -845,6 +866,9 @@ through the same file model, which is the shape agents can build on later.
 The shell session frame makes that snapshot more trustworthy: task id, terminal
 id, and cwd now come from a served `wanix-qjs-shell.v1` message before terminal
 output, not from prompt text scraping.
+The shell mutation frame extends that trust boundary from startup metadata to
+filesystem change notification: the browser no longer needs to parse qjs-shell
+commands to know a served-root path actually changed.
 
 The newest slice gives the cockpit a way to diagnose itself before anyone asks
 an agent to build on top of it. `Run Cockpit Self Check` verifies the advertised
@@ -928,9 +952,9 @@ The current loop is:
    `Open Report Inventory` to refresh `/.wanix/cockpit-reports.md` and
    `/.wanix/cockpit-reports.json` from the live Reports rows.
 11. Edit or create a file in `wanix:/`.
-12. Create a file from the shell, for example
-   `write shellmade hello from shell activity`, and see Explorer plus Activity
-   update around that exact path.
+12. Create a file from the served qjs-shell, for example
+   `write made.txt confirmed-event`, and see Explorer plus the System Journal
+   update from the confirmed `mutation` frame for `/made.txt`.
 13. Click that Activity row to reopen the changed Wanix file.
 14. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1037,9 +1061,9 @@ That is a much better base to build on. It makes the Rust Wanix port feel less l
 
 The next round should probably focus on making the workbench less demo-only:
 
-- Extend the shell session event contract from startup metadata into confirmed
-  mutation events, so shell writes can stop relying on common-command
-  heuristics.
+- Add richer operation metadata to shell mutation frames, such as operation
+  kind, source/target paths, and success/failure, and move the direct terminal
+  path onto the same event model.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract.
 

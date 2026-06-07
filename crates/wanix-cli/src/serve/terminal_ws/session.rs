@@ -10,6 +10,7 @@ use crate::qjs_term::QjsShellSession;
 
 use super::super::connection::ServeConnectionError;
 use super::message::parse_terminal_resize_message;
+use super::root_changes::RootChangeTracker;
 
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
 
@@ -24,6 +25,7 @@ pub(in crate::serve) fn serve_terminal_websocket_connection(
 struct TerminalWebSocketSession {
     socket: WebSocket<TcpStream>,
     shell: QjsShellSession,
+    changes: RootChangeTracker,
 }
 
 impl TerminalWebSocketSession {
@@ -40,7 +42,12 @@ impl TerminalWebSocketSession {
             .map_err(ServeConnectionError::Io)?;
         let (shell, initial_output) = QjsShellSession::start_in_cwd(root_path, cwd)
             .map_err(ServeConnectionError::Terminal)?;
-        let mut session = Self { socket, shell };
+        let changes = RootChangeTracker::new(root_path).map_err(ServeConnectionError::Io)?;
+        let mut session = Self {
+            socket,
+            shell,
+            changes,
+        };
         session.send_session()?;
         session.send_output(initial_output)?;
         Ok(session)
@@ -106,7 +113,11 @@ impl TerminalWebSocketSession {
             .shell
             .input(input)
             .map_err(ServeConnectionError::Terminal)?;
-        self.send_output(output)
+        self.send_output(output)?;
+        if input_contains_line_boundary(input) {
+            self.send_mutations()?;
+        }
+        Ok(())
     }
 
     fn resize(&mut self, columns: u16, rows: u16) -> Result<(), ServeConnectionError> {
@@ -154,6 +165,19 @@ impl TerminalWebSocketSession {
             .map_err(ws_error)
     }
 
+    fn send_mutations(&mut self) -> Result<(), ServeConnectionError> {
+        let paths = self
+            .changes
+            .take_changed_paths()
+            .map_err(ServeConnectionError::Io)?;
+        if paths.is_empty() {
+            return Ok(());
+        }
+        self.socket
+            .send(Message::text(shell_mutation_message(&self.shell, &paths)))
+            .map_err(ws_error)
+    }
+
     fn send_pong(&mut self, bytes: Bytes) -> Result<(), ServeConnectionError> {
         self.socket.send(Message::Pong(bytes)).map_err(ws_error)
     }
@@ -174,6 +198,21 @@ fn shell_session_message(shell: &QjsShellSession) -> String {
         json_string(&shell.task_id()),
         json_string(shell.terminal_id()),
         json_string(shell.cwd().as_str()),
+    )
+}
+
+fn shell_mutation_message(shell: &QjsShellSession, paths: &[String]) -> String {
+    format!(
+        "{{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\
+         \"taskId\":{},\"terminalId\":{},\"cwd\":{},\"paths\":[{}]}}",
+        json_string(&shell.task_id()),
+        json_string(shell.terminal_id()),
+        json_string(shell.cwd().as_str()),
+        paths
+            .iter()
+            .map(|path| json_string(path))
+            .collect::<Vec<_>>()
+            .join(","),
     )
 }
 
@@ -216,6 +255,10 @@ fn is_terminal_websocket_idle_tick(error: &WsError) -> bool {
 
 fn ws_error(error: WsError) -> ServeConnectionError {
     ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error))
+}
+
+fn input_contains_line_boundary(input: &[u8]) -> bool {
+    input.iter().any(|byte| matches!(byte, b'\n' | b'\r'))
 }
 
 fn json_string(value: &str) -> String {

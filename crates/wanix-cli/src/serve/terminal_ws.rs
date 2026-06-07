@@ -1,5 +1,6 @@
 mod message;
 mod request;
+mod root_changes;
 mod session;
 
 #[cfg(test)]
