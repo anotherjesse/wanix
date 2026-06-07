@@ -291,6 +291,15 @@ row instead of asking the user to remember which file changed.
 
 ![HTTP counter state artifact](assets/wanix-workbench-browser-dx/39-http-counter-state-artifact.png)
 
+The route run also exposes the task traces that the Rust HTTP app runner writes
+under `/.wanix/http`. The local route response carries the task id plus stdout
+and stderr paths, the response report records them, and the `Route Runs` tree
+hangs `Task Stdout` and `Task Stderr` under the exact HTTP execution. That makes
+debugging a qjs-backed route feel like inspecting a process, not spelunking a
+server log.
+
+![HTTP route task trace artifacts](assets/wanix-workbench-browser-dx/40-http-route-trace-artifacts.png)
+
 The execution labels are concrete now as well. The `Route Runs` list says
 `/.wanix/app/hello` and `/.wanix/app/counter`, not only the template
 `/.wanix/app/<name>`, so mixed route runs read like a log of what actually ran.
@@ -502,6 +511,11 @@ The cleanup pass made route-run artifacts generic. Counter state is the first
 use, but the tree can now hang other run outputs under the same execution row
 without adding another route-specific sidebar path.
 
+HTTP app responses now carry local Wanix trace headers for the task id, stdout
+trace, and stderr trace. The workbench records those paths in the saved response
+report and exposes the trace files under the route run, so failures have a
+natural place to attach process output.
+
 Route-run labels now use the concrete app path too, so the log distinguishes
 `/.wanix/app/hello` from `/.wanix/app/counter` at a glance.
 
@@ -590,21 +604,23 @@ The current loop is:
     app, then inspect `apps/counter.response.txt` and `apps/counter.count.txt`.
 32. Expand the counter route run and open the `State File` child directly from
     the execution row.
-33. Click `New qjs Script` to create a unique runnable scratch script without
+33. Expand the same route run and inspect `Task Stdout` or `Task Stderr` from
+    the exact HTTP execution that produced the response.
+34. Click `New qjs Script` to create a unique runnable scratch script without
     leaving the workbench.
-34. Run that script, then expand its task row to reopen the source, transcript,
+35. Run that script, then expand its task row to reopen the source, transcript,
     metadata, terminal output, or `#task/<id>` service directory.
-35. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
+36. Open the same task row's metadata JSON to inspect cwd, argv, env, source,
     output, exit, and transcript capture state.
-36. Click `Clear Finished Rows` when old exited tasks and closed terminals are
+37. Click `Clear Finished Rows` when old exited tasks and closed terminals are
     crowding the sidebar.
-37. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
+38. Click `Install Agent Repair Demo`, then run `Fix Current Wanix Program` on
     `/agent/broken.js`.
-38. Watch the `Agent` section list the repair loop: read, run, observe, edit,
+39. Watch the `Agent` section list the repair loop: read, run, observe, edit,
     rerun, capture transcripts, and verify `agent/out/result.txt`.
-39. Click an Agent row with an artifact to reopen the source, transcript, or
+40. Click an Agent row with an artifact to reopen the source, transcript, or
     result file from the same system panel.
-40. Click `diff broken.js` to reopen the before/after repair diff from
+41. Click `diff broken.js` to reopen the before/after repair diff from
     `/agent/out`.
 
 That is a much better base to build on. It makes the Rust Wanix port feel less like a bag of impressive subsystems and more like a small operating environment you can poke at from the browser.

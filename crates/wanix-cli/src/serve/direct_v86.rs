@@ -77,6 +77,7 @@ pub(super) fn direct_v86_asset_response(
     Some(StaticResponse {
         status: HttpStatus::Ok,
         content_type: asset.content_type,
+        headers: Vec::new(),
         body: asset.bytes.to_vec(),
     })
 }

@@ -191,6 +191,7 @@ fn bundle_html_response(bundle: &str) -> Option<StaticResponse> {
     Some(StaticResponse {
         status: HttpStatus::Ok,
         content_type: "text/html; charset=utf-8",
+        headers: Vec::new(),
         body: html.into_bytes(),
     })
 }

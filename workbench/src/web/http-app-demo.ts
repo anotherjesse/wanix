@@ -30,6 +30,12 @@ type HttpAppPreviewTarget = {
 	artifacts?: Array<{ label: string; path: string; icon?: string }>;
 };
 
+type HttpAppTrace = {
+	taskId?: string;
+	stdoutPath?: string;
+	stderrPath?: string;
+};
+
 const HELLO_PREVIEW: HttpAppPreviewTarget = {
 	name: APP_NAME,
 	sourcePath: APP_PATH,
@@ -185,17 +191,23 @@ async function previewHttpApp(
 	const url = `${httpAppDemoUrl(config, target.name)}?from=workbench`;
 	const response = await fetch(url, { cache: "no-store" });
 	const body = await response.text();
+	const trace = httpAppTrace(response);
+	const artifacts = [
+		...(target.artifacts || []),
+		...httpAppTraceArtifacts(trace),
+	];
 	const preview = httpAppPreviewReport({
 		url,
 		status: response.status,
 		statusText: response.statusText,
 		contentType: response.headers.get("content-type"),
+		trace,
 		body,
 		generatedAt: new Date().toISOString(),
 	});
 	await fsys.writeFile(target.previewPath, preview);
 	refreshWanixFile(bridge, target.previewPath);
-	for (const artifact of target.artifacts || []) {
+	for (const artifact of artifacts) {
 		refreshWanixFile(bridge, artifact.path);
 	}
 	systemView.routePreviewed("http-app", {
@@ -205,7 +217,7 @@ async function previewHttpApp(
 		sourcePath: target.sourcePath,
 		url,
 		label: `/.wanix/app/${target.name}`,
-		artifacts: target.artifacts,
+		artifacts,
 	});
 	await Promise.resolve(vscode.commands.executeCommand("workbench.files.action.refreshFilesExplorer")).catch((error: unknown) => {
 		console.warn("Wanix explorer refresh failed", error);
@@ -239,26 +251,60 @@ async function wanixPathExists(fsys: any, path: string): Promise<boolean> {
 	}
 }
 
+function httpAppTrace(response: Response): HttpAppTrace {
+	return {
+		taskId: nonEmptyHeader(response, "x-wanix-task-id"),
+		stdoutPath: nonEmptyHeader(response, "x-wanix-stdout-path"),
+		stderrPath: nonEmptyHeader(response, "x-wanix-stderr-path"),
+	};
+}
+
+function nonEmptyHeader(response: Response, name: string): string | undefined {
+	return response.headers.get(name)?.trim() || undefined;
+}
+
+function httpAppTraceArtifacts(trace: HttpAppTrace): Array<{ label: string; path: string; icon?: string }> {
+	const artifacts: Array<{ label: string; path: string; icon?: string }> = [];
+	if (trace.stdoutPath) {
+		artifacts.push({ label: "Task Stdout", path: trace.stdoutPath, icon: "output" });
+	}
+	if (trace.stderrPath) {
+		artifacts.push({ label: "Task Stderr", path: trace.stderrPath, icon: "warning" });
+	}
+	return artifacts;
+}
+
 function httpAppPreviewReport(preview: {
 	url: string;
 	status: number;
 	statusText: string;
 	contentType: string | null;
+	trace: HttpAppTrace;
 	body: string;
 	generatedAt: string;
 }): string {
 	const statusText = preview.statusText ? ` ${preview.statusText}` : "";
 	const contentType = preview.contentType || "unknown";
-	return [
+	const lines = [
 		"Wanix HTTP app preview",
 		`URL: ${preview.url}`,
 		`Status: ${preview.status}${statusText}`,
 		`Content-Type: ${contentType}`,
 		`Generated: ${preview.generatedAt}`,
+	];
+	if (preview.trace.taskId || preview.trace.stdoutPath || preview.trace.stderrPath) {
+		lines.push(
+			`Task: ${preview.trace.taskId || "unknown"}`,
+			`Stdout Trace: ${preview.trace.stdoutPath || "unknown"}`,
+			`Stderr Trace: ${preview.trace.stderrPath || "unknown"}`,
+		);
+	}
+	lines.push(
 		"",
 		"Body:",
 		preview.body,
-	].join("\n");
+	);
+	return lines.join("\n");
 }
 
 async function openWanixFile(path: string): Promise<void> {

@@ -239,6 +239,15 @@ std.writeFile("ran.txt", "ran " + target);
         headers.contains("Content-Type: text/plain; charset=utf-8\r\n"),
         "{headers}"
     );
+    assert!(headers.contains("X-Wanix-Task-Id: 2\r\n"), "{headers}");
+    assert!(
+        headers.contains("X-Wanix-Stdout-Path: /.wanix/http/2.out\r\n"),
+        "{headers}"
+    );
+    assert!(
+        headers.contains("X-Wanix-Stderr-Path: /.wanix/http/2.err\r\n"),
+        "{headers}"
+    );
     assert_eq!(
         body,
         b"app hello\ntarget /.wanix/app/hello?from=browser\nargv hello.js|/.wanix/app/hello?from=browser\n"

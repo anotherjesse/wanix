@@ -65,26 +65,34 @@ fn app_response(
         );
     }
     match run_qjs_app(roots.p9_root.as_ref(), name, request) {
-        Ok(stdout) => StaticResponse {
-            status: HttpStatus::Ok,
-            content_type: APP_CONTENT_TYPE,
-            body: stdout,
-        },
+        Ok(run) => app_trace_headers(
+            StaticResponse {
+                status: HttpStatus::Ok,
+                content_type: APP_CONTENT_TYPE,
+                headers: Vec::new(),
+                body: run.stdout,
+            },
+            &run.task_id,
+            &run.stdout_path,
+            &run.stderr_path,
+        ),
         Err(AppError::MissingScript(path)) => StaticResponse::plain(
             HttpStatus::NotFound,
             &format!("wanix app script {path} was not found"),
         ),
-        Err(AppError::TaskExit {
-            exit,
-            stdout,
-            stderr,
-        }) => StaticResponse::plain(
-            HttpStatus::InternalServerError,
-            &format!(
-                "wanix app {name} exited {exit}\n\nstdout:\n{}\n\nstderr:\n{}",
-                String::from_utf8_lossy(&stdout),
-                String::from_utf8_lossy(&stderr)
+        Err(AppError::TaskExit(task_exit)) => app_trace_headers(
+            StaticResponse::plain(
+                HttpStatus::InternalServerError,
+                &format!(
+                    "wanix app {name} exited {exit}\n\nstdout:\n{}\n\nstderr:\n{}",
+                    String::from_utf8_lossy(&task_exit.stdout),
+                    String::from_utf8_lossy(&task_exit.stderr),
+                    exit = task_exit.exit,
+                ),
             ),
+            &task_exit.task_id,
+            &task_exit.stdout_path,
+            &task_exit.stderr_path,
         ),
         Err(AppError::Fs(error)) => StaticResponse::plain(
             HttpStatus::InternalServerError,
@@ -93,7 +101,7 @@ fn app_response(
     }
 }
 
-fn run_qjs_app(fs: &dyn FileSystem, name: &str, request: &[u8]) -> Result<Vec<u8>, AppError> {
+fn run_qjs_app(fs: &dyn FileSystem, name: &str, request: &[u8]) -> Result<AppRun, AppError> {
     let source_script = app_script(name);
     require_script_file(fs, &source_script)?;
     prepare_trace_dir(fs)?;
@@ -131,13 +139,41 @@ fn run_qjs_app(fs: &dyn FileSystem, name: &str, request: &[u8]) -> Result<Vec<u8
     let stdout = read_all(fs, &stdout_path)?;
     let stderr = read_all(fs, &stderr_path)?;
     if exit.trim() == "0" {
-        Ok(stdout)
+        Ok(AppRun {
+            task_id,
+            stdout_path,
+            stderr_path,
+            stdout,
+        })
     } else {
-        Err(AppError::TaskExit {
+        Err(AppError::TaskExit(Box::new(AppTaskExit {
             exit: exit.trim().to_owned(),
             stdout,
             stderr,
-        })
+            task_id,
+            stdout_path,
+            stderr_path,
+        })))
+    }
+}
+
+fn app_trace_headers(
+    response: StaticResponse,
+    task_id: &str,
+    stdout_path: &str,
+    stderr_path: &str,
+) -> StaticResponse {
+    response
+        .with_header("X-Wanix-Task-Id", task_id)
+        .with_header("X-Wanix-Stdout-Path", rooted_trace_path(stdout_path))
+        .with_header("X-Wanix-Stderr-Path", rooted_trace_path(stderr_path))
+}
+
+fn rooted_trace_path(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
     }
 }
 
@@ -203,12 +239,24 @@ fn http_env(name: &str, target: &str) -> String {
 
 enum AppError {
     MissingScript(String),
-    TaskExit {
-        exit: String,
-        stdout: Vec<u8>,
-        stderr: Vec<u8>,
-    },
+    TaskExit(Box<AppTaskExit>),
     Fs(FsError),
+}
+
+struct AppTaskExit {
+    exit: String,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    task_id: String,
+    stdout_path: String,
+    stderr_path: String,
+}
+
+struct AppRun {
+    task_id: String,
+    stdout_path: String,
+    stderr_path: String,
+    stdout: Vec<u8>,
 }
 
 impl From<FsError> for AppError {
