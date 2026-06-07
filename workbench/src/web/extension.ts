@@ -4,13 +4,47 @@ import { openAgentToolContract, writeAgentToolContract } from './agent-tool-cont
 import { AGENT_BROKEN_PATH, installAgentRepairDemo, repairQjsProgram } from './agent-repair-demo.js';
 import { WanixBridge, type WanixBridgeMutation } from './bridge.js';
 import { COCKPIT_SELF_CHECK_JSON_PATH, COCKPIT_SELF_CHECK_MD_PATH, COCKPIT_SELF_CHECK_PROBE_PATH, runCockpitSelfCheck } from './cockpit-self-check.js';
-import { DUET_DEMO_STEPS, DUET_OUTPUT_PATH, installDuetDemo, resetDuetDemo } from './duet-demo.js';
-import { copyHttpAppUrl, createHttpApp, installHttpAppDemo, openHttpAppCatalog, openHttpAppDemo, openHttpAppHandler, openHttpCounterDemo, openHttpWasmDemo, previewHttpAppPath, previewHttpCatalogApp, publishHttpAppDataStores, publishHttpAppsToSystemView, type HttpAppCatalogTarget, type HttpAppRouteConfig } from './http-app-demo.js';
 import { createQjsStarter } from './qjs-starter.js';
 import { WANIX_INSPECT_SCHEME, WanixServiceInspector } from './service-inspector.js';
 import { WanixSystemView, type WanixServiceTask, type WanixServiceTerminal } from './system-view.js';
-import { openDirectV86, openV86SharedDemo, V86_SHARED_DIR, V86_SHARED_LINUX_PATH, type V86SharedConfig } from './v86-shared-demo.js';
 import { ensureWasmStarter, installWasmStarter, WASM_STARTER_OUTPUT_PATH, WASM_STARTER_PATH } from './wasm-starter.js';
+
+// STUB: duet-demo not yet ported — see docs/integration/plan.md
+const DUET_OUTPUT_PATH = "";
+type DuetDemoStep = { kind: "qjs" | "wasm"; path: string; label: string };
+const DUET_DEMO_STEPS: DuetDemoStep[] = [];
+async function installDuetDemo(..._args: any[]): Promise<any> { return undefined; }
+async function resetDuetDemo(..._args: any[]): Promise<any> { return undefined; }
+
+// STUB: http-app-demo not yet ported — see docs/integration/plan.md
+type HttpAppRouteConfig = { url?: string; status?: string };
+type HttpAppCatalogTarget = { name?: string; sourcePath?: string };
+async function installHttpAppDemo(..._args: any[]): Promise<any> { return undefined; }
+async function openHttpAppHandler(..._args: any[]): Promise<any> { return undefined; }
+async function copyHttpAppUrl(..._args: any[]): Promise<any> { return undefined; }
+async function openHttpAppDemo(..._args: any[]): Promise<any> { return undefined; }
+async function openHttpCounterDemo(..._args: any[]): Promise<any> { return undefined; }
+async function publishHttpAppDataStores(..._args: any[]): Promise<any> { return undefined; }
+async function openHttpWasmDemo(..._args: any[]): Promise<any> { return undefined; }
+async function createHttpApp(..._args: any[]): Promise<any> { return undefined; }
+async function openHttpAppCatalog(..._args: any[]): Promise<any> { return undefined; }
+async function publishHttpAppsToSystemView(..._args: any[]): Promise<any> { return undefined; }
+async function previewHttpCatalogApp(..._args: any[]): Promise<any> { return undefined; }
+async function previewHttpAppPath(..._args: any[]): Promise<any> { return undefined; }
+
+// STUB: v86-shared-demo not yet ported — see docs/integration/plan.md
+const V86_SHARED_DIR = "/shared";
+const V86_SHARED_LINUX_PATH = `${V86_SHARED_DIR}/from-linux.txt`;
+type V86SharedConfig = {
+	launchUrl?: string;
+	boot?: { ready?: boolean; kernel?: string; init?: string; initrd?: string; missing?: string[] };
+	rootfs?: { status?: string; ready?: boolean; url?: string; missing?: string[] };
+	p9?: { websocket?: string };
+	defaultCmdline?: string;
+	p9Msize?: number;
+};
+async function openV86SharedDemo(..._args: any[]): Promise<any> { return undefined; }
+async function openDirectV86(..._args: any[]): Promise<any> { return undefined; }
 import { WanixP9Handle, type WanixP9Route } from '../wanix/p9.js';
 //@ts-ignore
 import { WanixHandle } from '../wanix/fs.js';
