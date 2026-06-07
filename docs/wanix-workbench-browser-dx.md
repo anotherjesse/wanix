@@ -523,6 +523,16 @@ the editor title bar alone.
 
 ![Wanix agent repair report](assets/wanix-workbench-browser-dx/51-agent-repair-report.png)
 
+The report now has a machine-readable sibling too:
+`/agent/out/broken.repair-report.json`. It uses schema
+`wanix.agent-repair.v1` and records the same repair as structured data:
+backend, contract, target, result, ordered operations, task ids, transcript
+paths, metadata paths, snapshots, and artifacts. That gives a future Codex
+app-server backend a concrete run record to produce and inspect instead of
+asking it to scrape Markdown.
+
+![Structured Wanix agent repair JSON](assets/wanix-workbench-browser-dx/69-agent-repair-json-report.png)
+
 The demo path is now one click. `Run Agent Repair Demo` installs the broken
 program and immediately repairs `/agent/broken.js` as an explicit target, so an
 empty workbench can show the whole agent loop without relying on the active
@@ -537,7 +547,7 @@ markdown contract, and records the write in both the Agent section and Activity.
 The JSON uses the explicit `wanix.agent-tools.v1` schema and names the current
 repair backend, service roots, policies, repair-demo loop, and tools such as
 `readFile`, `writeFile`, `runTask`, `observeTask`, `previewHttpRoute`, and
-`writeSystemSnapshot`. This is the shape a Codex app-server engine can attach to
+`writeRepairReport`. This is the shape a Codex app-server engine can attach to
 without changing the Wanix-facing contract.
 
 ![Wanix agent tool contract](assets/wanix-workbench-browser-dx/57-agent-tool-contract.png)
@@ -601,6 +611,8 @@ But the first browser pass had several small breaks in the loop:
   activity instead of appearing as a clickable repair trace.
 - The repaired source changed in the editor, but there was no durable
   before/after diff artifact to inspect later.
+- The repair report was human-readable, but did not yet have a structured JSON
+  run record for agents or tooling.
 - HTTP route previews updated route status, but the execution itself was not a
   first-class row in the system panel.
 - HTTP route previews could prove a qjs handler returned text, but not yet that
@@ -867,6 +879,9 @@ a person can inspect.
 The repair report makes that loop durable. It is useful today for humans
 reviewing what happened, and it gives the future Codex app-server backend a
 stable artifact shape to fill in without changing the browser story.
+The structured JSON sidecar makes that artifact shape explicit:
+`wanix.agent-repair.v1` records the repair contract, operations, task ids,
+transcripts, metadata, snapshots, result, and status as data.
 
 The one-click action matters for demos because it removes the last bit of
 coordination: no command palette, no title-bar hunting, no active-editor
@@ -1075,7 +1090,10 @@ The current loop is:
 65. Click `write repair report` or open
     `/agent/out/broken.repair-report.md` to inspect the complete repair trace:
     operation list, task ids, transcript paths, snapshots, result, and status.
-66. Use the System action row `Fix Current Wanix Program` when the current
+66. Open `/agent/out/broken.repair-report.json` to inspect the same repair as
+    `wanix.agent-repair.v1`: structured operations, artifacts, result, and
+    backend contract.
+67. Use the System action row `Fix Current Wanix Program` when the current
     editor is a qjs file and you want to apply the same repair contract outside
     the canned demo.
 
@@ -1090,6 +1108,7 @@ The next round should probably focus on making the workbench less demo-only:
 - Extend operation metadata with explicit failure reports for commands that did
   not mutate the served root.
 - Replace the deterministic repair backend with Codex app-server behind the
-  same Wanix-shaped command contract.
+  same Wanix-shaped command contract, producing the same
+  `wanix.agent-repair.v1` run record.
 
 The important thing is that these can now be incremental. The browser loop is alive.

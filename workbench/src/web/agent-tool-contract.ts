@@ -50,6 +50,13 @@ const AGENT_TOOLS: AgentTool[] = [
 		wanixSurface: ["wanix:/<beforePath>", "wanix:/<afterPath>"],
 	},
 	{
+		name: "writeRepairReport",
+		description: "Persist a structured agent repair run record for humans and future agent backends.",
+		input: { target: "program path", operations: "ordered Wanix tool operations", status: "repaired, already repaired, or failed" },
+		output: { markdownPath: "human report", jsonPath: "wanix.agent-repair.v1 run record" },
+		wanixSurface: ["/agent/out/*.repair-report.md", "/agent/out/*.repair-report.json", "Reports section artifacts"],
+	},
+	{
 		name: "previewHttpRoute",
 		description: "Run a Wanix-backed HTTP route and save response plus route-run artifacts.",
 		input: { route: "/.wanix/app/<name>" },
@@ -133,8 +140,10 @@ function agentToolContractJson(generatedAt: Date): string {
 		repairDemo: {
 			target: "/agent/broken.js",
 			reportPath: "/agent/out/broken.repair-report.md",
+			reportJsonPath: "/agent/out/broken.repair-report.json",
+			reportSchema: "wanix.agent-repair.v1",
 			expectedResultPath: "/agent/out/result.txt",
-			loop: ["readFile", "runTask", "observeTask", "writeFile", "runTask", "observeTask", "openPath"],
+			loop: ["readFile", "runTask", "observeTask", "writeFile", "diffFiles", "runTask", "observeTask", "writeRepairReport", "openPath"],
 		},
 		policies: [
 			"Operate through Wanix files, tasks, terminals, service files, and route artifacts.",
@@ -169,7 +178,10 @@ function agentToolContractMarkdown(generatedAt: Date): string {
 		"4. writeFile repaired source plus before/after snapshots",
 		"5. runTask qjs /agent/broken.js again",
 		"6. observeTask success and result file",
-		"7. openPath /agent/out/broken.repair-report.md",
+		"7. writeRepairReport /agent/out/broken.repair-report.md and /agent/out/broken.repair-report.json",
+		"8. openPath /agent/out/broken.repair-report.md",
+		"",
+		"The JSON report uses schema `wanix.agent-repair.v1` and records the ordered Wanix operations, task ids, transcript paths, metadata paths, before/after snapshots, result path, and status.",
 		"",
 		"## Policies",
 		"",

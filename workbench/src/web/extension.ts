@@ -1302,7 +1302,7 @@ async function repairWanixProgramTarget(
 ): Promise<void> {
 	const trace: AgentTraceStep[] = [];
 	const startedAt = new Date();
-	let reportPath: string | undefined;
+	let reportPaths: { markdownPath: string; jsonPath: string } | undefined;
 	const agentStep = (label: string, options: Partial<AgentTraceStep> & { icon?: string } = {}): void => {
 		trace.push({
 			label,
@@ -1324,36 +1324,40 @@ async function repairWanixProgramTarget(
 		});
 	};
 	const writeReport = async (status: string, error?: unknown, resultPath?: string): Promise<string> => {
-		const path = reportPath || agentReportPath(target);
-		reportPath = path;
-		const reportDir = parentPath(path);
+		const paths = reportPaths || agentReportPaths(target);
+		reportPaths = paths;
+		const reportDir = parentPath(paths.markdownPath);
 		if (reportDir) {
 			await fsys.makeDirAll(reportDir);
 		}
-		const report = agentRepairReportMarkdown({
+		const report = {
 			target,
 			status,
 			startedAt,
 			completedAt: new Date(),
 			steps: trace,
-			reportPath: path,
+			reportPath: paths.markdownPath,
+			jsonPath: paths.jsonPath,
 			resultPath,
 			error: error instanceof Error ? error.message : error ? String(error) : undefined,
-		});
-		await fsys.writeFile(path, report);
-		bridge.refresh(path);
-		systemView.reportPublished("Agent Repair Report", path, {
+		};
+		await fsys.writeFile(paths.markdownPath, agentRepairReportMarkdown(report));
+		await fsys.writeFile(paths.jsonPath, agentRepairReportJson(report));
+		bridge.refresh(paths.markdownPath);
+		bridge.refresh(paths.jsonPath);
+		systemView.reportPublished("Agent Repair Report", paths.markdownPath, {
 			kind: "agent",
 			description: status,
 			icon: "tools",
 			artifacts: agentRepairArtifacts({
 				target,
-				reportPath: path,
+				reportPath: paths.markdownPath,
+				jsonPath: paths.jsonPath,
 				resultPath,
 				steps: trace,
 			}),
 		});
-		return path;
+		return paths.markdownPath;
 	};
 	systemView.agentStarted(`repair ${target.name}`);
 	try {
@@ -1395,8 +1399,9 @@ async function repairWanixProgramTarget(
 		const repaired = repairQjsProgram(source);
 		if (repaired === source && firstCode === 0) {
 			agentStep("already repaired", { icon: "pass", path: target.path });
+			const paths = reportPaths || agentReportPaths(target);
+			agentStep("write repair report", { icon: "notebook", path: paths.markdownPath, description: paths.jsonPath });
 			const path = await writeReport("already repaired");
-			agentStep("write repair report", { icon: "notebook", path });
 			await openWanixPath(path);
 			vscode.window.showInformationMessage(`${target.name} already looks repaired`);
 			return;
@@ -1459,16 +1464,18 @@ async function repairWanixProgramTarget(
 		const result = await waitForTextFile(fsys, resultPath);
 		agentStep(`verify ${baseName(resultPath)}`, { icon: "pass", path: resultPath });
 		await openWanixPath(resultPath);
+		const paths = reportPaths || agentReportPaths(target);
+		agentStep("write repair report", { icon: "notebook", path: paths.markdownPath, description: paths.jsonPath });
 		const path = await writeReport("repaired", undefined, resultPath);
-		agentStep("write repair report", { icon: "notebook", path });
-		await refreshWanixPaths(bridge, [resultPath, path]);
+		await refreshWanixPaths(bridge, [resultPath, path, paths.jsonPath]);
 		await openWanixPath(path);
 		vscode.window.showInformationMessage(`Wanix agent repair wrote ${resultPath}: ${result.trim()}`);
 	} catch (error) {
 		agentStep("repair failed", { icon: "error", description: error instanceof Error ? error.message : String(error) });
 		try {
+			const paths = reportPaths || agentReportPaths(target);
+			agentStep("write failure report", { icon: "notebook", path: paths.markdownPath, description: paths.jsonPath });
 			const path = await writeReport("failed", error);
-			agentStep("write failure report", { icon: "notebook", path });
 			await openWanixPath(path);
 		} catch (reportError) {
 			console.warn("Wanix agent repair report failed", reportError);
@@ -1794,6 +1801,14 @@ function agentReportPath(target: TaskRunTarget): string {
 	return `${artifactDir}/${stem}.repair-report.md`;
 }
 
+function agentReportPaths(target: TaskRunTarget): { markdownPath: string; jsonPath: string } {
+	const markdownPath = agentReportPath(target);
+	return {
+		markdownPath,
+		jsonPath: markdownPath.replace(/\.md$/i, ".json"),
+	};
+}
+
 function agentRepairReportMarkdown(report: {
 	target: TaskRunTarget;
 	status: string;
@@ -1801,6 +1816,7 @@ function agentRepairReportMarkdown(report: {
 	completedAt: Date;
 	steps: AgentTraceStep[];
 	reportPath: string;
+	jsonPath: string;
 	resultPath?: string;
 	error?: string;
 }): string {
@@ -1814,6 +1830,7 @@ function agentRepairReportMarkdown(report: {
 		"Contract: read file, run task, observe transcript, write file, rerun task, verify filesystem output",
 		`Started: ${report.startedAt.toISOString()}`,
 		`Completed: ${report.completedAt.toISOString()}`,
+		`JSON: ${displayWanixReportPath(report.jsonPath)}`,
 		report.error ? `Error: ${report.error}` : undefined,
 		"",
 		"## Operations",
@@ -1826,9 +1843,56 @@ function agentRepairReportMarkdown(report: {
 	].filter((line): line is string => line !== undefined).join("\n");
 }
 
+function agentRepairReportJson(report: {
+	target: TaskRunTarget;
+	status: string;
+	startedAt: Date;
+	completedAt: Date;
+	steps: AgentTraceStep[];
+	reportPath: string;
+	jsonPath: string;
+	resultPath?: string;
+	error?: string;
+}): string {
+	return `${JSON.stringify({
+		schema: "wanix.agent-repair.v1",
+		status: report.status,
+		backend: "deterministic local repair",
+		contract: [
+			"readFile",
+			"runTask",
+			"observeTask",
+			"writeFile",
+			"diffFiles",
+			"runTask",
+			"observeTask",
+			"writeRepairReport",
+			"openPath",
+		],
+		startedAt: report.startedAt.toISOString(),
+		completedAt: report.completedAt.toISOString(),
+		target: {
+			kind: "qjs",
+			path: displayWanixReportPath(report.target.path),
+			cwd: displayWanixReportPath(report.target.dir === "." ? "/" : report.target.dir),
+			name: report.target.name,
+		},
+		result: {
+			status: report.status,
+			resultPath: report.resultPath ? displayWanixReportPath(report.resultPath) : undefined,
+			error: report.error,
+		},
+		reportPath: displayWanixReportPath(report.reportPath),
+		jsonPath: displayWanixReportPath(report.jsonPath),
+		operations: report.steps.map(agentRepairOperationJson),
+		artifacts: agentRepairArtifacts(report).map(displayWanixReportPath),
+	}, null, 2)}\n`;
+}
+
 function agentRepairArtifacts(report: {
 	target: TaskRunTarget;
 	reportPath: string;
+	jsonPath?: string;
 	resultPath?: string;
 	steps: AgentTraceStep[];
 }): string[] {
@@ -1836,6 +1900,7 @@ function agentRepairArtifacts(report: {
 		report.target.path,
 		report.resultPath || "",
 		report.reportPath,
+		report.jsonPath || "",
 		...report.steps.flatMap((step) => [
 			step.path || "",
 			step.beforePath || "",
@@ -1844,6 +1909,53 @@ function agentRepairArtifacts(report: {
 			step.metadataPath || "",
 		]),
 	]);
+}
+
+function agentRepairOperationJson(step: AgentTraceStep, index: number): object {
+	return {
+		index: index + 1,
+		tool: agentRepairOperationTool(step.label),
+		label: step.label,
+		description: step.description,
+		taskId: step.taskId,
+		exitCode: typeof step.exitCode === "number" ? step.exitCode : undefined,
+		path: step.path ? displayWanixReportPath(step.path) : undefined,
+		beforePath: step.beforePath ? displayWanixReportPath(step.beforePath) : undefined,
+		afterPath: step.afterPath ? displayWanixReportPath(step.afterPath) : undefined,
+		transcriptPath: step.outputPath ? displayWanixReportPath(step.outputPath) : undefined,
+		metadataPath: step.metadataPath ? displayWanixReportPath(step.metadataPath) : undefined,
+	};
+}
+
+function agentRepairOperationTool(label: string): string {
+	if (label.startsWith("read ")) {
+		return "readFile";
+	}
+	if (label.startsWith("run ") || label.startsWith("rerun ")) {
+		return "runTask";
+	}
+	if (label.startsWith("capture ")) {
+		return "observeTask";
+	}
+	if (label.startsWith("observe ")) {
+		return "observeTask";
+	}
+	if (label.startsWith("snapshot ")) {
+		return "writeFile";
+	}
+	if (label.startsWith("edit ")) {
+		return "writeFile";
+	}
+	if (label.startsWith("diff ")) {
+		return "diffFiles";
+	}
+	if (label.startsWith("verify ")) {
+		return "readFile";
+	}
+	if (label.includes("report")) {
+		return "writeRepairReport";
+	}
+	return "agentStep";
 }
 
 function agentReportStepLines(step: AgentTraceStep, index: number): string[] {
