@@ -106,6 +106,12 @@ type ShellHistoryPick = vscode.QuickPickItem & {
 	entry: ShellHistoryEntry;
 };
 
+type ShellHistoryArtifact = {
+	entry: ShellHistoryEntry;
+	index: number;
+	path: string;
+};
+
 const TASK_RUNNERS: Record<TaskRunKind, { extension: string; label: string }> = {
 	qjs: { extension: ".js", label: "JavaScript" },
 	wasm: { extension: ".wasm", label: "WASM" },
@@ -122,6 +128,7 @@ const SHELL_HISTORY_JSON_PATH = ".wanix/qjs-shell/latest.json";
 const SHELL_HISTORY_MD_PATH = ".wanix/qjs-shell/latest.md";
 const SHELL_HISTORY_SELECTED_MD_PATH = ".wanix/qjs-shell/selected.md";
 const SHELL_HISTORY_SUMMARY_MD_PATH = ".wanix/qjs-shell/summary.md";
+const SHELL_HISTORY_COMMANDS_DIR = ".wanix/qjs-shell/commands";
 const SYSTEM_JOURNAL_PATH = ".wanix/system-journal.md";
 const SYSTEM_STATE_PATH = ".wanix/system-state.json";
 const SERVICE_STATE_POLL_MS = 1000;
@@ -805,7 +812,9 @@ async function openShellHistorySummary(
 		throw new Error("No qjs shell command history entries yet. Run a served shell command first.");
 	}
 	await fsys.makeDirAll(parentPath(SHELL_HISTORY_SUMMARY_MD_PATH));
-	await fsys.writeFile(SHELL_HISTORY_SUMMARY_MD_PATH, shellHistorySummaryMarkdown(entries, new Date()));
+	const artifacts = shellHistoryArtifacts(entries);
+	await writeShellHistoryCommandArtifacts(fsys, artifacts);
+	await fsys.writeFile(SHELL_HISTORY_SUMMARY_MD_PATH, shellHistorySummaryMarkdown(artifacts, new Date()));
 	const paths = await existingShellHistoryPaths(fsys);
 	const reportPaths = paths.includes(SHELL_HISTORY_SUMMARY_MD_PATH) ? paths : [SHELL_HISTORY_SUMMARY_MD_PATH, ...paths];
 	publishShellCommandHistoryReportFromPaths(systemView, reportPaths, shellHistoryReportOpenPath(reportPaths));
@@ -832,6 +841,7 @@ async function clearShellCommandHistory(
 		return;
 	}
 	const paths = [
+		SHELL_HISTORY_COMMANDS_DIR,
 		SHELL_HISTORY_SUMMARY_MD_PATH,
 		SHELL_HISTORY_SELECTED_MD_PATH,
 		SHELL_HISTORY_MD_PATH,
@@ -840,7 +850,11 @@ async function clearShellCommandHistory(
 	];
 	for (const path of paths) {
 		try {
-			await fsys.remove(path);
+			if (path === SHELL_HISTORY_COMMANDS_DIR) {
+				await removeShellHistoryCommandArtifacts(fsys);
+			} else {
+				await fsys.remove(path);
+			}
 		} catch {
 			// Missing history artifacts are harmless during a clear operation.
 		}
@@ -980,7 +994,108 @@ function shellHistorySelectionMarkdown(entry: ShellHistoryEntry): string {
 	return lines.join("\n");
 }
 
-function shellHistorySummaryMarkdown(entries: ShellHistoryEntry[], generatedAt: Date): string {
+async function writeShellHistoryCommandArtifacts(fsys: any, artifacts: ShellHistoryArtifact[]): Promise<void> {
+	await removeShellHistoryCommandArtifacts(fsys);
+	await fsys.makeDirAll(SHELL_HISTORY_COMMANDS_DIR);
+	for (const artifact of artifacts) {
+		await fsys.writeFile(artifact.path, shellHistoryCommandArtifactMarkdown(artifact));
+	}
+}
+
+async function removeShellHistoryCommandArtifacts(fsys: any): Promise<void> {
+	if (typeof fsys.removeAll === "function") {
+		try {
+			await fsys.removeAll(SHELL_HISTORY_COMMANDS_DIR);
+			return;
+		} catch {
+			// The directory is created only after the summary has been generated.
+		}
+	}
+	let entries: any[] = [];
+	try {
+		entries = typeof fsys.readDirEntries === "function"
+			? await fsys.readDirEntries(SHELL_HISTORY_COMMANDS_DIR)
+			: [];
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		const name = typeof entry === "string" ? entry : entry?.Name;
+		if (name) {
+			await fsys.remove(`${SHELL_HISTORY_COMMANDS_DIR}/${name.replace(/\/$/, "")}`);
+		}
+	}
+	try {
+		await fsys.remove(SHELL_HISTORY_COMMANDS_DIR);
+	} catch {
+		// A missing empty directory is fine here too.
+	}
+}
+
+function shellHistoryArtifacts(entries: ShellHistoryEntry[]): ShellHistoryArtifact[] {
+	const width = Math.max(4, String(entries.length).length);
+	return entries.map((entry, index) => {
+		const number = String(index + 1).padStart(width, "0");
+		return {
+			entry,
+			index: index + 1,
+			path: `${SHELL_HISTORY_COMMANDS_DIR}/${number}.md`,
+		};
+	});
+}
+
+function shellHistoryCommandArtifactMarkdown(artifact: ShellHistoryArtifact): string {
+	const entry = artifact.entry;
+	const lines = [
+		`# qjs Shell Command ${artifact.index}`,
+		"",
+		"Schema: wanix.qjs-shell.command-evidence.v1",
+		`Command: ${shellHistoryCommand(entry)}`,
+		`Status: ${shellHistoryStatus(entry)}`,
+		`Summary: ${shellHistoryArtifactSummary(artifact)}`,
+		`History summary: ${shellHistoryWanixLink("/.wanix/qjs-shell/summary.md", SHELL_HISTORY_SUMMARY_MD_PATH)}`,
+		`Latest history: ${shellHistoryWanixLink("/.wanix/qjs-shell/latest.md", SHELL_HISTORY_MD_PATH)}`,
+	];
+	const observedAt = formatShellHistoryTime(entry.observedAtUnixMillis);
+	if (observedAt) {
+		lines.push(`Observed: ${observedAt}`);
+	}
+	if (entry.cwd) {
+		lines.push(`Cwd: ${entry.cwd}`);
+	}
+	if (entry.taskId) {
+		lines.push(`Task: ${entry.taskId}`);
+	}
+	if (entry.terminalId) {
+		lines.push(`Terminal: ${entry.terminalId}`);
+	}
+	lines.push("", "## Outcome");
+	lines.push(`Evidence: ${entry.outcome?.evidence || "unknown"}`);
+	lines.push(`Diagnostic: ${entry.outcome?.diagnostic || ""}`);
+	if (entry.outcome?.terminalOutput) {
+		lines.push("", "### Terminal Output", "```text", entry.outcome.terminalOutput.trimEnd(), "```");
+	}
+	lines.push("", "## Operation");
+	lines.push(`Kind: ${entry.operation?.kind || ""}`);
+	lines.push(`Status: ${entry.operation?.status || ""}`);
+	if (entry.operation?.source) {
+		lines.push(`Source: ${shellHistoryWanixLink(entry.operation.source, entry.operation.source)}`);
+	}
+	if (entry.operation?.target) {
+		lines.push(`Target: ${shellHistoryWanixLink(entry.operation.target, entry.operation.target)}`);
+	}
+	if (entry.operation?.paths?.length) {
+		lines.push("Paths:");
+		for (const path of entry.operation.paths) {
+			lines.push(`- ${shellHistoryWanixLink(path, path)}`);
+		}
+	}
+	lines.push("", "## Raw JSON", "```json", JSON.stringify(entry, null, 2), "```", "");
+	return lines.join("\n");
+}
+
+function shellHistorySummaryMarkdown(artifacts: ShellHistoryArtifact[], generatedAt: Date): string {
+	const entries = artifacts.map((artifact) => artifact.entry);
 	const firstObserved = shellHistoryObservedRange(entries, "first");
 	const lastObserved = shellHistoryObservedRange(entries, "last");
 	const lines = [
@@ -992,79 +1107,82 @@ function shellHistorySummaryMarkdown(entries: ShellHistoryEntry[], generatedAt: 
 		`Time range: ${firstObserved || "unknown"} to ${lastObserved || "unknown"}`,
 		`Latest history: /${SHELL_HISTORY_MD_PATH}`,
 		`Append log: /${SHELL_HISTORY_JSONL_PATH}`,
+		`Command evidence: /${SHELL_HISTORY_COMMANDS_DIR}`,
 		"",
 		"## Outcome Counts",
-		...shellHistoryCountLines(shellHistoryGroupBy(entries, shellHistoryStatusKey)),
+		...shellHistoryCountLines(shellHistoryGroupBy(artifacts, (artifact) => shellHistoryStatusKey(artifact.entry))),
 		"",
 		"## Changed Counts",
-		...shellHistoryCountLines(shellHistoryGroupBy(entries, shellHistoryChangedKey)),
+		...shellHistoryCountLines(shellHistoryGroupBy(artifacts, (artifact) => shellHistoryChangedKey(artifact.entry))),
 		"",
 		"## By Time",
-		...shellHistoryGroupLines(shellHistoryGroupBy(entries, shellHistoryTimeBucket), { includeRange: true }),
+		...shellHistoryGroupLines(shellHistoryGroupBy(artifacts, (artifact) => shellHistoryTimeBucket(artifact.entry)), { includeRange: true }),
 		"",
 		"## By Cwd",
-		...shellHistoryGroupLines(shellHistoryGroupBy(entries, (entry) => entry.cwd || "(unknown cwd)")),
+		...shellHistoryGroupLines(shellHistoryGroupBy(artifacts, (artifact) => artifact.entry.cwd || "(unknown cwd)")),
 		"",
 		"## By Terminal",
-		...shellHistoryGroupLines(shellHistoryGroupBy(entries, (entry) => entry.terminalId || "(unknown terminal)")),
+		...shellHistoryGroupLines(shellHistoryGroupBy(artifacts, (artifact) => artifact.entry.terminalId || "(unknown terminal)")),
 		"",
 		"## By Task",
-		...shellHistoryGroupLines(shellHistoryGroupBy(entries, (entry) => entry.taskId || "(unknown task)")),
+		...shellHistoryGroupLines(shellHistoryGroupBy(artifacts, (artifact) => artifact.entry.taskId || "(unknown task)")),
 		"",
 		"## Recent Commands",
-		...shellHistoryRecentLines(entries, 12),
+		...shellHistoryRecentLines(artifacts, 12),
 		"",
 	];
 	return lines.join("\n");
 }
 
-function shellHistoryGroupBy(entries: ShellHistoryEntry[], keyFor: (entry: ShellHistoryEntry) => string): Map<string, ShellHistoryEntry[]> {
-	const groups = new Map<string, ShellHistoryEntry[]>();
-	for (const entry of entries) {
-		const key = keyFor(entry);
+function shellHistoryGroupBy(artifacts: ShellHistoryArtifact[], keyFor: (artifact: ShellHistoryArtifact) => string): Map<string, ShellHistoryArtifact[]> {
+	const groups = new Map<string, ShellHistoryArtifact[]>();
+	for (const artifact of artifacts) {
+		const key = keyFor(artifact);
 		const group = groups.get(key);
 		if (group) {
-			group.push(entry);
+			group.push(artifact);
 		} else {
-			groups.set(key, [entry]);
+			groups.set(key, [artifact]);
 		}
 	}
 	return groups;
 }
 
-function shellHistoryCountLines(groups: Map<string, ShellHistoryEntry[]>): string[] {
+function shellHistoryCountLines(groups: Map<string, ShellHistoryArtifact[]>): string[] {
 	return shellHistorySortedGroups(groups).map(([key, group]) => `- ${key}: ${group.length}`);
 }
 
 function shellHistoryGroupLines(
-	groups: Map<string, ShellHistoryEntry[]>,
+	groups: Map<string, ShellHistoryArtifact[]>,
 	options: { includeRange?: boolean } = {},
 ): string[] {
 	const lines: string[] = [];
 	for (const [key, group] of shellHistorySortedGroups(groups)) {
-		const changed = group.filter((entry) => entry.outcome?.changed).length;
-		const errors = group.filter(shellHistoryLooksFailed).length;
-		const range = options.includeRange ? `, ${shellHistoryObservedRange(group, "first") || "unknown"} to ${shellHistoryObservedRange(group, "last") || "unknown"}` : "";
+		const entries = group.map((artifact) => artifact.entry);
+		const changed = entries.filter((entry) => entry.outcome?.changed).length;
+		const errors = entries.filter(shellHistoryLooksFailed).length;
+		const range = options.includeRange ? `, ${shellHistoryObservedRange(entries, "first") || "unknown"} to ${shellHistoryObservedRange(entries, "last") || "unknown"}` : "";
 		lines.push(`- ${key}: ${group.length} commands, ${changed} changed, ${errors} failed${range}`);
-		for (const entry of [...group].slice(-3).reverse()) {
-			lines.push(`  - ${shellHistoryEntrySummary(entry)}`);
+		for (const artifact of [...group].slice(-3).reverse()) {
+			lines.push(`  - ${shellHistoryArtifactSummary(artifact)}`);
 		}
 	}
 	return lines.length ? lines : ["- no entries"];
 }
 
-function shellHistoryRecentLines(entries: ShellHistoryEntry[], limit: number): string[] {
-	return [...entries].slice(-limit).reverse().map((entry) => `- ${shellHistoryEntrySummary(entry)}`);
+function shellHistoryRecentLines(artifacts: ShellHistoryArtifact[], limit: number): string[] {
+	return [...artifacts].slice(-limit).reverse().map((artifact) => `- ${shellHistoryArtifactSummary(artifact)}`);
 }
 
-function shellHistoryEntrySummary(entry: ShellHistoryEntry): string {
+function shellHistoryArtifactSummary(artifact: ShellHistoryArtifact): string {
+	const entry = artifact.entry;
 	const time = formatShellHistoryTime(entry.observedAtUnixMillis) || "unknown time";
 	const target = shellHistoryTarget(entry);
-	const targetText = target ? ` -> ${target}` : "";
-	return `${time} - ${shellHistoryStatus(entry)} - ${shellHistoryCommand(entry)}${targetText}`;
+	const targetText = target ? ` -> ${shellHistoryWanixLink(target, target)}` : "";
+	return `${time} - ${shellHistoryStatus(entry)} - ${shellHistoryWanixLink(shellHistoryCommand(entry), artifact.path)}${targetText}`;
 }
 
-function shellHistorySortedGroups(groups: Map<string, ShellHistoryEntry[]>): [string, ShellHistoryEntry[]][] {
+function shellHistorySortedGroups(groups: Map<string, ShellHistoryArtifact[]>): [string, ShellHistoryArtifact[]][] {
 	return [...groups.entries()].sort(([leftKey, leftEntries], [rightKey, rightEntries]) => {
 		const byCount = rightEntries.length - leftEntries.length;
 		return byCount || leftKey.localeCompare(rightKey);
@@ -1111,6 +1229,19 @@ function shellHistoryLooksFailed(entry: ShellHistoryEntry): boolean {
 		return true;
 	}
 	return !!status && status !== "ok" && status !== "observed";
+}
+
+function shellHistoryWanixLink(label: string, path: string): string {
+	return `[${shellHistoryMarkdownLabel(label)}](${shellHistoryWanixUri(path)})`;
+}
+
+function shellHistoryMarkdownLabel(label: string): string {
+	return label.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/]/g, "\\]");
+}
+
+function shellHistoryWanixUri(path: string): string {
+	const normalized = path.startsWith("/") ? path : `/${path}`;
+	return `wanix:${encodeURI(normalized).replace(/\(/g, "%28").replace(/\)/g, "%29")}`;
 }
 
 function formatShellHistoryTime(value: unknown): string | undefined {
@@ -1160,7 +1291,7 @@ function publishShellCommandHistoryReportFromPaths(
 }
 
 async function existingShellHistoryPaths(fsys: any): Promise<string[]> {
-	const paths = [SHELL_HISTORY_SUMMARY_MD_PATH, SHELL_HISTORY_SELECTED_MD_PATH, SHELL_HISTORY_MD_PATH, SHELL_HISTORY_JSON_PATH, SHELL_HISTORY_JSONL_PATH];
+	const paths = [SHELL_HISTORY_SUMMARY_MD_PATH, SHELL_HISTORY_COMMANDS_DIR, SHELL_HISTORY_SELECTED_MD_PATH, SHELL_HISTORY_MD_PATH, SHELL_HISTORY_JSON_PATH, SHELL_HISTORY_JSONL_PATH];
 	const existing: string[] = [];
 	for (const path of paths) {
 		try {

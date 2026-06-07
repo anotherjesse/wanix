@@ -510,6 +510,15 @@ need to understand the shape of the whole session.
 
 ![Shell command history summary](assets/wanix-workbench-browser-dx/77-shell-history-summary.png)
 
+The summary rows are navigable now. Regenerating the summary writes one evidence
+file per command under `/.wanix/qjs-shell/commands/`, and the summary links each
+command label to its evidence file while linking touched paths back to
+`wanix:/...`. That gives humans and agents a stable way to jump from a grouped
+session view to the exact raw JSON, terminal snippet, operation metadata, and
+file path behind one command.
+
+![Shell command history linked evidence](assets/wanix-workbench-browser-dx/78-shell-history-linked-evidence.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1109,7 +1118,9 @@ The current loop is:
     use `Search Shell Command History` to filter the append log and open a
     focused `/.wanix/qjs-shell/selected.md` selection artifact.
 17. Click `Open Shell History Summary` to generate the grouped
-    `/.wanix/qjs-shell/summary.md` session view.
+    `/.wanix/qjs-shell/summary.md` session view. Command rows link to
+    `/.wanix/qjs-shell/commands/<n>.md`, and touched paths link back to
+    `wanix:/...`.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1221,8 +1232,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add clickable links from shell history summary rows back to selected command
-  artifacts or touched Wanix paths.
+- Add shell history compaction controls by count or age now that each summary
+  run creates per-command evidence files.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.
