@@ -117,6 +117,39 @@ type ShellHistoryArchivePick = vscode.QuickPickItem & {
 	commandsPath: string;
 };
 
+type ShellHistoryArchiveInfo = {
+	name: string;
+	archiveDir: string;
+	commandsPath: string;
+	indexPath: string;
+	manifestPath: string;
+	summaryPath: string;
+	latestMarkdownPath: string;
+	generatedAt: string;
+	generatedAtUnixMillis?: number;
+	commandCount: number;
+	firstObservedAt?: string;
+	lastObservedAt?: string;
+	compareMarkdownPath: string;
+	compareJsonPath: string;
+	compareGeneratedAt?: string;
+	archivedOnlyCount?: number;
+	liveOnlyCount?: number;
+	wasLastRestored?: boolean;
+};
+
+type ShellHistoryArchiveInventory = {
+	generatedAt: Date;
+	archives: ShellHistoryArchiveInfo[];
+	lastRestoredArchiveDir?: string;
+};
+
+type ShellHistoryArchivePrunePick = vscode.QuickPickItem & {
+	retentionKind: "count" | "age";
+	keepCount?: number;
+	ageMs?: number;
+};
+
 type ShellHistoryArtifact = {
 	entry: ShellHistoryEntry;
 	index: number;
@@ -196,6 +229,10 @@ const SHELL_HISTORY_RESTORE_MD_PATH = ".wanix/qjs-shell/restored.md";
 const SHELL_HISTORY_RESTORE_JSON_PATH = ".wanix/qjs-shell/restored.json";
 const SHELL_HISTORY_COMMANDS_DIR = ".wanix/qjs-shell/commands";
 const SHELL_HISTORY_ARCHIVE_DIR = ".wanix/qjs-shell/archive";
+const SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH = ".wanix/qjs-shell/archive/inventory.md";
+const SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH = ".wanix/qjs-shell/archive/inventory.json";
+const SHELL_HISTORY_ARCHIVE_PRUNE_MD_PATH = ".wanix/qjs-shell/archive/pruned.md";
+const SHELL_HISTORY_ARCHIVE_PRUNE_JSON_PATH = ".wanix/qjs-shell/archive/pruned.json";
 const SHELL_HISTORY_COMPARE_MD_NAME = "compare-live.md";
 const SHELL_HISTORY_COMPARE_JSON_NAME = "compare-live.json";
 const SHELL_HISTORY_LATEST_MARKDOWN_LIMIT = 12;
@@ -415,6 +452,14 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			}
 		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.openShellHistoryArchiveInventory', async () => {
+			try {
+				await openShellHistoryArchiveInventory(fsys, bridge, systemView);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.compareShellHistoryArchive', async () => {
 			try {
 				await compareShellHistoryArchive(fsys, bridge, systemView);
@@ -426,6 +471,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(vscode.commands.registerCommand('workbench.restoreShellHistoryArchive', async () => {
 			try {
 				await restoreShellHistoryArchive(fsys, bridge, systemView);
+				revealWanixSystemView();
+			} catch (error) {
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			}
+		}));
+		context.subscriptions.push(vscode.commands.registerCommand('workbench.pruneShellHistoryArchives', async () => {
+			try {
+				await pruneShellHistoryArchives(fsys, bridge, systemView);
 				revealWanixSystemView();
 			} catch (error) {
 				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -953,6 +1006,24 @@ async function archiveShellCommandHistory(
 	vscode.window.showInformationMessage(`Archived qjs shell history: ${entries.length} commands`);
 }
 
+async function openShellHistoryArchiveInventory(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const inventory = await shellHistoryArchiveInventory(fsys, new Date());
+	const paths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	publishShellHistoryArchiveInventoryReport(systemView, paths);
+	systemView.filesystemActivity("shell archive inventory published", {
+		description: `${inventory.archives.length} archives`,
+		path: SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH,
+		paths,
+	});
+	await refreshWanixPaths(bridge, [SHELL_HISTORY_ARCHIVE_DIR, ...paths]);
+	await openWanixPath(SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH);
+	vscode.window.showInformationMessage(`Opened qjs shell archive inventory: ${inventory.archives.length} archives`);
+}
+
 async function compareShellHistoryArchive(
 	fsys: any,
 	bridge: WanixBridge,
@@ -1033,6 +1104,58 @@ async function restoreShellHistoryArchive(
 	await refreshWanixPaths(bridge, [".wanix/qjs-shell", ...reportPaths]);
 	await openWanixPath(SHELL_HISTORY_RESTORE_MD_PATH);
 	vscode.window.showInformationMessage(`Restored qjs shell history archive: ${archiveEntries.length} commands`);
+}
+
+async function pruneShellHistoryArchives(
+	fsys: any,
+	bridge: WanixBridge,
+	systemView: WanixSystemView,
+): Promise<void> {
+	const archives = await shellHistoryArchiveInfos(fsys);
+	if (archives.length === 0) {
+		throw new Error("No qjs shell history archives yet. Use Archive Shell Command History first.");
+	}
+	const now = Date.now();
+	const pick = await vscode.window.showQuickPick(shellHistoryArchivePrunePicks(archives, now), {
+		placeHolder: "Prune qjs shell history archives",
+		matchOnDescription: true,
+		matchOnDetail: true,
+	});
+	if (!pick) {
+		return;
+	}
+	const removed = shellHistoryArchivesToPrune(archives, pick, now);
+	if (removed.length === 0) {
+		await openShellHistoryArchiveInventory(fsys, bridge, systemView);
+		vscode.window.showInformationMessage(`No qjs shell archives matched ${pick.label}; refreshed archive inventory`);
+		return;
+	}
+	const choice = await vscode.window.showWarningMessage(
+		`Prune ${removed.length} qjs shell history archive directories using "${pick.label}"? This deletes archived evidence directories but leaves current live shell history untouched.`,
+		{ modal: true },
+		"Prune Archives",
+	);
+	if (choice !== "Prune Archives") {
+		return;
+	}
+	for (const archive of removed) {
+		await removeShellHistoryArchiveDir(fsys, archive.archiveDir);
+	}
+	const generatedAt = new Date();
+	const remaining = await shellHistoryArchiveInfos(fsys);
+	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt, remaining);
+	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
+	const prunePaths = await writeShellHistoryArchivePruneReport(fsys, generatedAt, pick, removed, remaining);
+	const paths = [...prunePaths, ...inventoryPaths];
+	publishShellHistoryArchivePruneReport(systemView, paths);
+	systemView.filesystemActivity("shell archives pruned", {
+		description: `${removed.length} removed, ${remaining.length} kept`,
+		path: SHELL_HISTORY_ARCHIVE_PRUNE_MD_PATH,
+		paths,
+	});
+	await refreshWanixPaths(bridge, [SHELL_HISTORY_ARCHIVE_DIR, ...removed.map((archive) => archive.archiveDir), ...paths]);
+	await openWanixPath(SHELL_HISTORY_ARCHIVE_PRUNE_MD_PATH);
+	vscode.window.showInformationMessage(`Pruned qjs shell archives: ${removed.length} removed, ${remaining.length} kept`);
 }
 
 async function compactShellCommandHistory(
@@ -1211,6 +1334,352 @@ async function shellHistoryReadJson(fsys: any, path: string): Promise<any | unde
 	} catch {
 		return undefined;
 	}
+}
+
+async function shellHistoryArchiveInventory(
+	fsys: any,
+	generatedAt: Date,
+	archives?: ShellHistoryArchiveInfo[],
+): Promise<ShellHistoryArchiveInventory> {
+	const lastRestoredArchiveDir = await shellHistoryLastRestoredArchiveDir(fsys);
+	const archiveInfos = archives || await shellHistoryArchiveInfos(fsys, lastRestoredArchiveDir);
+	return {
+		generatedAt,
+		archives: archiveInfos.map((archive) => ({
+			...archive,
+			wasLastRestored: lastRestoredArchiveDir
+				? shellHistoryRelativePath(lastRestoredArchiveDir) === shellHistoryRelativePath(archive.archiveDir)
+				: false,
+		})),
+		lastRestoredArchiveDir,
+	};
+}
+
+async function shellHistoryArchiveInfos(fsys: any, lastRestoredArchiveDir?: string): Promise<ShellHistoryArchiveInfo[]> {
+	const names = await shellHistoryReadDirNames(fsys, SHELL_HISTORY_ARCHIVE_DIR);
+	const archives: ShellHistoryArchiveInfo[] = [];
+	for (const name of names) {
+		const archiveDir = `${SHELL_HISTORY_ARCHIVE_DIR}/${name.replace(/\/$/, "")}`;
+		const commandsPath = `${archiveDir}/commands.jsonl`;
+		const manifestPath = `${archiveDir}/manifest.json`;
+		const manifest = await shellHistoryReadJson(fsys, manifestPath);
+		const commandCount = typeof manifest?.commandCount === "number"
+			? manifest.commandCount
+			: (await readShellHistoryEntriesOptional(fsys, commandsPath)).length;
+		if (commandCount === 0) {
+			continue;
+		}
+		const compareJsonPath = `${archiveDir}/${SHELL_HISTORY_COMPARE_JSON_NAME}`;
+		const compare = await shellHistoryReadJson(fsys, compareJsonPath);
+		const generatedAt = typeof manifest?.generatedAt === "string" ? manifest.generatedAt : name;
+		const generatedAtUnixMillis = typeof manifest?.generatedAtUnixMillis === "number"
+			? manifest.generatedAtUnixMillis
+			: shellHistoryArchiveIdUnixMillis(name) ?? Date.parse(generatedAt);
+		archives.push({
+			name,
+			archiveDir,
+			commandsPath,
+			indexPath: `${archiveDir}/index.md`,
+			manifestPath,
+			summaryPath: `${archiveDir}/summary.md`,
+			latestMarkdownPath: `${archiveDir}/latest.md`,
+			generatedAt,
+			generatedAtUnixMillis: Number.isFinite(generatedAtUnixMillis) ? generatedAtUnixMillis : undefined,
+			commandCount,
+			firstObservedAt: typeof manifest?.firstObservedAt === "string" ? manifest.firstObservedAt : undefined,
+			lastObservedAt: typeof manifest?.lastObservedAt === "string" ? manifest.lastObservedAt : undefined,
+			compareMarkdownPath: `${archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`,
+			compareJsonPath,
+			compareGeneratedAt: typeof compare?.generatedAt === "string" ? compare.generatedAt : undefined,
+			archivedOnlyCount: typeof compare?.archivedOnlyCount === "number" ? compare.archivedOnlyCount : undefined,
+			liveOnlyCount: typeof compare?.liveOnlyCount === "number" ? compare.liveOnlyCount : undefined,
+			wasLastRestored: lastRestoredArchiveDir
+				? shellHistoryRelativePath(lastRestoredArchiveDir) === shellHistoryRelativePath(archiveDir)
+				: false,
+		});
+	}
+	return archives.sort((left, right) => shellHistoryArchiveSortMillis(right) - shellHistoryArchiveSortMillis(left) || right.name.localeCompare(left.name));
+}
+
+async function shellHistoryLastRestoredArchiveDir(fsys: any): Promise<string | undefined> {
+	const restore = await shellHistoryReadJson(fsys, SHELL_HISTORY_RESTORE_JSON_PATH);
+	return typeof restore?.archiveDir === "string" ? shellHistoryRelativePath(restore.archiveDir) : undefined;
+}
+
+async function writeShellHistoryArchiveInventory(
+	fsys: any,
+	inventory: ShellHistoryArchiveInventory,
+): Promise<string[]> {
+	await fsys.makeDirAll(SHELL_HISTORY_ARCHIVE_DIR);
+	await fsys.writeFile(SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH, shellHistoryArchiveInventoryJson(inventory));
+	await fsys.writeFile(SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH, shellHistoryArchiveInventoryMarkdown(inventory));
+	return [SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH, SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH, SHELL_HISTORY_ARCHIVE_DIR];
+}
+
+function shellHistoryArchiveInventoryJson(inventory: ShellHistoryArchiveInventory): string {
+	return `${JSON.stringify({
+		schema: "wanix.qjs-shell.archive-inventory.v1",
+		generatedAt: inventory.generatedAt.toISOString(),
+		archiveRoot: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_DIR),
+		inventoryMarkdownPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH),
+		inventoryJsonPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH),
+		archiveCount: inventory.archives.length,
+		totalCommandCount: inventory.archives.reduce((sum, archive) => sum + archive.commandCount, 0),
+		lastRestoredArchiveDir: inventory.lastRestoredArchiveDir ? shellHistoryAbsolutePath(inventory.lastRestoredArchiveDir) : undefined,
+		archives: inventory.archives.map(shellHistoryArchiveInfoJson),
+	}, null, 2)}\n`;
+}
+
+function shellHistoryArchiveInfoJson(archive: ShellHistoryArchiveInfo): Record<string, unknown> {
+	return {
+		name: archive.name,
+		archiveDir: shellHistoryAbsolutePath(archive.archiveDir),
+		generatedAt: archive.generatedAt,
+		generatedAtUnixMillis: archive.generatedAtUnixMillis,
+		commandCount: archive.commandCount,
+		firstObservedAt: archive.firstObservedAt,
+		lastObservedAt: archive.lastObservedAt,
+		indexPath: shellHistoryAbsolutePath(archive.indexPath),
+		manifestPath: shellHistoryAbsolutePath(archive.manifestPath),
+		commandsPath: shellHistoryAbsolutePath(archive.commandsPath),
+		summaryPath: shellHistoryAbsolutePath(archive.summaryPath),
+		latestMarkdownPath: shellHistoryAbsolutePath(archive.latestMarkdownPath),
+		compared: archive.compareGeneratedAt !== undefined,
+		compareGeneratedAt: archive.compareGeneratedAt,
+		compareMarkdownPath: shellHistoryAbsolutePath(archive.compareMarkdownPath),
+		compareJsonPath: shellHistoryAbsolutePath(archive.compareJsonPath),
+		archivedOnlyCount: archive.archivedOnlyCount,
+		liveOnlyCount: archive.liveOnlyCount,
+		wasLastRestored: archive.wasLastRestored,
+	};
+}
+
+function shellHistoryArchiveInventoryMarkdown(inventory: ShellHistoryArchiveInventory): string {
+	return [
+		"# qjs Shell Archive Inventory",
+		"",
+		"Schema: wanix.qjs-shell.archive-inventory.v1",
+		`Generated: ${inventory.generatedAt.toISOString()}`,
+		`Archive root: ${shellHistoryWanixLink(shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_DIR), SHELL_HISTORY_ARCHIVE_DIR)}`,
+		`JSON: ${shellHistoryWanixLink(shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH), SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH)}`,
+		"",
+		"## Counts",
+		"",
+		`- Archives: ${inventory.archives.length}`,
+		`- Archived commands: ${inventory.archives.reduce((sum, archive) => sum + archive.commandCount, 0)}`,
+		`- Last restored archive: ${inventory.lastRestoredArchiveDir ? shellHistoryWanixLink(shellHistoryAbsolutePath(`${inventory.lastRestoredArchiveDir}/index.md`), `${inventory.lastRestoredArchiveDir}/index.md`) : "none"}`,
+		"",
+		"## Archives",
+		"",
+		...shellHistoryArchiveInventoryRows(inventory.archives),
+		"",
+		"## Retention",
+		"",
+		"Use `Prune Shell History Archives` to keep the latest count or recent time window. Pruning deletes archived evidence directories after confirmation, then regenerates this inventory.",
+		"",
+	].join("\n");
+}
+
+function shellHistoryArchiveInventoryRows(archives: ShellHistoryArchiveInfo[]): string[] {
+	if (archives.length === 0) {
+		return ["No shell history archives yet. Use `Archive Shell Command History` first."];
+	}
+	const rows = [
+		"| Archive | Commands | Range | Compare | Restore |",
+		"| --- | ---: | --- | --- | --- |",
+	];
+	for (const archive of archives) {
+		const archiveLink = shellHistoryWanixLink(archive.name, archive.indexPath);
+		const range = [archive.firstObservedAt, archive.lastObservedAt].filter(Boolean).join(" to ") || archive.generatedAt;
+		const compare = archive.compareGeneratedAt
+			? `${shellHistoryWanixLink("compared", archive.compareMarkdownPath)} (${archive.archivedOnlyCount ?? "?"} archived-only, ${archive.liveOnlyCount ?? "?"} live-only)`
+			: "not compared";
+		const restore = archive.wasLastRestored ? "last restored" : "";
+		rows.push(`| ${archiveLink} | ${archive.commandCount} | ${range} | ${compare} | ${restore} |`);
+	}
+	return rows;
+}
+
+function shellHistoryArchivePrunePicks(archives: ShellHistoryArchiveInfo[], now: number): ShellHistoryArchivePrunePick[] {
+	const countPick = (keepCount: number): ShellHistoryArchivePrunePick => {
+		const removed = shellHistoryArchivesToPrune(archives, { label: `Keep latest ${keepCount} archives`, retentionKind: "count", keepCount }, now).length;
+		return {
+			label: `Keep latest ${keepCount} archives`,
+			description: shellHistoryArchivePruneDescription(archives.length, removed),
+			detail: "Delete older timestamped archive directories; live shell history is not changed.",
+			retentionKind: "count",
+			keepCount,
+		};
+	};
+	const agePick = (label: string, ageMs: number): ShellHistoryArchivePrunePick => {
+		const removed = shellHistoryArchivesToPrune(archives, { label, retentionKind: "age", ageMs }, now).length;
+		return {
+			label,
+			description: shellHistoryArchivePruneDescription(archives.length, removed),
+			detail: "Delete archives older than this window; archives without parseable timestamps are kept.",
+			retentionKind: "age",
+			ageMs,
+		};
+	};
+	return [
+		countPick(5),
+		countPick(10),
+		countPick(25),
+		agePick("Keep archives from last 7 days", 7 * 24 * 60 * 60 * 1000),
+		agePick("Keep archives from last 30 days", 30 * 24 * 60 * 60 * 1000),
+	];
+}
+
+function shellHistoryArchivePruneDescription(total: number, removed: number): string {
+	return removed > 0 ? `${total} -> ${total - removed} archives, remove ${removed}` : `${total} archives already fit`;
+}
+
+function shellHistoryArchivesToPrune(
+	archives: ShellHistoryArchiveInfo[],
+	pick: ShellHistoryArchivePrunePick,
+	now: number,
+): ShellHistoryArchiveInfo[] {
+	const sorted = [...archives].sort((left, right) => shellHistoryArchiveSortMillis(right) - shellHistoryArchiveSortMillis(left) || right.name.localeCompare(left.name));
+	if (pick.retentionKind === "count") {
+		const keepCount = Math.max(1, pick.keepCount ?? sorted.length);
+		return sorted.slice(keepCount);
+	}
+	const cutoff = now - Math.max(0, pick.ageMs ?? 0);
+	return sorted.filter((archive) => {
+		const millis = archive.generatedAtUnixMillis;
+		return millis !== undefined && millis < cutoff;
+	});
+}
+
+async function removeShellHistoryArchiveDir(fsys: any, archiveDir: string): Promise<void> {
+	if (shellHistoryRelativePath(archiveDir) === shellHistoryRelativePath(SHELL_HISTORY_ARCHIVE_DIR)) {
+		throw new Error("Refusing to remove the shell history archive root");
+	}
+	if (typeof fsys.removeAll === "function") {
+		await fsys.removeAll(archiveDir);
+		return;
+	}
+	await removeShellHistoryCommandArtifacts(fsys, `${archiveDir}/commands`);
+	for (const path of [
+		`${archiveDir}/${SHELL_HISTORY_COMPARE_JSON_NAME}`,
+		`${archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`,
+		`${archiveDir}/latest.json`,
+		`${archiveDir}/latest.md`,
+		`${archiveDir}/summary.md`,
+		`${archiveDir}/commands.jsonl`,
+		`${archiveDir}/manifest.json`,
+		`${archiveDir}/index.md`,
+	]) {
+		try {
+			await fsys.remove(path);
+		} catch {
+			// Missing optional archive artifacts are fine during pruning.
+		}
+	}
+	await fsys.remove(archiveDir);
+}
+
+async function writeShellHistoryArchivePruneReport(
+	fsys: any,
+	generatedAt: Date,
+	pick: ShellHistoryArchivePrunePick,
+	removed: ShellHistoryArchiveInfo[],
+	remaining: ShellHistoryArchiveInfo[],
+): Promise<string[]> {
+	await fsys.makeDirAll(SHELL_HISTORY_ARCHIVE_DIR);
+	await fsys.writeFile(SHELL_HISTORY_ARCHIVE_PRUNE_JSON_PATH, shellHistoryArchivePruneJson(generatedAt, pick, removed, remaining));
+	await fsys.writeFile(SHELL_HISTORY_ARCHIVE_PRUNE_MD_PATH, shellHistoryArchivePruneMarkdown(generatedAt, pick, removed, remaining));
+	return [SHELL_HISTORY_ARCHIVE_PRUNE_MD_PATH, SHELL_HISTORY_ARCHIVE_PRUNE_JSON_PATH];
+}
+
+function shellHistoryArchivePruneJson(
+	generatedAt: Date,
+	pick: ShellHistoryArchivePrunePick,
+	removed: ShellHistoryArchiveInfo[],
+	remaining: ShellHistoryArchiveInfo[],
+): string {
+	return `${JSON.stringify({
+		schema: "wanix.qjs-shell.archive-prune.v1",
+		generatedAt: generatedAt.toISOString(),
+		retention: {
+			label: pick.label,
+			kind: pick.retentionKind,
+			keepCount: pick.keepCount,
+			ageMs: pick.ageMs,
+		},
+		removedArchiveCount: removed.length,
+		remainingArchiveCount: remaining.length,
+		pruneMarkdownPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_PRUNE_MD_PATH),
+		pruneJsonPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_PRUNE_JSON_PATH),
+		inventoryMarkdownPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH),
+		inventoryJsonPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH),
+		removedArchives: removed.map(shellHistoryArchiveInfoJson),
+		remainingArchives: remaining.map(shellHistoryArchiveInfoJson),
+	}, null, 2)}\n`;
+}
+
+function shellHistoryArchivePruneMarkdown(
+	generatedAt: Date,
+	pick: ShellHistoryArchivePrunePick,
+	removed: ShellHistoryArchiveInfo[],
+	remaining: ShellHistoryArchiveInfo[],
+): string {
+	return [
+		"# qjs Shell Archive Prune",
+		"",
+		"Schema: wanix.qjs-shell.archive-prune.v1",
+		`Generated: ${generatedAt.toISOString()}`,
+		`Retention: ${pick.label}`,
+		`JSON: ${shellHistoryWanixLink(shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_PRUNE_JSON_PATH), SHELL_HISTORY_ARCHIVE_PRUNE_JSON_PATH)}`,
+		`Inventory: ${shellHistoryWanixLink(shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH), SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH)}`,
+		"",
+		"## Counts",
+		"",
+		`- Removed archives: ${removed.length}`,
+		`- Remaining archives: ${remaining.length}`,
+		`- Removed commands: ${removed.reduce((sum, archive) => sum + archive.commandCount, 0)}`,
+		"",
+		"## Removed Archives",
+		"",
+		...shellHistoryArchivePrunedRows(removed),
+		"",
+		"Pruning deletes archive directories only. It does not change the current live qjs-shell history files.",
+		"",
+	].join("\n");
+}
+
+function shellHistoryArchivePrunedRows(archives: ShellHistoryArchiveInfo[]): string[] {
+	if (archives.length === 0) {
+		return ["- none"];
+	}
+	return archives.map((archive) => `- ${archive.name}: ${archive.commandCount} commands, ${archive.generatedAt}`);
+}
+
+function shellHistoryArchiveSortMillis(archive: ShellHistoryArchiveInfo): number {
+	return archive.generatedAtUnixMillis ?? 0;
+}
+
+function shellHistoryArchiveIdUnixMillis(name: string): number | undefined {
+	const match = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})(\d{0,3})Z$/.exec(name);
+	if (!match) {
+		return undefined;
+	}
+	const [, year, month, day, hour, minute, second, rawMillis] = match;
+	const millisText = rawMillis.padEnd(3, "0").slice(0, 3) || "0";
+	const millis = Date.UTC(
+		Number(year),
+		Number(month) - 1,
+		Number(day),
+		Number(hour),
+		Number(minute),
+		Number(second),
+		Number(millisText),
+	);
+	return Number.isFinite(millis) ? millis : undefined;
+}
+
+function shellHistoryRelativePath(path: string): string {
+	return path.replace(/^wanix:\//, "").replace(/^\/+/, "");
 }
 
 function shellHistoryArchiveComparison(
@@ -2150,6 +2619,18 @@ function publishShellCommandHistoryArchiveReport(
 	});
 }
 
+function publishShellHistoryArchiveInventoryReport(
+	systemView: WanixSystemView,
+	paths: string[],
+): void {
+	systemView.reportPublished("qjs Shell Archive Inventory", SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH, {
+		kind: "shell",
+		description: "archive retention",
+		icon: "list-tree",
+		artifacts: paths,
+	});
+}
+
 function publishShellCommandHistoryArchiveCompareReport(
 	systemView: WanixSystemView,
 	archiveDir: string,
@@ -2159,6 +2640,18 @@ function publishShellCommandHistoryArchiveCompareReport(
 		kind: "shell",
 		description: "archive vs live",
 		icon: "diff",
+		artifacts: paths,
+	});
+}
+
+function publishShellHistoryArchivePruneReport(
+	systemView: WanixSystemView,
+	paths: string[],
+): void {
+	systemView.reportPublished("qjs Shell Archive Prune", SHELL_HISTORY_ARCHIVE_PRUNE_MD_PATH, {
+		kind: "shell",
+		description: "archive retention",
+		icon: "clear-all",
 		artifacts: paths,
 	});
 }
@@ -2176,7 +2669,7 @@ function publishShellCommandHistoryRestoreReport(
 }
 
 async function existingShellHistoryPaths(fsys: any): Promise<string[]> {
-	const paths = [SHELL_HISTORY_SUMMARY_MD_PATH, SHELL_HISTORY_RESTORE_MD_PATH, SHELL_HISTORY_RESTORE_JSON_PATH, SHELL_HISTORY_COMMANDS_DIR, SHELL_HISTORY_ARCHIVE_DIR, SHELL_HISTORY_SELECTED_MD_PATH, SHELL_HISTORY_MD_PATH, SHELL_HISTORY_JSON_PATH, SHELL_HISTORY_JSONL_PATH];
+	const paths = [SHELL_HISTORY_SUMMARY_MD_PATH, SHELL_HISTORY_RESTORE_MD_PATH, SHELL_HISTORY_RESTORE_JSON_PATH, SHELL_HISTORY_COMMANDS_DIR, SHELL_HISTORY_ARCHIVE_DIR, SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH, SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH, SHELL_HISTORY_ARCHIVE_PRUNE_MD_PATH, SHELL_HISTORY_ARCHIVE_PRUNE_JSON_PATH, SHELL_HISTORY_SELECTED_MD_PATH, SHELL_HISTORY_MD_PATH, SHELL_HISTORY_JSON_PATH, SHELL_HISTORY_JSONL_PATH];
 	const existing: string[] = [];
 	for (const path of paths) {
 		try {

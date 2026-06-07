@@ -241,6 +241,12 @@
         "icon": "$(archive)"
       },
       {
+        "command": "workbench.openShellHistoryArchiveInventory",
+        "title": "Open Shell Archive Inventory",
+        "category": "Wanix",
+        "icon": "$(list-tree)"
+      },
+      {
         "command": "workbench.compareShellHistoryArchive",
         "title": "Compare Shell History Archive",
         "category": "Wanix",
@@ -251,6 +257,12 @@
         "title": "Restore Shell History Archive",
         "category": "Wanix",
         "icon": "$(history)"
+      },
+      {
+        "command": "workbench.pruneShellHistoryArchives",
+        "title": "Prune Shell History Archives",
+        "category": "Wanix",
+        "icon": "$(clear-all)"
       },
       {
         "command": "workbench.compactShellCommandHistory",

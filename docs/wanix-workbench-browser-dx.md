@@ -556,6 +556,18 @@ browser and future agents get a fresh live view to inspect.
 
 ![Shell command history archive restore](assets/wanix-workbench-browser-dx/82-shell-history-archive-restore.png)
 
+Archives now have an inventory and retention surface. `Open Shell Archive
+Inventory` writes `/.wanix/qjs-shell/archive/inventory.md` and
+`inventory.json`, listing each archive's command count, time range, compare
+state, and whether it was the last archive restored into live history. `Prune
+Shell History Archives` offers count and age retention choices, confirms before
+deleting timestamped archive directories, and records the retention run in
+`pruned.md` and `pruned.json` before refreshing the inventory. The important
+shift is that archives stop being hidden folders; they become inspectable
+cockpit state with a durable retention trail.
+
+![Shell archive inventory and retention](assets/wanix-workbench-browser-dx/83-shell-archive-inventory-retention.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1165,6 +1177,10 @@ The current loop is:
     `Restore Shell History Archive` when a prior audit snapshot should become
     the live browser-readable history again; it writes `restored.md/json` and
     repopulates the generated live history files without rerunning commands.
+    `Open Shell Archive Inventory` writes an archive ledger at
+    `/.wanix/qjs-shell/archive/inventory.md/json`, and `Prune Shell History
+    Archives` applies count or age retention with a durable `pruned.md/json`
+    report.
 18. Click a changed Activity row to reopen the Wanix file it touched.
 19. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1276,8 +1292,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Add an archive inventory and retention view, so long-lived archive directories
-  can be compared, restored, pruned, or exported from one browser surface.
+- Add archive bundle export/download, so a retained shell-history audit trail
+  can leave the browser session as one portable artifact.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.
