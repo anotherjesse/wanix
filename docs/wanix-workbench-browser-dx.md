@@ -697,6 +697,17 @@ does not hide behind compare, bundle, restore, or import badges.
 
 ![Shell archive retryable filter](assets/wanix-workbench-browser-dx/95-shell-archive-retryable-filter.png)
 
+That queue is machine-readable now too. Every archive inventory write also
+publishes `/.wanix/qjs-shell/archive/retryable-dossier-actions.md` and
+`.json`, with schema `wanix.qjs-shell.archive-dossier-retry-queue.v1`. The
+JSON carries each retryable archive, last action status, safe
+`workbench.runShellHistoryArchiveDossierAction` command args, and the original
+archive snapshot. The Reports section also gets a `qjs Shell Archive Retry
+Queue` row, so humans can open the markdown while agents consume the JSON
+without scraping sidebar labels.
+
+![Shell archive retry queue report](assets/wanix-workbench-browser-dx/96-shell-archive-retry-queue.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -1446,8 +1457,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Let the retryable archive summary publish a structured report, so future
-  agents can consume the queue without walking the tree UI.
+- Let the retry queue feed a safe `run all retryable actions` preview with
+  per-archive progress and cancellation breadcrumbs.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

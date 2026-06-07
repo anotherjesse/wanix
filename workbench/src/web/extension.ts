@@ -218,6 +218,13 @@ type ShellHistoryArchiveInventory = {
 	lastRestoredArchiveDir?: string;
 };
 
+type ShellHistoryArchiveDossierRetryQueueItem = {
+	archive: ShellHistoryArchiveInfo;
+	status: string;
+	statusDetail?: string;
+	retryAction: ShellHistoryArchiveDossierAction;
+};
+
 type ShellHistoryArchiveBundleFile = {
 	path: string;
 	bytes: number;
@@ -326,6 +333,8 @@ const SHELL_HISTORY_COMMANDS_DIR = ".wanix/qjs-shell/commands";
 const SHELL_HISTORY_ARCHIVE_DIR = ".wanix/qjs-shell/archive";
 const SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH = ".wanix/qjs-shell/archive/inventory.md";
 const SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH = ".wanix/qjs-shell/archive/inventory.json";
+const SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH = ".wanix/qjs-shell/archive/retryable-dossier-actions.md";
+const SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH = ".wanix/qjs-shell/archive/retryable-dossier-actions.json";
 const SHELL_HISTORY_ARCHIVE_PRUNE_MD_PATH = ".wanix/qjs-shell/archive/pruned.md";
 const SHELL_HISTORY_ARCHIVE_PRUNE_JSON_PATH = ".wanix/qjs-shell/archive/pruned.json";
 const SHELL_HISTORY_ARCHIVE_BUNDLE_MD_NAME = "bundle.md";
@@ -1136,6 +1145,7 @@ async function archiveShellCommandHistory(
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
 	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	publishShellHistoryArchiveRetryQueueReport(systemView, inventory, inventoryPaths);
 	const reportPaths = [...paths, ...inventoryPaths];
 	publishShellCommandHistoryArchiveReport(systemView, archiveDir, reportPaths);
 	systemView.filesystemActivity("shell command history archived", {
@@ -1157,6 +1167,7 @@ async function openShellHistoryArchiveInventory(
 	const paths = await writeShellHistoryArchiveInventory(fsys, inventory);
 	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
 	publishShellHistoryArchiveInventoryReport(systemView, paths);
+	publishShellHistoryArchiveRetryQueueReport(systemView, inventory, paths);
 	systemView.filesystemActivity("shell archive inventory published", {
 		description: `${inventory.archives.length} archives`,
 		path: SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH,
@@ -1187,6 +1198,7 @@ async function openShellHistoryArchiveDossier(
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
 	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	publishShellHistoryArchiveRetryQueueReport(systemView, inventory, inventoryPaths);
 	const reportPaths = [...paths, ...inventoryPaths];
 	publishShellHistoryArchiveDossierReport(systemView, archive, reportPaths);
 	systemView.filesystemActivity("shell archive dossier opened", {
@@ -1309,6 +1321,7 @@ async function recordShellHistoryArchiveDossierAction(
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
 	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	publishShellHistoryArchiveRetryQueueReport(systemView, inventory, inventoryPaths);
 	const reportPaths = [...actionPaths, ...dossierPaths, ...inventoryPaths];
 	publishShellHistoryArchiveDossierReport(systemView, archive, reportPaths);
 	systemView.filesystemActivity("shell archive dossier action recorded", {
@@ -1511,6 +1524,7 @@ async function hydrateShellArchiveInventory(
 	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
 	if (scanned.length > 0) {
 		const paths = await writeShellHistoryArchiveInventory(fsys, inventory);
+		publishShellHistoryArchiveRetryQueueReport(systemView, inventory, paths);
 		await refreshWanixPaths(bridge, [SHELL_HISTORY_ARCHIVE_DIR, ...paths]);
 	}
 }
@@ -1532,6 +1546,7 @@ async function exportShellHistoryArchiveBundle(
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
 	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	publishShellHistoryArchiveRetryQueueReport(systemView, inventory, inventoryPaths);
 	const reportPaths = [...paths, ...inventoryPaths];
 	publishShellHistoryArchiveBundleReport(systemView, archive, reportPaths);
 	systemView.filesystemActivity("shell archive bundle exported", {
@@ -1560,6 +1575,7 @@ async function importShellHistoryArchiveBundle(
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
 	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	publishShellHistoryArchiveRetryQueueReport(systemView, inventory, inventoryPaths);
 	const reportPaths = [...paths, ...inventoryPaths];
 	publishShellHistoryArchiveImportReport(systemView, parsed.archive, reportPaths);
 	systemView.filesystemActivity("shell archive bundle imported", {
@@ -1590,6 +1606,7 @@ async function compareShellHistoryArchive(
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
 	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	publishShellHistoryArchiveRetryQueueReport(systemView, inventory, inventoryPaths);
 	const comparePath = `${pick.archiveDir}/${SHELL_HISTORY_COMPARE_MD_NAME}`;
 	const reportPaths = [...paths, ...inventoryPaths];
 	publishShellCommandHistoryArchiveCompareReport(systemView, pick.archiveDir, reportPaths);
@@ -1635,6 +1652,7 @@ async function restoreShellHistoryArchive(
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
 	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	publishShellHistoryArchiveRetryQueueReport(systemView, inventory, inventoryPaths);
 	const reportPaths = [SHELL_HISTORY_RESTORE_MD_PATH, SHELL_HISTORY_RESTORE_JSON_PATH, ...paths, ...inventoryPaths];
 	publishShellCommandHistoryRestoreReport(systemView, reportPaths);
 	systemView.filesystemActivity("shell history archive restored", {
@@ -1691,6 +1709,7 @@ async function pruneShellHistoryArchives(
 	const inventory = await shellHistoryArchiveInventory(fsys, generatedAt, remaining);
 	const inventoryPaths = await writeShellHistoryArchiveInventory(fsys, inventory);
 	publishShellArchiveInventoryToSystemView(systemView, inventory.archives);
+	publishShellHistoryArchiveRetryQueueReport(systemView, inventory, inventoryPaths);
 	const prunePaths = await writeShellHistoryArchivePruneReport(fsys, generatedAt, pick, removed, remaining);
 	const paths = [...prunePaths, ...inventoryPaths];
 	publishShellHistoryArchivePruneReport(systemView, paths);
@@ -2185,7 +2204,15 @@ async function writeShellHistoryArchiveInventory(
 	await fsys.makeDirAll(SHELL_HISTORY_ARCHIVE_DIR);
 	await fsys.writeFile(SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH, shellHistoryArchiveInventoryJson(inventory));
 	await fsys.writeFile(SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH, shellHistoryArchiveInventoryMarkdown(inventory));
-	return [SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH, SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH, SHELL_HISTORY_ARCHIVE_DIR];
+	await fsys.writeFile(SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH, shellHistoryArchiveDossierRetryQueueJson(inventory));
+	await fsys.writeFile(SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH, shellHistoryArchiveDossierRetryQueueMarkdown(inventory));
+	return [
+		SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH,
+		SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH,
+		SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH,
+		SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH,
+		SHELL_HISTORY_ARCHIVE_DIR,
+	];
 }
 
 function shellHistoryArchiveInventoryJson(inventory: ShellHistoryArchiveInventory): string {
@@ -2198,8 +2225,126 @@ function shellHistoryArchiveInventoryJson(inventory: ShellHistoryArchiveInventor
 		archiveCount: inventory.archives.length,
 		totalCommandCount: inventory.archives.reduce((sum, archive) => sum + archive.commandCount, 0),
 		lastRestoredArchiveDir: inventory.lastRestoredArchiveDir ? shellHistoryAbsolutePath(inventory.lastRestoredArchiveDir) : undefined,
+		retryableDossierActionCount: shellHistoryArchiveDossierRetryQueueItems(inventory.archives).length,
+		retryableDossierActionsPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH),
 		archives: inventory.archives.map(shellHistoryArchiveInfoJson),
 	}, null, 2)}\n`;
+}
+
+function shellHistoryArchiveDossierRetryQueueJson(inventory: ShellHistoryArchiveInventory): string {
+	const retryable = shellHistoryArchiveDossierRetryQueueItems(inventory.archives);
+	return `${JSON.stringify({
+		schema: "wanix.qjs-shell.archive-dossier-retry-queue.v1",
+		generatedAt: inventory.generatedAt.toISOString(),
+		inventoryMarkdownPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH),
+		inventoryJsonPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_INVENTORY_JSON_PATH),
+		retryQueueMarkdownPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH),
+		retryQueueJsonPath: shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH),
+		retryableCount: retryable.length,
+		items: retryable.map(shellHistoryArchiveDossierRetryQueueItemJson),
+	}, null, 2)}\n`;
+}
+
+function shellHistoryArchiveDossierRetryQueueItemJson(item: ShellHistoryArchiveDossierRetryQueueItem): Record<string, unknown> {
+	return {
+		archiveName: item.archive.name,
+		archiveDir: shellHistoryAbsolutePath(item.archive.archiveDir),
+		commandCount: item.archive.commandCount,
+		lastObservedAt: item.archive.lastObservedAt,
+		lastDossierAction: {
+			generatedAt: item.archive.dossierActionGeneratedAt,
+			label: item.archive.dossierActionLabel,
+			command: item.archive.dossierActionCommand,
+			status: item.status,
+			statusDetail: item.statusDetail,
+			markdownPath: shellHistoryAbsolutePath(item.archive.dossierActionMarkdownPath),
+			jsonPath: shellHistoryAbsolutePath(item.archive.dossierActionJsonPath),
+		},
+		retry: {
+			label: item.retryAction.label,
+			command: "workbench.runShellHistoryArchiveDossierAction",
+			args: [item.retryAction],
+			commandUri: shellHistoryCommandUri("workbench.runShellHistoryArchiveDossierAction", [item.retryAction]),
+			reason: item.retryAction.reason,
+		},
+		archive: shellHistoryArchiveInfoJson(item.archive),
+	};
+}
+
+function shellHistoryArchiveDossierRetryQueueMarkdown(inventory: ShellHistoryArchiveInventory): string {
+	const retryable = shellHistoryArchiveDossierRetryQueueItems(inventory.archives);
+	return [
+		"# qjs Shell Archive Dossier Retry Queue",
+		"",
+		"Schema: wanix.qjs-shell.archive-dossier-retry-queue.v1",
+		`Generated: ${inventory.generatedAt.toISOString()}`,
+		`JSON: ${shellHistoryWanixLink(shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH), SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH)}`,
+		`Inventory: ${shellHistoryWanixLink(shellHistoryAbsolutePath(SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH), SHELL_HISTORY_ARCHIVE_INVENTORY_MD_PATH)}`,
+		"",
+		"## Counts",
+		"",
+		`- Retryable dossier actions: ${retryable.length}`,
+		`- Archives indexed: ${inventory.archives.length}`,
+		"",
+		"## Queue",
+		"",
+		...shellHistoryArchiveDossierRetryQueueRows(retryable),
+		"",
+		"This report is generated with the shell archive inventory so humans and future agents can find failed, partial, or cancelled dossier actions without walking the System tree.",
+		"",
+	].join("\n");
+}
+
+function shellHistoryArchiveDossierRetryQueueRows(items: ShellHistoryArchiveDossierRetryQueueItem[]): string[] {
+	if (items.length === 0) {
+		return ["No retryable dossier actions are currently recorded."];
+	}
+	return [
+		"| Archive | Last Action | Status | Retry | Report |",
+		"| --- | --- | --- | --- | --- |",
+		...items.map((item) => {
+			const archive = shellHistoryWanixLink(item.archive.name, item.archive.indexPath);
+			const action = item.archive.dossierActionLabel || "recorded dossier action";
+			const status = item.statusDetail ? `${item.status}: ${item.statusDetail}` : item.status;
+			const retry = shellHistoryCommandMarkdownLink(item.retryAction.label, "workbench.runShellHistoryArchiveDossierAction", [item.retryAction]);
+			const report = shellHistoryWanixLink("action report", item.archive.dossierActionMarkdownPath);
+			return `| ${archive} | ${shellHistoryMarkdownCell(action)} | ${shellHistoryMarkdownCell(status)} | ${retry} | ${report} |`;
+		}),
+	];
+}
+
+function shellHistoryArchiveDossierRetryQueueItems(archives: ShellHistoryArchiveInfo[]): ShellHistoryArchiveDossierRetryQueueItem[] {
+	const items: ShellHistoryArchiveDossierRetryQueueItem[] = [];
+	for (const archive of archives) {
+		const retryAction = shellHistoryArchiveDossierRetryActionForArchive(archive);
+		if (!retryAction) {
+			continue;
+		}
+		items.push({
+			archive,
+			status: archive.dossierActionStatus || "recorded",
+			statusDetail: archive.dossierActionStatusDetail,
+			retryAction,
+		});
+	}
+	return items;
+}
+
+function shellHistoryArchiveDossierRetryActionForArchive(archive: ShellHistoryArchiveInfo): ShellHistoryArchiveDossierAction | undefined {
+	if (!shellHistoryArchiveDossierActionNeedsRetry(archive.dossierActionStatus) || !archive.dossierActionCommand) {
+		return undefined;
+	}
+	if (!shellHistoryArchiveDossierCommandAllowsTarget(archive.dossierActionCommand)) {
+		return undefined;
+	}
+	const status = archive.dossierActionStatus || "recorded";
+	const detail = archive.dossierActionStatusDetail ? `: ${archive.dossierActionStatusDetail}` : "";
+	return {
+		label: `Retry ${archive.dossierActionLabel || "dossier action"}`,
+		command: archive.dossierActionCommand,
+		reason: `Previous dossier action was ${status}${detail}`,
+		archiveTarget: shellHistoryArchiveDossierCommandTarget(archive),
+	};
 }
 
 function shellHistoryArchiveInfoJson(archive: ShellHistoryArchiveInfo): Record<string, unknown> {
@@ -4378,6 +4523,20 @@ function publishShellHistoryArchiveInventoryReport(
 		description: "archive retention",
 		icon: "list-tree",
 		artifacts: paths,
+	});
+}
+
+function publishShellHistoryArchiveRetryQueueReport(
+	systemView: WanixSystemView,
+	inventory: ShellHistoryArchiveInventory,
+	paths: string[],
+): void {
+	const retryableCount = shellHistoryArchiveDossierRetryQueueItems(inventory.archives).length;
+	systemView.reportPublished("qjs Shell Archive Retry Queue", SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH, {
+		kind: "shell",
+		description: `${retryableCount} retryable dossier ${retryableCount === 1 ? "action" : "actions"}`,
+		icon: retryableCount > 0 ? "warning" : "pass",
+		artifacts: [SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_MD_PATH, SHELL_HISTORY_ARCHIVE_RETRY_QUEUE_JSON_PATH, ...paths],
 	});
 }
 
