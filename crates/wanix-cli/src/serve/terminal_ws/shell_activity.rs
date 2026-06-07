@@ -3,6 +3,7 @@ use wanix_fs::NormalizedPath;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::serve) struct ShellMutationOperation {
     pub(in crate::serve) kind: String,
+    pub(in crate::serve) command: String,
     pub(in crate::serve) status: String,
     pub(in crate::serve) diagnostic: Option<String>,
     pub(in crate::serve) source: Option<String>,
@@ -52,27 +53,28 @@ impl ShellInputActivityTracker {
     }
 
     fn finish_line(&mut self) -> Option<ShellMutationOperation> {
-        let words = shell_words(self.line.trim());
-        let command = words.first()?;
-        if command == "cd" {
+        let command_text = self.line.trim().to_owned();
+        let words = shell_words(&command_text);
+        let command_name = words.first()?;
+        if command_name == "cd" {
             self.cwd = resolve_wanix_path(&self.cwd, words.get(1).map_or(".", String::as_str));
             return None;
         }
         let redirected = shell_redirection_paths(&words, &self.cwd);
-        match command.as_str() {
+        match command_name.as_str() {
             "write" => {
                 let target = if words.len() >= 3 {
                     words.get(1).map(|path| resolve_wanix_path(&self.cwd, path))
                 } else {
                     redirected.last().cloned()
                 };
-                target.map(|target| operation("write", None, Some(target)))
+                target.map(|target| operation("write", &command_text, None, Some(target)))
             }
             "mkdir" | "rm" | "rmdir" => words
                 .get(1)
                 .map(|path| resolve_wanix_path(&self.cwd, path))
                 .or_else(|| redirected.last().cloned())
-                .map(|target| operation(command, None, Some(target))),
+                .map(|target| operation(command_name, &command_text, None, Some(target))),
             "cp" => {
                 let source = words.get(1).map(|path| resolve_wanix_path(&self.cwd, path));
                 let target = words
@@ -81,9 +83,11 @@ impl ShellInputActivityTracker {
                     .or_else(|| redirected.last().cloned());
                 match (source, target) {
                     (Some(source), Some(target)) => {
-                        Some(operation("cp", Some(source), Some(target)))
+                        Some(operation("cp", &command_text, Some(source), Some(target)))
                     }
-                    (None, Some(target)) => Some(operation("cp", None, Some(target))),
+                    (None, Some(target)) => {
+                        Some(operation("cp", &command_text, None, Some(target)))
+                    }
                     _ => None,
                 }
             }
@@ -92,7 +96,7 @@ impl ShellInputActivityTracker {
                 let target = words.get(2).map(|path| resolve_wanix_path(&self.cwd, path));
                 match (source, target) {
                     (Some(source), Some(target)) => {
-                        Some(operation("mv", Some(source), Some(target)))
+                        Some(operation("mv", &command_text, Some(source), Some(target)))
                     }
                     _ => None,
                 }
@@ -105,14 +109,17 @@ impl ShellInputActivityTracker {
                     .or_else(|| redirected.last().cloned());
                 match (source, target) {
                     (Some(source), Some(target)) => {
-                        Some(operation("ln-s", Some(source), Some(target)))
+                        Some(operation("ln-s", &command_text, Some(source), Some(target)))
                     }
-                    (None, Some(target)) => Some(operation("ln-s", None, Some(target))),
+                    (None, Some(target)) => {
+                        Some(operation("ln-s", &command_text, None, Some(target)))
+                    }
                     _ => None,
                 }
             }
             _ if !redirected.is_empty() => Some(ShellMutationOperation {
                 kind: "redirect".to_owned(),
+                command: command_text,
                 status: "changed".to_owned(),
                 diagnostic: None,
                 source: None,
@@ -162,7 +169,12 @@ fn operation_intersects_changed_paths(
     })
 }
 
-fn operation(kind: &str, source: Option<String>, target: Option<String>) -> ShellMutationOperation {
+fn operation(
+    kind: &str,
+    command: &str,
+    source: Option<String>,
+    target: Option<String>,
+) -> ShellMutationOperation {
     let mut paths = Vec::new();
     if let Some(source) = &source {
         paths.push(source.clone());
@@ -172,6 +184,7 @@ fn operation(kind: &str, source: Option<String>, target: Option<String>) -> Shel
     }
     ShellMutationOperation {
         kind: kind.to_owned(),
+        command: command.to_owned(),
         status: "changed".to_owned(),
         diagnostic: None,
         source,
@@ -316,10 +329,12 @@ mod tests {
 
         assert_eq!(operations.len(), 2);
         assert_eq!(operations[0].kind, "write");
+        assert_eq!(operations[0].command, "write made.txt hello");
         assert_eq!(operations[0].status, "changed");
         assert_eq!(operations[0].target.as_deref(), Some("/app/made.txt"));
         assert_eq!(operations[0].paths, ["/app/made.txt"]);
         assert_eq!(operations[1].kind, "mv");
+        assert_eq!(operations[1].command, "mv made.txt moved.txt");
         assert_eq!(operations[1].source.as_deref(), Some("/app/made.txt"));
         assert_eq!(operations[1].target.as_deref(), Some("/app/moved.txt"));
         assert_eq!(operations[1].paths, ["/app/made.txt", "/app/moved.txt"]);
@@ -338,6 +353,7 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].kind, "redirect");
+        assert_eq!(filtered[0].command, "qjs demo.js > out.txt 2> err.txt");
         assert_eq!(filtered[0].paths, ["/app/out.txt", "/app/err.txt"]);
     }
 
@@ -350,6 +366,7 @@ mod tests {
 
         assert_eq!(unchanged.len(), 1);
         assert_eq!(unchanged[0].kind, "rm");
+        assert_eq!(unchanged[0].command, "rm missing.txt");
         assert_eq!(unchanged[0].status, "unchanged");
         assert_eq!(
             unchanged[0].diagnostic.as_deref(),

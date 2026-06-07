@@ -1417,11 +1417,11 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
     );
     assert_eq!(
         qjs_shell["mutationMessage"],
-        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"],\"operations\":[{\"kind\":\"write\",\"status\":\"changed\",\"target\":\"/path\",\"paths\":[\"/path\"]}]}"
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[\"/path\"],\"operations\":[{\"kind\":\"write\",\"command\":\"write /path data\",\"status\":\"changed\",\"target\":\"/path\",\"outcome\":{\"status\":\"ok\",\"changed\":true},\"paths\":[\"/path\"]}]}"
     );
     assert_eq!(
         qjs_shell["unchangedOperationMessage"],
-        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"status\":\"unchanged\",\"target\":\"/missing\",\"diagnostic\":\"rm: missing: errno -44\",\"paths\":[]}]}"
+        "{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\"taskId\":\"ID\",\"terminalId\":\"ID\",\"cwd\":\"PATH\",\"paths\":[],\"operations\":[{\"kind\":\"rm\",\"command\":\"rm missing\",\"status\":\"unchanged\",\"target\":\"/missing\",\"diagnostic\":\"rm: missing: errno -44\",\"outcome\":{\"status\":\"error\",\"changed\":false,\"diagnostic\":\"rm: missing: errno -44\"},\"paths\":[]}]}"
     );
     assert_eq!(qjs_shell["exitMessage"], "{\"type\":\"exit\",\"code\":N}");
     assert_eq!(
@@ -2348,8 +2348,11 @@ std.exit(6);
             );
             let operation = &mutation_json["operations"][0];
             assert_eq!(operation["kind"], "write");
+            assert_eq!(operation["command"], "write observed.txt observed from ws");
             assert_eq!(operation["status"], "changed");
             assert_eq!(operation["target"], "/app/observed.txt");
+            assert_eq!(operation["outcome"]["status"], "ok");
+            assert_eq!(operation["outcome"]["changed"], true);
             assert_eq!(
                 qjs_shell_operation_paths(operation),
                 vec!["/app/observed.txt".to_owned()]
@@ -2379,10 +2382,17 @@ std.exit(6);
             assert_eq!(mutation_json["paths"].as_array().unwrap().len(), 0);
             let operation = &mutation_json["operations"][0];
             assert_eq!(operation["kind"], "rm");
+            assert_eq!(operation["command"], "rm definitely-missing.txt");
             assert_eq!(operation["status"], "unchanged");
             assert_eq!(operation["target"], "/app/definitely-missing.txt");
             assert_eq!(
                 operation["diagnostic"],
+                "rm: definitely-missing.txt: errno -44"
+            );
+            assert_eq!(operation["outcome"]["status"], "error");
+            assert_eq!(operation["outcome"]["changed"], false);
+            assert_eq!(
+                operation["outcome"]["diagnostic"],
                 "rm: definitely-missing.txt: errno -44"
             );
             assert!(qjs_shell_operation_paths(operation).is_empty());

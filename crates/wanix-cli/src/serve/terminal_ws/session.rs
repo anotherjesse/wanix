@@ -10,6 +10,7 @@ use crate::qjs_term::QjsShellSession;
 
 use super::super::connection::ServeConnectionError;
 use super::message::parse_terminal_resize_message;
+use super::protocol::{shell_exit_message, shell_mutation_message, shell_session_message};
 use super::root_changes::RootChangeTracker;
 use super::shell_activity::{
     ShellInputActivityTracker, ShellMutationOperation, operations_for_changed_paths,
@@ -211,73 +212,9 @@ impl TerminalWebSocketSession {
 
     fn send_exit(&mut self, code: i32) -> Result<(), ServeConnectionError> {
         self.socket
-            .send(Message::text(format!(
-                "{{\"type\":\"exit\",\"code\":{code}}}"
-            )))
+            .send(Message::text(shell_exit_message(code)))
             .map_err(ws_error)
     }
-}
-
-fn shell_session_message(shell: &QjsShellSession) -> String {
-    format!(
-        "{{\"type\":\"session\",\"protocol\":\"wanix-qjs-shell.v1\",\
-         \"taskId\":{},\"terminalId\":{},\"cwd\":{}}}",
-        json_string(&shell.task_id()),
-        json_string(shell.terminal_id()),
-        json_string(shell.cwd().as_str()),
-    )
-}
-
-fn shell_mutation_message(
-    shell: &QjsShellSession,
-    paths: &[String],
-    operations: &[ShellMutationOperation],
-) -> String {
-    let operations = operations
-        .iter()
-        .map(shell_operation_json)
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "{{\"type\":\"mutation\",\"protocol\":\"wanix-qjs-shell.v1\",\
-         \"taskId\":{},\"terminalId\":{},\"cwd\":{},\"paths\":[{}],\
-         \"operations\":[{}]}}",
-        json_string(&shell.task_id()),
-        json_string(shell.terminal_id()),
-        json_string(shell.cwd().as_str()),
-        paths
-            .iter()
-            .map(|path| json_string(path))
-            .collect::<Vec<_>>()
-            .join(","),
-        operations,
-    )
-}
-
-fn shell_operation_json(operation: &ShellMutationOperation) -> String {
-    let mut fields = vec![
-        format!("\"kind\":{}", json_string(&operation.kind)),
-        format!("\"status\":{}", json_string(&operation.status)),
-    ];
-    if let Some(source) = &operation.source {
-        fields.push(format!("\"source\":{}", json_string(source)));
-    }
-    if let Some(target) = &operation.target {
-        fields.push(format!("\"target\":{}", json_string(target)));
-    }
-    if let Some(diagnostic) = &operation.diagnostic {
-        fields.push(format!("\"diagnostic\":{}", json_string(diagnostic)));
-    }
-    fields.push(format!(
-        "\"paths\":[{}]",
-        operation
-            .paths
-            .iter()
-            .map(|path| json_string(path))
-            .collect::<Vec<_>>()
-            .join(",")
-    ));
-    format!("{{{}}}", fields.join(","))
 }
 
 enum TerminalWebSocketEvent {
@@ -358,25 +295,4 @@ fn truncate_shell_diagnostic(value: &str) -> String {
         truncated.push(ch);
     }
     truncated
-}
-
-fn json_string(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len() + 2);
-    escaped.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            ch if ch.is_control() => {
-                use std::fmt::Write as _;
-                let _ = write!(escaped, "\\u{:04x}", ch as u32);
-            }
-            ch => escaped.push(ch),
-        }
-    }
-    escaped.push('"');
-    escaped
 }

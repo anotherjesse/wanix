@@ -451,6 +451,14 @@ activity, and now it has a reason attached.
 
 ![Shell no-change diagnostic in Activity](assets/wanix-workbench-browser-dx/71-shell-unchanged-diagnostic.png)
 
+That error reason now has a stable shape too. Each operation carries the
+original shell `command` and an `outcome` object, for example
+`{"status":"error","changed":false,"diagnostic":"rm: definitely-missing.txt: errno -44"}`.
+The browser still keeps the row readable, but tools and future agents no
+longer need to infer "failed command" from a free-form activity description.
+
+![Shell structured command outcome](assets/wanix-workbench-browser-dx/72-shell-structured-outcome.png)
+
 That row is not just a log line anymore. Activity entries can now carry their
 Wanix path, show it as row context, and open it directly. Click
 `shell write jumpable` and the workbench jumps to `/jumpable`, with the shell
@@ -931,6 +939,9 @@ keeping `paths` reserved for files Rust actually observed changing.
 The diagnostic field keeps that explicit miss useful for people and agents:
 the cockpit can record why the operation did not change the namespace without
 loosening the meaning of `paths`.
+The command outcome object gives that diagnostic a durable shape: `changed`
+means observed filesystem effect, `status` means command outcome, and
+`diagnostic` remains the human-facing reason when the shell knows one.
 
 The newest slice gives the cockpit a way to diagnose itself before anyone asks
 an agent to build on top of it. `Run Cockpit Self Check` verifies the advertised
@@ -1022,6 +1033,8 @@ The current loop is:
 14. Try `rm absent.txt` in the served qjs-shell and see the no-change operation
     frame report `status: unchanged` with `paths: []` and a `diagnostic`, so the
     cockpit can say the attempted mutation did not change the namespace and why.
+    The same operation now includes the original `command` and structured
+    `outcome`, so future tools can consume it without scraping the Activity row.
 15. Click a changed Activity row to reopen the Wanix file it touched.
 16. Move a file from the shell, expand the `shell mv ...` Activity row, and open
    the `open target` child.
@@ -1133,8 +1146,8 @@ The next round should probably focus on making the workbench less demo-only:
 
 - Move the direct terminal path onto the same server-authored event model as
   qjs-shell, so all shell-like activity uses one mutation contract.
-- Extend qjs-shell diagnostics toward structured command outcomes when the
-  shell exposes exit status, stderr/stdout channels, or richer built-in errors.
+- Fill in `outcome.exitCode` and command output channels once qjs-shell exposes
+  richer exit, stderr, stdout, or built-in error records.
 - Replace the deterministic repair backend with Codex app-server behind the
   same Wanix-shaped command contract, producing the same
   `wanix.agent-repair.v1` run record.

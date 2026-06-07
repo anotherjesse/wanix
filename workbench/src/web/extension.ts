@@ -2364,11 +2364,20 @@ type QjsShellMutationMessage = {
 
 type QjsShellMutationOperation = {
 	kind: string;
+	command?: string;
 	status?: string;
 	source?: string;
 	target?: string;
 	diagnostic?: string;
+	outcome?: QjsShellCommandOutcome;
 	paths: string[];
+};
+
+type QjsShellCommandOutcome = {
+	status?: string;
+	changed?: boolean;
+	diagnostic?: string;
+	exitCode?: number;
 };
 
 function isQjsShellMutationMessage(message: unknown): message is QjsShellMutationMessage {
@@ -2397,12 +2406,25 @@ function isQjsShellMutationOperation(operation: unknown): operation is QjsShellM
 	const candidate = operation as Record<string, unknown>;
 	return typeof candidate.kind === "string"
 		&& candidate.kind.length > 0
+		&& (candidate.command === undefined || typeof candidate.command === "string")
 		&& (candidate.status === undefined || typeof candidate.status === "string")
 		&& (candidate.source === undefined || typeof candidate.source === "string")
 		&& (candidate.target === undefined || typeof candidate.target === "string")
 		&& (candidate.diagnostic === undefined || typeof candidate.diagnostic === "string")
+		&& (candidate.outcome === undefined || isQjsShellCommandOutcome(candidate.outcome))
 		&& Array.isArray(candidate.paths)
 		&& candidate.paths.every((path) => typeof path === "string" && path.length > 0);
+}
+
+function isQjsShellCommandOutcome(outcome: unknown): outcome is QjsShellCommandOutcome {
+	if (!outcome || typeof outcome !== "object") {
+		return false;
+	}
+	const candidate = outcome as Record<string, unknown>;
+	return (candidate.status === undefined || typeof candidate.status === "string")
+		&& (candidate.changed === undefined || typeof candidate.changed === "boolean")
+		&& (candidate.diagnostic === undefined || typeof candidate.diagnostic === "string")
+		&& (candidate.exitCode === undefined || typeof candidate.exitCode === "number");
 }
 
 function shellMutationActivity(message: QjsShellMutationMessage): FilesystemActivity | undefined {
@@ -2431,7 +2453,7 @@ function shellOperationActivity(operation: QjsShellMutationOperation): Filesyste
 			const openPath = shellOperationNoChangeOpenPath(operation.kind, source, target);
 			return {
 				label: shellOperationLabel(operation.kind, source, target, unique, operation.status),
-				description: operation.diagnostic,
+				description: shellOperationDescription(operation),
 				openPath,
 				paths: [openPath],
 			};
@@ -2440,7 +2462,23 @@ function shellOperationActivity(operation: QjsShellMutationOperation): Filesyste
 	}
 	const openPath = shellOperationOpenPath(operation.kind, source, target, unique);
 	const label = shellOperationLabel(operation.kind, source, target, unique, operation.status);
-	return { label, description: operation.diagnostic, openPath, paths: unique };
+	return { label, description: shellOperationDescription(operation), openPath, paths: unique };
+}
+
+function shellOperationDescription(operation: QjsShellMutationOperation): string | undefined {
+	const diagnostic = operation.outcome?.diagnostic || operation.diagnostic;
+	const status = operation.outcome?.status;
+	const command = operation.command;
+	if (diagnostic && status && status !== "ok") {
+		return command ? `${status}: ${diagnostic} · ${command}` : `${status}: ${diagnostic}`;
+	}
+	if (diagnostic) {
+		return command ? `${diagnostic} · ${command}` : diagnostic;
+	}
+	if (status && status !== "ok") {
+		return command ? `${status} · ${command}` : status;
+	}
+	return command && operation.status !== "changed" ? command : undefined;
 }
 
 function shellOperationOpenPath(kind: string, source: string | undefined, target: string | undefined, paths: string[]): string {

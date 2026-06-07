@@ -1,4 +1,5 @@
 mod message;
+mod protocol;
 mod request;
 mod root_changes;
 mod session;
