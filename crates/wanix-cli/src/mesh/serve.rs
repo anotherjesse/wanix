@@ -1,9 +1,12 @@
-//! `wanix-rust mesh-serve`: export a host directory as 9P over QUIC.
+//! `wanix-rust mesh-serve`: export a host directory over the native mesh wire.
 //!
 //! Binds an iroh endpoint from the persisted node identity (`~/.wanix/node.key`
-//! by default), serves `--root` over ALPN `wanix/9p/1`, prints the node id and a
-//! dialable ticket, and blocks serving connections. With `--peer`/`--grant` it
-//! installs a default-deny grant table keyed by the verified peer identity.
+//! by default), serves `--root` over the native `wanix-mesh-wire` plane (ALPN
+//! [`wanix_mesh::WANIX_FS_ALPN`]) — the Wanix↔Wanix path the `mount iroh://`
+//! client dials — prints the node id and a dialable ticket, and blocks serving
+//! connections. With `--peer`/`--grant` it installs a default-deny grant table
+//! keyed by the verified peer identity. (9P stays at the foreign edge: the
+//! `tcp://` mount path and `serve --p9`.)
 
 use std::io::Write;
 use std::net::SocketAddr;
@@ -13,7 +16,7 @@ use std::time::Duration;
 
 use wanix_fs::{FileSystem, LocalFs};
 use wanix_id::{GrantTable, GrantTablePolicy, NodeIdentity};
-use wanix_mesh::{MeshNode, ServeConfig};
+use wanix_mesh::{MeshNode, NativeServeConfig};
 
 use super::grant::{GrantSpec, build_grant_table, parse_peer_hex};
 use crate::serve::services_namespace_for_root;
@@ -160,15 +163,32 @@ pub(crate) fn run_mesh_serve_streaming(
 ) -> Result<i32, CliError> {
     let identity = load_identity(&command)?;
     let root = load_root(&command)?;
-    let mut node = bind_node(&command, &identity)?;
-    let config = build_config(&command, &root)?;
-    node.serve(config);
+    let node = build_and_serve(&command, &identity, &root)?;
     announce(&command, &node, process_stderr)?;
     // Serving runs on the node's owned runtime; park the foreground thread so the
     // node (endpoint + router) stays alive until the process is terminated.
     loop {
         std::thread::park();
     }
+}
+
+/// Binds the node and starts serving `root` over the **native** `wanix-mesh-wire`
+/// plane ([`wanix_mesh::WANIX_FS_ALPN`]).
+///
+/// Factored out of [`run_mesh_serve_streaming`] (which then only announces and
+/// parks) so a test can drive the real serve-config selection against the real
+/// [`crate::mesh::dial_iroh_remote`] client without the park-forever loop. The
+/// `node.serve_native` call is type-locked to [`build_config`]'s
+/// [`NativeServeConfig`]: reverting to the 9P `node.serve` would not compile.
+fn build_and_serve(
+    command: &MeshServeCommand,
+    identity: &NodeIdentity,
+    root: &Arc<dyn FileSystem>,
+) -> Result<MeshNode, CliError> {
+    let mut node = bind_node(command, identity)?;
+    let config = build_config(command, root)?;
+    node.serve_native(config);
+    Ok(node)
 }
 
 fn load_identity(command: &MeshServeCommand) -> Result<NodeIdentity, CliError> {
@@ -215,15 +235,15 @@ fn bind_node(command: &MeshServeCommand, identity: &NodeIdentity) -> Result<Mesh
 fn build_config(
     command: &MeshServeCommand,
     root: &Arc<dyn FileSystem>,
-) -> Result<ServeConfig, CliError> {
+) -> Result<NativeServeConfig, CliError> {
     let Some(peer_hex) = &command.peer_hex else {
-        return Ok(ServeConfig::open(Arc::clone(root)));
+        return Ok(NativeServeConfig::open(Arc::clone(root)));
     };
     let peer = parse_peer_hex(peer_hex)?;
     let table = GrantTable::new();
     build_grant_table(&table, peer, &command.grants, Arc::clone(root));
     let policy = Arc::new(GrantTablePolicy::new(table));
-    Ok(ServeConfig::guarded(Arc::clone(root), policy))
+    Ok(NativeServeConfig::guarded(Arc::clone(root), policy))
 }
 
 /// Prints the node id and a dialable `iroh://` ticket to stderr.
@@ -273,6 +293,101 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    /// End-to-end regression guard: the production serve path and the production
+    /// `mount iroh://` client must speak the SAME wire.
+    ///
+    /// The bug this catches: `mesh-serve` served the 9P plane (`node.serve`)
+    /// while `dial_iroh_remote` dialed the native plane (`dial_native`), so every
+    /// CLI dial failed with "peer doesn't support any known protocol". Each half
+    /// HAD a test — but each tested against a hand-rolled counterpart that matched
+    /// its own ALPN (the integration test in `tests/mesh_iroh.rs` hand-builds the
+    /// server with `serve_native` and *mirrors* `dial_iroh_remote`), so the drift
+    /// between the real server and the real client was invisible. This drives
+    /// `build_and_serve` (the exact serve call the foreground makes) against the
+    /// real [`crate::mesh::dial_iroh_remote`] over loopback QUIC and round-trips a
+    /// file. Reverting the server to 9P fails to compile (type-locked); diverging
+    /// the dialer's ALPN fails this at runtime.
+    #[test]
+    fn mesh_serve_and_mount_iroh_speak_the_same_wire() {
+        use wanix_fs::{MemFs, NormalizedPath, OpenOptions};
+        use wanix_vfs::{BindOptions, Namespace};
+
+        use crate::mesh::IROH_SCHEME;
+
+        // A real parsed command on a local direct-address endpoint, then the real
+        // serve call — serving an in-memory root so the test needs no temp dir.
+        let command =
+            parse_mesh_serve_command(&args(&["--root", "/unused", "--addr", "127.0.0.1:0"]))
+                .unwrap();
+        let identity = NodeIdentity::from_secret_bytes([42u8; 32]);
+        let host = Arc::new(MemFs::new());
+        let root: Arc<dyn FileSystem> = host.clone();
+        let server = build_and_serve(&command, &identity, &root).unwrap();
+
+        // Build the dialable ticket string exactly as `announce` prints it for the
+        // operator, then dial it through the REAL CLI client.
+        let peer = server.peer_id();
+        let addrs: Vec<String> = server
+            .ticket()
+            .ip_addrs()
+            .map(|addr| format!("addr={addr}"))
+            .collect();
+        assert!(
+            !addrs.is_empty(),
+            "loopback ticket must carry a direct addr"
+        );
+        let url = format!("{IROH_SCHEME}{peer}?{}", addrs.join("&"));
+
+        let mount = crate::mesh::dial_iroh_remote(&url, "").unwrap();
+        let mut namespace = Namespace::new();
+        namespace
+            .bind(
+                mount.remote.clone(),
+                ".",
+                "n/remote",
+                BindOptions::default(),
+            )
+            .unwrap();
+
+        // Write across the native wire (synchronous request/reply), confirm it
+        // landed on the served root, then read it back through the mount.
+        let payload = b"step 0 across the native wire";
+        let p = NormalizedPath::new("n/remote/hello.txt").unwrap();
+        let mut file = namespace
+            .open(
+                &p,
+                OpenOptions {
+                    read: false,
+                    write: true,
+                    create: true,
+                    truncate: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(file.write(payload).unwrap(), payload.len());
+        drop(file);
+
+        assert_eq!(host.read_file("hello.txt").unwrap(), payload);
+
+        let mut got = Vec::new();
+        let mut reader = namespace.open(&p, OpenOptions::read()).unwrap();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let read = reader.read(&mut chunk).unwrap();
+            if read == 0 {
+                break;
+            }
+            got.extend_from_slice(&chunk[..read]);
+            assert!(got.len() < (1 << 20), "stream grew unbounded");
+        }
+        assert_eq!(got, payload);
+
+        // The dialer node (inside `mount`) and the server own the runtimes their
+        // ops ride on; hold both until every assertion above has run.
+        drop(mount);
+        drop(server);
     }
 
     #[test]
