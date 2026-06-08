@@ -115,6 +115,18 @@ pub(crate) fn parse_volume_serve_command(
     if let VolumeSelection::Explicit(list) = &selection {
         reject_fixed_port_multi(local_addr, list.len())?;
     }
+    // Default-deny on the public endpoint (matches mesh-serve): serving with no
+    // --addr exports each volume read-write to anyone with its ticket, so require
+    // an explicit --insecure-open. Enforced at parse time so EVERY path — the
+    // streaming runtime and the collected/library path — refuses it, never just
+    // the runtime.
+    if local_addr.is_none() && !insecure_open {
+        return Err(CliError::usage(
+            "volume serve on the public endpoint exports each volume read-write to anyone with \
+             its ticket; pass --addr IP:PORT (use port 0 to serve multiple volumes) or \
+             --insecure-open to deliberately export to the open internet",
+        ));
+    }
     Ok(VolumeServeCommand {
         selection,
         local_addr,
@@ -147,23 +159,17 @@ fn reject_fixed_port_multi(local_addr: Option<SocketAddr>, count: usize) -> Resu
 ///
 /// # Errors
 ///
-/// Returns a CLI error when no volume is selected, the public-endpoint posture
-/// is violated, a fixed port is used for multiple volumes, or a volume/identity/
-/// endpoint cannot be resolved or bound.
+/// Returns a CLI error when no volume is selected, a fixed port is used for
+/// multiple volumes, or a volume/identity/endpoint cannot be resolved or bound.
+/// (The public-endpoint posture is enforced in [`parse_volume_serve_command`].)
 pub(crate) fn run_volume_serve_streaming(
     command: VolumeServeCommand,
     process_stderr: &mut dyn Write,
 ) -> Result<i32, CliError> {
     let names = resolve_selection(&command)?;
-    // Keep the mesh-serve posture: a public endpoint (no --addr) exports the
-    // volume read-write to anyone with the ticket, so require an explicit opt-in.
-    if command.local_addr.is_none() && !command.insecure_open {
-        return Err(CliError::usage(
-            "volume serve on the public endpoint exports each volume read-write to anyone with \
-             its ticket; pass --addr IP:PORT (use port 0 to serve multiple volumes) or \
-             --insecure-open to deliberately export to the open internet",
-        ));
-    }
+    // The public-endpoint posture is enforced at parse time. The fixed-port rule
+    // is re-checked here because `--all`'s volume count is only known now (parse
+    // already covered an explicit `--volume` list).
     reject_fixed_port_multi(command.local_addr, names.len())?;
 
     let mut volumes = Vec::with_capacity(names.len());
@@ -177,7 +183,7 @@ pub(crate) fn run_volume_serve_streaming(
         write_process_output(
             process_stderr,
             "stderr",
-            format!("{}\t{}\n", volume.name, volume.ticket_url).as_bytes(),
+            volume_serve_line(&volume.name, &volume.ticket_url).as_bytes(),
         )?;
     }
     // Serving runs on each node's owned runtime; park so they stay alive until the
@@ -185,6 +191,12 @@ pub(crate) fn run_volume_serve_streaming(
     loop {
         std::thread::park();
     }
+}
+
+/// One announce line for a served volume: `NAME\tTICKET_URL\n`. Tab-separated and
+/// newline-terminated so a later catalog-register step can parse it stably.
+fn volume_serve_line(name: &str, ticket_url: &str) -> String {
+    format!("{name}\t{ticket_url}\n")
 }
 
 fn resolve_selection(command: &VolumeServeCommand) -> Result<Vec<String>, CliError> {

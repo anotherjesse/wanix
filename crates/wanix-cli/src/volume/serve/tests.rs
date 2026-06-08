@@ -6,7 +6,10 @@ use wanix_fs::{FileSystem, NormalizedPath, OpenOptions};
 use wanix_id::NodeIdentity;
 use wanix_vfs::{BindOptions, Namespace};
 
-use super::{VolumeSelection, bind_volume_endpoints, parse_volume_serve_command};
+use super::{
+    VolumeSelection, bind_volume_endpoints, parse_volume_serve_command, reject_fixed_port_multi,
+    volume_serve_line,
+};
 
 fn args(values: &[&str]) -> Vec<OsString> {
     values.iter().map(OsString::from).collect()
@@ -54,7 +57,7 @@ fn parse_accepts_explicit_volumes_and_all() {
         VolumeSelection::Explicit(vec!["notes".to_owned(), "photos".to_owned()])
     );
 
-    let all = parse_volume_serve_command(&args(&["--all"])).unwrap();
+    let all = parse_volume_serve_command(&args(&["--all", "--insecure-open"])).unwrap();
     assert_eq!(all.selection, VolumeSelection::All);
 }
 
@@ -63,6 +66,41 @@ fn parse_allows_single_volume_on_a_fixed_port() {
     // A fixed nonzero port is fine for ONE volume — the multi-volume rule does not
     // apply.
     parse_volume_serve_command(&args(&["--volume", "notes", "--addr", "127.0.0.1:8080"])).unwrap();
+}
+
+#[test]
+fn parse_enforces_public_endpoint_posture() {
+    // No --addr and no --insecure-open is a public endpoint: refused (matches
+    // mesh-serve). The check is at parse time, so the collected path refuses it too.
+    let error = parse_volume_serve_command(&args(&["--volume", "notes"])).unwrap_err();
+    assert_eq!(error.exit_code(), 2);
+    assert!(error.to_string().contains("public endpoint"), "got {error}");
+
+    // --insecure-open is the explicit public opt-in; a local --addr is also fine.
+    parse_volume_serve_command(&args(&["--volume", "notes", "--insecure-open"])).unwrap();
+    parse_volume_serve_command(&args(&["--all", "--insecure-open"])).unwrap();
+    parse_volume_serve_command(&args(&["--volume", "notes", "--addr", "127.0.0.1:0"])).unwrap();
+}
+
+#[test]
+fn fixed_port_rule_rejects_multiple_volumes() {
+    let fixed: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+    // The rule that backs `--all` at runtime (count known only after resolving):
+    // a fixed nonzero port cannot serve more than one volume.
+    assert!(reject_fixed_port_multi(Some(fixed), 2).is_err());
+    // One volume on a fixed port, port 0 for many, or a public endpoint are fine.
+    assert!(reject_fixed_port_multi(Some(fixed), 1).is_ok());
+    assert!(reject_fixed_port_multi("127.0.0.1:0".parse().ok(), 2).is_ok());
+    assert!(reject_fixed_port_multi(None, 2).is_ok());
+}
+
+#[test]
+fn volume_serve_line_is_a_stable_tab_record() {
+    // Pinned so a later catalog-register step can parse it: NAME\tTICKET\n.
+    assert_eq!(
+        volume_serve_line("notes", "iroh://abc?addr=127.0.0.1:5610"),
+        "notes\tiroh://abc?addr=127.0.0.1:5610\n"
+    );
 }
 
 #[test]

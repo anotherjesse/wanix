@@ -430,9 +430,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_requires_root() {
+    fn parse_requires_root_or_volume() {
         let error = parse_mesh_serve_command(&args(&["--addr", "127.0.0.1:0"])).unwrap_err();
-        assert!(error.to_string().contains("mesh-serve requires --root DIR"));
+        assert!(
+            error
+                .to_string()
+                .contains("mesh-serve requires --root DIR or --volume NAME"),
+            "got {error}"
+        );
     }
 
     #[test]
