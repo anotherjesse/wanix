@@ -13,6 +13,7 @@ mod html;
 mod http;
 mod roots;
 mod terminal_ws;
+mod ws_duplex;
 
 #[cfg(test)]
 pub(super) use command::DEFAULT_SERVE_ADDR;
@@ -22,6 +23,7 @@ use connection::serve_one_connection;
 use discovery::display_host;
 use roots::ServeRoots;
 pub(crate) use roots::services_namespace_for_root;
+pub(crate) use ws_duplex::WebSocketDuplex;
 
 const FS9P_BUNDLE: &str = "fs9p";
 const WORKBENCH_FS9P_BUNDLE: &str = "workbench-fs9p";

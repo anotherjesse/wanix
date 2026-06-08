@@ -5,8 +5,8 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 
 use tungstenite::accept;
+use wanix_9p::P9Server;
 
-use crate::p9_ws::{P9WsConnectionError, serve_websocket_connection};
 use crate::{CliError, write_process_output};
 
 use super::ServeRoots;
@@ -17,6 +17,7 @@ use super::http::{
 use super::terminal_ws::{
     is_qjs_shell_websocket_path, qjs_shell_cwd_from_target, serve_terminal_websocket_connection,
 };
+use super::ws_duplex::{WebSocketDoorError, WebSocketDuplex};
 
 pub(super) fn serve_one_connection(
     listener: &TcpListener,
@@ -75,15 +76,18 @@ fn serve_websocket_request(
         return write_static_response(stream, response);
     }
     let socket = accept_websocket(stream)?;
-    serve_websocket_connection(Arc::clone(&roots.p9_root), socket)
-        .map_err(ServeConnectionError::WebSocket)
+    let mut server = P9Server::new(Arc::clone(&roots.p9_root));
+    server
+        .serve_duplex(WebSocketDuplex::new(socket))
+        .map(|_stats| ())
+        .map_err(|error| ServeConnectionError::WebSocket(WebSocketDoorError::from(error)))
 }
 
 fn accept_websocket(
     stream: TcpStream,
 ) -> Result<tungstenite::WebSocket<TcpStream>, ServeConnectionError> {
     accept(stream).map_err(|error| {
-        ServeConnectionError::WebSocket(P9WsConnectionError::Handshake(error.to_string()))
+        ServeConnectionError::WebSocket(WebSocketDoorError::Handshake(error.to_string()))
     })
 }
 
@@ -91,7 +95,7 @@ fn accept_websocket(
 pub(super) enum ServeConnectionError {
     Io(io::Error),
     Http(String),
-    WebSocket(P9WsConnectionError),
+    WebSocket(WebSocketDoorError),
     Terminal(CliError),
 }
 
@@ -135,7 +139,7 @@ mod tests {
             "request headers exceeded limit"
         );
         assert_eq!(
-            ServeConnectionError::WebSocket(P9WsConnectionError::Handshake("bad key".to_owned()))
+            ServeConnectionError::WebSocket(WebSocketDoorError::Handshake("bad key".to_owned()))
                 .to_string(),
             "websocket 9P failed: websocket handshake failed: bad key"
         );
@@ -151,13 +155,8 @@ mod tests {
         assert!(io_error.source().unwrap().is::<io::Error>());
 
         let websocket_error =
-            ServeConnectionError::WebSocket(P9WsConnectionError::Handshake("bad key".to_owned()));
-        assert!(
-            websocket_error
-                .source()
-                .unwrap()
-                .is::<P9WsConnectionError>()
-        );
+            ServeConnectionError::WebSocket(WebSocketDoorError::Handshake("bad key".to_owned()));
+        assert!(websocket_error.source().unwrap().is::<WebSocketDoorError>());
 
         let terminal_error = ServeConnectionError::Terminal(CliError::new("shell failed", 1));
         assert!(terminal_error.source().unwrap().is::<CliError>());

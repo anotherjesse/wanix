@@ -5,10 +5,10 @@ use std::time::Duration;
 use tungstenite::{Bytes, Error as WsError, Message, WebSocket};
 use wanix_fs::NormalizedPath;
 
-use crate::p9_ws::P9WsConnectionError;
 use crate::qjs_term::QjsShellSession;
 
 use super::super::connection::ServeConnectionError;
+use super::super::ws_duplex::WebSocketDoorError;
 use super::message::parse_terminal_resize_message;
 
 const QJS_SHELL_WEBSOCKET_IDLE_PUMP_MS: u64 = 20;
@@ -198,5 +198,5 @@ fn is_terminal_websocket_idle_tick(error: &WsError) -> bool {
 }
 
 fn ws_error(error: WsError) -> ServeConnectionError {
-    ServeConnectionError::WebSocket(P9WsConnectionError::WebSocket(error))
+    ServeConnectionError::WebSocket(WebSocketDoorError::Handshake(error.to_string()))
 }

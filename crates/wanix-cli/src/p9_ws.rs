@@ -3,7 +3,6 @@ mod connection;
 mod runtime;
 
 pub(super) use command::parse_p9_ws_command;
-pub(super) use connection::{P9WsConnectionError, serve_websocket_connection};
 pub(super) use runtime::run_p9_ws_streaming;
 
 #[cfg(test)]
