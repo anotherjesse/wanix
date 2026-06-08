@@ -88,13 +88,19 @@ fn start_raw9p_door_for_serve(
     let Some(p9_addr) = command.p9_addr.as_deref() else {
         return Ok(roots.clone());
     };
+    // Bind the door first WITHOUT accepting, enforce the exec-device trust
+    // boundary on the bound address, and only then spawn the accept loop — the
+    // door fails closed before it can serve a single connection. (Binding then
+    // checking after spawning would leave a window where a non-loopback
+    // `--p9 --wanix-services` door accepts RCE before the refusal.)
+    let (listener, bound) = raw9p::bind_raw9p_door(p9_addr)?;
+    enforce_services_trust_boundary(command, roots.local_addr, Some(bound))?;
     let policy = raw9p::build_serve_policy(command.peer, command.grants.clone(), &roots.p9_root);
     // The raw-9P door is a long-lived service door (many `mount-*` clients), so
     // it always loops on its dedicated thread; `--once` is the HTTP door's
     // single-connection test affordance and does not apply here. The thread is
     // detached and reaped when the process exits.
-    let bound = raw9p::start_raw9p_door(p9_addr, std::sync::Arc::clone(&roots.p9_root), policy)?;
-    enforce_services_trust_boundary(command, roots.local_addr, Some(bound))?;
+    raw9p::spawn_raw9p_accept(listener, std::sync::Arc::clone(&roots.p9_root), policy);
     write_process_output(
         process_stderr,
         "stderr",

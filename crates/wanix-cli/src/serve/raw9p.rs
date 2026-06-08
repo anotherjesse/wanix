@@ -37,26 +37,18 @@ pub(in crate::serve) fn build_serve_policy(
     })
 }
 
-/// Binds the raw-9P TCP door on `addr`, spawns a dedicated blocking accept loop
-/// thread serving `root` (capability-gated by `policy`), and returns the bound
-/// address so discovery/status can advertise it.
+/// Binds the raw-9P TCP door on `addr` **without accepting any connection yet**,
+/// returning the open listener and its resolved bound address.
 ///
-/// The loop runs on its own thread because the concurrent HTTP poller has no
-/// shutdown signal (see the design plan); the raw-9P door reuses the blocking
-/// per-connection thread model the standalone `p9-listen` used. It always loops
-/// (it is a long-lived service door for many `mount-*` clients); the thread is
-/// detached and reaped on process exit. The thread logs to the live process
-/// `stderr` directly, since the loop only runs in the live `wanix-rust` binary,
-/// never in collected/captured mode.
+/// Binding alone serves nothing, so the caller enforces the exec-device trust
+/// boundary on the bound address and only then calls [`spawn_raw9p_accept`] —
+/// the door fails closed *before* it can ever accept a connection. Dropping the
+/// returned listener (e.g. on a trust-boundary error) closes the socket.
 ///
 /// # Errors
 ///
 /// Returns an error when the address cannot be bound or inspected.
-pub(in crate::serve) fn start_raw9p_door(
-    addr: &str,
-    root: Arc<dyn FileSystem>,
-    policy: Option<ServePolicy>,
-) -> Result<SocketAddr, CliError> {
+pub(in crate::serve) fn bind_raw9p_door(addr: &str) -> Result<(TcpListener, SocketAddr), CliError> {
     let listener = TcpListener::bind(addr).map_err(|error| {
         CliError::new(
             format!("failed to bind serve --p9 address {addr}: {error}"),
@@ -66,11 +58,29 @@ pub(in crate::serve) fn start_raw9p_door(
     let bound = listener.local_addr().map_err(|error| {
         CliError::new(format!("failed to inspect serve --p9 address: {error}"), 1)
     })?;
+    Ok((listener, bound))
+}
+
+/// Spawns the dedicated blocking accept/serve loop for an **already-bound** and
+/// **already-trust-checked** raw-9P door. Call only after the trust boundary has
+/// been enforced on the door's bound address.
+///
+/// The loop runs on its own thread because the concurrent HTTP poller has no
+/// shutdown signal (see the design plan); the raw-9P door reuses the blocking
+/// per-connection thread model the standalone `p9-listen` used. It always loops
+/// (it is a long-lived service door for many `mount-*` clients); the thread is
+/// detached and reaped on process exit. The thread logs to the live process
+/// `stderr` directly, since the loop only runs in the live `wanix-rust` binary,
+/// never in collected/captured mode.
+pub(in crate::serve) fn spawn_raw9p_accept(
+    listener: TcpListener,
+    root: Arc<dyn FileSystem>,
+    policy: Option<ServePolicy>,
+) {
     thread::spawn(move || {
         let mut stderr = std::io::stderr();
         let _ = serve_raw9p_listener(false, &listener, root, policy.as_ref(), &mut stderr);
     });
-    Ok(bound)
 }
 
 /// Accept/serve/error loop for the raw-9P door. Shared, transport-agnostic over
