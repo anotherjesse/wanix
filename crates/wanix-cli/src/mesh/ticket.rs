@@ -10,9 +10,18 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use wanix_id::NodeIdentity;
-use wanix_mesh::{EndpointAddr, EndpointId, MeshNode};
+use wanix_mesh::{EndpointAddr, EndpointId, IrohStreamFactory, MeshNode, NativeFs};
 
 use crate::CliError;
+
+/// The imported remote filesystem type for an `iroh://` mesh mount: the native
+/// `wanix-mesh-wire` client over a held QUIC connection.
+///
+/// Wanix↔Wanix mesh imports ride the native wire (typed `FsError`s, one bidi
+/// stream per op / per open file), not 9P. 9P stays at the foreign edge (the
+/// `tcp://` mount path, Linux/v86/QEMU, external tools, the cockpit) per
+/// ADR 0004 and the native-mesh-wire plan §9.
+pub(crate) type MeshFs = NativeFs<IrohStreamFactory>;
 
 /// URL scheme that selects a QUIC mesh dial instead of a raw TCP 9P dial.
 pub(crate) const IROH_SCHEME: &str = "iroh://";
@@ -96,36 +105,43 @@ fn parse_addr_query(query: &str) -> Result<Vec<SocketAddr>, CliError> {
 /// it.
 ///
 /// The [`MeshNode`] owns the tokio runtime and iroh endpoint the returned
-/// [`RemoteFs`] drives every operation through. Its [`crate::mesh::BlockingDuplex`]
-/// holds only a non-owning runtime [`tokio::runtime::Handle`], so dropping the
-/// node shuts the runtime down and the next namespace op would panic ("a Tokio
-/// 1.x context was found, but it is being shutdown"). The node is therefore
-/// returned alongside the `RemoteFs` and **must be kept alive for the mount's
-/// whole lifetime** — every read/write/walk through the mount runs on it.
+/// [`MeshFs`] drives every operation through. The native wire's
+/// [`IrohStreamFactory`] holds only a non-owning runtime
+/// [`tokio::runtime::Handle`] (each op opens a fresh bidi stream wrapped in a
+/// `BlockingDuplex`), so dropping the node shuts the runtime down and the next
+/// namespace op would panic ("a Tokio 1.x context was found, but it is being
+/// shutdown"). The node is therefore returned alongside the [`MeshFs`] and
+/// **must be kept alive for the mount's whole lifetime** — every
+/// read/write/walk through the mount runs on it.
 #[must_use]
 pub(crate) struct IrohMount {
-    /// The imported remote filesystem, bound into a namespace by the caller.
-    pub(crate) remote: Arc<wanix_9p_client::RemoteFs>,
+    /// The imported remote filesystem (native wire), bound into a namespace by
+    /// the caller.
+    pub(crate) remote: Arc<MeshFs>,
     /// The live dialer node; kept alive for the mount's lifetime. Held only to
     /// keep the runtime the `remote` drives its operations on from shutting down.
     _node: MeshNode,
 }
 
-/// Dials an `iroh://` ticket and returns a connected mount over QUIC.
+/// Dials an `iroh://` ticket and returns a connected mount over the native wire.
 ///
 /// A fresh dialer-only [`MeshNode`] is bound from an ephemeral identity (the
 /// importer's stable identity is not required to dial out), then the ticket is
-/// dialed. `aname` selects the named subtree to attach, empty for the root.
+/// dialed over [`wanix_mesh::WANIX_FS_ALPN`] — the Wanix↔Wanix mesh path, not
+/// 9P. `aname` is threaded for symmetry with a future scoped-attach path; the
+/// v1 native wire resolves the connection root from the verified `remote_id()`
+/// alone and does not yet carry the attach name on the wire (so a default-deny
+/// rejection surfaces lazily as a per-op transport fault, not at dial time).
 ///
 /// The bound node is returned inside the [`IrohMount`] and **must outlive every
-/// operation on the returned filesystem**: it owns the runtime the `RemoteFs`
+/// operation on the returned filesystem**: it owns the runtime the [`MeshFs`]
 /// drives its QUIC traffic on, so dropping it early shuts that runtime down and
 /// panics the first namespace op.
 ///
 /// # Errors
 ///
 /// Returns a CLI error when the node cannot bind, the ticket cannot be parsed,
-/// or the QUIC dial/9P negotiation fails.
+/// or the QUIC dial fails.
 pub(crate) fn dial_iroh_remote(addr: &str, aname: &str) -> Result<IrohMount, CliError> {
     let ticket = MeshTicket::parse(addr)?;
     // Dialing out only needs an endpoint; a fresh identity is fine.
@@ -134,7 +150,7 @@ pub(crate) fn dial_iroh_remote(addr: &str, aname: &str) -> Result<IrohMount, Cli
         .map_err(|error| CliError::new(format!("failed to bind mesh endpoint: {error}"), 1))?;
     let remote = node
         .dialer()
-        .dial_attach(ticket.endpoint_addr(), aname)
+        .dial_native_attach(ticket.endpoint_addr(), aname)
         .map_err(|error| CliError::new(format!("failed to dial iroh peer: {error}"), 1))?;
     Ok(IrohMount {
         remote,

@@ -135,10 +135,10 @@ pub(super) fn run_mount_command(command: MountCommand) -> Result<CliOutput, CliE
 /// transport keepalive that must outlive every operation on it.
 ///
 /// For an `iroh://` mount the keepalive is the dialer [`crate::mesh::IrohMount`],
-/// which owns the tokio runtime the `RemoteFs` drives its QUIC traffic on;
-/// dropping it before the op runs would shut that runtime down and panic. For a
-/// `tcp://` mount there is nothing extra to hold (the `TcpStream` lives inside
-/// the `RemoteFs`), so the keepalive is `None`.
+/// which owns the tokio runtime the native-wire import drives its QUIC traffic
+/// on; dropping it before the op runs would shut that runtime down and panic.
+/// For a `tcp://` mount there is nothing extra to hold (the `TcpStream` lives
+/// inside the `RemoteFs`), so the keepalive is `None`.
 struct MountSession {
     namespace: Namespace,
     /// Held only to keep the transport (and its runtime, for iroh) alive for the
@@ -146,9 +146,35 @@ struct MountSession {
     _keepalive: Option<crate::mesh::IrohMount>,
 }
 
-/// Dials `addr`, negotiates a 9P session, and binds the remote at `/n/remote`.
+/// Dials `addr` and binds the imported remote at `/n/remote`, choosing the
+/// transport (and wire) by scheme.
+///
+/// `iroh://<peer>[?addr=...]` dials the peer over the QUIC mesh and imports it
+/// over the **native** `wanix-mesh-wire` plane (typed `FsError`s, one bidi
+/// stream per op / per open file); `tcp://HOST:PORT` opens a raw TCP **9P**
+/// stream at the foreign edge. Both imports are `FileSystem`s, so the `mount-*`
+/// verbs run identically over either, and the bind is type-transparent.
+///
+/// The `iroh://` arm returns its dialer node (inside [`crate::mesh::IrohMount`])
+/// as a keepalive: it owns the runtime the native import runs every op on, so
+/// the caller must hold it until the operation completes.
 fn mount_namespace(addr: &str) -> Result<MountSession, CliError> {
-    let (remote, keepalive) = dial_remote(addr)?;
+    if addr.starts_with(crate::mesh::IROH_SCHEME) {
+        // Wanix↔Wanix mesh import: the native wire over QUIC.
+        let mount = crate::mesh::dial_iroh_remote(addr, "")?;
+        let remote = std::sync::Arc::clone(&mount.remote);
+        return bind_mount(remote, Some(mount));
+    }
+    // Foreign-edge import: raw TCP 9P, unchanged per ADR 0004.
+    let remote = dial_tcp_remote(addr)?;
+    bind_mount(remote, None)
+}
+
+/// Binds an imported `FileSystem` at `/n/remote` and pairs it with `keepalive`.
+fn bind_mount(
+    remote: std::sync::Arc<dyn wanix_fs::FileSystem>,
+    keepalive: Option<crate::mesh::IrohMount>,
+) -> Result<MountSession, CliError> {
     let mut namespace = Namespace::new();
     namespace
         .bind(remote, ".", MOUNT_POINT, BindOptions::default())
@@ -162,26 +188,6 @@ fn mount_namespace(addr: &str) -> Result<MountSession, CliError> {
         namespace,
         _keepalive: keepalive,
     })
-}
-
-/// Dials the remote 9P server named by `addr`, choosing transport by scheme.
-///
-/// `tcp://HOST:PORT` opens a raw TCP 9P stream; `iroh://<peer>[?addr=...]` dials
-/// the peer over the QUIC mesh transport. Both yield the same [`RemoteFs`], so
-/// the `mount-*` verbs run identically over either transport.
-///
-/// The `iroh://` arm also returns its dialer node (inside [`crate::mesh::IrohMount`])
-/// as a keepalive: it owns the runtime the `RemoteFs` runs every op on, so the
-/// caller must hold it until the operation completes.
-fn dial_remote(
-    addr: &str,
-) -> Result<(std::sync::Arc<RemoteFs>, Option<crate::mesh::IrohMount>), CliError> {
-    if addr.starts_with(crate::mesh::IROH_SCHEME) {
-        let mount = crate::mesh::dial_iroh_remote(addr, "")?;
-        let remote = std::sync::Arc::clone(&mount.remote);
-        return Ok((remote, Some(mount)));
-    }
-    Ok((dial_tcp_remote(addr)?, None))
 }
 
 /// Connects a TCP stream to the `tcp://HOST:PORT` address and negotiates 9P.

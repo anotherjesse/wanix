@@ -248,6 +248,31 @@ impl MeshNode {
         self.router = Some(router);
     }
 
+    /// Starts serving the **native** control plane (`config`) on
+    /// [`crate::WANIX_FS_ALPN`] *and* the blob data plane (`cas`) on
+    /// [`crate::BLOBS_ALPN`] from one shared [`Router`].
+    ///
+    /// The native analog of [`Self::serve_with_blobs`]: the Wanix↔Wanix mesh
+    /// control plane (typed `FsError`s, one bidi stream per op / per open file)
+    /// and the BLAKE3 bulk-blob data plane accept on the same identity-bound
+    /// endpoint. 9P is not advertised, so a node that wants only the native
+    /// control plane beside its blob plane serves exactly these two ALPNs.
+    pub fn serve_native_with_blobs(
+        &mut self,
+        config: NativeServeConfig,
+        cas: &crate::IrohCasStore,
+    ) {
+        let handler = self.native_handler(config);
+        let blobs = crate::blobs_protocol(cas);
+        let router = self.runtime.block_on(async {
+            Router::builder(self.endpoint.clone())
+                .accept(crate::WANIX_FS_ALPN, handler)
+                .accept(crate::BLOBS_ALPN, blobs)
+                .spawn()
+        });
+        self.router = Some(router);
+    }
+
     /// Builds a [`crate::GossipPlumbPort`] over this node's endpoint and runtime.
     ///
     /// `bootstrap` are dialable peer addresses ([`EndpointAddr`] tickets) a
@@ -278,6 +303,31 @@ impl MeshNode {
         let router = self.runtime.block_on(async {
             Router::builder(self.endpoint.clone())
                 .accept(crate::WANIX_9P_ALPN, handler)
+                .accept(crate::GOSSIP_ALPN, gossip)
+                .spawn()
+        });
+        self.router = Some(router);
+    }
+
+    /// Starts serving the **native** control plane (`config`) on
+    /// [`crate::WANIX_FS_ALPN`] *and* the gossip coordination plane (`plumb`) on
+    /// [`crate::GOSSIP_ALPN`] from one shared [`Router`].
+    ///
+    /// The native analog of [`Self::serve_with_plumb`]: the Wanix↔Wanix mesh
+    /// control plane beside the broker-less gossip bus, both on one
+    /// identity-bound endpoint, with 9P not advertised. The gossip plane is a
+    /// distinct ALPN from the FileSystem control plane and is unchanged by the
+    /// native wire — it carries plumber envelopes, not `FileSystem` ops.
+    pub fn serve_native_with_plumb(
+        &mut self,
+        config: NativeServeConfig,
+        plumb: &crate::GossipPlumbPort,
+    ) {
+        let handler = self.native_handler(config);
+        let gossip = plumb.protocol();
+        let router = self.runtime.block_on(async {
+            Router::builder(self.endpoint.clone())
+                .accept(crate::WANIX_FS_ALPN, handler)
                 .accept(crate::GOSSIP_ALPN, gossip)
                 .spawn()
         });

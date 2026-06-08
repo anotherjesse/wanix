@@ -5,6 +5,11 @@
 //! operations the `mount-*` verbs run resolve identically when bound through a
 //! [`wanix_mesh::MeshNode`] dial. Both nodes bind on loopback with relays/DNS
 //! disabled, so the test needs no external network.
+//!
+//! The `iroh://` mount path imports over the **native** `wanix-mesh-wire` plane
+//! (typed `FsError`s, one bidi stream per op / per open file), not 9P, exactly
+//! as the CLI's `dial_iroh_remote` does after the native-mesh-wire swap (plan
+//! §9). 9P stays at the foreign edge (the `tcp://` mount path).
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -12,7 +17,7 @@ use std::sync::Arc;
 use wanix_fs::{File, FileSystem, FileType, MemFs, NormalizedPath, OpenOptions};
 use wanix_id::NodeIdentity;
 use wanix_kv::KvDevice;
-use wanix_mesh::{MeshNode, ServeConfig};
+use wanix_mesh::{MeshNode, NativeServeConfig};
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
 use wanix_vfs::{BindOptions, BindPosition, Namespace};
@@ -74,17 +79,18 @@ fn services_namespace() -> (Namespace, Arc<MemFs>) {
     (namespace, host)
 }
 
-/// Serves `root` over QUIC and binds it at `/n/remote` through a dialed mount,
-/// returning the client namespace and both nodes (kept alive by the caller).
+/// Serves `root` over the native wire and binds it at `/n/remote` through a
+/// dialed mount, returning the client namespace and both nodes (kept alive by
+/// the caller).
 fn mount_over_quic(root: Arc<dyn FileSystem>) -> (Namespace, MeshNode, MeshNode) {
     let server_identity = NodeIdentity::from_secret_bytes([1u8; 32]);
     let client_identity = NodeIdentity::from_secret_bytes([2u8; 32]);
     let mut server = MeshNode::bind_local(&server_identity, loopback()).unwrap();
-    server.serve(ServeConfig::open(root));
+    server.serve_native(NativeServeConfig::open(root));
     let ticket = server.ticket();
 
     let client = MeshNode::bind_local(&client_identity, loopback()).unwrap();
-    let remote = client.dialer().dial(ticket).unwrap();
+    let remote = client.dialer().dial_native(ticket).unwrap();
     let mut namespace = Namespace::new();
     namespace
         .bind(remote, ".", MOUNT_POINT, BindOptions::default())
@@ -223,19 +229,20 @@ fn kv_device_operated_over_iroh() {
 /// exact shape the CLI's `IrohMount` keepalive enforces.
 struct DialerMount {
     namespace: Namespace,
-    /// The dialer node owns the tokio runtime the `RemoteFs` runs every op on.
-    /// Held so the runtime is not shut down out from under an in-flight op.
+    /// The dialer node owns the tokio runtime the native import runs every op
+    /// on. Held so the runtime is not shut down out from under an in-flight op.
     _dialer: MeshNode,
 }
 
-/// Mirrors `wanix-cli`'s `dial_iroh_remote`: bind a *fresh* dialer node, dial,
-/// bind the remote into a namespace, and return BOTH so the node outlives the
-/// mount. Crucially the server-side binding is dropped before the returned mount
-/// is used, so this reproduces the real CLI drop path the in-process helpers miss.
+/// Mirrors `wanix-cli`'s `dial_iroh_remote`: bind a *fresh* dialer node, dial
+/// over the native wire, bind the remote into a namespace, and return BOTH so
+/// the node outlives the mount. Crucially the server-side binding is dropped
+/// before the returned mount is used, so this reproduces the real CLI drop path
+/// the in-process helpers miss.
 fn dial_into_mount(ticket: wanix_mesh::EndpointAddr) -> DialerMount {
     let dialer_identity = NodeIdentity::from_secret_bytes([99u8; 32]);
     let dialer = MeshNode::bind_local(&dialer_identity, loopback()).unwrap();
-    let remote = dialer.dialer().dial_attach(ticket, "").unwrap();
+    let remote = dialer.dialer().dial_native_attach(ticket, "").unwrap();
     let mut namespace = Namespace::new();
     namespace
         .bind(remote, ".", MOUNT_POINT, BindOptions::default())
@@ -259,7 +266,7 @@ fn mount_survives_the_dialer_function_returning() {
         .unwrap();
     let server_identity = NodeIdentity::from_secret_bytes([7u8; 32]);
     let mut server = MeshNode::bind_local(&server_identity, loopback()).unwrap();
-    server.serve(ServeConfig::open(Arc::new(server_ns)));
+    server.serve_native(NativeServeConfig::open(Arc::new(server_ns)));
     let ticket = server.ticket();
 
     // `dial_into_mount` returns; the dialer node lives only inside the mount.

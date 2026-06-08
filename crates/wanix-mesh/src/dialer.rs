@@ -1,16 +1,24 @@
 //! Outbound side: dial a peer over QUIC and import its namespace.
 //!
-//! [`MeshDialer::dial`] connects to a peer's [`iroh::EndpointAddr`], opens one
-//! bidi stream, wraps it in a [`BlockingDuplex`], and hands it to
-//! [`wanix_9p_client::RemoteFs::connect`]. `RemoteFs` then negotiates `Tversion`
-//! over the stream — and because an iroh bidi stream is invisible to the peer's
-//! `accept_bi` until the opener writes its first byte, that `Tversion` write is
-//! exactly what makes the inbound side see the stream. A dialer that read first
-//! would hang.
+//! There are two import wires:
 //!
-//! The connect/open work runs on the mesh runtime; the returned `RemoteFs` is a
-//! fully synchronous [`wanix_fs::FileSystem`] whose method calls drive the QUIC
-//! stream through the held [`Handle`], on non-runtime threads only.
+//! - [`MeshDialer::dial_native`] (the default mesh path) connects on
+//!   [`crate::WANIX_FS_ALPN`] and returns a native-wire [`NativeFs`] over the
+//!   held [`Connection`]: one fresh bidi stream per op / per open file, typed
+//!   [`wanix_mesh_wire::WireFsError`]s instead of an errno round-trip, and each
+//!   never-EOF open file on its own stream.
+//! - [`MeshDialer::dial`] (the 9P foreign edge) connects on
+//!   [`crate::WANIX_9P_ALPN`], opens one bidi stream, wraps it in a
+//!   [`BlockingDuplex`], and hands it to [`wanix_9p_client::RemoteFs::connect`].
+//!   `RemoteFs` negotiates `Tversion` over the stream — and because an iroh bidi
+//!   stream is invisible to the peer's `accept_bi` until the opener writes its
+//!   first byte, that `Tversion` write is what makes the inbound side see the
+//!   stream. A dialer that read first would hang. (The same first-write fact
+//!   makes the native wire's request frame resolve `accept_bi`.)
+//!
+//! The connect/open work runs on the mesh runtime; both returned filesystems are
+//! fully synchronous [`wanix_fs::FileSystem`]s whose method calls drive the QUIC
+//! streams through the held [`Handle`], on non-runtime threads only.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -81,35 +89,6 @@ impl MeshDialer {
         let remote = RemoteFs::connect_with_aname(Box::new(duplex), aname)
             .map_err(|err| MeshError::Session(err.to_string()))?;
         Ok(Arc::new(remote))
-    }
-
-    /// Dials `addr`/`aname` and wraps the import so blocking streaming opens get
-    /// their own bidi stream, returning a [`crate::StreamingImportFs`].
-    ///
-    /// This is the deadlock-safe form for importing a peer's service namespace:
-    /// the everyday-ops connection serves walk/stat/readdir/mutation and short
-    /// reads, while an open of a never-EOF service file (an `#agent` event/reply
-    /// stream, a `#plumb` recv stream — see [`crate::default_blocking_stream`])
-    /// dials a fresh stream so it cannot freeze the rest of the import.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MeshError::Dial`]/[`MeshError::Session`] when the everyday-ops
-    /// connection cannot be established or negotiated.
-    pub fn dial_streaming(
-        &self,
-        addr: EndpointAddr,
-        aname: &str,
-        predicate: crate::StreamPredicate,
-    ) -> MeshResult<crate::StreamingImportFs> {
-        let shared = self.dial_attach(addr.clone(), aname)?;
-        Ok(crate::StreamingImportFs::new(
-            shared,
-            self.clone(),
-            addr,
-            aname,
-            predicate,
-        ))
     }
 
     /// Dials `addr` over [`crate::WANIX_FS_ALPN`] and returns the imported peer

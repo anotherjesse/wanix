@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use wanix_fs::{File, FileSystem, NormalizedPath, OpenOptions};
 use wanix_id::NodeIdentity;
-use wanix_mesh::{GossipPlumbPort, MeshNode, ServeConfig};
+use wanix_mesh::{GossipPlumbPort, MeshNode, NativeServeConfig};
 use wanix_plumb::{PlumbDevice, PlumbEnvelope};
 
 fn path(value: &str) -> NormalizedPath {
@@ -81,7 +81,12 @@ fn plumb_node(
     let mut node = MeshNode::bind_local(&identity, loopback()).unwrap();
     let port = node.plumb_port(peers);
     // An empty served root is fine: this test exercises only the gossip plane.
-    node.serve_with_plumb(ServeConfig::open(Arc::new(wanix_fs::MemFs::new())), &port);
+    // The bundled control plane is the native wire (the mesh path), not 9P; the
+    // gossip ALPN it rides beside is unchanged either way.
+    node.serve_native_with_plumb(
+        NativeServeConfig::open(Arc::new(wanix_fs::MemFs::new())),
+        &port,
+    );
     let device = PlumbDevice::new(Arc::new(port.clone()));
     (node, port, device)
 }
@@ -100,7 +105,10 @@ fn a_topic_message_crosses_the_gossip_mesh() {
 
     // Build A's port bootstrapped from B and serve gossip on A.
     let port_a = node_a.plumb_port(vec![ticket_b]);
-    node_a.serve_with_plumb(ServeConfig::open(Arc::new(wanix_fs::MemFs::new())), &port_a);
+    node_a.serve_native_with_plumb(
+        NativeServeConfig::open(Arc::new(wanix_fs::MemFs::new())),
+        &port_a,
+    );
     let device_a = PlumbDevice::new(Arc::new(port_a));
 
     // Node A subscribes to the topic (joins the gossip swarm for it).

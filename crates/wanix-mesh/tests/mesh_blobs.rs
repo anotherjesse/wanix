@@ -21,7 +21,7 @@ use std::sync::Arc;
 use wanix_cas::{Capsule, ContentStore};
 use wanix_fs::{FileSystem, MemFs};
 use wanix_id::NodeIdentity;
-use wanix_mesh::{MeshNode, ServeConfig};
+use wanix_mesh::{MeshNode, NativeServeConfig};
 
 fn loopback() -> SocketAddr {
     SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)
@@ -55,11 +55,13 @@ fn ship_a_world_by_capsule_id_over_the_blob_plane() {
     let identity_b = NodeIdentity::from_secret_bytes([202u8; 32]);
 
     // Node A serves both planes; its CAS store fetches from no one (it is the
-    // origin), so its peer list is empty.
+    // origin), so its peer list is empty. The bundled control plane is the
+    // native wire (the mesh path), not 9P; the blobs data plane it rides beside
+    // is a distinct ALPN, unchanged by the wire choice.
     let mut node_a = MeshNode::bind_local(&identity_a, loopback()).unwrap();
     let cas_a = node_a.cas_store(vec![]);
     let server_root: Arc<dyn FileSystem> = Arc::new(MemFs::new());
-    node_a.serve_with_blobs(ServeConfig::open(server_root), &cas_a);
+    node_a.serve_native_with_blobs(NativeServeConfig::open(server_root), &cas_a);
     // Node B fetches with A's full ticket (direct loopback addresses), since
     // relay/DNS discovery is disabled in the local test binding.
     let ticket_a = node_a.ticket();

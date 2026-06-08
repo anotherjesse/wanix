@@ -1,12 +1,23 @@
-//! Mesh transport for Wanix: 9P over iroh QUIC, the only async crate.
+//! Mesh transport for Wanix: FileSystem-over-iroh QUIC, the only async crate.
 //!
 //! This crate is the network edge of the Wanix mesh. It binds one
 //! [`iroh::Endpoint`] per node from the persisted [`wanix_id::NodeIdentity`]
-//! secret key, exports a Wanix namespace as 9P over QUIC under ALPN
-//! [`WANIX_9P_ALPN`], and dials peers to import their namespaces as a
-//! [`wanix_9p_client::RemoteFs`]. The synchronous 9P core
-//! ([`wanix_9p::P9Server`] and [`wanix_9p_client::RemoteFs`]) is reused
-//! **unchanged**; the async/sync boundary is bridged here and nowhere else.
+//! secret key and exports a Wanix namespace over QUIC on two control-plane
+//! ALPNs:
+//!
+//! - the **native** `wanix-mesh-wire` plane ([`WANIX_FS_ALPN`]) — the
+//!   Wanix↔Wanix mesh path, a hand-rolled `postcard` frame carrying the full
+//!   [`wanix_fs::FileSystem`] trait with typed errors and one bidi stream per op
+//!   / per open file. [`MeshDialer::dial_native`] imports a peer as a
+//!   [`NativeFs`]; this is the default mesh import wire.
+//! - the **9P** plane ([`WANIX_9P_ALPN`]) — the foreign edge (Linux/v86/QEMU,
+//!   external 9P tools, the cockpit). [`MeshDialer::dial`] imports a peer as a
+//!   [`wanix_9p_client::RemoteFs`]; the synchronous 9P core
+//!   ([`wanix_9p::P9Server`] and [`wanix_9p_client::RemoteFs`]) is reused
+//!   **unchanged**.
+//!
+//! Both planes ride the one identity-bound endpoint; the async/sync boundary is
+//! bridged here and nowhere else.
 //!
 //! # Layering
 //!
@@ -39,7 +50,6 @@ mod handler;
 mod identity;
 mod node;
 mod plumb;
-mod streaming;
 mod wire_handler;
 
 pub use cas::{IrohCasStore, blob_hash, blobs_protocol, content_hash};
@@ -51,7 +61,6 @@ pub use handler::{P9ProtocolHandler, ServeConfig};
 pub use identity::{endpoint_id_for, peer_id_for, secret_key_for};
 pub use node::{DEFAULT_OP_DEADLINE, MeshNode};
 pub use plumb::{GOSSIP_ALPN, GossipPlumbPort};
-pub use streaming::{StreamPredicate, StreamingImportFs, default_blocking_stream};
 pub use wire_handler::{NativeFsHandler, NativeServeConfig};
 
 /// Re-export of the native-wire client `FileSystem`, the import half of the
