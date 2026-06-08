@@ -333,6 +333,12 @@ current-state docs, and commit messages instead of active ADRs.
   is a serve mode (`--p9 ADDR`), so `p9-ws`/`p9-listen` are retired; the serve
   9P edge refuses `--wanix-services` off-loopback and capability-gates raw `--p9`
   via `--peer`/`--grant`.
+- [ADR 0007](docs/adrs/0007-resources-catalogs-and-pairing.md) **(DRAFT /
+  PROPOSED)**: the resource catalog / volume server / host-wrapper device /
+  recipe story — a humane mesh front door where you address resources by name
+  and compose namespaces from a catalog — plus the layered trust model (Layer 0
+  iroh identity → Layer 1 naming → Layer 2/3 authorization). A discussion draft,
+  to be split into accepted ADRs once its contracts stabilize.
 
 The mesh/agent layer (9P-over-QUIC transport, ed25519 identity + capability
 binds, the `#agent` device, and the `#kv`/`#pipe`/`#plumb`/`#cas`/`#cpu`
