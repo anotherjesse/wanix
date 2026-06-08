@@ -4785,6 +4785,7 @@ dependencies = [
  "wanix-plumb",
  "wanix-protocol",
  "wanix-qjs",
+ "wanix-site-fs",
  "wanix-task",
  "wanix-term",
  "wanix-vfs",
@@ -4904,6 +4905,13 @@ dependencies = [
  "sha2 0.10.9",
  "wanix-module-cache",
  "wasmtime",
+]
+
+[[package]]
+name = "wanix-site-fs"
+version = "0.1.0"
+dependencies = [
+ "wanix-fs",
 ]
 
 [[package]]

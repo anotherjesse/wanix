@@ -1,0 +1,18 @@
+[package]
+name = "wanix-site-fs"
+description = "FileSystem-backed static site resolution for the Rust-native Wanix port."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+wanix-fs = { path = "../wanix-fs" }
+
+[lib]
+name = "wanix_site_fs"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

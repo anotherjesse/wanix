@@ -20,6 +20,13 @@ use crate::{CliError, quickjs_runner};
 #[derive(Clone)]
 pub(super) struct ServeRoots {
     pub(super) static_root: PathBuf,
+    /// The filesystem the HTTP static path serves through. For `--root DIR`
+    /// this is a `LocalFs` over the same directory as `static_root`, so byte
+    /// content, directory-index resolution, and MIME are unchanged — only the
+    /// I/O path moves from `std::fs` to the `FileSystem` trait (Phase 0). Later
+    /// phases serve other filesystems (an in-memory generator output, a CAS
+    /// snapshot) through this same field.
+    pub(super) site_root: Arc<dyn FileSystem>,
     pub(super) p9_root: Arc<dyn FileSystem>,
     /// Task driver kinds advertised by service discovery, captured from the
     /// registry at build time so the discovery JSON cannot drift from what
@@ -43,9 +50,11 @@ impl ServeRoots {
                 1,
             )
         })?;
+        let site_root = open_host_p9_root(root_path)?;
         let (p9_root, driver_kinds) = serve_p9_root(root_path, wanix_services)?;
         Ok(Self {
             static_root,
+            site_root,
             p9_root,
             driver_kinds,
             local_addr,

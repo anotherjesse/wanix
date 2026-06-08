@@ -27,6 +27,7 @@ wanix-pipe = { path = "../wanix-pipe" }
 wanix-plumb = { version = "0.1.0", path = "../wanix-plumb" }
 wanix-protocol = { path = "../wanix-protocol" }
 wanix-qjs = { path = "../wanix-qjs" }
+wanix-site-fs = { path = "../wanix-site-fs" }
 wanix-task = { path = "../wanix-task" }
 wanix-term = { path = "../wanix-term" }
 wanix-vfs = { path = "../wanix-vfs" }
