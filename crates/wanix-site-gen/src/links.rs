@@ -49,6 +49,10 @@ pub(crate) fn rewrite_links(body: &str, routes: &BTreeMap<String, String>) -> St
     let mut out = String::with_capacity(body.len());
     let bytes = body.as_bytes();
     let mut i = 0;
+    // Start of the verbatim run not yet copied to `out`. We only ever slice at
+    // the ASCII delimiters `]`/`(`/`)`, so every boundary is a valid UTF-8 char
+    // boundary and multibyte text between matches is copied through unchanged.
+    let mut last = 0;
     while i < bytes.len() {
         if bytes[i] == b']'
             && i + 1 < bytes.len()
@@ -56,15 +60,17 @@ pub(crate) fn rewrite_links(body: &str, routes: &BTreeMap<String, String>) -> St
             && let Some(close) = body[i + 2..].find(')')
         {
             let target = &body[i + 2..i + 2 + close];
+            out.push_str(&body[last..i]);
             out.push_str("](");
             out.push_str(&rewrite_target(target, routes));
             out.push(')');
             i = i + 2 + close + 1;
+            last = i;
             continue;
         }
-        out.push(bytes[i] as char);
         i += 1;
     }
+    out.push_str(&body[last..]);
     out
 }
 

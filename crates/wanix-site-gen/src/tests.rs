@@ -147,6 +147,29 @@ fn internal_slug_link_rewritten() {
 }
 
 #[test]
+fn non_ascii_body_text_survives_link_rewriting() {
+    // Regression: link rewriting must copy multibyte UTF-8 verbatim between the
+    // ASCII `](...)` delimiters, not reconstruct the body byte-by-byte as `char`
+    // (which would mojibake every em-dash, smart quote, and accented letter).
+    let mut routes = BTreeMap::new();
+    routes.insert("/concepts/foo".to_string(), "/concepts/foo/".to_string());
+    let body = "Café — a naïve [trait](/concepts/foo) with “smart” quotes 🚀.";
+    let out = crate::links::rewrite_links(body, &routes);
+    assert!(
+        out.contains("Café — a naïve"),
+        "accents/em-dash preserved: {out}"
+    );
+    assert!(
+        out.contains("“smart” quotes 🚀"),
+        "smart quotes + emoji preserved: {out}"
+    );
+    assert!(
+        out.contains("[trait](/concepts/foo/)"),
+        "internal link still rewritten to served directory form: {out}"
+    );
+}
+
+#[test]
 fn gfm_tables_and_tasklists_render() {
     let io = MemIo::with(&[(
         "content/home.md",
