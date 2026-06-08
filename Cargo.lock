@@ -5101,6 +5101,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wanix-mesh-wire"
+version = "0.1.0"
+dependencies = [
+ "postcard",
+ "serde",
+ "wanix-fs",
+ "wanix-vfs",
+]
+
+[[package]]
 name = "wanix-module-cache"
 version = "0.1.0"
 dependencies = [

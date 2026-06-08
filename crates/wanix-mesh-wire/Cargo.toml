@@ -1,0 +1,21 @@
+[package]
+name = "wanix-mesh-wire"
+description = "Transport-agnostic, async-free native FileSystem-over-stream wire (postcard frames over a sync Duplex) for the Wanix mesh; the native analog of wanix-9p + wanix-9p-client."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wanix-fs = { path = "../wanix-fs" }
+wanix-vfs = { path = "../wanix-vfs" }
+serde = { version = "1.0.228", features = ["derive"] }
+postcard = { version = "1.1.3", features = ["use-std"] }
+
+[lib]
+name = "wanix_mesh_wire"
+path = "src/lib.rs"
