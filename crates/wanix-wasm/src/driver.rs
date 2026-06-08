@@ -213,4 +213,40 @@ mod tests {
             "the file the wasm task wrote is visible through the shared MemFs"
         );
     }
+
+    const SHELL_GUEST: &[u8] = include_bytes!("../fixtures/shell.wasm");
+
+    #[test]
+    fn shell_guest_runs_echo_via_dash_c() {
+        // End-to-end: the wanix-sh shell, compiled to wasm, runs as an ordinary
+        // wasm task and `shell -c "echo hi"` prints `hi` to the task's stdout.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell.wasm");
+
+        let task = wasm_task(namespace_on(&fs), "shell.wasm -c \"echo hi\"");
+
+        // Capture the guest's stdout (fd 1).
+        let sink = Arc::new(MemFs::new());
+        sink.write_file("out", b"").expect("seed sink");
+        let stdout = sink
+            .open(
+                &NormalizedPath::new("out").expect("path"),
+                OpenOptions::read_write(),
+            )
+            .expect("open sink");
+        task.insert_fd(
+            Fd::STDOUT,
+            stdout,
+            NormalizedPath::new("out").expect("path"),
+        )
+        .expect("install fd 1");
+
+        let driver = WasmTaskDriver::new();
+        driver.start(&task).expect("shell task ran");
+        assert_eq!(task.exit(), "0", "echo should exit 0");
+
+        let out = String::from_utf8(sink.read_file("out").expect("read sink")).expect("utf8");
+        assert_eq!(out, "hi\n", "shell -c \"echo hi\" should print hi");
+    }
 }

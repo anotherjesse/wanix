@@ -1,0 +1,21 @@
+# Standalone guest compiled to wasm32-wasip1; its own workspace so the parent
+# Wanix workspace does not try to build it for the host target.
+# Build: cargo build --release --target wasm32-wasip1
+# then copy target/wasm32-wasip1/release/shell.wasm to ../shell.wasm
+[package]
+name = "shell"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "shell"
+path = "src/main.rs"
+
+[dependencies]
+wanix-sh = { path = "../../../wanix-sh" }
+
+[profile.release]
+opt-level = "s"
+strip = true
+
+[workspace]

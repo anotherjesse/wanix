@@ -1,0 +1,19 @@
+[package]
+name = "wanix-sh"
+description = "Wanix-native shell: brush-parser syntax with a Wanix executor, compiled to wasm and run as an ordinary Wanix task."
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/tractordev/wanix"
+rust-version = "1.93"
+
+# Explicit package fields (rather than workspace inheritance) so this crate also
+# resolves cleanly as a path dependency of the isolated guest workspace at
+# crates/wanix-wasm/fixtures/shell-src.
+
+[dependencies]
+brush-parser = "0.4"
+
+[lib]
+name = "wanix_sh"
+path = "src/lib.rs"
