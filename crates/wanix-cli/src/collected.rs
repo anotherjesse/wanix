@@ -32,7 +32,7 @@ pub(super) fn run_collected_command(
             "agent-exec-server",
         ),
         Some("new") => new::run_new_command(new::parse_new_command(rest)?),
-        Some("volume") => volume::run_volume_command(volume::parse_volume_command(rest)?),
+        Some("volume") => run_volume_collected_command(rest),
         Some("rootfs") => rootfs::run_rootfs_command(rootfs::parse_rootfs_command(rest)?),
         Some("qemu") => qemu::run_qemu_command(qemu::parse_qemu_command(rest)?),
         Some("serve") => require_live_process_io(serve::parse_serve_command(rest), "serve"),
@@ -68,6 +68,19 @@ fn run_qjs_collected_command(
         "qjs-restore" => qjs_restore::parse_and_run_qjs_restore(rest),
         _ => unknown_collected_command_name(command),
     }
+}
+
+/// `volume create`/`ls` run in the collected path; `volume serve` is streaming
+/// (it parks binding mesh endpoints), so it parses here but defers to the live
+/// process-IO path, mirroring `mesh-serve`.
+fn run_volume_collected_command(rest: &[OsString]) -> Result<CliOutput, CliError> {
+    if rest.first().and_then(|arg| arg.to_str()) == Some("serve") {
+        return require_live_process_io(
+            volume::parse_volume_serve_command(&rest[1..]),
+            "volume serve",
+        );
+    }
+    volume::run_volume_command(volume::parse_volume_command(rest)?)
 }
 
 fn require_live_process_io<T>(

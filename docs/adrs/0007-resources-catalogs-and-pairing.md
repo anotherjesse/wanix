@@ -85,6 +85,19 @@ What is missing is mostly a *naming layer* and one *new kind of device*.
   non-root scope entirely by making each ticket address exactly one resource
   root. Native subresource selection is a later optimization/authorization shape,
   not required for the first volume/catalog loop.
+- **Persistent mesh mounts into a task/shell namespace (shipped).** `qjs-shell
+  --mount-mesh iroh://...=/vol` dials a remote namespace over the native wire and
+  binds it into the shell's task namespace, holding the dialer keepalive for the
+  session lifetime. Repeated `--mount-mesh` composes several resources into one
+  namespace. (Open: generalizing the flag to `qjs`/`qjs-term`/`wasm`, which each
+  need a keepalive home.)
+- **A single-process per-resource volume server (shipped).** `wanix volume
+  create` makes persistent volumes under `~/.wanix/volumes`; `wanix volume serve
+  (--volume NAME ... | --all)` runs one native mesh endpoint per volume — each
+  with a distinct, stable identity under `~/.wanix/volume-identities` (outside the
+  exported root) — and prints one ticket per volume. Clients compose the tickets
+  with repeated `--mount-mesh`; there is no aggregate root. (`mesh-serve --volume
+  NAME` remains the single-volume debug shorthand.)
 
 > Wire-protocol direction (ADR 0004): the Wanix↔Wanix mesh path is now the
 > hand-rolled native `wanix-mesh-wire` over iroh QUIC, not 9P-over-iroh and not
@@ -99,15 +112,6 @@ What is missing is mostly a *naming layer* and one *new kind of device*.
   at `~/.wanix/node.key`, but addresses are pasted by hand as
   `iroh://<64-hex>[?addr=IP:PORT]`. Even `#plumb` admits its topic list is "a
   best-effort directory, not a global registry" (`crates/wanix-plumb/src/lib.rs`).
-- **There is no persistent mesh mount in a task or shell namespace.** The
-  one-shot `mount-ls`/`mount-cat`/`mount-write` verbs can dial `iroh://` and do a
-  single operation, but `qjs-shell`/`qjs`/`wasm` launch mounts are still host-dir
-  mounts. The headline demo needs `--mount-mesh iroh://...=/vol` (or the catalog
-  equivalent) so a running shell uses the remote volume as an ordinary path.
-- **There is no resource server that emits per-resource tickets.** A single host
-  process should be able to serve several local volumes by running several native
-  mesh endpoints internally — one root `FileSystem` and one ticket per volume —
-  while clients compose only the tickets they were handed.
 - **There is no way to project a single local CLI program onto the mesh
   safely.** `#cpu` exists, but it runs *arbitrary* caller-supplied job specs —
   the wrong direction for "expose exactly this one capability of my machine."
@@ -385,25 +389,25 @@ Front-load visible payoff (a real remote volume in a real shell); run open to
 start; defer catalog naming and authorization until the address-based bind path
 is solid.
 
-0. **Native volume proof.** Keep the manual invariant green: one process runs
-   `mesh-serve --root DIR --addr 127.0.0.1:PORT --insecure-open`, another uses
+0. **Native volume proof (shipped).** Keep the manual invariant green: one process
+   runs `mesh-serve --root DIR --addr 127.0.0.1:PORT --insecure-open`, another uses
    `mount-cat`/`mount-write iroh://...` and the write lands on the served root.
    This proves the production native server and production native client speak
    the same wire.
-1. **Persistent mesh mount into a shell/task namespace.** Add a launch-time bind
-   such as `qjs-shell --mount-mesh iroh://...=/vol`. The implementation must keep
-   the dialer `IrohMount` alive for the task/session lifetime because it owns the
-   runtime handle used by the native import.
-2. **Two shells, one open volume.** Start two shell sessions with the same
-   `--mount-mesh` volume; one writes `/vol/x`, the other reads it. This proves
-   the resource-composition experience before naming exists.
-3. **`wanix volume create` and per-resource volume serving.** Create persistent
-   local volume dirs (for example under `~/.wanix/volumes/<name>`). Add a
-   single-volume serve shorthand for development, then a volume-server mode that
-   runs one native endpoint per served volume and prints one ticket per volume.
-4. **Client composition across multiple served resources.** Mount two different
-   volume tickets into one shell/task namespace with repeated `--mount-mesh`
-   flags and prove writes stay scoped to their target volumes.
+1. **Persistent mesh mount into a shell/task namespace (shipped).** `qjs-shell
+   --mount-mesh iroh://...=/vol` keeps the dialer `IrohMount` alive for the
+   session because it owns the runtime handle used by the native import.
+2. **Two shells, one open volume (shipped).** Two shell sessions with the same
+   `--mount-mesh` volume; one writes `/vol/x`, the other reads it — the
+   resource-composition experience before naming exists.
+3. **`wanix volume create` and per-resource volume serving (shipped).** Persistent
+   local volume dirs under `~/.wanix/volumes/<name>`; `mesh-serve --volume NAME` is
+   the single-volume debug shorthand, and `volume serve (--volume ... | --all)`
+   runs one native endpoint per volume (distinct identity each) and prints one
+   ticket per volume.
+4. **Client composition across multiple served resources (shipped).** Repeated
+   `--mount-mesh` flags mount two different volume tickets into one shell/task
+   namespace, with writes scoped to their target volumes.
 5. **`#catalog` device backed by a volume.** Entries as files; model on
    `#kv`/`#agent`. The first catalog can be local or a normal mounted volume.
 6. **Make commands register entries and mount by name.** `volume create` /

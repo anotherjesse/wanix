@@ -2,8 +2,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use super::{
-    VolumeCommand, create_volume_in, list_volumes_in, parse_volume_command,
-    resolve_existing_volume, validate_volume_name,
+    VolumeCommand, create_volume_in, list_volumes_in, load_identity_at, parse_volume_command,
+    resolve_existing_volume, validate_volume_name, volume_identity_path, volumes_root,
 };
 
 fn args(values: &[&str]) -> Vec<OsString> {
@@ -105,6 +105,34 @@ fn resolve_existing_volume_finds_present_and_rejects_missing() {
     // An invalid name is rejected before any filesystem lookup (usage error).
     let invalid = resolve_existing_volume(&root, "../escape").unwrap_err();
     assert_eq!(invalid.exit_code(), 2);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn volume_identity_lives_outside_the_served_volume_root() {
+    let identity = volume_identity_path("notes").unwrap();
+    let volumes = volumes_root().unwrap();
+    // The endpoint secret key must NOT sit inside the exported volume tree.
+    assert!(
+        !identity.starts_with(&volumes),
+        "{identity:?} must not be under the served volumes root {volumes:?}"
+    );
+    assert!(identity.ends_with("volume-identities/notes.key"));
+    // An invalid name never produces a path.
+    assert!(volume_identity_path("../escape").is_err());
+}
+
+#[test]
+fn distinct_volumes_get_distinct_stable_peer_ids() {
+    let root = temp_root("identities");
+    let notes_a = load_identity_at(&root.join("notes.key")).unwrap();
+    let photos = load_identity_at(&root.join("photos.key")).unwrap();
+    // Different key files => different peer ids (independent resources).
+    assert_ne!(notes_a.peer_id(), photos.peer_id());
+    // Same key file => stable peer id across reloads.
+    let notes_b = load_identity_at(&root.join("notes.key")).unwrap();
+    assert_eq!(notes_a.peer_id(), notes_b.peer_id());
 
     let _ = std::fs::remove_dir_all(&root);
 }

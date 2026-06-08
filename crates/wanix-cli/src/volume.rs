@@ -14,8 +14,12 @@ use wanix_id::NodeIdentity;
 
 use crate::{CliError, CliOutput};
 
+mod serve;
+
 #[cfg(test)]
 mod tests;
+
+pub(crate) use serve::{parse_volume_serve_command, run_volume_serve_streaming};
 
 /// One parsed `volume` subcommand.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,9 +98,21 @@ fn create_volume_in(root: &Path, name: &str) -> Result<CliOutput, CliError> {
     Ok(CliOutput::new(line.into_bytes(), Vec::new(), 0))
 }
 
-/// Lists the volume names defined under `root` (one per line, sorted). A missing
-/// volumes root lists as empty rather than erroring.
+/// Lists the volume names defined under `root` (one per line, sorted).
 fn list_volumes_in(root: &Path) -> Result<CliOutput, CliError> {
+    let names = defined_volume_names(root)?;
+    let output = if names.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", names.join("\n"))
+    };
+    Ok(CliOutput::new(output.into_bytes(), Vec::new(), 0))
+}
+
+/// The sorted volume names defined under `root`. A missing volumes root yields an
+/// empty list rather than an error. Shared by `volume ls` and `volume serve
+/// --all`.
+fn defined_volume_names(root: &Path) -> Result<Vec<String>, CliError> {
     let mut names = Vec::new();
     match std::fs::read_dir(root) {
         Ok(entries) => {
@@ -120,12 +136,7 @@ fn list_volumes_in(root: &Path) -> Result<CliOutput, CliError> {
         }
     }
     names.sort();
-    let output = if names.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", names.join("\n"))
-    };
-    Ok(CliOutput::new(output.into_bytes(), Vec::new(), 0))
+    Ok(names)
 }
 
 /// Resolves an existing volume directory under `root`, validating the name.
@@ -157,12 +168,57 @@ pub(crate) fn resolve_existing_volume(root: &Path, name: &str) -> Result<PathBuf
 ///
 /// Returns a CLI error when no home directory is known.
 pub(crate) fn volumes_root() -> Result<PathBuf, CliError> {
+    Ok(wanix_dir()?.join("volumes"))
+}
+
+/// The `~/.wanix` base directory (parent of the node identity key).
+fn wanix_dir() -> Result<PathBuf, CliError> {
     let key = NodeIdentity::default_key_path()
         .map_err(|error| CliError::new(format!("cannot resolve ~/.wanix: {error}"), 1))?;
-    let wanix = key
-        .parent()
-        .ok_or_else(|| CliError::new("cannot resolve the ~/.wanix directory", 1))?;
-    Ok(wanix.join("volumes"))
+    key.parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| CliError::new("cannot resolve the ~/.wanix directory", 1))
+}
+
+/// The per-volume mesh-endpoint identity key path,
+/// `~/.wanix/volume-identities/<name>.key`.
+///
+/// Deliberately OUTSIDE the served volume root (`~/.wanix/volumes/<name>`) so a
+/// volume's own endpoint secret key is never exported to peers that mount it.
+fn volume_identity_path(name: &str) -> Result<PathBuf, CliError> {
+    validate_volume_name(name)?;
+    Ok(wanix_dir()?
+        .join("volume-identities")
+        .join(format!("{name}.key")))
+}
+
+/// Loads (or creates) the stable per-volume endpoint identity for `name`. Each
+/// volume gets a distinct key, hence a distinct peer id, so its mesh endpoint is
+/// an independent resource.
+fn load_volume_identity(name: &str) -> Result<NodeIdentity, CliError> {
+    load_identity_at(&volume_identity_path(name)?)
+}
+
+/// Loads or creates an owner-private identity at `path`, creating the parent
+/// directory first (`load_or_create` does not).
+fn load_identity_at(path: &Path) -> Result<NodeIdentity, CliError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            CliError::new(
+                format!(
+                    "failed to create identity dir {}: {error}",
+                    parent.display()
+                ),
+                1,
+            )
+        })?;
+    }
+    NodeIdentity::load_or_create(path).map_err(|error| {
+        CliError::new(
+            format!("failed to load volume identity {}: {error}", path.display()),
+            1,
+        )
+    })
 }
 
 /// Validates a volume name: non-empty, ASCII alphanumeric plus `.` `_` `-`, with
