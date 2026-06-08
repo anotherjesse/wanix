@@ -251,3 +251,35 @@ fn publish_without_store_is_an_error() {
         Err(crate::PublishError::NoStore)
     ));
 }
+
+#[test]
+fn dir_source_descriptor_round_trips() {
+    // `dir <path>` is the file-driven way to serve a host directory as a site,
+    // replacing the old `--site` CLI flag.
+    let source = SiteSource::parse_descriptor("dir /srv/blog").expect("parse dir descriptor");
+    assert!(matches!(&source, SiteSource::Dir(path) if path == std::path::Path::new("/srv/blog")));
+    assert_eq!(source.descriptor(), "dir /srv/blog\n");
+}
+
+#[test]
+fn dir_source_resolves_to_the_host_directory() {
+    // Writing `dir <path>` to `#sites/<host>` makes the gateway serve that
+    // directory through a `LocalFs` — no flag, no in-process registration.
+    let dir = std::env::temp_dir().join(format!(
+        "wanix-sites-dir-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create site dir");
+    std::fs::write(dir.join("index.html"), b"<h1>dir site</h1>").expect("write index");
+
+    let device = SitesDevice::new();
+    let host = Host::registered("blog.localhost").unwrap();
+    device.bind_site(host.clone(), SiteSource::Dir(dir.clone()));
+
+    let fs = device.resolve(&host).expect("dir source resolves");
+    assert_eq!(read_file(fs.as_ref(), "index.html"), b"<h1>dir site</h1>");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

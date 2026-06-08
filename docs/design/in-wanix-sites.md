@@ -220,6 +220,37 @@ and a host binding can be repointed for atomic deploy/rollback.
 
 ---
 
+## Follow-up: file-driven `#sites` registration vs. CLI transport
+
+Site registration is a filesystem operation, not a CLI flag: write a source
+descriptor to `#sites/<host>` —
+
+```
+echo 'dir /abs/path/to/site'  > '#sites/blog.localhost'   # serve a host directory
+echo 'cas <root-hash>'        > '#sites/docs.localhost'   # serve an immutable snapshot
+```
+
+The `--site HOST=PATH` flag was **removed**; the `dir <path>` source is its
+file-driven replacement (and `cas <hash>` is the publish form). The device
+parses/round-trips/serves all three sources (`memory` placeholder, `dir`, `cas`)
+and is unit-tested.
+
+**Open transport gap.** Writing `#sites` *live against a running `serve`* needs a
+9P client that speaks serve's transport — and serve's 9P rides a **websocket
+upgrade**, while the CLI's `mount-write` is **raw-TCP 9P only** (and `p9-listen`,
+which is raw 9P, does not expose `--wanix-services`). So today `#sites` is
+writable in-browser by the cockpit (over the websocket) or in-process, but not
+from the CLI against a live serve. Until that client exists, the CLI demo
+(`docs/site/serve-from-wanix.sh`) serves the generated tree via `--root`.
+
+Options to close it (pick one):
+- **9P-over-websocket client** in the CLI (`mount-write ws://host:port …`) — the
+  most general fix; the CLI then does file operations against any served
+  namespace, exactly like the cockpit.
+- **Startup namespace/site profile** — `serve` reads a file of bind operations
+  (Plan 9 `/lib/namespace` style); file-driven config with no per-site flag.
+- **Raw 9P listener** alongside HTTP on the serve endpoint.
+
 ## Next steps (Phase 4 — not in this workflow)
 
 - **iroh-addressed sites.** Serve a site identity over iroh QUIC (reuse

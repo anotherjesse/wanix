@@ -10,7 +10,7 @@ use wanix_kv::KvDevice;
 use wanix_pipe::PipeDevice;
 use wanix_plumb::PlumbDevice;
 use wanix_qjs::QuickJsTaskDriver;
-use wanix_sites::{Host, SiteSource, SitesDevice};
+use wanix_sites::SitesDevice;
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
 use wanix_vfs::{BindOptions, BindPosition, Namespace};
@@ -51,7 +51,6 @@ impl ServeRoots {
         local_addr: SocketAddr,
         bundle: Option<String>,
         wanix_services: bool,
-        sites: &[(String, PathBuf)],
     ) -> Result<Self, CliError> {
         let static_root = fs::canonicalize(root_path).map_err(|error| {
             CliError::new(
@@ -68,7 +67,6 @@ impl ServeRoots {
         let sites_device = Arc::new(SitesDevice::with_store(
             Arc::clone(&cas_store) as Arc<dyn ContentStore>
         ));
-        register_startup_sites(&sites_device, sites)?;
         let (p9_root, driver_kinds) = serve_p9_root(
             root_path,
             wanix_services,
@@ -86,26 +84,6 @@ impl ServeRoots {
             wanix_services,
         })
     }
-}
-
-/// Registers each `--site HOST=PATH` startup binding as a live `LocalFs`
-/// [`SiteSource::Memory`] source, so the gateway serves that host immediately.
-fn register_startup_sites(
-    device: &SitesDevice,
-    sites: &[(String, PathBuf)],
-) -> Result<(), CliError> {
-    for (raw_host, path) in sites {
-        let host = Host::registered(raw_host)
-            .ok_or_else(|| CliError::usage(format!("invalid --site host: {raw_host:?}")))?;
-        let fs = Arc::new(LocalFs::new(path).map_err(|error| {
-            CliError::new(
-                format!("failed to open --site root {}: {error}", path.display()),
-                1,
-            )
-        })?);
-        device.bind_site(host, SiteSource::Memory(fs));
-    }
-    Ok(())
 }
 
 fn serve_p9_root(

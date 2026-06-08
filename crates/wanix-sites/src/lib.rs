@@ -15,11 +15,13 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use wanix_cas::ContentStore;
 use wanix_fs::{
-    DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
+    DirEntry, File, FileSystem, FileType, FsError, FsResult, LocalFs, Metadata, NormalizedPath,
+    OpenOptions,
 };
 use wanix_site_cas::{CasRootHash, CasSiteFs};
 
@@ -44,6 +46,10 @@ pub(crate) mod modes {
 pub enum SiteSource {
     /// A live filesystem: an in-memory generator output, a `LocalFs`, etc.
     Memory(Arc<dyn FileSystem>),
+    /// A host directory, served through a `LocalFs`. Registered by a file write
+    /// (`dir <path>` to `#sites/<host>`) so that exposing a directory as a site
+    /// is a filesystem operation, not a CLI flag.
+    Dir(PathBuf),
     /// An immutable CAS snapshot, named by its root hash (hex). Resolving this
     /// to a servable filesystem requires the device to be built with a backing
     /// content store ([`SitesDevice::with_store`]); it then loads a
@@ -58,6 +64,7 @@ impl SiteSource {
     pub fn descriptor(&self) -> String {
         match self {
             Self::Memory(_) => "memory\n".to_owned(),
+            Self::Dir(path) => format!("dir {}\n", path.display()),
             Self::Cas(hash) => format!("cas {hash}\n"),
         }
     }
@@ -69,6 +76,13 @@ impl SiteSource {
         let trimmed = descriptor.trim();
         if trimmed.eq_ignore_ascii_case("memory") {
             return Some(Self::Memory(Arc::new(EmptySiteFs)));
+        }
+        if let Some(path) = trimmed
+            .strip_prefix("dir")
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            return Some(Self::Dir(PathBuf::from(path)));
         }
         let hash = trimmed
             .strip_prefix("cas")
@@ -108,6 +122,7 @@ impl fmt::Debug for SiteSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Memory(_) => f.write_str("Memory(..)"),
+            Self::Dir(path) => write!(f, "Dir({})", path.display()),
             Self::Cas(hash) => write!(f, "Cas({hash})"),
         }
     }
@@ -225,6 +240,9 @@ impl SitesDevice {
         };
         match source {
             SiteSource::Memory(fs) => Some(fs),
+            SiteSource::Dir(path) => LocalFs::new(&path)
+                .ok()
+                .map(|fs| Arc::new(fs) as Arc<dyn FileSystem>),
             SiteSource::Cas(hash) => self.resolve_cas(&hash),
         }
     }

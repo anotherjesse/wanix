@@ -81,7 +81,6 @@ fn serve_roots_for_listener(
         local_addr,
         command.bundle.clone(),
         command.wanix_services,
-        &command.sites,
     )?;
     Ok((local_addr, roots))
 }
