@@ -13,6 +13,7 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use wanix_fs::{File, FileSystem, FileType, MemFs, NormalizedPath, OpenOptions};
 use wanix_id::NodeIdentity;
@@ -114,6 +115,22 @@ fn read_all(mut file: Box<dyn File>) -> Vec<u8> {
 
 fn read_through(namespace: &Namespace, p: &NormalizedPath) -> Vec<u8> {
     read_all(namespace.open(p, OpenOptions::read()).unwrap())
+}
+
+/// Reads a path through the namespace, returning `None` on any error (a dead
+/// mount mid-reconnect) instead of panicking — for poll loops.
+fn try_read_through(namespace: &Namespace, p: &NormalizedPath) -> Option<Vec<u8>> {
+    let mut file = namespace.open(p, OpenOptions::read()).ok()?;
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    loop {
+        match file.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+            Err(_) => return None,
+        }
+    }
+    Some(bytes)
 }
 
 #[test]
@@ -307,5 +324,58 @@ fn mdns_discovers_a_bare_peer_id_without_a_direct_addr() {
     assert_eq!(
         read_through(&namespace, &mounted("marker.txt")),
         b"found-via-mdns"
+    );
+}
+
+#[test]
+fn native_mount_reconnects_after_the_server_restarts() {
+    // Regression for "errno 54 (ECONNRESET) forever after `volume serve` restart":
+    // a held native mount cached one connection to the old server process and
+    // never re-dialed. Now the stream factory re-dials by stable peer id on a dead
+    // connection, so the mount recovers when the peer comes back — without
+    // rebuilding it.
+    let identity = NodeIdentity::from_secret_bytes([51u8; 32]);
+
+    // Server v1 on an ephemeral loopback port.
+    let host1 = Arc::new(MemFs::new());
+    host1.write_file("marker.txt", b"v1").unwrap();
+    let mut server1 = MeshNode::bind_local(&identity, loopback()).unwrap();
+    server1.serve_native(NativeServeConfig::open(host1 as Arc<dyn FileSystem>));
+    let peer = server1.peer_id();
+
+    // Mount by BARE peer id (no addr=), exactly like the failing CLI case.
+    let bare = wanix_mesh::EndpointAddr::new(wanix_mesh::endpoint_id_for(peer).unwrap());
+    let client =
+        MeshNode::bind_local(&NodeIdentity::from_secret_bytes([52u8; 32]), loopback()).unwrap();
+    let remote = client.dialer().dial_native(bare).unwrap();
+    let mut namespace = Namespace::new();
+    namespace
+        .bind(remote, ".", MOUNT_POINT, BindOptions::default())
+        .unwrap();
+    assert_eq!(read_through(&namespace, &mounted("marker.txt")), b"v1");
+
+    // Restart: drop v1 (kills the connection), bring up v2 with the SAME identity
+    // on a NEW ephemeral port. mDNS re-resolves the stable peer id to v2.
+    drop(server1);
+    let host2 = Arc::new(MemFs::new());
+    host2.write_file("marker.txt", b"v2").unwrap();
+    let mut server2 = MeshNode::bind_local(&identity, loopback()).unwrap();
+    server2.serve_native(NativeServeConfig::open(host2 as Arc<dyn FileSystem>));
+
+    // The held mount must recover by re-dialing — without being rebuilt.
+    let mut recovered = None;
+    for _ in 0..60 {
+        if let Some(bytes) = try_read_through(&namespace, &mounted("marker.txt")) {
+            if bytes == b"v2" {
+                recovered = Some(bytes);
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    assert_eq!(
+        recovered.as_deref(),
+        Some(b"v2".as_slice()),
+        "the mount did not reconnect to the restarted server"
     );
 }
