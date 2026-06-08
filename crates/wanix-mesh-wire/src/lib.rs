@@ -26,13 +26,55 @@
 //! - [`write_frame`] / [`read_frame`] and the [`MAX_FRAME_LEN`] /
 //!   [`MAX_CHUNK_LEN`] ceilings — bounded `postcard` framing over a sync stream.
 //!
-//! The protocol enums, the sync server dispatcher, and the sync client
-//! `FileSystem` facade land in later phases.
+//! # Phase 2 surface
+//!
+//! On top of Phase 1 this crate now ships the protocol enums, the sync server
+//! dispatcher, and the sync client `FileSystem` facade — fully exercisable over
+//! an in-memory [`Duplex`] with no transport:
+//!
+//! - [`Inbound`] / [`FsRequest`] / [`FsResponse`] / [`ReadDirPage`] /
+//!   [`OpenRequest`] / [`OpenResponse`] / [`OpenOk`] / [`FileOp`] /
+//!   [`FileReply`] — the op-level service protocol.
+//! - [`serve_one`] — the sync server dispatcher: one [`Inbound`] in, one
+//!   [`FsResponse`] out (one-shot), or the open-file loop (open).
+//! - [`StreamFactory`], [`NativeFs`], [`NativeFile`] — the sync client facade
+//!   over a [`Duplex`]-producing factory.
+//!
+//! Binding this codec to iroh QUIC (the async/iroh edge) lands in `wanix-mesh`.
 
+mod client;
 mod error;
+mod file;
 mod frame;
+mod proto;
+mod server;
 mod value;
 
+use std::io::{Read, Write};
+
+pub use client::{NativeFs, StreamFactory};
 pub use error::WireFsError;
+pub use file::NativeFile;
 pub use frame::{FrameError, FrameResult, MAX_CHUNK_LEN, MAX_FRAME_LEN, read_frame, write_frame};
+pub use proto::{
+    FileOp, FileReply, FsRequest, FsResponse, Inbound, OpenOk, OpenRequest, OpenResponse,
+    ReadDirPage,
+};
+pub use server::serve_one;
 pub use value::{WireDirEntry, WireFileType, WireMetadata, WireOpenOptions, WireSeek};
+
+/// The content-addressing primitive carried by `content_hash`, re-exported from
+/// `wanix-fs` so callers need not depend on it directly.
+pub use wanix_fs::ContentHash;
+
+/// A blocking, bidirectional byte stream the native wire runs over.
+///
+/// This is the transport seam: the wire crate frames `postcard` requests and
+/// replies over any type that is [`Read`] + [`Write`] + [`Send`], exactly the
+/// boundary `wanix-9p-client`'s `Duplex` defines. `wanix-mesh` supplies the
+/// implementation by wrapping an iroh QUIC bidi stream in its existing
+/// `BlockingDuplex`; the wire crate never sees async. Any in-memory pipe
+/// satisfies it for tests.
+pub trait Duplex: Read + Write + Send {}
+
+impl<T: Read + Write + Send> Duplex for T {}
