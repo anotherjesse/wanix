@@ -788,6 +788,36 @@ fn fd_table_non_replacing_insert_preserves_existing_fd() {
     assert_eq!(&buf[..count], b"first");
 }
 
+#[test]
+fn close_all_fds_releases_open_fds() {
+    // A finished task releases its fds (Unix/Plan 9 semantics); this is what
+    // drops a pipeline producer's #pipe writer so the consumer observes EOF.
+    let table = TaskTable::new();
+    table.register_noop_driver("noop").unwrap();
+    let task = table.allocate_root("noop").unwrap();
+
+    let backing = MemFs::new();
+    backing.write_file("f", b"x").unwrap();
+    task.insert_fd(
+        Fd::STDOUT,
+        backing
+            .open(
+                &NormalizedPath::new("f").unwrap(),
+                OpenOptions::read_write(),
+            )
+            .unwrap(),
+        NormalizedPath::new("f").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(task.fd_numbers(), vec![Fd::STDOUT]);
+
+    task.close_all_fds();
+    assert!(
+        task.fd_numbers().is_empty(),
+        "a finished task should hold no fds"
+    );
+}
+
 #[derive(Debug)]
 struct ReentrantFile {
     task: Task,

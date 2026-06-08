@@ -193,6 +193,24 @@ impl Task {
         })
     }
 
+    /// Releases every open fd, emptying the task's fd table.
+    ///
+    /// A task driver calls this when a task finishes running, mirroring the
+    /// Unix/Plan 9 semantic that an exited process holds no descriptors. It is
+    /// what lets a pipeline's producer drop its `#pipe` writer when it finishes,
+    /// so the consumer observes EOF (a pipe reports end-of-file once its last
+    /// writer is gone). Anything that needs a task's output after it exits must
+    /// read the fd's backing (a file, sink, or pipe), not the task's fd table.
+    ///
+    /// This is distinct from [`set_exit`](Self::set_exit), which only records the
+    /// status and may be called mid-operation while fds are still in use.
+    pub fn close_all_fds(&self) {
+        let _ = self.write_state(|state| {
+            state.fds = crate::FdTable::new();
+            Ok(())
+        });
+    }
+
     fn read_state<T>(&self, f: impl FnOnce(&TaskState) -> T) -> FsResult<T> {
         let state = self
             .state

@@ -349,6 +349,15 @@ more feature work.
 
 ## Queued Follow-ups
 
+- Shell pipeline concurrency (HIGH — address ASAP once the `wanix-sh` foundation
+  works): pipeline stages currently run SEQUENTIALLY against the unbounded
+  in-memory `#pipe` (stage a fully buffers its output, then b drains), a
+  deliberate divergence from Plan 9's concurrent stages + bounded blocking pipe.
+  Restore concurrency (and a bounded pipe) once tasks can run on their own
+  threads — the same per-task thread work the interactive shell needs. Context in
+  `docs/site/content/concepts/task-exit-closes-fds.md`; the fd-on-exit primitive
+  (`Task::close_all_fds`) is shipped for the wasm driver only — the qjs driver
+  should adopt it too before qjs commands are piped.
 - Module-line health: `just module-lines` is green against the 350-line hard
   limit, but three modules sit above the 250-line warn limit and should be split
   before they grow — `wanix-agent/src/codex.rs` (~307), `wanix-agent/src/

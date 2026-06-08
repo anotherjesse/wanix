@@ -32,7 +32,12 @@ impl TaskDriver for WasmTaskDriver {
     }
 
     fn start(&self, task: &Task) -> FsResult<()> {
-        match run_wasm_task(task) {
+        let result = run_wasm_task(task);
+        // A finished task releases its fds (Unix/Plan 9: an exited process holds
+        // no descriptors), so a pipeline producer's `#pipe` writer drops and the
+        // consumer observes EOF.
+        task.close_all_fds();
+        match result {
             Ok(code) => task.set_exit(code.to_string()),
             Err(err) => {
                 let _ = task.set_exit("1");
