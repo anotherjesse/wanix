@@ -43,8 +43,6 @@ wanix-rust qjs-snapshot
 wanix-rust qjs-resume
 wanix-rust qjs-restore
 wanix-rust p9-stdio
-wanix-rust p9-listen
-wanix-rust p9-ws
 wanix-rust rootfs
 wanix-rust qemu
 wanix-rust serve
@@ -391,8 +389,10 @@ entrypoint map rather than a linear copy/paste script:
 
 ```sh
 $WANIX p9-stdio --root /tmp/wanix-host
-$WANIX p9-listen --root /tmp/wanix-host --addr 127.0.0.1:5640
-$WANIX p9-ws --root /tmp/wanix-host --addr 127.0.0.1:7654
+
+# Raw 9P over TCP is now a serve mode (ADR 0006); p9-listen/p9-ws are retired.
+$WANIX serve --root /tmp/wanix-host --p9 127.0.0.1:5640
+$WANIX serve --root /tmp/wanix-host --p9 127.0.0.1:5640 --peer HEX --grant root:/:r
 
 $WANIX serve --root /tmp/wanix-host --listen 127.0.0.1:7654 --bundle fs9p --wanix-services
 $WANIX serve --root /tmp/wanix-host --listen 127.0.0.1:7654 --bundle workbench-fs9p --wanix-services

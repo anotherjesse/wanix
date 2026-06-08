@@ -55,7 +55,7 @@ loop {
 }
 ```
 
-One `read`, one `handle`, then back to the top. There is no background reader thread, no per-tag oneshot map, no demultiplexer — the connection is a single in-flight frame at a time. For ordinary 9P traffic (walk, stat, read a `#kv` value, write a file) this is correct and cheap: every request completes promptly, so serial processing is invisible. The mesh import half relies on exactly this property — `RemoteFs` runs one outstanding request behind a `Mutex<P9Conn>` precisely because it is "provably correct against a server that processes one frame at a time" (`docs/mesh-blueprint.md:143`).
+One `read`, one `handle`, then back to the top. There is no background reader thread, no per-tag oneshot map, no demultiplexer — the connection is a single in-flight frame at a time. This is a property of the request→response session loop itself, so it is identical across every door over the one session core (the websocket door, the raw-TCP `--p9` door, `p9-stdio`, and the mesh's QUIC stream); the transport refactor under ADR 0006 did not change it. For ordinary 9P traffic (walk, stat, read a `#kv` value, write a file) this is correct and cheap: every request completes promptly, so serial processing is invisible. The mesh import half relies on exactly this property — `RemoteFs` runs one outstanding request behind a `Mutex<P9Conn>` precisely because it is "provably correct against a server that processes one frame at a time" (`docs/mesh-blueprint.md:143`).
 
 ## Where it breaks: a blocking Tread that never returns
 

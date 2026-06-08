@@ -1,6 +1,9 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use wanix_9p::PeerId;
+
+use super::raw9p::grant::{GrantSpec, parse_peer};
 use crate::CliError;
 
 pub(crate) const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
@@ -15,6 +18,17 @@ pub(crate) struct ServeCommand {
     pub(super) bundle: Option<String>,
     pub(super) wanix_services: bool,
     pub(super) once: bool,
+    /// Raw-9P-over-TCP door address, present only when `--p9 HOST:PORT` is set.
+    /// Exports the served namespace as raw 9P so `mount-write tcp://...` works
+    /// against a live serve. Subject to the `--wanix-services` off-loopback
+    /// trust guard.
+    pub(super) p9_addr: Option<String>,
+    /// Explicit verified peer identity for the raw-9P door, present only when
+    /// `--peer HEX` gates `--p9` with a default-deny grant table.
+    pub(super) peer: Option<PeerId>,
+    /// Capability grants for `peer`, scoped to the served namespace at attach
+    /// time. Requires `--peer`.
+    pub(super) grants: Vec<GrantSpec>,
 }
 
 pub(crate) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, CliError> {
@@ -40,7 +54,7 @@ impl<'a> ServeCommandParser<'a> {
         while let Some(arg) = self.next_arg()? {
             self.apply_arg(arg)?;
         }
-        Ok(self.parts.finish())
+        self.parts.finish()
     }
 
     fn next_arg(&self) -> Result<Option<ServeArg>, CliError> {
@@ -73,6 +87,9 @@ impl<'a> ServeCommandParser<'a> {
             ServeValueOption::Root => self.parts.set_root(value, "serve accepts only one --root"),
             ServeValueOption::Addr | ServeValueOption::Listen => self.parts.set_addr(value),
             ServeValueOption::Bundle => self.parts.set_bundle(value),
+            ServeValueOption::P9 => self.parts.set_p9_addr(value),
+            ServeValueOption::Peer => self.parts.set_peer(value),
+            ServeValueOption::Grant => self.parts.push_grant(value),
         }
     }
 
@@ -113,6 +130,9 @@ struct ServeCommandParts {
     bundle: Option<String>,
     wanix_services: bool,
     once: bool,
+    p9_addr: Option<String>,
+    peer: Option<PeerId>,
+    grants: Vec<GrantSpec>,
 }
 
 impl ServeCommandParts {
@@ -157,13 +177,52 @@ impl ServeCommandParts {
         Ok(())
     }
 
-    fn finish(self) -> ServeCommand {
-        ServeCommand {
+    fn set_p9_addr(&mut self, value: &OsString) -> Result<(), CliError> {
+        if self.p9_addr.is_some() {
+            return Err(CliError::usage("serve accepts only one --p9"));
+        }
+        let raw = value.to_string_lossy();
+        self.p9_addr = Some(normalize_listen_addr(&raw));
+        Ok(())
+    }
+
+    fn set_peer(&mut self, value: &OsString) -> Result<(), CliError> {
+        if self.peer.is_some() {
+            return Err(CliError::usage("serve accepts only one --peer"));
+        }
+        self.peer = Some(parse_peer(&value.to_string_lossy())?);
+        Ok(())
+    }
+
+    fn push_grant(&mut self, value: &OsString) -> Result<(), CliError> {
+        self.grants
+            .push(GrantSpec::parse(&value.to_string_lossy())?);
+        Ok(())
+    }
+
+    fn finish(self) -> Result<ServeCommand, CliError> {
+        // A grant names a capability for a peer; a peer/grant with no raw-9P
+        // door is dead config, so require `--p9`. (The websocket door stays
+        // unauthenticated; capability gating is the raw-9P door's contract.)
+        if !self.grants.is_empty() && self.peer.is_none() {
+            return Err(CliError::usage(
+                "serve --grant requires --peer HEX to name the authorized peer",
+            ));
+        }
+        if (self.peer.is_some() || !self.grants.is_empty()) && self.p9_addr.is_none() {
+            return Err(CliError::usage(
+                "serve --peer/--grant gate the raw-9P door; they require --p9 HOST:PORT",
+            ));
+        }
+        Ok(ServeCommand {
             root_path: self.root_path.unwrap_or_else(|| PathBuf::from(".")),
             addr: self.addr.unwrap_or_else(|| DEFAULT_SERVE_ADDR.to_owned()),
             bundle: self.bundle,
             wanix_services: self.wanix_services,
             once: self.once,
-        }
+            p9_addr: self.p9_addr,
+            peer: self.peer,
+            grants: self.grants,
+        })
     }
 }

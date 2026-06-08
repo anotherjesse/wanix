@@ -4,8 +4,8 @@ use std::io::{Read, Write};
 mod fd;
 
 use crate::{
-    CliError, agent_exec_server, cpu, mesh, p9_listen, p9_stdio, p9_ws, qemu, qjs_term,
-    run_collected, serve, write_process_output,
+    CliError, agent_exec_server, cpu, mesh, p9_stdio, qemu, qjs_term, run_collected, serve,
+    write_process_output,
 };
 
 /// Unix fd pair used by terminal-aware CLI entrypoints.
@@ -112,7 +112,7 @@ fn run_streaming_command(
     };
     match command.to_str() {
         Some("qjs-term" | "qjs-shell") => run_qjs_streaming_command(command, rest, io),
-        Some("p9-stdio" | "p9-listen" | "p9-ws") => run_9p_streaming_command(command, rest, io),
+        Some("p9-stdio") => run_9p_streaming_command(command, rest, io),
         Some("mesh-serve") => Ok(Some(mesh::run_mesh_serve_streaming(
             mesh::parse_mesh_serve_command(rest)?,
             io.stderr,
@@ -169,14 +169,6 @@ fn run_9p_streaming_command(
             p9_stdio::parse_p9_stdio_command(rest)?,
             io.stdin,
             io.stdout,
-            io.stderr,
-        )?)),
-        Some("p9-listen") => Ok(Some(p9_listen::run_p9_listen_streaming(
-            p9_listen::parse_p9_listen_command(rest)?,
-            io.stderr,
-        )?)),
-        Some("p9-ws") => Ok(Some(p9_ws::run_p9_ws_streaming(
-            p9_ws::parse_p9_ws_command(rest)?,
             io.stderr,
         )?)),
         _ => Ok(None),
@@ -282,37 +274,6 @@ mod tests {
     }
 
     #[test]
-    fn p9_streaming_command_reports_listener_parse_errors() {
-        let mut stdin = &b""[..];
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let mut io = empty_process_io(&mut stdin, &mut stdout, &mut stderr);
-
-        let error =
-            run_9p_streaming_command(&OsString::from("p9-listen"), &[], &mut io).unwrap_err();
-
-        assert_eq!(error.exit_code(), 2);
-        assert!(error.to_string().contains("p9-listen requires --root DIR"));
-        assert!(stdout.is_empty());
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
-    fn p9_streaming_command_reports_websocket_parse_errors() {
-        let mut stdin = &b""[..];
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let mut io = empty_process_io(&mut stdin, &mut stdout, &mut stderr);
-
-        let error = run_9p_streaming_command(&OsString::from("p9-ws"), &[], &mut io).unwrap_err();
-
-        assert_eq!(error.exit_code(), 2);
-        assert!(error.to_string().contains("p9-ws requires --root DIR"));
-        assert!(stdout.is_empty());
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
     fn p9_streaming_command_routes_stdio_runtime_errors() {
         let missing_root = temp_dir_path("wanix-cli-process-io-p9-stdio-missing");
         let root_arg = missing_root.display().to_string();
@@ -327,43 +288,6 @@ mod tests {
 
         assert_eq!(error.exit_code(), 1);
         assert!(error.to_string().contains("failed to open p9-stdio root"));
-        assert!(stdout.is_empty());
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
-    fn p9_streaming_command_routes_listener_runtime_errors() {
-        let rest = args(&["--root", ".", "--addr", "127.0.0.1:bad-port"]);
-        let mut stdin = &b""[..];
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let mut io = empty_process_io(&mut stdin, &mut stdout, &mut stderr);
-
-        let error =
-            run_9p_streaming_command(&OsString::from("p9-listen"), &rest, &mut io).unwrap_err();
-
-        assert_eq!(error.exit_code(), 1);
-        assert!(
-            error
-                .to_string()
-                .contains("failed to bind p9-listen address")
-        );
-        assert!(stdout.is_empty());
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
-    fn p9_streaming_command_routes_websocket_runtime_errors() {
-        let rest = args(&["--root", ".", "--addr", "127.0.0.1:bad-port"]);
-        let mut stdin = &b""[..];
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let mut io = empty_process_io(&mut stdin, &mut stdout, &mut stderr);
-
-        let error = run_9p_streaming_command(&OsString::from("p9-ws"), &rest, &mut io).unwrap_err();
-
-        assert_eq!(error.exit_code(), 1);
-        assert!(error.to_string().contains("failed to bind p9-ws address"));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
     }

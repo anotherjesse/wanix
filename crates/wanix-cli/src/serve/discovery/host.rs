@@ -38,7 +38,14 @@ fn is_safe_host(host: &str) -> bool {
 }
 
 pub(super) fn is_loopback_peer(peer_addr: SocketAddr) -> bool {
-    peer_addr.ip().is_loopback()
+    is_loopback_addr(peer_addr)
+}
+
+/// Whether a socket address is a loopback (or, for `:PORT`/`0.0.0.0`, an
+/// unspecified-but-still-not-loopback) endpoint. Used both for the rootfs/peer
+/// loopback gate and the serve 9P `--wanix-services` trust boundary.
+pub(in crate::serve) fn is_loopback_addr(addr: SocketAddr) -> bool {
+    addr.ip().is_loopback()
 }
 
 pub(in crate::serve) fn display_host(local_addr: SocketAddr) -> String {

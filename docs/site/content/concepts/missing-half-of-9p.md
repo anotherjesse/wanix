@@ -42,7 +42,7 @@ Plan 9 built network transparency from two operations, not one:
 
 The import half is a single struct, `RemoteFs`, that implements the synchronous `wanix_fs::FileSystem` trait by speaking 9P to a server over a blocking byte stream. It is the exact mirror of the server: where the server decodes T-messages and encodes R-messages, the client encodes T-messages and decodes R-messages. No new wire format, no async runtime, no transport of its own — it turns the existing `wanix-protocol` codecs inside out (`docs/mesh-the-missing-half-of-9p.md:20-29`).
 
-You can watch it work across two processes today. The server dials up a raw 9P listener over a host directory:
+You can watch it work across two processes today. The server exports a host directory as raw 9P over TCP — a `serve` mode, not a separate daemon:
 
 ```sh
 # build once
@@ -52,7 +52,7 @@ alias wanix-rust='./target/debug/wanix-rust'
 # Terminal 1 — the server (export)
 SROOT=$(mktemp -d)
 echo "hello from the server" > "$SROOT/greeting.txt"
-wanix-rust p9-listen --root "$SROOT" --addr 127.0.0.1:5640
+wanix-rust serve --root "$SROOT" --p9 127.0.0.1:5640
 ```
 
 The client imports it and reads, writes, and lists *through the mount* — never a local shortcut. The bytes genuinely traverse `Namespace -> RemoteFs -> 9P -> server` (`docs/mesh-the-missing-half-of-9p.md:440-442`):

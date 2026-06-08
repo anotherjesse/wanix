@@ -57,22 +57,24 @@ curl http://127.0.0.1:7654/.wanix/app/hello           # run apps/hello.js, retur
 
 One listener, five behaviours. Plan 9 called the file server and the connection muxer separate things; `serve` keeps that line. The connection handler peeks the request headers once, and forks on a single question — is this a WebSocket upgrade? (`crates/wanix-cli/src/serve/connection.rs:42-53`). Upgrades route to the 9P or terminal socket handlers; everything else is an HTTP request, resolved against the static root and the well-known/bundle/app/asset chain.
 
-## The four transports, then serve
+## One session core, many doors
 
-The 9P server is transport-agnostic, and the CLI exposes that fact directly. Three sibling subcommands export a Wanix filesystem over a bare transport, with no HTTP layered on (`crates/wanix-cli/src/collected.rs:21`, `process_io.rs:168-181`):
+The 9P server is transport-agnostic, and there is exactly one per-connection session core — `P9Server::serve_duplex<D: Read + Write>` — that every transport feeds. Each transport is a thin byte adapter over that one core, not a separate server:
 
-- `p9-stdio` — 9P over the process stdin/stdout pipe.
-- `p9-listen` — 9P over a raw TCP socket.
-- `p9-ws` — 9P over a bare WebSocket.
+- `p9-stdio` — 9P over the process stdin/stdout pipe (the QEMU-v86 console bridge); the only remaining standalone 9P subcommand.
+- the 9P-over-WebSocket door at `/.well-known/export9p` — a `WebSocketDuplex` framing adapter on the `serve` HTTP listener.
+- a raw 9P-over-TCP door, bound by `serve --p9 HOST:PORT` (loopback by default, capability-gated by `--peer`/`--grant`).
+- the iroh QUIC stream the mesh uses.
 
-`serve` is the fourth and richest path: it does not *replace* those transports, it *composes* one of them (the 9P-over-WebSocket route at `/.well-known/export9p`) with HTTP, discovery, the terminal socket, bundles, and the app route. Same 9P server, same filesystem, more adapters in front of it.
+`serve` is the richest path: it does not *replace* those doors, it *composes* the WebSocket and (optional) raw-TCP 9P doors with HTTP, discovery, the terminal socket, bundles, and the app route. Same session core, same filesystem, more adapters in front of it. The standalone `p9-listen`/`p9-ws` subcommands were retired and folded into `serve` under ADR 0006 — raw 9P over TCP is now the `--p9` mode, and the websocket door is a framing adapter rather than a second server implementation.
 
 ## Flags: what serve takes
 
 The parser is small and total (`crates/wanix-cli/src/serve/command.rs`). The defaults make the common case a single word:
 
 - `--root <DIR>` or a bare positional argument — the directory to serve. Default `.` (`command.rs:162`).
-- `--addr <ADDR>` or `--listen <ADDR>` — the bind address. Default `127.0.0.1:7654` (`command.rs:6,163`).
+- `--listen <ADDR>` — the HTTP/websocket bind address. Default `127.0.0.1:7654` (`command.rs:6,163`). (`--addr` is a deprecated hidden synonym; prefer `--listen`.)
+- `--p9 <HOST:PORT> [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]` — bind a raw 9P-over-TCP door alongside HTTP (loopback by default), capability-gated per peer. It and the websocket door share the one session core; a bound door is advertised as `routes.p9.tcp` in discovery (ADR 0006).
 - `--bundle <NAME>` — select a generated client bundle page (`fs9p`, `workbench-fs9p`, `direct-v86`); see [three serve bundles](/concepts/three-serve-bundles).
 - `--wanix-services` — export the `#`-device set and enable the services-gated routes; see [the wanix-services device set](/concepts/wanix-services-device-set).
 - `--once` — serve exactly one connection, then exit. This is the deterministic test/scripting mode.
@@ -109,3 +111,4 @@ Two execution shapes share all of the above (`crates/wanix-cli/src/serve.rs:110-
 - **Normal mode spawns a detached worker thread per connection with no cap**, and busy-polls `accept()` on a fixed `10ms` sleep when idle (`concurrent.rs:85,117`). A connection cap needs the shutdown signal first, so the cap is unshipped and uncapped is the current default.
 - **One 9P frame at a time per connection.** Because a connection's worker processes frames sequentially, a blocking read (e.g. `#plumb/<topic>/recv`) cannot interleave with a write on the same connection; live pub/sub needs a second connection or concurrent frame handling. This is the canonical [single-frame serve caveat](/concepts/single-frame-serve-caveat).
 - **The services-gated routes are loopback-only.** The HTTP-app route (`/.wanix/app/<name>`) and the qjs-shell WebSocket both require `--wanix-services`, and the app route additionally returns `403` to any non-loopback peer (`crates/wanix-cli/src/serve/http/app.rs:55-66`). The exec devices behind them (`#task`, `#agent`, `#cpu`) are local-trust only and are not exposed to untrusted or public peers.
+- **`--wanix-services` is refused off-loopback on either 9P door.** Because it binds the `#task`/`#agent` exec devices (remote code execution), serve refuses it when the HTTP/websocket listener or the raw `--p9` door is bound to a non-loopback address. Over raw TCP `--peer` is asserted, not cryptographically proven — only the mesh's iroh QUIC transport proves identity.

@@ -79,9 +79,40 @@ impl From<Wanix9pError> for P9TransportError {
     }
 }
 
+/// Pairs an independent `Read` and `Write` half into one `Read + Write` duplex
+/// so the single 9P session loop in [`P9Server::serve_duplex`] can drive both
+/// the split-stream ([`P9Server::serve_stream`]) and single-owned-duplex
+/// (websocket) transports through one body.
+struct DuplexPair<R, W> {
+    reader: R,
+    writer: W,
+}
+
+impl<R: Read, W: Write> Read for DuplexPair<R, W> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+
+impl<R: Read, W: Write> Write for DuplexPair<R, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.writer.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
 impl P9Server {
     /// Serves decoded 9P request frames from `reader` and writes response
     /// frames to `writer` until EOF.
+    ///
+    /// This is the split-stream entry point (separate read/write halves, e.g.
+    /// a `TcpStream` and its `try_clone`, or a pipe pair). It shares the one
+    /// per-connection session loop with [`P9Server::serve_duplex`] by wrapping
+    /// the halves in an internal duplex; the loop body lives in exactly one
+    /// place.
     ///
     /// Filesystem and unsupported-operation failures remain ordinary 9P
     /// response frames. Frame stream failures and malformed typed request
@@ -94,22 +125,42 @@ impl P9Server {
     /// a partial request frame buffered.
     pub fn serve_stream<R: Read, W: Write>(
         &mut self,
-        mut reader: R,
-        mut writer: W,
+        reader: R,
+        writer: W,
+    ) -> Result<P9TransportStats, P9TransportError> {
+        self.serve_duplex(DuplexPair { reader, writer })
+    }
+
+    /// Serves a 9P session over a single owned bidirectional byte stream.
+    ///
+    /// This is the canonical per-connection session loop; [`P9Server::serve_stream`]
+    /// delegates to it over an internal duplex. Use this directly when the
+    /// transport is one owned object that cannot be split into independent
+    /// read/write halves (e.g. a websocket adapter). The loop never reads and
+    /// writes concurrently, so a single `&mut D` is sufficient.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when I/O fails, frame splitting/encoding fails, a
+    /// decoded request is too malformed for a 9P response, or EOF arrives with
+    /// a partial request frame buffered.
+    pub fn serve_duplex<D: Read + Write>(
+        &mut self,
+        mut duplex: D,
     ) -> Result<P9TransportStats, P9TransportError> {
         let mut frames = P9FrameBuffer::new();
         let mut stats = P9TransportStats::default();
         let mut buf = [0_u8; STREAM_READ_BUFFER_BYTES];
 
         loop {
-            let count = reader.read(&mut buf)?;
+            let count = duplex.read(&mut buf)?;
             if count == 0 {
                 if frames.buffered_len() != 0 {
                     return Err(P9TransportError::TruncatedFrame {
                         buffered_len: frames.buffered_len(),
                     });
                 }
-                writer.flush()?;
+                duplex.flush()?;
                 return Ok(stats);
             }
 
@@ -118,7 +169,7 @@ impl P9Server {
                 stats.requests += 1;
                 let response = self.handle_frame(&request)?;
                 let response_bytes = response.encode()?;
-                writer.write_all(&response_bytes)?;
+                duplex.write_all(&response_bytes)?;
                 stats.bytes_out += response_bytes.len();
                 stats.responses += 1;
             }
@@ -128,7 +179,7 @@ impl P9Server {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::sync::Arc;
 
     use wanix_fs::{FileSystem, MemFs};
@@ -223,6 +274,32 @@ mod tests {
     }
 
     #[test]
+    fn serve_duplex_round_trips_over_one_byte_stream() {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("hello.txt", b"hello 9p").unwrap();
+        let mut server = server(fs);
+        let input = request_stream([
+            p9_tversion(1, 8192, P9_VERSION_9P2000_L).unwrap(),
+            p9_tattach(2, 1, 0xffff_ffff, "root", "", 0).unwrap(),
+            p9_twalk(3, 1, 2, &["hello.txt"]).unwrap(),
+            p9_tlopen(4, 2, 0),
+            p9_tread(5, 2, 0, 5),
+        ]);
+        let mut duplex = DuplexBuffer::new(input);
+
+        let stats = server.serve_duplex(&mut duplex).unwrap();
+
+        assert_eq!(stats.requests, 5);
+        assert_eq!(stats.responses, 5);
+        let frames = decode_response_stream(&duplex.written);
+        assert_eq!(
+            frame_types(&frames),
+            [P9_RVERSION, P9_RATTACH, P9_RWALK, P9_RLOPEN, P9_RREAD]
+        );
+        assert_eq!(p9_decode_rread(&frames[4]).unwrap(), b"hello");
+    }
+
+    #[test]
     fn transport_error_sources_preserve_wrapped_errors() {
         use std::error::Error as _;
 
@@ -262,6 +339,44 @@ mod tests {
 
     fn frame_types(frames: &[P9Frame]) -> Vec<u8> {
         frames.iter().map(P9Frame::message_type).collect()
+    }
+
+    /// In-memory `Read + Write` duplex: reads drain `to_read`, writes append to
+    /// `written`. Proves the single owned-duplex session path.
+    struct DuplexBuffer {
+        to_read: Vec<u8>,
+        offset: usize,
+        written: Vec<u8>,
+    }
+
+    impl DuplexBuffer {
+        fn new(to_read: Vec<u8>) -> Self {
+            Self {
+                to_read,
+                offset: 0,
+                written: Vec::new(),
+            }
+        }
+    }
+
+    impl Read for DuplexBuffer {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let count = (self.to_read.len() - self.offset).min(buf.len());
+            buf[..count].copy_from_slice(&self.to_read[self.offset..self.offset + count]);
+            self.offset += count;
+            Ok(count)
+        }
+    }
+
+    impl Write for DuplexBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     struct SlowReader {

@@ -196,9 +196,23 @@ tests.
   terminal resource when the session closes, and discovery advertises the
   qjs-shell cwd query, resize formats, exit frame, and session lifecycle
   contract for browser/editor clients.
-- `wanix-rust p9-stdio`, `p9-listen`, `p9-ws`, and `serve`: the Rust 9P server
-  exports Wanix filesystems over process, TCP, WebSocket, and HTTP composition
-  layers, with binary protocol traffic kept separate from diagnostics.
+- `wanix-rust p9-stdio` and `serve`: the Rust 9P server exports Wanix
+  filesystems over a process pipe (`p9-stdio`, the QEMU-v86 console bridge) and,
+  through `serve`, over a binary 9P WebSocket (`/.well-known/export9p`) and raw
+  9P over TCP (`serve --p9 ADDR`). One per-connection 9P session core
+  (`P9Server::serve_duplex`/`serve_stream`) backs every door; the websocket is a
+  `WebSocketDuplex` framing adapter over it, not a second server. Raw-9P export
+  is a serve mode (carrying `--peer`/`--grant` capability binds), so the
+  retired `p9-listen` "export a dir" use is `serve --root DIR --p9 ADDR`, and
+  `mount-write tcp://HOST:PORT ...` mutates a live serve namespace. The
+  standalone `p9-listen` and `p9-ws` subcommands are retired (ADR 0006). Binary
+  protocol traffic stays separate from diagnostics.
+- Serve 9P trust boundary (ADR 0006): `--wanix-services` binds the
+  `#task`/`#agent` exec devices (remote code execution) and is refused whenever
+  either 9P door (websocket or raw `--p9`) is bound to a non-loopback address,
+  mirroring the mesh exec-device rule. The raw `--p9` door is capability-gated
+  via `--peer HEX`/`--grant ANAME:PREFIX:RIGHTS` (default-deny `AttachPolicy`).
+  `--addr` is deprecated in favor of `--listen`.
 - `serve --wanix-services`: exports a Wanix namespace containing the served
   root plus the service devices `#task`, `#term`, `#pipe`, `#kv`, `#plumb`,
   `#cas`, and `#agent` (the inspectable set is the single
@@ -313,6 +327,12 @@ current-state docs, and commit messages instead of active ADRs.
   browser filesystem/workbench, direct-v86, rootfs prep, and native QEMU share
   explicit discovery and handoff contracts instead of becoming runtime
   foundations.
+- [ADR 0006](docs/adrs/0006-serve-9p-transport-and-trust-boundary.md): one
+  per-connection 9P session core (`serve_duplex`/`serve_stream`) backs every
+  serve 9P door; the websocket is a `WebSocketDuplex` framing adapter and raw 9P
+  is a serve mode (`--p9 ADDR`), so `p9-ws`/`p9-listen` are retired; the serve
+  9P edge refuses `--wanix-services` off-loopback and capability-gates raw `--p9`
+  via `--peer`/`--grant`.
 
 The mesh/agent layer (9P-over-QUIC transport, ed25519 identity + capability
 binds, the `#agent` device, and the `#kv`/`#pipe`/`#plumb`/`#cas`/`#cpu`

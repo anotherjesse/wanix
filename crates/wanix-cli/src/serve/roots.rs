@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use wanix_agent::{AgentDevice, FakeEngine};
-use wanix_cas::{CasDevice, LocalCasStore};
+use wanix_cas::{CasDevice, ContentStore, LocalCasStore};
 use wanix_fs::{FileSystem, LocalFs};
 use wanix_kv::KvDevice;
 use wanix_pipe::PipeDevice;
 use wanix_plumb::PlumbDevice;
 use wanix_qjs::QuickJsTaskDriver;
+use wanix_sites::SitesDevice;
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
 use wanix_vfs::{BindOptions, BindPosition, Namespace};
@@ -20,7 +21,27 @@ use crate::{CliError, quickjs_runner};
 #[derive(Clone)]
 pub(super) struct ServeRoots {
     pub(super) static_root: PathBuf,
+    /// The filesystem the HTTP static path serves through. For `--root DIR`
+    /// this is a `LocalFs` over the same directory as `static_root`, so byte
+    /// content, directory-index resolution, and MIME are unchanged — only the
+    /// I/O path moves from `std::fs` to the `FileSystem` trait (Phase 0). Later
+    /// phases serve other filesystems (an in-memory generator output, a CAS
+    /// snapshot) through this same field.
+    pub(super) site_root: Arc<dyn FileSystem>,
+    /// The `#sites` device: a host→filesystem binding table. The HTTP gateway
+    /// reads the request `Host` header and serves `sites.resolve(host)` through
+    /// the same FS-backed static handler as `site_root`. Shared with the bound
+    /// `#sites` in the services namespace so 9P writes and the gateway agree.
+    /// An empty device when services are disabled (the gateway then never
+    /// consults it and every request falls through to `--root`).
+    pub(super) sites: Arc<SitesDevice>,
     pub(super) p9_root: Arc<dyn FileSystem>,
+    /// The bound raw-9P-over-TCP door address, present only when `serve --p9`
+    /// is set. Advertised in discovery (`routes.p9.tcp`) and startup status so a
+    /// `mount-write tcp://HOST:PORT ...` client can find the raw door. The HTTP
+    /// `host` header drives the websocket URL; this is the raw door's own bound
+    /// loopback address.
+    pub(super) p9_tcp_addr: Option<SocketAddr>,
     /// Task driver kinds advertised by service discovery, captured from the
     /// registry at build time so the discovery JSON cannot drift from what
     /// `serve_task_table` actually registers. Empty when services are disabled.
@@ -43,25 +64,52 @@ impl ServeRoots {
                 1,
             )
         })?;
-        let (p9_root, driver_kinds) = serve_p9_root(root_path, wanix_services)?;
+        let site_root = open_host_p9_root(root_path)?;
+        // One owner-private store backs both `#cas` and `#sites`, so a blob
+        // ingested via `#cas` (or written by a publish freeze) is readable by a
+        // site by hash. The `#sites` device is built `with_store` so a
+        // `cas <root-hash>` binding resolves to an immutable `CasSiteFs`.
+        let cas_store = Arc::new(LocalCasStore::open_default());
+        let sites_device = Arc::new(SitesDevice::with_store(
+            Arc::clone(&cas_store) as Arc<dyn ContentStore>
+        ));
+        let (p9_root, driver_kinds) = serve_p9_root(
+            root_path,
+            wanix_services,
+            Arc::clone(&sites_device),
+            Arc::clone(&cas_store) as Arc<dyn ContentStore>,
+        )?;
         Ok(Self {
             static_root,
+            site_root,
+            sites: sites_device,
             p9_root,
+            p9_tcp_addr: None,
             driver_kinds,
             local_addr,
             bundle,
             wanix_services,
         })
     }
+
+    /// Records the bound raw-9P door address so discovery and startup status can
+    /// advertise the `tcp://` route. Zero churn for the existing `ServeRoots::new`
+    /// call sites, which never bind a raw door.
+    pub(super) fn with_p9_tcp_addr(mut self, addr: Option<SocketAddr>) -> Self {
+        self.p9_tcp_addr = addr;
+        self
+    }
 }
 
 fn serve_p9_root(
     root_path: &Path,
     wanix_services: bool,
+    sites: Arc<SitesDevice>,
+    cas_store: Arc<dyn ContentStore>,
 ) -> Result<(Arc<dyn FileSystem>, Vec<String>), CliError> {
     let host_root = open_host_p9_root(root_path)?;
     match wanix_services {
-        true => serve_services_root(host_root),
+        true => serve_services_root(host_root, sites, cas_store),
         false => Ok((host_root, Vec::new())),
     }
 }
@@ -80,10 +128,12 @@ fn open_host_p9_root(root_path: &Path) -> Result<Arc<dyn FileSystem>, CliError> 
 
 fn serve_services_root(
     host_root: Arc<dyn FileSystem>,
+    sites: Arc<SitesDevice>,
+    cas_store: Arc<dyn ContentStore>,
 ) -> Result<(Arc<dyn FileSystem>, Vec<String>), CliError> {
     let table = serve_task_table()?;
     let driver_kinds = table.driver_kinds();
-    let namespace = serve_services_namespace(host_root, &table)?;
+    let namespace = serve_services_namespace(host_root, sites, cas_store, &table)?;
     Ok((Arc::new(namespace), driver_kinds))
 }
 
@@ -98,16 +148,20 @@ pub(crate) fn services_namespace_for_root(
     root_path: &Path,
 ) -> Result<Arc<dyn FileSystem>, CliError> {
     let host_root = open_host_p9_root(root_path)?;
-    let (namespace, _kinds) = serve_services_root(host_root)?;
+    let cas_store = Arc::new(LocalCasStore::open_default()) as Arc<dyn ContentStore>;
+    let sites = Arc::new(SitesDevice::with_store(Arc::clone(&cas_store)));
+    let (namespace, _kinds) = serve_services_root(host_root, sites, cas_store)?;
     Ok(namespace)
 }
 
 fn serve_services_namespace(
     host_root: Arc<dyn FileSystem>,
+    sites: Arc<SitesDevice>,
+    cas_store: Arc<dyn ContentStore>,
     table: &TaskTable,
 ) -> Result<Namespace, CliError> {
     let mut namespace = Namespace::new();
-    bind_host_and_terminal(&mut namespace, host_root)?;
+    bind_host_and_terminal(&mut namespace, host_root, sites, cas_store)?;
     bind_task_service(&mut namespace, table)?;
     Ok(namespace)
 }
@@ -116,12 +170,15 @@ fn serve_services_namespace(
 /// discovery so the cockpit can list and inspect them. Must stay in sync with
 /// the binds in [`bind_host_and_terminal`] and [`bind_task_service`]; the
 /// `serve_wanix_services_*` tests exercise each one over 9P.
-pub(super) const INSPECTABLE_SERVICE_DEVICES: &[&str] =
-    &["#task", "#term", "#kv", "#pipe", "#plumb", "#cas", "#agent"];
+pub(super) const INSPECTABLE_SERVICE_DEVICES: &[&str] = &[
+    "#task", "#term", "#kv", "#pipe", "#plumb", "#cas", "#agent", "#sites",
+];
 
 fn bind_host_and_terminal(
     namespace: &mut Namespace,
     host_root: Arc<dyn FileSystem>,
+    sites: Arc<SitesDevice>,
+    cas_store: Arc<dyn ContentStore>,
 ) -> Result<(), CliError> {
     let terminal = Arc::new(TermDevice::new());
     namespace.bind(host_root, ".", ".", BindOptions::default())?;
@@ -153,9 +210,11 @@ fn bind_host_and_terminal(
     // `#cas/ingest` is write-then-read-hash, `#cas/have/<hash>` probes presence.
     // Like `#kv` it is just a `FileSystem`, so it imports across the mesh for
     // free (`/n/A/#cas/...`). It is backed by the owner-private on-disk store, so
-    // blobs an agent ingests here persist and dedup against capsules.
+    // blobs an agent ingests here persist and dedup against capsules. It shares
+    // the same store instance as `#sites`, so a blob ingested here (or written by
+    // a publish freeze) is readable by a site by hash.
     namespace.bind(
-        Arc::new(CasDevice::new(Arc::new(LocalCasStore::open_default()))),
+        Arc::new(CasDevice::new(cas_store)),
         ".",
         "#cas",
         BindOptions::default(),
@@ -168,6 +227,12 @@ fn bind_host_and_terminal(
         "#agent",
         BindOptions::default(),
     )?;
+    // `#sites` binds a host to a filesystem source: `#sites/<host>` lists/reads/
+    // writes the binding, and the serve HTTP gateway serves `resolve(host)` for a
+    // matching `Host` header. The same `SitesDevice` Arc backs the gateway, so a
+    // 9P write to `#sites/<host>` and the gateway agree. Like the other devices
+    // it is a plain `FileSystem`, so it imports across the mesh for free.
+    namespace.bind(sites, ".", "#sites", BindOptions::default())?;
     Ok(())
 }
 

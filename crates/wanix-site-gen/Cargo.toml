@@ -1,0 +1,28 @@
+[package]
+name = "wanix-site-gen"
+description = "pulldown-cmark static-site generator logic for the Rust-native Wanix port; runs on host and as a wasm32-wasi Wanix task."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
+[dev-dependencies]
+wanix-fs = { path = "../wanix-fs" }
+wanix-task = { path = "../wanix-task" }
+wanix-vfs = { path = "../wanix-vfs" }
+wanix-wasm = { path = "../wanix-wasm" }
+wanix-site-fs = { path = "../wanix-site-fs" }
+wanix-cas = { path = "../wanix-cas" }
+wanix-site-cas = { path = "../wanix-site-cas" }
+wanix-sites = { path = "../wanix-sites" }
+
+[lib]
+name = "wanix_site_gen"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

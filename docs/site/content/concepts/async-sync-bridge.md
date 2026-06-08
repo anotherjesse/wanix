@@ -67,7 +67,7 @@ That second discipline drives where each direction runs.
 
 ## Under the hood: duplex.rs is the single seam
 
-The whole conversion is ~175 lines (`crates/wanix-mesh/src/duplex.rs`). Everything else — frame splitting, fids, walk/stat/read/write semantics, EOF rules — is the same synchronous code the local `p9-listen` and `p9-stdio` transports run. The mesh did not fork the protocol to go remote; it added one async-aware byte pipe and reused the rest. That is why `RemoteFs` is "also a `FileSystem`" the moment the duplex is built, and why a peer's `#kv`, `#cas`, or `#agent` imports across the mesh for free.
+The whole conversion is ~175 lines (`crates/wanix-mesh/src/duplex.rs`). Everything else — frame splitting, fids, walk/stat/read/write semantics, EOF rules — is the same synchronous session core (`P9Server::serve_duplex`) that the local `p9-stdio` and `serve` 9P doors run. The mesh did not fork the protocol to go remote; it added one async-aware byte pipe and reused the rest. That is why `RemoteFs` is "also a `FileSystem`" the moment the duplex is built, and why a peer's `#kv`, `#cas`, or `#agent` imports across the mesh for free.
 
 ## See also
 

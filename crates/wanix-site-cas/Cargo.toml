@@ -1,0 +1,22 @@
+[package]
+name = "wanix-site-cas"
+description = "Freeze a site FileSystem tree to a #cas root hash and serve it back read-only as a FileSystem (immutable publish + rollback)."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wanix-fs = { path = "../wanix-fs" }
+wanix-cas = { path = "../wanix-cas" }
+
+[dev-dependencies]
+wanix-site-fs = { path = "../wanix-site-fs" }
+
+[lib]
+name = "wanix_site_cas"
+path = "src/lib.rs"

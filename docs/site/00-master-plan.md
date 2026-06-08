@@ -129,7 +129,7 @@ The global nav has eight destinations. **Decision (resolves IA-coherence review)
 │   ├── /reference/attach-and-capability-contract  (NEW — see §10)
 │   ├── /reference/guest-sdk                  (NEW — lib/wanix/)
 │   ├── /reference/serve-and-discovery
-│   ├── /reference/cli-command-index          (includes `new`, `agent`, p9-listen grants)
+│   ├── /reference/cli-command-index          (includes `new`, `agent`, `serve --p9` grants)
 │   ├── /reference/cli-rootfs-qemu-v86
 │   ├── /reference/quality-gates
 │   ├── /reference/performance                (NEW — scaling-eli5 + compute_bench)
@@ -376,7 +376,7 @@ Sourcing existing material: the five recipes (`docs/recipes/01–05.md`) and the
 
 ### Phase 1 — full corpus (DoD: every IA page exists and is cross-linked)
 
-**Deliverables:** all ~78 concept pages; all 8 device pages + the Devices index/anchor convention; all 6 use cases (each ending in one recipe) + all 8 recipes; the full Reference section including the **new** attach-and-capability contract, guest-SDK, performance, and CLI-index-with-`new`/`agent`/`p9-listen` pages; the Find hub including the **new glossary**; the remaining 7 flows.
+**Deliverables:** all ~78 concept pages; all 8 device pages + the Devices index/anchor convention; all 6 use cases (each ending in one recipe) + all 8 recipes; the full Reference section including the **new** attach-and-capability contract, guest-SDK, performance, and CLI-index-with-`new`/`agent`/`serve --p9` pages; the Find hub including the **new glossary**; the remaining 7 flows.
 **DoD:** the orphan report is clean (every concept has an inbound `/find/concepts` link); the twin rule and canonical-caveat rule hold (no duplicated honest-limits blocks); `just`-style link/schema check is green in CI.
 
 ### Phase 2 — interactive demos (DoD: the demo plan is realized)
@@ -425,7 +425,7 @@ How each top issue from the four adversarial reviews is resolved in this plan.
 - *Guest SDK undocumented (HIGH).* **New `/reference/guest-sdk`** for `examples/lib/wanix/` (`fs.js`, `process.js`, `task.js`, `bytes.js`, `index.js`, `.d.ts`) — the positive counterpart to `guest-js-guardrails`.
 - *`#pipe` orphaned (MEDIUM).* A `#pipe` step added to the add-a-service-device flow; `devices/pipe` "Used in flows" rail is non-empty.
 - *`POST /agent` + `--insecure-open` page-less (MEDIUM).* `POST /agent` documented on `devices/agent`/`http-app-route`; `--insecure-open` (read-write data, **no exec**, `help.rs:43`) added to the capability contract / trust-boundary-gaps as a distinct grant shape.
-- *`p9-listen` grant grammar undocumented (MEDIUM).* `ANAME:PREFIX:RIGHTS` + `--peer/--grant/--once` documented in the CLI index, cross-linked from the capability contract.
+- *`serve --p9` grant grammar undocumented (MEDIUM).* `ANAME:PREFIX:RIGHTS` + `--peer/--grant` on the raw-9P TCP door (ADR 0006) documented in the CLI index, cross-linked from the capability contract.
 - *Scaling under-surfaced (MEDIUM).* **New `/reference/performance`** sourced from `docs/scaling-eli5.md` + the `compute_bench` example, backing the rooms-not-houses claim.
 - *Kemi's flow dead-ends on a concept (LOW).* Re-ordered to land on recipe 01/05; `fakeengine-vs-codex` is the penultimate honest beat.
 - *`wanix agent --world` undocumented (LOW).* Documented in the CLI index (`--world` is the confinement boundary; `--fake` the override; verified `crates/wanix-cli/src/agent.rs:42,50`).

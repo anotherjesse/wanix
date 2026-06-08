@@ -56,7 +56,7 @@ That produces `wanix-rust`, the aliased binary used throughout these docs and th
 wanix-rust --help
 ```
 
-You should see subcommands for `qjs`, `qjs-term`, `qjs-shell`, the snapshot/resume/restore trio, `p9-stdio`, `p9-listen`, `p9-ws`, `rootfs`, `qemu`, and `serve` (`rust-walkthrough.md:38-51`). The fastest "is my build alive" check is a native QuickJS task:
+You should see subcommands for `qjs`, `qjs-term`, `qjs-shell`, the snapshot/resume/restore trio, `p9-stdio`, `rootfs`, `qemu`, the `mount-*` verbs, `mesh-serve`, and `serve` (`rust-walkthrough.md:38-51`). Raw 9P over TCP is no longer a standalone subcommand — the retired `p9-listen`/`p9-ws` folded into `serve --p9 ADDR` and the serve websocket door (ADR 0006). The fastest "is my build alive" check is a native QuickJS task:
 
 ```sh
 wanix-rust qjs examples/qjs-demo.js

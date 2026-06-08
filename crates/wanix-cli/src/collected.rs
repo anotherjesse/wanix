@@ -3,9 +3,9 @@ use std::io::Read;
 
 use crate::wasm_args::parse_wasm_command;
 use crate::{
-    CliError, CliOutput, agent, agent_exec_server, capsule, cpu, mesh, mount, new, p9_listen,
-    p9_stdio, p9_ws, parse_qjs_command, parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore,
-    qjs_term, rootfs, serve, wasm,
+    CliError, CliOutput, agent, agent_exec_server, capsule, cpu, mesh, mount, new, p9_stdio,
+    parse_qjs_command, parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term, rootfs,
+    serve, wasm,
 };
 
 pub(super) fn run_collected_command(
@@ -18,8 +18,8 @@ pub(super) fn run_collected_command(
             command_name @ ("qjs" | "qjs-term" | "qjs-shell" | "qjs-snapshot" | "qjs-resume"
             | "qjs-restore"),
         ) => run_qjs_collected_command(command_name, rest, process_stdin),
-        Some(command_name @ ("p9-stdio" | "p9-listen" | "p9-ws")) => {
-            run_9p_collected_command(command_name, rest, process_stdin)
+        Some("p9-stdio") => {
+            p9_stdio::run_p9_stdio(p9_stdio::parse_p9_stdio_command(rest)?, process_stdin)
         }
         Some(verb @ ("mount-ls" | "mount-cat" | "mount-write")) => {
             mount::run_mount_command(mount::parse_mount_command(verb, rest)?)
@@ -69,23 +69,6 @@ fn run_qjs_collected_command(
     }
 }
 
-fn run_9p_collected_command(
-    command: &str,
-    rest: &[OsString],
-    process_stdin: &mut dyn Read,
-) -> Result<CliOutput, CliError> {
-    match command {
-        "p9-stdio" => {
-            p9_stdio::run_p9_stdio(p9_stdio::parse_p9_stdio_command(rest)?, process_stdin)
-        }
-        "p9-listen" => {
-            require_live_process_io(p9_listen::parse_p9_listen_command(rest), "p9-listen")
-        }
-        "p9-ws" => require_live_process_io(p9_ws::parse_p9_ws_command(rest), "p9-ws"),
-        _ => unknown_collected_command_name(command),
-    }
-}
-
 fn require_live_process_io<T>(
     parsed: Result<T, CliError>,
     command_name: &str,
@@ -115,30 +98,25 @@ mod tests {
 
     #[test]
     fn collected_streaming_commands_require_live_process_io_after_parsing() {
-        for (command, args) in [
-            ("p9-listen", vec!["--root", ".", "--addr", "127.0.0.1:0"]),
-            ("p9-ws", vec!["--root", ".", "--addr", "127.0.0.1:0"]),
-            ("serve", Vec::new()),
-        ] {
-            let error = run_collected(command, &args).unwrap_err();
+        let error = run_collected("serve", &[]).unwrap_err();
 
-            assert_eq!(error.exit_code(), 2);
-            assert!(
-                error
-                    .to_string()
-                    .contains(&format!("{command} requires live process IO")),
-                "{command} produced {error}"
-            );
-        }
+        assert_eq!(error.exit_code(), 2);
+        assert!(
+            error.to_string().contains("serve requires live process IO"),
+            "serve produced {error}"
+        );
     }
 
     #[test]
     fn collected_streaming_commands_preserve_parser_errors() {
-        let error = run_collected("p9-listen", &[]).unwrap_err();
+        // serve --grant without --peer is a parser error surfaced before the
+        // live-process-IO refusal.
+        let error =
+            run_collected("serve", &["--p9", "127.0.0.1:0", "--grant", "a:b:rw"]).unwrap_err();
 
         assert_eq!(error.exit_code(), 2);
         assert!(
-            error.to_string().contains("p9-listen requires --root DIR"),
+            error.to_string().contains("--grant requires --peer"),
             "{error}"
         );
     }

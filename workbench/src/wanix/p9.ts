@@ -23,6 +23,11 @@ type DiscoveryDocument = {
 
 export type WanixP9Route = {
 	websocket?: string;
+	// Raw 9P-over-TCP door (`tcp://HOST:PORT`), present only when `serve --p9`
+	// bound a raw door. Informational for the browser cockpit: browsers cannot
+	// dial raw TCP, so `fromRoute` still requires `websocket`. The CLI
+	// `mount-write tcp://...` path uses this.
+	tcp?: string;
 	transport?: string;
 	protocol?: string;
 	supportedProtocols?: string[];

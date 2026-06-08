@@ -444,8 +444,6 @@ wanix-rust qjs-snapshot
 wanix-rust qjs-resume
 wanix-rust qjs-restore
 wanix-rust p9-stdio
-wanix-rust p9-listen
-wanix-rust p9-ws
 wanix-rust rootfs
 wanix-rust qemu
 wanix-rust serve
@@ -458,8 +456,10 @@ That set of commands says a lot about the intended shape:
 - run an interactive shell path;
 - persist and resume VM state;
 - expose a namespace over process stdio;
-- expose a namespace over TCP;
-- expose a namespace over WebSocket;
+- expose a namespace over raw TCP and over WebSocket through `serve` doors
+  (`serve --p9 ADDR` and `/.well-known/export9p`), both adapters over one
+  per-connection 9P session core (ADR 0006; the standalone `p9-listen`/`p9-ws`
+  subcommands are retired);
 - prepare a Linux guest root and emit shell or `wanix-rootfs.v1` JSON handoffs
   for native QEMU and direct-v86;
 - print a native QEMU/KVM virtio-9p handoff command with explicit host 9P

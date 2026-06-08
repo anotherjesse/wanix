@@ -7,6 +7,9 @@ pub(super) const SERVE_VALUE_OPTIONS: &[(&str, ServeValueOption)] = &[
     ("--addr", ServeValueOption::Addr),
     ("--listen", ServeValueOption::Listen),
     ("--bundle", ServeValueOption::Bundle),
+    ("--p9", ServeValueOption::P9),
+    ("--peer", ServeValueOption::Peer),
+    ("--grant", ServeValueOption::Grant),
 ];
 
 pub(super) const SERVE_FLAG_OPTIONS: &[(&str, ServeFlagOption)] = &[
@@ -35,6 +38,9 @@ pub(super) enum ServeValueOption {
     Addr,
     Listen,
     Bundle,
+    P9,
+    Peer,
+    Grant,
 }
 
 impl ServeValueOption {
@@ -44,14 +50,19 @@ impl ServeValueOption {
             Self::Addr => "serve --addr",
             Self::Listen => "serve --listen",
             Self::Bundle => "serve --bundle",
+            Self::P9 => "serve --p9",
+            Self::Peer => "serve --peer",
+            Self::Grant => "serve --grant",
         }
     }
 
     pub(super) fn value_name(self) -> &'static str {
         match self {
             Self::Root => "DIR",
-            Self::Addr | Self::Listen => "HOST:PORT",
+            Self::Addr | Self::Listen | Self::P9 => "HOST:PORT",
             Self::Bundle => "NAME",
+            Self::Peer => "HEX",
+            Self::Grant => "ANAME:PREFIX:RIGHTS",
         }
     }
 }

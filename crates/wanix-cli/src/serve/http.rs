@@ -1,9 +1,9 @@
-use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::Path;
 use std::thread;
 use std::time::Duration;
+
+use wanix_sites::Host;
 
 use super::{ServeRoots, connection::ServeConnectionError};
 
@@ -12,12 +12,16 @@ pub(super) mod app;
 mod request;
 mod response;
 mod routes;
+mod static_serve;
 
 pub(super) use request::{
     header_end, parse_http_request, peek_request_target, percent_decode, request_target,
     websocket_rejection_response,
 };
 pub(super) use response::{HttpStatus, StaticResponse};
+pub(super) use static_serve::{
+    path_to_url_relative, read_disk_static_response, read_static_response,
+};
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
@@ -53,32 +57,6 @@ pub(super) fn is_websocket_upgrade(header_bytes: &[u8]) -> bool {
     has_connection_upgrade && has_websocket_upgrade
 }
 
-pub(super) fn read_static_response(static_root: &Path, relative_path: &Path) -> StaticResponse {
-    let candidate = static_root.join(relative_path);
-    let candidate = if candidate.is_dir() {
-        candidate.join("index.html")
-    } else {
-        candidate
-    };
-
-    let canonical = match fs::canonicalize(&candidate) {
-        Ok(path) => path,
-        Err(_) => return StaticResponse::plain(HttpStatus::NotFound, "not found"),
-    };
-    if !canonical.starts_with(static_root) {
-        return StaticResponse::plain(HttpStatus::Forbidden, "forbidden");
-    }
-    match fs::read(&canonical) {
-        Ok(body) => StaticResponse {
-            status: HttpStatus::Ok,
-            content_type: content_type(&canonical),
-            headers: Vec::new(),
-            body,
-        },
-        Err(_) => StaticResponse::plain(HttpStatus::NotFound, "not found"),
-    }
-}
-
 pub(super) fn serve_http_connection(
     roots: &ServeRoots,
     mut stream: TcpStream,
@@ -89,7 +67,11 @@ pub(super) fn serve_http_connection(
     write_static_response(stream, response)
 }
 
-fn http_response(roots: &ServeRoots, request: &[u8], peer_addr: SocketAddr) -> StaticResponse {
+pub(super) fn http_response(
+    roots: &ServeRoots,
+    request: &[u8],
+    peer_addr: SocketAddr,
+) -> StaticResponse {
     if request_method(request).as_deref() == Some("POST") {
         return match request_line_path(request).as_deref() {
             Some("/agent") => agent::agent_endpoint(roots, request_body(request), peer_addr),
@@ -97,10 +79,47 @@ fn http_response(roots: &ServeRoots, request: &[u8], peer_addr: SocketAddr) -> S
         };
     }
     match parse_http_request(request) {
-        Ok(path) => routes::http_route_response(roots, &path, request, peer_addr)
-            .unwrap_or_else(|| read_static_response(&roots.static_root, &path)),
+        Ok(path) => {
+            let url_relative = path_to_url_relative(&path);
+            routes::http_route_response(roots, &path, request, peer_addr)
+                .or_else(|| site_gateway_response(roots, request, &url_relative))
+                .unwrap_or_else(|| read_static_response(roots.site_root.as_ref(), &url_relative))
+        }
         Err(status) => StaticResponse::plain(status, status.reason()),
     }
+}
+
+/// Routes a request to a host-bound site (the `*.localhost` gateway).
+///
+/// Reads the `Host` header, strips its port, and looks the host up in `#sites`.
+/// A bound, non-bare host serves through the Phase 0 FS-backed handler against
+/// that site's filesystem; a bare `localhost`, an IP literal, or an unbound
+/// host returns `None` so the caller falls through to the `--root` behavior.
+/// Only active when `--wanix-services` bound the `#sites` device.
+fn site_gateway_response(
+    roots: &ServeRoots,
+    request: &[u8],
+    url_relative: &str,
+) -> Option<StaticResponse> {
+    if !roots.wanix_services {
+        return None;
+    }
+    let host = Host::parse(request_host_header(request)?)?;
+    let site_fs = roots.sites.resolve(&host)?;
+    Some(read_static_response(site_fs.as_ref(), url_relative))
+}
+
+/// Returns the raw `Host` header value, if present.
+fn request_host_header(request: &[u8]) -> Option<&str> {
+    request_header_str(request)?
+        .lines()
+        .skip(1)
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("host")
+                .then(|| value.trim())
+        })
 }
 
 fn request_header_str(request: &[u8]) -> Option<&str> {
@@ -187,25 +206,4 @@ fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, ServeConnectionE
         }
     }
     Ok(request)
-}
-
-fn content_type(path: &Path) -> &'static str {
-    const TYPES: &[(&str, &str)] = &[
-        ("html", "text/html; charset=utf-8"),
-        ("js", "text/javascript; charset=utf-8"),
-        ("mjs", "text/javascript; charset=utf-8"),
-        ("css", "text/css; charset=utf-8"),
-        ("json", "application/json"),
-        ("wasm", "application/wasm"),
-        ("txt", "text/plain; charset=utf-8"),
-    ];
-    let extension = path.extension().and_then(|extension| extension.to_str());
-    TYPES
-        .iter()
-        .find_map(|(known_extension, content_type)| {
-            extension
-                .filter(|extension| extension == known_extension)
-                .map(|_| *content_type)
-        })
-        .unwrap_or("application/octet-stream")
 }

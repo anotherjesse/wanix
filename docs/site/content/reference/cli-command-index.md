@@ -2,7 +2,7 @@
 title: CLI Command Index
 slug: reference/cli-command-index
 pageType: reference
-oneLiner: Every wanix-rust subcommand at a glance — qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-*, serve, rootfs, qemu, mesh-serve, mount-*, cpu, agent, capsule — each linked to its dedicated reference or recipe page.
+oneLiner: Every wanix-rust subcommand at a glance — qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-stdio, serve, rootfs, qemu, mesh-serve, mount-*, cpu, agent, capsule — each linked to its dedicated reference or recipe page.
 audience: [developer]
 tags: [cli, reference, shipped, mesh, local-trust-only, caveat]
 sourceRefs:
@@ -29,7 +29,7 @@ canonicalCaveatFor: []
 
 # CLI Command Index
 
-Every `wanix-rust` subcommand at a glance — qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-*, serve, rootfs, qemu, mesh-serve, mount-*, cpu, agent, capsule — each linked to its dedicated reference or recipe page.
+Every `wanix-rust` subcommand at a glance — qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-stdio, serve, rootfs, qemu, mesh-serve, mount-*, cpu, agent, capsule — each linked to its dedicated reference or recipe page.
 
 The native binary is one entry point with a flat subcommand surface: a verb, its flags, and (for the task runtimes) a script or module argument. This page is the map of that surface. It groups the commands the way the runtime groups them — task runtimes, the snapshot family, 9P transports, the `serve` composition layer, VM handoffs, the mesh, and the agent — and points each one at the page where the behaviour is actually documented. The single source of truth for the exact spelling of every flag is the `USAGE` string the binary prints (`crates/wanix-cli/src/help.rs:3-62`); run `wanix-rust --help` to see it verbatim.
 
@@ -68,18 +68,18 @@ See [QuickJS snapshots are VM images](/concepts/quickjs-snapshots-are-vm-images)
 
 These export a Wanix filesystem over a single transport, with binary protocol traffic kept off the diagnostic channel.
 
-- **`p9-stdio --root DIR`** — 9P over the process's stdin/stdout.
-- **`p9-listen --root DIR --addr HOST:PORT [--once] [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]`** — 9P over TCP, with capability grants per peer.
-- **`p9-ws --root DIR --addr HOST:PORT [--once]`** — 9P over WebSocket.
+- **`p9-stdio --root DIR`** — 9P over the process's stdin/stdout (the QEMU-v86 console bridge).
+- **`serve --root DIR --p9 HOST:PORT [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]`** — 9P over TCP, with capability grants per peer. Raw 9P over TCP is now a `serve` mode, not a standalone subcommand; the websocket door (`/.well-known/export9p`) rides the same `serve` HTTP listener. The retired `p9-listen` and `p9-ws` subcommands folded into `serve` (ADR 0006).
 
-The `--once` flag serves a single connection and exits, which is what the import demos pair against. See [the 9P contract](/concepts/the-9p-contract) and [serve and discovery](/reference/serve-and-discovery).
+See [the 9P contract](/concepts/the-9p-contract) and [serve and discovery](/reference/serve-and-discovery).
 
 ## serve — the composition layer
 
-`serve` is the one command that composes the others into an addressable surface (process, TCP, WebSocket, and HTTP) with a discovery document.
+`serve` is the one command that composes the others into an addressable surface (HTTP, the 9P-over-WebSocket door, and an optional raw 9P-over-TCP door via `--p9`) with a discovery document.
 
-- **`serve [--root DIR | DIR] [--addr HOST:PORT | --listen HOST:PORT] [--bundle NAME] [--wanix-services] [--once]`** (`help.rs:59-60`).
-  - `--wanix-services` exports the service device set (`#task`, `#term`, `#pipe`, `#kv`, `#plumb`, `#cas`, `#agent`) into the served namespace.
+- **`serve [--root DIR | DIR] [--listen HOST:PORT] [--p9 HOST:PORT [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]] [--bundle NAME] [--wanix-services] [--once]`** (`help.rs:59-60`). (`--addr` is a deprecated hidden synonym for `--listen`; prefer `--listen`.)
+  - `--wanix-services` exports the service device set (`#task`, `#term`, `#pipe`, `#kv`, `#plumb`, `#cas`, `#agent`) into the served namespace. Because it binds the `#task`/`#agent` exec devices (remote code execution), it is refused if either 9P door — the HTTP/websocket listener or the raw `--p9` door — is bound to a non-loopback address.
+  - `--p9 HOST:PORT` binds a raw 9P-over-TCP door (loopback by default) alongside the HTTP listener, with capability grants per peer; the websocket 9P door rides the HTTP listener at `/.well-known/export9p`. Both are thin adapters over one per-connection 9P session core (ADR 0006). Over raw TCP `--peer` is asserted, not cryptographically proven — only the mesh's iroh QUIC transport proves identity.
   - `--bundle NAME` selects a browser launch path: `fs9p`, `workbench-fs9p` (the cockpit), or `direct-v86`.
   - The HTTP-app route `/.wanix/app/<name>` is served on this path — loopback-only and services-gated.
 
@@ -100,7 +100,7 @@ See [CLI: rootfs, qemu, v86](/reference/cli-rootfs-qemu-v86).
 The mesh carries 9P over iroh QUIC, keyed off the node's persisted ed25519 identity.
 
 - **`mesh-serve --root DIR [--key FILE] [--addr IP:PORT] [--peer HEX --grant ANAME:PREFIX:RIGHTS ...] [--wanix-services] [--insecure-open]`** — bind an `iroh::Endpoint` and export the namespace under the Wanix ALPN (`help.rs:39-43`).
-- **`mount-ls (tcp://HOST:PORT | iroh://PEER[?addr=IP:PORT]) [PATH]`**, **`mount-cat ... PATH`**, **`mount-write ... PATH TEXT`** — dial a 9P server, build a `RemoteFs`, bind it, and run one filesystem op (`help.rs:48-50`). The shipped binding slot is `/n/remote` (`crates/wanix-cli/src/mount.rs:25-29`).
+- **`mount-ls (tcp://HOST:PORT | iroh://PEER[?addr=IP:PORT]) [PATH]`**, **`mount-cat ... PATH`**, **`mount-write ... PATH TEXT`** — dial a 9P server, build a `RemoteFs`, bind it, and run one filesystem op (`help.rs:48-50`). The shipped binding slot is `/n/remote` (`crates/wanix-cli/src/mount.rs:25-29`). The `tcp://` form works against a live `serve --p9` door — e.g. `mount-write tcp://127.0.0.1:9999 '#sites/blog.localhost' 'dir /abs/site'`.
 - **`cpu --node iroh://PEER[?addr=IP:PORT] [--cwd DIR] [--write] [--env KEY=VALUE ...] -- KIND PROGRAM [ARG ...]`** — Plan 9 cpu over the mesh: reverse-export `DIR` (read-only by default; `--write` opts into read-write) and run `KIND PROGRAM` on the data node against it (`help.rs:44-47`).
 - **`capsule (save DIR | load CAPSULE_ID DIR) [--store DIR]`** — freeze a Wanix world into a portable CAS-backed `.wcap`, or load one back (`help.rs:54`).
 
