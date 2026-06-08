@@ -701,6 +701,47 @@
     "targetWords": 900
   },
   {
+    "slug": "concepts/porting-a-normal-binary",
+    "title": "Porting a Normal Binary (What a Wanix Task Sees)",
+    "section": "concepts",
+    "pageType": "concept",
+    "audience": "developer",
+    "persona": "Theo, the integrator / extension author",
+    "oneLiner": "A Wanix task is an ordinary WASI program — same open/read/write, same argv/env — so file-and-stdio software ports by recompiling; what changes is what the syscalls refer to, and async/socket/event-loop software is the part that needs rework.",
+    "outline": [
+      "The one-sentence answer: Plan 9 changes the referents, not the syscalls",
+      "The 90% that is identical: wasm32-wasi open/read/write, argv/env, fds 0/1/2 (wanix-sh + jaq as proof)",
+      "Difference 1: everything-is-a-file makes non-file I/O into file I/O (#kv, #plumb, /n/peer)",
+      "Difference 2: no ambient global namespace; leaf-easy vs spawn-and-compose-hard",
+      "Difference 3: no async (poll_oneoff = NOSYS); sequential pipelines today",
+      "Difference 4: fds are explicit capabilities, not ambient inheritance",
+      "The verdict by software shape: sync/file = recompile, async/socket = rewrite",
+      "Status / honest limits: no general porting workflow yet; the limits are current state, not inherent"
+    ],
+    "prerequisites": [
+      "everything-is-a-file",
+      "command-style-wasm-linker"
+    ],
+    "relatedConcepts": [
+      "everything-is-a-file",
+      "wanix-backed-wasi",
+      "command-style-wasm-linker",
+      "host-not-ambient-authority",
+      "per-process-namespaces",
+      "task-exit-closes-fds"
+    ],
+    "demoRefs": [],
+    "sourceRefs": [
+      "crates/wanix-wasi-host/src/core.rs:34-39",
+      "crates/wanix-wasi/src/ctx/path.rs:12-18",
+      "crates/wanix-wasi/src/task_config.rs:24-45",
+      "crates/wanix-sh/src/ns.rs:54-104",
+      "crates/wanix-sh/src/exec.rs:1-9",
+      "crates/wanix-task/src/task.rs:189-210"
+    ],
+    "targetWords": 1200
+  },
+  {
     "slug": "concepts/two-tiers-one-substrate",
     "title": "Two Tiers, One Substrate",
     "section": "concepts",

@@ -20,7 +20,7 @@ the content tree under `content/` stands on its own.
 |---|---|
 | [`00-master-plan.md`](00-master-plan.md) | The decision-bearing master plan: vision, audiences, IA, content plan, demos, tech-stack recommendation, build roadmap, review resolutions, first-PR slice, success metrics. **Start here.** |
 | [`01-personas.md`](01-personas.md) | Six personas across three audience tracks (users / developers / visionaries). |
-| [`02-information-architecture.md`](02-information-architecture.md) | The dual-mode IA (guided flows + canonical reference), the sitemap, the 76-node concept graph, the 8 learning flows. |
+| [`02-information-architecture.md`](02-information-architecture.md) | The dual-mode IA (guided flows + canonical reference), the sitemap, the 77-node concept graph, the 8 learning flows. |
 | [`03-content-catalog.md`](03-content-catalog.md) | The page catalog / manifest grouped by section. |
 | [`04-demo-catalog.md`](04-demo-catalog.md) | The demo & interactivity plan (live casts vs recorded screenshots), 20 demos. |
 | [`05-voice-and-style.md`](05-voice-and-style.md) | Voice & style guide. |
@@ -33,7 +33,7 @@ reconciled corpus list).
 
 ### The content (`content/`)
 
-The complete written corpus — **120 pages, ~150k words**, every page link-checked
+The complete written corpus — **121 pages, ~150k words**, every page link-checked
 (0 broken internal links) and carrying a `Status / honest limits` block wherever
 it makes a behavioural claim.
 

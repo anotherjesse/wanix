@@ -1,4 +1,6 @@
 .DS_Store
+/data
+/docs/site/preview/
 /node_modules
 /dist
 /TODO
