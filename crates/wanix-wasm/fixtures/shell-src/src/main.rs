@@ -65,6 +65,15 @@ impl NamespaceOps for WasiNamespace {
         let base = format!("#task/{child}");
 
         write_service(&format!("{base}/cmd"), &command_line(spec))?;
+        if !spec.env.is_empty() {
+            let env_lines = spec
+                .env
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            write_service(&format!("{base}/env"), &env_lines)?;
+        }
         bind_fd(&base, 0, &input_bind(&spec.stdin, &self_id))?;
         bind_fd(&base, 1, &output_bind(&spec.stdout, &self_id))?;
         // stderr is always inherited.

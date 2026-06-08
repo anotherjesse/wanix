@@ -14,21 +14,25 @@
 //! ## Supported subset (today)
 //!
 //! Simple commands and arguments with quote removal, `;` / newline sequences,
-//! `|` pipelines (sequential, `#pipe`-backed), the `echo`, `cat`, `true`,
-//! `false`, `:`, and `exit` builtins, and external command launch (child tasks
-//! via the `#task` device). Redirections, `&&`/`||`, control flow, and expansion
-//! are recognized by the parser but reported as [`ShellError::Unsupported`]
-//! until their executor support lands.
+//! `|` pipelines (sequential, `#pipe`-backed), the `echo`, `cat`, `pwd`, `env`,
+//! `true`, `false`, `:`, `exit`, `cd`, `export`, and `unset` builtins, and
+//! external command launch (child tasks via the `#task` device, resolved from a
+//! `bin` directory, inheriting the shell's exported env). Redirections, `&&`/`||`,
+//! control flow, and expansion are recognized by the parser but reported as
+//! [`ShellError::Unsupported`] until their executor support lands.
 
+mod builtins;
 mod error;
 mod exec;
 mod lower;
 mod ns;
 mod resolve;
+mod state;
 mod syntax;
 
 pub use error::{ShellError, ShellResult};
 pub use ns::{InputSource, NamespaceOps, OutputSink, SpawnSpec};
+pub use state::ShellState;
 
 use exec::execute;
 use lower::lower;
@@ -42,7 +46,10 @@ use syntax::parse_program;
 #[must_use]
 pub fn run_shell(args: &[String], ns: &mut dyn NamespaceOps) -> i32 {
     match command_string(args) {
-        Some(line) => run_line(&line, ns),
+        Some(line) => {
+            let mut state = ShellState::new();
+            run_line(&line, &mut state, ns)
+        }
         None => {
             let _ = ns.write_stderr(
                 b"wsh: interactive mode is not supported yet; use -c \"<command>\"\n",
@@ -52,12 +59,12 @@ pub fn run_shell(args: &[String], ns: &mut dyn NamespaceOps) -> i32 {
     }
 }
 
-/// Parses, lowers, and executes a single command-line string.
+/// Parses, lowers, and executes a single command-line string against `state`.
 ///
 /// Parse and lowering failures are reported to standard error with status 2;
 /// execution failures carry their own status.
 #[must_use]
-pub fn run_line(line: &str, ns: &mut dyn NamespaceOps) -> i32 {
+pub fn run_line(line: &str, state: &mut ShellState, ns: &mut dyn NamespaceOps) -> i32 {
     let program = match parse_program(line) {
         Ok(program) => program,
         Err(err) => return report(ns, &err),
@@ -66,7 +73,7 @@ pub fn run_line(line: &str, ns: &mut dyn NamespaceOps) -> i32 {
         Ok(plan) => plan,
         Err(err) => return report(ns, &err),
     };
-    execute(&plan, ns)
+    execute(&plan, state, ns)
 }
 
 fn command_string(args: &[String]) -> Option<String> {

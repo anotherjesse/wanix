@@ -18,6 +18,7 @@ const COMMANDS: &[(&str, CommandHandler)] = &[
     ("--utime", utime_command),
     ("--echo", echo_command),
     ("--cat", cat_command),
+    ("--env", env_command),
 ];
 
 pub(crate) fn run(args: &[String]) -> bool {
@@ -93,5 +94,15 @@ fn cat_command(_args: &[String]) {
     let mut input = Vec::new();
     if std::io::stdin().read_to_end(&mut input).is_ok() {
         let _ = std::io::stdout().write_all(&input);
+    }
+}
+
+/// Prints the guest's environment as sorted `KEY=VALUE` lines, so the shell's
+/// tests can prove a child inherits the shell's exported environment.
+fn env_command(_args: &[String]) {
+    let mut vars: Vec<(String, String)> = std::env::vars().collect();
+    vars.sort();
+    for (key, value) in vars {
+        println!("{key}={value}");
     }
 }

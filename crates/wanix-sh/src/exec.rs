@@ -8,9 +8,11 @@
 //! move to concurrent stages). A command that cannot be launched reports an
 //! honest error and a 127 status.
 
-use crate::error::ShellResult;
+use crate::builtins::{builtin, is_special, special_builtin};
+use crate::error::{ShellError, ShellResult};
 use crate::lower::{Pipeline, Plan, Stage};
 use crate::ns::{InputSource, NamespaceOps, OutputSink, SpawnSpec};
+use crate::state::ShellState;
 
 /// The status code returned when an external command cannot be launched.
 const COMMAND_NOT_FOUND_STATUS: i32 = 127;
@@ -21,25 +23,44 @@ enum Outcome {
 }
 
 /// Runs every pipeline in `plan` in sequence and returns the final exit status.
-pub fn execute(plan: &Plan, ns: &mut dyn NamespaceOps) -> i32 {
+///
+/// `state` is threaded through so state-mutating builtins (`cd`/`export`/…) and
+/// `$?` see each pipeline's effect.
+pub fn execute(plan: &Plan, state: &mut ShellState, ns: &mut dyn NamespaceOps) -> i32 {
     let mut status = 0;
     for pipeline in &plan.pipelines {
-        match run_pipeline(pipeline, ns) {
+        match run_pipeline(pipeline, state, ns) {
             Ok(Outcome::Status(code)) => status = code,
-            Ok(Outcome::Exit(code)) => return code,
+            Ok(Outcome::Exit(code)) => {
+                state.set_last_status(code);
+                return code;
+            }
             Err(err) => {
                 let _ = ns.write_stderr(format!("wsh: {err}\n").as_bytes());
                 status = 1;
             }
         }
+        state.set_last_status(status);
     }
     status
 }
 
-fn run_pipeline(pipeline: &Pipeline, ns: &mut dyn NamespaceOps) -> ShellResult<Outcome> {
+fn run_pipeline(
+    pipeline: &Pipeline,
+    state: &mut ShellState,
+    ns: &mut dyn NamespaceOps,
+) -> ShellResult<Outcome> {
     let stages = &pipeline.stages;
     if stages.len() == 1 {
-        return run_single_stage(&stages[0], ns);
+        return run_single_stage(&stages[0], state, ns);
+    }
+
+    // State-mutating builtins (cd/export/…) and exit cannot run in a pipeline.
+    if let Some(stage) = stages.iter().find(|stage| is_special(&stage.argv[0])) {
+        return Err(ShellError::Unsupported(format!(
+            "'{}' cannot be used in a pipeline",
+            stage.argv[0]
+        )));
     }
 
     // One #pipe between each adjacent pair; stages run left to right.
@@ -60,31 +81,40 @@ fn run_pipeline(pipeline: &Pipeline, ns: &mut dyn NamespaceOps) -> ShellResult<O
         } else {
             OutputSink::Pipe(pipes[i].clone())
         };
-        status = run_stage(stage, stdin, stdout, ns)?;
+        status = run_stage(stage, stdin, stdout, state, ns)?;
     }
     Ok(Outcome::Status(status))
 }
 
-fn run_single_stage(stage: &Stage, ns: &mut dyn NamespaceOps) -> ShellResult<Outcome> {
-    if stage.argv[0] == "exit" {
+fn run_single_stage(
+    stage: &Stage,
+    state: &mut ShellState,
+    ns: &mut dyn NamespaceOps,
+) -> ShellResult<Outcome> {
+    let name = stage.argv[0].as_str();
+    if name == "exit" {
         return Ok(Outcome::Exit(parse_exit_code(&stage.argv)));
     }
-    run_stage(stage, InputSource::Inherit, OutputSink::Inherit, ns).map(Outcome::Status)
+    if let Some(special) = special_builtin(name) {
+        return Ok(Outcome::Status(special(&stage.argv, state)));
+    }
+    run_stage(stage, InputSource::Inherit, OutputSink::Inherit, state, ns).map(Outcome::Status)
 }
 
 fn run_stage(
     stage: &Stage,
     stdin: InputSource,
     stdout: OutputSink,
+    state: &ShellState,
     ns: &mut dyn NamespaceOps,
 ) -> ShellResult<i32> {
     if let Some(builtin) = builtin(&stage.argv[0]) {
         let input = gather_input(&stdin, ns)?;
-        let (output, status) = builtin(&stage.argv, &input);
+        let (output, status) = builtin(&stage.argv, &input, state);
         emit_output(&stdout, &output, ns)?;
         Ok(status)
     } else {
-        run_external(stage, stdin, stdout, ns)
+        run_external(stage, stdin, stdout, state, ns)
     }
 }
 
@@ -92,12 +122,17 @@ fn run_external(
     stage: &Stage,
     stdin: InputSource,
     stdout: OutputSink,
+    state: &ShellState,
     ns: &mut dyn NamespaceOps,
 ) -> ShellResult<i32> {
     let program = crate::resolve::resolve_command(&stage.argv[0], &*ns)?;
     let spec = SpawnSpec {
         program,
         args: stage.argv[1..].to_vec(),
+        env: state
+            .env_iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
         stdin,
         stdout,
     };
@@ -124,39 +159,6 @@ fn emit_output(sink: &OutputSink, bytes: &[u8], ns: &mut dyn NamespaceOps) -> Sh
     }
 }
 
-/// A builtin: `argv` + standard input bytes → standard output bytes + status.
-type Builtin = fn(&[String], &[u8]) -> (Vec<u8>, i32);
-
-fn builtin(name: &str) -> Option<Builtin> {
-    match name {
-        "echo" => Some(builtin_echo),
-        "cat" => Some(builtin_cat),
-        "true" | ":" => Some(|_, _| (Vec::new(), 0)),
-        "false" => Some(|_, _| (Vec::new(), 1)),
-        _ => None,
-    }
-}
-
-fn builtin_echo(argv: &[String], _input: &[u8]) -> (Vec<u8>, i32) {
-    let mut args = &argv[1..];
-    let mut trailing_newline = true;
-    if let Some(first) = args.first()
-        && first == "-n"
-    {
-        trailing_newline = false;
-        args = &args[1..];
-    }
-    let mut out = args.join(" ").into_bytes();
-    if trailing_newline {
-        out.push(b'\n');
-    }
-    (out, 0)
-}
-
-fn builtin_cat(_argv: &[String], input: &[u8]) -> (Vec<u8>, i32) {
-    (input.to_vec(), 0)
-}
-
 fn parse_exit_code(argv: &[String]) -> i32 {
     argv.get(1).and_then(|code| code.parse().ok()).unwrap_or(0)
 }
@@ -180,6 +182,7 @@ mod tests {
         commands: HashMap<String, FakeCmd>,
         pipes: HashMap<String, Vec<u8>>,
         files: std::collections::HashSet<String>,
+        spawns: Vec<SpawnSpec>,
         next_pipe: u32,
     }
 
@@ -242,6 +245,7 @@ mod tests {
             Ok(())
         }
         fn spawn(&mut self, spec: &SpawnSpec) -> ShellResult<i32> {
+            self.spawns.push(spec.clone());
             let input = self.read_source(&spec.stdin);
             let Some(cmd) = self.commands.get(&spec.program).copied() else {
                 return Err(crate::ShellError::Io("command not found".into()));
@@ -252,9 +256,14 @@ mod tests {
         }
     }
 
-    fn run_on(input: &str, ns: &mut FakeNs) -> i32 {
+    fn run_with(input: &str, state: &mut ShellState, ns: &mut FakeNs) -> i32 {
         let plan = lower(&parse_program(input).expect("parses")).expect("lowers");
-        execute(&plan, ns)
+        execute(&plan, state, ns)
+    }
+
+    fn run_on(input: &str, ns: &mut FakeNs) -> i32 {
+        let mut state = ShellState::new();
+        run_with(input, &mut state, ns)
     }
 
     fn run(input: &str) -> (i32, FakeNs) {
@@ -417,5 +426,64 @@ mod tests {
         });
         assert_eq!(run_on("lister a b", &mut ns), 0);
         assert_eq!(String::from_utf8(ns.out).unwrap(), "ran a,b\n");
+    }
+
+    // ---- shell state + builtins -----------------------------------------
+
+    #[test]
+    fn cd_updates_logical_cwd() {
+        let mut state = ShellState::new();
+        let mut ns = FakeNs::default();
+        assert_eq!(run_with("cd work", &mut state, &mut ns), 0);
+        assert_eq!(state.cwd(), "work");
+    }
+
+    #[test]
+    fn pwd_prints_cwd() {
+        let mut state = ShellState::new();
+        let mut ns = FakeNs::default();
+        run_with("cd work/sub", &mut state, &mut ns);
+        run_with("pwd", &mut state, &mut ns);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "/work/sub\n");
+    }
+
+    #[test]
+    fn export_then_env_lists_sorted() {
+        let mut state = ShellState::new();
+        let mut ns = FakeNs::default();
+        run_with("export B=2", &mut state, &mut ns);
+        run_with("export A=1", &mut state, &mut ns);
+        run_with("env", &mut state, &mut ns);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "A=1\nB=2\n");
+    }
+
+    #[test]
+    fn unset_removes_env() {
+        let mut state = ShellState::new();
+        let mut ns = FakeNs::default();
+        run_with("export A=1", &mut state, &mut ns);
+        run_with("unset A", &mut state, &mut ns);
+        assert_eq!(state.env_get("A"), None);
+    }
+
+    #[test]
+    fn special_builtin_in_pipeline_is_unsupported() {
+        let (code, ns) = run("cd x | cat");
+        assert_eq!(code, 1);
+        assert!(
+            String::from_utf8(ns.err)
+                .unwrap()
+                .contains("cannot be used in a pipeline")
+        );
+    }
+
+    #[test]
+    fn exported_env_propagates_to_child() {
+        let mut state = ShellState::new();
+        let mut ns = FakeNs::default();
+        ns.register("prog", |_in, _args| (Vec::new(), 0));
+        run_with("export A=1; prog", &mut state, &mut ns);
+        let last = ns.spawns.last().expect("a child was spawned");
+        assert_eq!(last.env, vec![("A".to_owned(), "1".to_owned())]);
     }
 }

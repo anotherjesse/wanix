@@ -93,11 +93,13 @@ fn lower_simple(simple: &ast::SimpleCommand) -> ShellResult<Stage> {
         for item in &suffix.0 {
             match item {
                 ast::CommandPrefixOrSuffixItem::Word(word) => argv.push(resolve_word(&word.value)),
+                // After the command word, a `name=value` token is an ordinary
+                // argument (e.g. `export A=1`, `echo A=1`), not an assignment.
+                ast::CommandPrefixOrSuffixItem::AssignmentWord(_, word) => {
+                    argv.push(resolve_word(&word.value));
+                }
                 ast::CommandPrefixOrSuffixItem::IoRedirect(_) => {
                     return Err(ShellError::Unsupported("redirections".into()));
-                }
-                ast::CommandPrefixOrSuffixItem::AssignmentWord(_, _) => {
-                    return Err(ShellError::Unsupported("inline assignments".into()));
                 }
                 ast::CommandPrefixOrSuffixItem::ProcessSubstitution(_, _) => {
                     return Err(ShellError::Unsupported("process substitution".into()));

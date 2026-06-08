@@ -40,6 +40,8 @@ pub struct SpawnSpec {
     pub program: String,
     /// The arguments following the program name.
     pub args: Vec<String>,
+    /// Environment variables to give the child (the shell's exported env).
+    pub env: Vec<(String, String)>,
     /// Where the child reads standard input.
     pub stdin: InputSource,
     /// Where the child writes standard output.
