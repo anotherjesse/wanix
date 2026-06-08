@@ -6,9 +6,10 @@
 terse ADR on purpose: it carries the *motivation story* for how a user builds
 things in Wanix, then proposes the primitives that story implies, then collects
 the open questions we still need to answer. Once the contracts here stabilize,
-split the durable boundaries (the catalog format, the host-wrapper service
-contract, the Layer-2/3 authorization model) into consecutive accepted ADRs and
-let this draft retire into commit history.
+split the durable boundaries (the catalog format, the native resource-scope
+selection shape, the host-wrapper service contract, the Layer-2/3 authorization
+model) into consecutive accepted ADRs and let this draft retire into commit
+history.
 
 ---
 
@@ -63,25 +64,34 @@ What is missing is mostly a *naming layer* and one *new kind of device*.
 
 **Already shipped (the mechanism):**
 
-- The mesh imports a remote namespace at `/n/<peer>`, where `<peer>` is the raw
-  64-hex ed25519 public key (`crates/wanix-mesh/src/dialer.rs`).
+- The mesh imports a remote namespace over the native FileSystem-over-iroh wire
+  (`WANIX_FS_ALPN`) at `/n/<peer>`, where `<peer>` is the raw 64-hex ed25519
+  public key (`crates/wanix-mesh/src/dialer.rs`).
 - Every device is a plain `FileSystem`, so `#kv`/`#cas`/`#plumb`/`#agent`/`#cpu`
   import across the mesh for free (`/n/A/#kv/...`).
-- Binding a `RemoteFs` into a `Namespace` *is* "compose resources into a
-  namespace."
-- Streaming files (never-EOF reads such as `#agent/<id>/events`) already get a
-  dedicated bidi stream so a blocking read does not freeze the import
-  (`StreamingImportFs`, `crates/wanix-mesh/src/dialer.rs`).
-- `serve --wanix-services` already exports a namespace of devices over 9P/QUIC.
-- Attach is capability-gated, default-deny, with per-peer grants
-  (`crates/wanix-cli/src/mesh/grant.rs`, `crates/wanix-id`).
+- Binding an imported `FileSystem` into a `Namespace` *is* "compose resources
+  into a namespace." On the mesh this import is `NativeFs`; on the foreign edge
+  (`tcp://`, Linux/v86/QEMU, external 9P clients, the current cockpit) it is
+  `RemoteFs`.
+- Streaming files (never-EOF reads such as `#agent/<id>/events`) ride their own
+  native-wire bidi stream by construction, so a blocking read does not freeze
+  sibling operations.
+- `mesh-serve --wanix-services` exports a namespace of devices over the native
+  mesh wire; `serve --wanix-services` keeps exporting the same shape over the
+  direct 9P edge for browser/editor clients.
+- Layer-0 identity is already cryptographic: iroh authenticates the peer's
+  ed25519 pubkey on every connection. The existing `AttachPolicy`/`GrantTable`
+  machinery is the enforcement primitive, but the v1 native wire currently
+  resolves only the empty/root scope. Non-root `ANAME` grants are a 9P-shaped
+  surface that must become a native resource-scope selection contract before
+  private multi-resource catalog entries are honest.
 
-> Wire-protocol direction (ADR 0004): the mesh currently tunnels 9P over iroh,
-> but the decided direction is a **native FileSystem-over-iroh wire (`irpc`)**
-> for Wanix↔Wanix, with 9P quarantined to the foreign edge (Linux/VM, external
-> 9P tools, the current cockpit). The catalog/recipe story below is wire-agnostic
-> — it composes `FileSystem`s into namespaces regardless of which encoding
-> carries them — so it is unaffected by that change.
+> Wire-protocol direction (ADR 0004): the Wanix↔Wanix mesh path is now the
+> hand-rolled native `wanix-mesh-wire` over iroh QUIC, not 9P-over-iroh and not
+> `irpc`. 9P is quarantined to the foreign edge (Linux/VM, external 9P tools,
+> `tcp://`, and the current cockpit). The catalog/recipe story composes
+> `FileSystem`s into namespaces regardless of encoding, but its mesh-facing
+> resource and authorization shapes should be designed for the native wire.
 
 **Not yet built (the story's missing half):**
 
@@ -89,6 +99,11 @@ What is missing is mostly a *naming layer* and one *new kind of device*.
   at `~/.wanix/node.key`, but addresses are pasted by hand as
   `iroh://<64-hex>[?addr=IP:PORT]`. Even `#plumb` admits its topic list is "a
   best-effort directory, not a global registry" (`crates/wanix-plumb/src/lib.rs`).
+- **There is no persistent mesh mount in a task or shell namespace.** The
+  one-shot `mount-ls`/`mount-cat`/`mount-write` verbs can dial `iroh://` and do a
+  single operation, but `qjs-shell`/`qjs`/`wasm` launch mounts are still host-dir
+  mounts. The headline demo needs `--mount-mesh iroh://...=/vol` (or the catalog
+  equivalent) so a running shell uses the remote volume as an ordinary path.
 - **There is no way to project a single local CLI program onto the mesh
   safely.** `#cpu` exists, but it runs *arbitrary* caller-supplied job specs —
   the wrong direction for "expose exactly this one capability of my machine."
@@ -118,8 +133,8 @@ is a file; listing the directory lists your resources; tags enable queries
 The `address` is a **tagged union**, and the tag dictates how to mount and
 whether the resource can be offline:
 
-- `iroh:<pubkey>[+addrs]` — a **live** node or service. May be down; needs a
-  probe.
+- `iroh://<pubkey>[?addr=...]` plus an optional resource scope — a **live** node,
+  volume, or service. May be down; needs a probe.
 - `cas:<hash>` — a **static** blob or `.wcap` capsule. Always loadable, never
   offline.
 - `local:<path>` — something on this machine.
@@ -131,10 +146,18 @@ name/tags but they do not behave the same.
 
 ### 2. The volume server
 
-"A single Wanix binary that exposes any volumes." This is `serve
---wanix-services` generalized to *N named data volumes*, each registering a
-catalog entry on creation. `wanix volume create photos` makes a volume and emits
-its catalog entry. Mostly orchestration over existing machinery.
+"A single Wanix binary that exposes any volumes." The first useful version is
+deliberately smaller: one open, writable `LocalFs` served over the native mesh
+wire, mounted into a shell by address. After that works, `wanix volume create
+photos` can become a thin persistent-dir wrapper, and the volume server can
+generalize from one root to *N named data volumes*, each registering a catalog
+entry on creation.
+
+The N-volume form is the first place the old 9P `aname` question becomes a
+native design question. The product concept is not "copy 9P attach"; it is
+**resource scope selection**: a catalog entry should be able to say "this iroh
+endpoint, scope `volumes/photos`" and the native server should authorize
+`(verified-peer, scope)` before returning the scoped `FileSystem`.
 
 ### 3. The host wrapper — the genuinely new device
 
@@ -160,8 +183,10 @@ template for "wrap a stateful local thing as files"):
 ```
 
 The wrapper process binds an iroh endpoint from its own `~/.wanix/node.key`,
-exports that one device, default-denies attach, and spawns
-`whisper <fixed-flags>` per session, feeding `in`→stdin and stdout→`out`.
+exports that one device over the native mesh wire, and spawns
+`whisper <fixed-flags>` per session, feeding `in`→stdin and stdout→`out`. It can
+run open in the Layer-1 prototype; once Layer 2 lands it should default-deny
+through the same resource-scoped ACL machinery as volumes.
 
 Two contract flavors, declared per service:
 
@@ -223,11 +248,11 @@ and changes what "open" even means:
   build. This whole document is mostly Layer 1.
 
 - **Layer 2 — Authorization (per-resource ACL).** Start open, then per-resource
-  allow-lists keyed on the Layer-0 pubkey. The default-deny grant table
-  (`AttachPolicy`/`GrantTable` in `crates/wanix-id`, `--grant
-  ANAME:PREFIX:RIGHTS --peer <hex>` in `crates/wanix-cli/src/mesh/grant.rs`) is
-  *already the enforcement primitive* — it is just statically configured on the
-  server today.
+  allow-lists keyed on the Layer-0 pubkey. The default-deny policy machinery
+  (`AttachPolicy`/`GrantTable` in `crates/wanix-id`) is already the enforcement
+  primitive, but the operator surface is still 9P-shaped and static
+  (`--grant ANAME:PREFIX:RIGHTS --peer <hex>`). The native catalog path needs a
+  resource-scope shape before per-resource private entries are honest.
 
 - **Layer 3 — Ownership & delegation.** Who may *edit* a resource's ACL, can
   access be delegated, can it be revoked. This is the genuinely unbuilt deep
@@ -280,9 +305,9 @@ hub: every `post` funnels through it, it assigns order, and it fans out to all
 `stream` readers. (Whether the room can outlive the host — a replicated/CRDT log
 — is a *different layer*, replication, not the resource contract; out of scope
 here.) Note a chatroom is the worst case for the single-frame serve websocket
-(you block-read `stream` while writing `post`), but the mesh path already handles
-it via `StreamingImportFs` dedicated bidi streams, so a chatroom is naturally
-mesh-native.
+(you block-read `stream` while writing `post`), but the native mesh path already
+handles it by giving every open file its own bidi stream, so a chatroom is
+naturally mesh-native.
 
 What it teaches about identity, layer by layer:
 
@@ -312,36 +337,54 @@ What it teaches about identity, layer by layer:
   **invite** = add a pubkey, **"ops can invite"** = delegation — Layer 3, with
   semantics that cannot be misread.
 
-**The chatroom is the forcing function for per-principal identity.** It is the
-first feature that genuinely needs the mesh-authenticated pubkey threaded down to
-the individual `post` operation as the acting principal. The 9P session seam
-today decodes `uname`/`aname` and discards them, resolving everything through one
-shared root (tracked as a queued follow-up in `CLAUDE.md`); the deferred
-per-principal `NamespaceProvider` was explicitly waiting for a first consumer
-rather than landing as a no-op seam. The chatroom is that consumer. When this
-plumbing is built, promote it to its own accepted ADR.
+**The chatroom is the forcing function for principal-aware resources.** The
+native mesh handler already learns the verified peer from iroh and resolves a
+per-connection root from it, but the core `FileSystem` trait is intentionally
+principal-blind. A chatroom needs the authenticated pubkey to reach the resource
+implementation as the acting principal for `post`, `stream`, and `who`. That may
+be a principal-scoped wrapper returned at attach time, a device-local session
+context, or a small resource-specific extension — but it should be designed as a
+native mesh identity seam, not as a client-claimed `uname`. When this plumbing is
+built, promote it to its own accepted ADR.
 
 ---
 
 ## Suggested build order
 
-Front-load visible payoff (naming, Layer 0+1); run open to start; defer
-authorization (Layer 2/3) until the shape is felt with real resources in hand.
+Front-load visible payoff (a real remote volume in a real shell); run open to
+start; defer catalog naming and authorization until the address-based bind path
+is solid.
 
-1. **`#catalog` device backed by a volume.** Entries as files; model on
-   `#kv`/`#agent`. It is a volume, so it syncs across your devices for free.
-2. **Make existing commands register entries.** `mesh-serve` and a new
-   `volume create` write a catalog entry on startup. Now the catalog has real
-   contents (your own exports) with zero new trust work.
-3. **`wanix mount <name>`.** Resolve a catalog name → address → `bind` at
-   `/n/<name>` instead of pasting `iroh://`. This alone delivers the headline
-   UX: grab a resource by name.
-4. **The host wrapper** as an `#agent`-shaped device (Whisper is the perfect
+0. **Native volume proof.** Keep the manual invariant green: one process runs
+   `mesh-serve --root DIR --addr 127.0.0.1:PORT --insecure-open`, another uses
+   `mount-cat`/`mount-write iroh://...` and the write lands on the served root.
+   This proves the production native server and production native client speak
+   the same wire.
+1. **Persistent mesh mount into a shell/task namespace.** Add a launch-time bind
+   such as `qjs-shell --mount-mesh iroh://...=/vol`. The implementation must keep
+   the dialer `IrohMount` alive for the task/session lifetime because it owns the
+   runtime handle used by the native import.
+2. **Two shells, one open volume.** Start two shell sessions with the same
+   `--mount-mesh` volume; one writes `/vol/x`, the other reads it. This proves
+   the resource-composition experience before naming exists.
+3. **`wanix volume create`.** Create persistent local volume dirs (for example
+   under `~/.wanix/volumes/<name>`) and add a `mesh-serve --volume <name>`
+   shorthand over the same native serve path.
+4. **`#catalog` device backed by a volume.** Entries as files; model on
+   `#kv`/`#agent`. The first catalog can be local or a normal mounted volume.
+5. **Make commands register entries and mount by name.** `volume create` /
+   `mesh-serve` write catalog entries; `wanix mount <name>` resolves a catalog
+   name -> address -> `bind` at `/n/<name>` or `/vol/<name>`.
+6. **The host wrapper** as an `#agent`-shaped device (Whisper is the perfect
    first target), request/response only.
-5. **Recipes.**
-6. **Authorization (Layer 2)** — per-resource allow-lists keyed on caller
-   pubkey, flipping the default off "open." Then ownership/delegation (Layer 3).
-7. **Streaming wrappers** (gated on serve concurrency).
+7. **Recipes.**
+8. **Native resource-scope selection and authorization (Layer 2).** Replace the
+   leaky 9P-shaped `ANAME` surface with a native scope carried in the catalog
+   address / dial path, then evaluate `(verified-peer, scope)` against an ACL.
+   Ownership/delegation is Layer 3.
+9. **Streaming wrappers and cockpit/serve edge concurrency.** The native mesh
+   path is stream-per-open-file already; the remaining concurrency problem is the
+   9P websocket edge.
 
 ---
 
@@ -352,13 +395,15 @@ These are the seams we should talk through before committing contracts.
 1. **The authorization model (Layer 2/3) — the deferred-but-inevitable
    project.** Naming (the catalog) does not need this; security-that-is-not-
    obscurity does. What is the per-resource ACL — a file under the resource
-   (`#whisper/acl`) listing allowed pubkeys? Who is the *owner* that may edit it,
-   and how is ownership established? Can a grantee *delegate* (re-grant) access,
-   and can grants be *revoked*? Where does the optional pairing handshake fit —
-   out-of-band ticket exchange, a `#pair` device, or an interactive
-   approve-this-key prompt on the host (like the `#agent` approval files)? Note
-   that Layer 0 already hands every resource the caller's authenticated pubkey,
-   so this is purely a policy/ownership question, not an identity one.
+   (`#whisper/acl`) listing allowed pubkeys? What native **scope** does an ACL
+   protect: the whole endpoint, `volumes/photos`, `services/whisper`, or a typed
+   resource id? Who is the *owner* that may edit it, and how is ownership
+   established? Can a grantee *delegate* (re-grant) access, and can grants be
+   *revoked*? Where does the optional pairing handshake fit — out-of-band ticket
+   exchange, a `#pair` device, or an interactive approve-this-key prompt on the
+   host (like the `#agent` approval files)? Note that Layer 0 already hands every
+   resource the caller's authenticated pubkey, so this is purely a
+   policy/ownership question, not an identity one.
 
 2. **Catalog as a synced volume vs. local-only.** Single-node first is obvious.
    But multi-device sync needs a merge story (last-writer-wins? CRDT? a
@@ -377,12 +422,12 @@ These are the seams we should talk through before committing contracts.
    reuse, and how do we keep the wrapper from drifting back into arbitrary exec?
 
 5. **Streaming over the single-frame serve connection.** Request/response works
-   today; live streaming hits the "one frame at a time per connection" limit
-   noted in `CLAUDE.md` (a blocking `recv` cannot interleave with a write). The
-   native mesh wire (ADR 0004: stream-per-call over iroh) makes this a non-issue
-   on the Wanix↔Wanix path by construction; the limitation then lives only on the
-   9P serve/websocket *edge* (the cockpit). Do we fix serve concurrency there, or
-   route streaming over the native mesh path that does not have the problem?
+   today; live streaming hits the "one frame at a time per connection" limit on
+   the 9P websocket edge (a blocking `recv` cannot interleave with a write). The
+   native mesh wire (ADR 0004: one stream per call / per open file over iroh)
+   makes this a non-issue on the Wanix↔Wanix path by construction. Do we fix
+   serve concurrency for cockpit clients, or keep streaming resources mesh-native
+   until the cockpit becomes a composing native client?
 
 6. **Naming collisions and scope.** `/n/<peer>` is globally unambiguous (it is a
    pubkey). `/n/whisper` is a *local* alias resolved through *my* catalog. What
@@ -391,8 +436,11 @@ These are the seams we should talk through before committing contracts.
    names only, or both with name-as-hint?
 
 7. **Address format / portability.** Is the catalog `address` the existing
-   `iroh://<hex>?addr=...` ticket string, or a richer typed value? How do
-   `cas:` and `local:` entries coexist with iroh entries in one resolver?
+   `iroh://<hex>?addr=...` ticket string, or a richer typed value? If a live
+   resource needs a scope (`volumes/photos`, `services/whisper`), is that a URL
+   query parameter, a fragment, or a structured field beside the endpoint ticket?
+   How do `cas:` and `local:` entries coexist with scoped iroh entries in one
+   resolver?
 
 8. **Display names / petnames (the chatroom surfaces this).** Layer 0 gives
    unforgeable but unreadable pubkeys. Human names are Zooko's triangle. Is the
@@ -401,20 +449,19 @@ These are the seams we should talk through before committing contracts.
    name map? How does a petname assigned in the catalog flow into a rendered
    `stream`/`who`?
 
-9. **Per-principal identity on the mesh wire.** The chatroom is the first
-   consumer that needs the authenticated pubkey threaded down to the acting
-   operation (so `post` can be attributed and `who` can be computed). The native
-   mesh wire (ADR 0004) is the place to build this in from the start — iroh
-   already authenticates the connection by pubkey, and the wire carries that
-   principal per operation — rather than retrofitting 9P's `attach`/`uname` path
-   (which today discards `uname` and resolves through one shared root). Open: the
-   exact per-principal session/handle model on the native wire, and whether it
-   lands first with the chatroom or with per-user namespaces.
+9. **Principal-aware resources on the mesh wire.** The chatroom is the first
+   consumer that needs the authenticated pubkey to reach the resource
+   implementation as the acting principal (so `post` can be attributed and `who`
+   can be computed). The native mesh wire (ADR 0004) is the place to build this
+   from the verified iroh `remote_id()`, rather than retrofitting 9P's
+   client-claimed `uname`. Open: whether this is modeled as a per-connection
+   principal-scoped filesystem wrapper, a device-local session context, or a
+   narrower resource-specific trait.
 
-10. **Where does this become ADRs?** Likely four durable boundaries: the catalog
-    format, the host-wrapper service contract, the Layer-2/3 authorization model,
-    and the per-principal 9P identity seam. Confirm that split before promoting
-    any of them out of this draft.
+10. **Where does this become ADRs?** Likely five durable boundaries: the catalog
+    format, native resource-scope selection, the host-wrapper service contract,
+    the Layer-2/3 authorization model, and the principal-aware resource seam.
+    Confirm that split before promoting any of them out of this draft.
 
 ---
 

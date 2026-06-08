@@ -15,7 +15,7 @@ pub(super) const USAGE: &str = concat!(
     "       wanix-rust qjs-shell [--raw] [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--event-loop-ms N] [--ready-io-turns N] ",
     "[--interrupt-after N] [--memory-limit-bytes N] ",
-    "[--mount HOST=GUEST ...]\n",
+    "[--mount HOST=GUEST ...] [--mount-mesh IROH_URL=GUEST ...]\n",
     "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--interrupt-after N] ",
     "[--memory-limit-bytes N] [--event-loop-ms N] [--ready-io-turns N] ",

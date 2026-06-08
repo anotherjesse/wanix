@@ -7,9 +7,10 @@ use wanix_vfs::BindOptions;
 
 use super::terminal::AttachedTerminal;
 use super::{QJS_SHELL_SCRIPT_SENTINEL, QJS_SHELL_SOURCE};
+use crate::mesh::IrohMount;
 use crate::{
-    CliError, QJS_GUEST_SCRIPT, QjsCommand, bind_host_mounts, copy_script_directory,
-    guest_path_in_cwd, read_utf8_script,
+    CliError, QJS_GUEST_SCRIPT, QjsCommand, bind_host_mounts, bind_mesh_mounts,
+    copy_script_directory, guest_path_in_cwd, read_utf8_script,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,23 +36,31 @@ pub(super) fn read_qjs_term_program(
     }
 }
 
+/// Prepares the qjs-term namespace and returns the prepared program alongside
+/// the native-mesh-mount keepalives (`--mount-mesh`). The keepalives MUST be
+/// held for the task lifetime — they own the runtimes the imported mesh
+/// filesystems drive QUIC ops on — so the caller stores them on the
+/// prepared-execution object.
 pub(super) fn prepare_qjs_term_namespace(
     task: &Task,
     qjs_command: &QjsCommand,
     program: QjsTermProgram,
     script: String,
-) -> Result<PreparedQjsTermProgram, CliError> {
+) -> Result<(PreparedQjsTermProgram, Vec<IrohMount>), CliError> {
     let runtime_cwd = qjs_term_runtime_cwd(&qjs_command.cwd, program)?;
     let program_path = qjs_term_program_path(program);
     let guest_script = qjs_term_guest_script(&qjs_command.cwd, program)?;
     let root = qjs_term_root(qjs_command, program, &guest_script, &script)?;
-    bind_qjs_term_namespace(task, root, qjs_command)?;
-    Ok(PreparedQjsTermProgram {
-        script,
-        guest_script,
-        program_path,
-        runtime_cwd,
-    })
+    let mesh_mounts = bind_qjs_term_namespace(task, root, qjs_command)?;
+    Ok((
+        PreparedQjsTermProgram {
+            script,
+            guest_script,
+            program_path,
+            runtime_cwd,
+        },
+        mesh_mounts,
+    ))
 }
 
 pub(super) fn terminal_task_env(
@@ -93,9 +102,10 @@ fn bind_qjs_term_namespace(
     task: &Task,
     root: Arc<MemFs>,
     qjs_command: &QjsCommand,
-) -> Result<(), CliError> {
+) -> Result<Vec<IrohMount>, CliError> {
     task.bind(root, ".", ".", BindOptions::default())?;
-    bind_host_mounts(task, &qjs_command.mounts)
+    bind_host_mounts(task, &qjs_command.mounts)?;
+    bind_mesh_mounts(task, &qjs_command.mesh_mounts)
 }
 
 fn qjs_term_runtime_cwd(

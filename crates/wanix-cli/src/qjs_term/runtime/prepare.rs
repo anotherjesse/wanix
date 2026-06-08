@@ -9,12 +9,18 @@ use super::super::program_spec::{
     terminal_task_env,
 };
 use super::super::terminal::{AttachedTerminal, attach_task_terminal};
+use crate::mesh::IrohMount;
 use crate::{CliError, QjsCommand, configure_qjs_task, read_qjs_stdin};
 
 pub(super) struct PreparedQjsTermExecution {
     pub(super) task: Task,
     pub(super) prepared: PreparedQjsTermProgram,
     pub(super) terminal: AttachedTerminal,
+    /// Native mesh-mount (`--mount-mesh`) keepalives. Each owns the tokio runtime
+    /// its imported `FileSystem` drives QUIC ops on, so this must outlive `task`'s
+    /// namespace ops. Declared LAST so it drops AFTER `task` (Rust drops fields in
+    /// declaration order), keeping the runtime alive while `task`'s bindings drop.
+    _mesh_mounts: Vec<IrohMount>,
 }
 
 pub(super) struct QjsTermInput {
@@ -29,13 +35,15 @@ pub(super) fn prepare_qjs_term_execution(
     input: QjsTermInput,
 ) -> Result<PreparedQjsTermExecution, CliError> {
     let task = allocate_qjs_term_task(runner, qjs_command)?;
-    let prepared = prepare_qjs_term_namespace(&task, qjs_command, program, input.script)?;
+    let (prepared, mesh_mounts) =
+        prepare_qjs_term_namespace(&task, qjs_command, program, input.script)?;
     let terminal = attach_task_terminal(&task, input.stdin_bytes)?;
     configure_terminal_qjs_task(&task, qjs_command, program, &prepared, &terminal)?;
     Ok(PreparedQjsTermExecution {
         task,
         prepared,
         terminal,
+        _mesh_mounts: mesh_mounts,
     })
 }
 

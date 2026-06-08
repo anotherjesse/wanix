@@ -52,6 +52,11 @@ impl QjsRunOptions {
             interrupt_poll_budget: self.interrupt_poll_budget,
             memory_limit_bytes: self.memory_limit_bytes,
             mounts: self.mounts,
+            // Slice 1 wires the --mount-mesh CLI entry point only through qjs-shell.
+            // The underlying MeshMountSpec/bind_mesh_mounts path is namespace-generic;
+            // qjs/qjs-term/wasm should add this once each runtime has a place to hold
+            // IrohMount keepalives for the task lifetime.
+            mesh_mounts: Vec::new(),
         }
     }
 

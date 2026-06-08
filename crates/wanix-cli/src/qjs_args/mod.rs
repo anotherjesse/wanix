@@ -28,6 +28,11 @@ pub(super) struct QjsCommand {
     pub(super) interrupt_poll_budget: Option<usize>,
     pub(super) memory_limit_bytes: Option<u32>,
     pub(super) mounts: Vec<HostMount>,
+    /// Native mesh imports (`--mount-mesh IROH_URL=GUEST`). Dialed at run time
+    /// into the task namespace; the dialer keepalive is held for the task
+    /// lifetime by the runtime path, never stored here (this is parse-time data
+    /// only). Today only the `qjs-shell` parser populates this.
+    pub(super) mesh_mounts: Vec<MeshMountSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +46,14 @@ pub(crate) enum QjsStdin {
 pub(super) struct HostMount {
     pub(super) host_path: PathBuf,
     pub(super) guest_path: NormalizedPath,
+}
+
+/// A `--mount-mesh IROH_URL=GUEST` request: a remote namespace dialed over the
+/// native mesh wire and bound at `guest_path` in the task namespace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MeshMountSpec {
+    pub(crate) addr: String,
+    pub(crate) guest_path: NormalizedPath,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +139,43 @@ fn parse_host_mount(value: &str, label: &str) -> Result<HostMount, CliError> {
     })
 }
 
+/// Parses a `--mount-mesh IROH_URL=GUEST` value.
+///
+/// The iroh URL carries its own `=` inside the `?addr=IP:PORT` query, so the
+/// address/guest boundary is the **last** `=`, not the first. The address must
+/// be an `iroh://` URL; the guest must be a non-`.` relative path (same rule as
+/// host mounts).
+pub(crate) fn parse_mesh_mount(value: &str, label: &str) -> Result<MeshMountSpec, CliError> {
+    let Some((addr, guest)) = value.rsplit_once('=') else {
+        return Err(CliError::usage(format!("{label} expects IROH_URL=GUEST")));
+    };
+    if addr.is_empty() || guest.is_empty() {
+        return Err(CliError::usage(format!("{label} expects IROH_URL=GUEST")));
+    }
+    if !addr.starts_with(crate::mesh::IROH_SCHEME) {
+        return Err(CliError::usage(format!(
+            "{label} address must be an {}URL",
+            crate::mesh::IROH_SCHEME
+        )));
+    }
+    // Accept an absolute-looking guest (`/vol`) like the one-shot `mount-*` verbs:
+    // the namespace is rooted, so `/vol` and `vol` name the same bind point.
+    let guest = guest.trim_start_matches('/');
+    if guest.is_empty() {
+        return Err(CliError::usage(format!("{label} expects IROH_URL=GUEST")));
+    }
+    let guest_path = NormalizedPath::new(guest)?;
+    if guest_path.as_str() == "." {
+        return Err(CliError::usage(format!(
+            "{label} guest path must not be . in this demo"
+        )));
+    }
+    Ok(MeshMountSpec {
+        addr: addr.to_owned(),
+        guest_path,
+    })
+}
+
 pub(crate) fn os_arg_to_string(arg: &OsString, label: &str) -> Result<String, CliError> {
     arg.clone()
         .into_string()
@@ -171,8 +221,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        QjsStdin, parse_duration_millis, parse_host_mount, parse_u32, parse_usize, set_qjs_stdin,
-        validate_env_line,
+        QjsStdin, parse_duration_millis, parse_host_mount, parse_mesh_mount, parse_u32,
+        parse_usize, set_qjs_stdin, validate_env_line,
     };
 
     #[test]
@@ -209,6 +259,50 @@ mod tests {
                     || error
                         .to_string()
                         .contains("qjs --mount guest path must not be .")
+            );
+        }
+    }
+
+    #[test]
+    fn mesh_mount_parser_splits_on_last_equals_keeping_addr_query() {
+        // The iroh URL carries `?addr=IP:PORT`, so the address/guest boundary must
+        // be the LAST `=` — the addr's own `=` stays part of the address.
+        let mount = parse_mesh_mount(
+            "iroh://abc123?addr=127.0.0.1:5599=/vol",
+            "qjs-shell --mount-mesh",
+        )
+        .unwrap();
+        assert_eq!(mount.addr, "iroh://abc123?addr=127.0.0.1:5599");
+        assert_eq!(mount.guest_path.as_str(), "vol");
+    }
+
+    #[test]
+    fn mesh_mount_parser_accepts_multiple_addr_query_params() {
+        let mount = parse_mesh_mount(
+            "iroh://abc?addr=127.0.0.1:1&addr=10.0.0.2:2=vol/notes",
+            "qjs-shell --mount-mesh",
+        )
+        .unwrap();
+        assert_eq!(mount.addr, "iroh://abc?addr=127.0.0.1:1&addr=10.0.0.2:2");
+        assert_eq!(mount.guest_path.as_str(), "vol/notes");
+    }
+
+    #[test]
+    fn mesh_mount_parser_rejects_boundary_errors() {
+        // No `=` separator, empty address, empty guest, non-iroh scheme, and a `.`
+        // guest path are all rejected.
+        for value in [
+            "iroh://abcnoequals",
+            "=/vol",
+            "iroh://abc=",
+            "tcp://host:9999=/vol",
+            "iroh://abc?addr=127.0.0.1:1=.",
+        ] {
+            let error = parse_mesh_mount(value, "qjs-shell --mount-mesh").unwrap_err();
+            assert_eq!(
+                error.exit_code(),
+                2,
+                "value {value:?} should be a usage error"
             );
         }
     }

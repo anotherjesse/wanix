@@ -9,7 +9,7 @@ use wanix_qjs::{QuickJsRunner, QuickJsTaskRuntime};
 use wanix_task::{Fd, Task};
 use wanix_vfs::BindOptions;
 
-use crate::qjs_args::HostMount;
+use crate::qjs_args::{HostMount, MeshMountSpec};
 use crate::{CliError, CliOutput};
 
 mod script;
@@ -124,6 +124,33 @@ pub(crate) fn bind_host_mounts(task: &Task, mounts: &[HostMount]) -> Result<(), 
     Ok(())
 }
 
+/// Dials each `--mount-mesh` spec over the native mesh wire and binds the
+/// imported remote into the task namespace at its guest path.
+///
+/// Returns the dialer [`crate::mesh::IrohMount`] keepalives. Each owns the tokio
+/// runtime its imported `FileSystem` drives QUIC ops on, so **the caller must
+/// hold the returned vector for as long as the task may touch the mount** —
+/// dropping a keepalive shuts down that runtime and panics the next op. The
+/// runtime path stores it on the prepared-execution object so it outlives the
+/// task.
+pub(crate) fn bind_mesh_mounts(
+    task: &Task,
+    mounts: &[MeshMountSpec],
+) -> Result<Vec<crate::mesh::IrohMount>, CliError> {
+    let mut keepalives = Vec::with_capacity(mounts.len());
+    for mount in mounts {
+        let dialed = crate::mesh::dial_iroh_remote(&mount.addr, "")?;
+        task.bind(
+            dialed.remote.clone(),
+            ".",
+            mount.guest_path.as_str(),
+            BindOptions::default(),
+        )?;
+        keepalives.push(dialed);
+    }
+    Ok(keepalives)
+}
+
 pub(crate) fn ensure_snapshot_task_fds_closed(task: &Task) -> Result<(), CliError> {
     let dynamic_fds = task
         .fd_numbers()
@@ -216,4 +243,101 @@ fn bundled_quickjs_runner() -> Result<Arc<QuickJsRunner>, FsError> {
 
 pub(crate) fn parse_exit(exit: &str) -> i32 {
     exit.trim().parse().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod mesh_mount_tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::Arc;
+
+    use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
+    use wanix_id::NodeIdentity;
+    use wanix_mesh::{MeshNode, NativeServeConfig};
+    use wanix_task::TaskTable;
+    use wanix_vfs::Namespace;
+
+    use super::bind_mesh_mounts;
+    use crate::mesh::IROH_SCHEME;
+    use crate::qjs_args::MeshMountSpec;
+
+    fn loopback() -> SocketAddr {
+        SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)
+    }
+
+    fn read_through(namespace: &Namespace, path: &str) -> Vec<u8> {
+        let mut file = namespace
+            .open(&NormalizedPath::new(path).unwrap(), OpenOptions::read())
+            .unwrap();
+        let mut bytes = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let read = file.read(&mut chunk).unwrap();
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        bytes
+    }
+
+    /// Slice 1 runtime proof: a `--mount-mesh` spec dialed by `bind_mesh_mounts`
+    /// binds a remote native-wire volume into a task namespace, and the task can
+    /// read a seeded file and write a new one (the served root observes it) while
+    /// the returned keepalive is held. Dropping the keepalive only after the task
+    /// mirrors the field order the qjs-shell runtime path relies on.
+    #[test]
+    fn mesh_mount_binds_into_task_namespace_and_stays_alive() {
+        let host = Arc::new(MemFs::new());
+        host.write_file("seed.txt", b"served-by-A").unwrap();
+        let server_identity = NodeIdentity::from_secret_bytes([3u8; 32]);
+        let mut server = MeshNode::bind_local(&server_identity, loopback()).unwrap();
+        server.serve_native(NativeServeConfig::open(host.clone() as Arc<dyn FileSystem>));
+
+        // Build the dialable iroh URL the way `mesh-serve` announces it.
+        let peer = server.peer_id();
+        let addrs: Vec<String> = server
+            .ticket()
+            .ip_addrs()
+            .map(|addr| format!("addr={addr}"))
+            .collect();
+        let url = format!("{IROH_SCHEME}{peer}?{}", addrs.join("&"));
+
+        let table = TaskTable::new();
+        table.register_noop_driver("noop").unwrap();
+        let task = table.allocate_root("noop").unwrap();
+
+        let spec = MeshMountSpec {
+            addr: url,
+            guest_path: NormalizedPath::new("vol").unwrap(),
+        };
+        let keepalive = bind_mesh_mounts(&task, std::slice::from_ref(&spec)).unwrap();
+        assert_eq!(keepalive.len(), 1);
+
+        // Read a seeded file through the task namespace: the mount is wired and the
+        // keepalive runtime is alive for the read.
+        let namespace = task.namespace();
+        assert_eq!(read_through(&namespace, "vol/seed.txt"), b"served-by-A");
+
+        // Write through the mount; the served root observes it across the wire.
+        let payload = b"from-task";
+        let mut file = namespace
+            .open(
+                &NormalizedPath::new("vol/from-task.txt").unwrap(),
+                OpenOptions {
+                    read: false,
+                    write: true,
+                    create: true,
+                    truncate: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(file.write(payload).unwrap(), payload.len());
+        drop(file);
+        assert_eq!(host.read_file("from-task.txt").unwrap(), payload);
+
+        // Mirror PreparedQjsTermExecution drop order: task before the keepalive.
+        drop(task);
+        drop(keepalive);
+        drop(server);
+    }
 }
