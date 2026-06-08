@@ -34,16 +34,16 @@ end-to-end loopback test that drives real files **and** real service devices
 (`#task`, `#term`) across a real socket and asserts the bytes are identical to a
 purely local namespace.
 
-Here is the demo, top to bottom, two terminals. Server side dials up a raw 9P
-listener over a host directory:
+Here is the demo, top to bottom, two terminals. Server side opens a raw 9P
+door over a host directory (a `serve` mode under ADR 0006; loopback-only):
 
 ```sh
 # Terminal 1 — the server
 SROOT=$(mktemp -d)
 echo "hello from the server" > "$SROOT/greeting.txt"
 mkdir "$SROOT/docs"
-wanix-rust p9-listen --root "$SROOT" --addr 127.0.0.1:5640
-# wanix-rust p9-listen: listening on 127.0.0.1:5640
+wanix-rust serve --root "$SROOT" --p9 127.0.0.1:5640
+# serve: 9P (tcp) listening on 127.0.0.1:5640
 ```
 
 Client side imports it and reads, writes, and lists through the mount:
@@ -376,16 +376,17 @@ whole workspace passes under `just check` (fmt + module-lines + clippy
 ### (b) A live two-process import
 
 This is the same keystone, but across two real OS processes over a real TCP
-socket. `serve` is the HTTP/WebSocket surface; the *raw-TCP 9P* listener that
-`mount-*` dials is `p9-listen`. The client opens a `TcpStream` and immediately
-speaks 9P framing, which is exactly what `p9-listen` answers.
+socket. `serve` carries the HTTP/WebSocket surface *and* the raw-TCP 9P door
+that `mount-*` dials: `serve --p9 ADDR` (ADR 0006). The same per-connection 9P
+session core backs both doors; the client opens a `TcpStream` and immediately
+speaks 9P framing, which is exactly what the raw `--p9` door answers.
 
 Server (terminal 1):
 
 ```
 $ SROOT=$(mktemp -d) && echo "hello from the server" > "$SROOT/greeting.txt" && mkdir "$SROOT/docs"
-$ wanix-rust p9-listen --root "$SROOT" --addr 127.0.0.1:5640
-wanix-rust p9-listen: listening on 127.0.0.1:5640
+$ wanix-rust serve --root "$SROOT" --p9 127.0.0.1:5640
+serve: 9P (tcp) listening on 127.0.0.1:5640
 ```
 
 Client (terminal 2):
@@ -441,8 +442,9 @@ The mechanics under those four client commands: each `mount-*` verb opens one
 filesystem operation **through the namespace** — never a local shortcut. The
 bytes genuinely traverse `Namespace -> RemoteFs -> 9P -> server`.
 
-> Note on scope: `p9-listen` serves a host directory (`LocalFs`), so the live
-> cross-process demo shows host **files** round-tripping. Services over the wire
+> Note on scope: `serve --root DIR --p9 ADDR` serves a host directory
+> (`LocalFs`), so the live cross-process demo shows host **files**
+> round-tripping. Services over the wire
 > (`#term`, `#task`) are proven deterministically by `mesh_loopback.rs`, which
 > serves a full Wanix `Namespace` (MemFs + `#term` + `#task`) and asserts the
 > devices cross identically. Files in the live demo, services in the test —
@@ -501,8 +503,9 @@ agent's reach — falls out. The mesh is incremental from here.
 
 The first slice gave Wanix the 9P *client* and, with it, import: bind a remote
 at `n/remote` and another node's namespace becomes part of yours. But import as
-built in Slice 1 was all-or-nothing. The server `p9-listen`-ed a host directory
-and handed the *entire* tree to anyone who could open the socket. That is fine
+built in Slice 1 was all-or-nothing. The server opened a raw 9P door over a host
+directory and handed the *entire* tree to anyone who could open the socket. That
+is fine
 for `127.0.0.1` and a single trusting user. It is exactly wrong for a mesh,
 where the point is that *other people's nodes* import *yours*. The missing
 piece is the boundary: **who** may import, and **how much** of your namespace
@@ -537,10 +540,12 @@ outside it because, in their namespace, there is no outside.
   `evaluate(peer, aname)` and installs the returned scoped root for that attach,
   or denies with EACCES. The same `handle_frame`/`serve_stream` hot loop runs
   unchanged underneath.
-- **`p9-listen --peer HEX --grant ANAME:PREFIX:RIGHTS`** — the CLI surface that
-  wires a default-deny `GrantTablePolicy` (scoped to the server's `--root`) into
-  the real TCP transport. Without `--peer`, the listener keeps its prior
-  all-or-nothing behavior, so nothing about the unguarded path changed.
+- **`serve --p9 ADDR --peer HEX --grant ANAME:PREFIX:RIGHTS`** — the CLI surface
+  that wires a default-deny `GrantTablePolicy` (scoped to the server's `--root`)
+  into the raw-TCP 9P door (ADR 0006). Without `--peer`, the door keeps its prior
+  all-or-nothing behavior, so nothing about the unguarded path changed. (Over raw
+  TCP the peer identity is asserted, not proven; only the iroh QUIC transport
+  cryptographically proves it.)
 
 ## Why: factotum, `/n/`, and "the key is the address"
 
@@ -686,8 +691,8 @@ walk can never escape the prefix" was corrected: a *string* walk can't, but a
 *symlink* walk could until this gate was added.
 
 **3. `with_policy(None)` is byte-for-byte the old server.** The grant boundary
-is strictly additive. The unguarded `p9-listen` (no `--peer`) constructs
-`P9Server::new(root)` exactly as before; only `--peer` swaps in
+is strictly additive. The unguarded raw 9P door (`serve --p9` with no `--peer`)
+constructs `P9Server::new(root)` exactly as before; only `--peer` swaps in
 `with_policy(root, peer, policy)`. There is a test asserting `build_serve_policy`
 returns `None` without a peer, so the no-policy path can't silently acquire a
 policy.
@@ -816,11 +821,11 @@ Server (terminal 1):
 $ SROOT=$(mktemp -d) && mkdir -p "$SROOT/projects/foo" "$SROOT/docs" \
     && echo "foo project file" > "$SROOT/projects/foo/main.rs" \
     && echo "secret docs"      > "$SROOT/docs/readme.txt"
-$ wanix-rust p9-listen --root "$SROOT" --addr 127.0.0.1:5652 --once \
+$ wanix-rust serve --root "$SROOT" --p9 127.0.0.1:5652 --once \
     --peer 2222222222222222222222222222222222222222222222222222222222222222 \
     --grant projects/foo:projects/foo:rw \
     --grant docs:docs:ro
-wanix-rust p9-listen: listening on 127.0.0.1:5652
+serve: 9P (tcp) listening on 127.0.0.1:5652
 ```
 
 Importer (terminal 2):

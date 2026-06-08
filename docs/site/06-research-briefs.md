@@ -216,20 +216,40 @@ the early FAIL sections).
 
 ### Serve transports and discovery
 
-The CLI exposes several 9P transports as separate subcommands plus a composition
-`serve` (`crates/wanix-cli/src/lib.rs` registers `p9-stdio`, `p9-listen`,
-`p9-ws`, `serve`):
+There is **one per-connection 9P session core** (`P9Server::serve_duplex`,
+ADR 0006), and every transport is a thin adapter over it. The CLI exposes
+`p9-stdio` as a standalone subcommand and folds the rest into `serve`
+(`crates/wanix-cli/src/lib.rs`):
 - `p9-stdio` — 9P over binary stdio (process pipe), proven by the
-  `p9_stdio_*` tests in `lib.rs`.
-- `p9-listen` — 9P over raw TCP.
-- `p9-ws` — 9P over a WebSocket listener.
+  `p9_stdio_*` tests in `lib.rs`. Still its own subcommand (the pipe /
+  QEMU-v86 console bridge).
 - `serve` — the local composition surface that combines static HTTP, discovery,
-  direct 9P over WebSocket, the qjs-shell WebSocket, and the HTTP-app route on
-  one listener (default `127.0.0.1:7654`, `crates/wanix-cli/src/serve/command.rs`;
-  flags: `--root/positional`, `--addr`/`--listen`, `--bundle`, `--wanix-services`,
-  `--once`). Normal mode accepts concurrent HTTP + 9P WebSocket clients
-  (`serve/concurrent.rs`); `--once` is the deterministic single-connection test
-  mode.
+  direct 9P over WebSocket (a `WebSocketDuplex` framing adapter handed to
+  `serve_duplex`, not a second server), the qjs-shell WebSocket, the HTTP-app
+  route, and an optional raw-9P-over-TCP door on one listener (default
+  `127.0.0.1:7654`, `crates/wanix-cli/src/serve/command.rs`; flags:
+  `--root/positional`, `--listen` (`--addr` deprecated synonym), `--p9 HOST:PORT`
+  with optional `--peer HEX`/`--grant ANAME:PREFIX:RIGHTS`, `--bundle`,
+  `--wanix-services`, `--once`). Normal mode accepts concurrent HTTP + 9P
+  WebSocket clients (`serve/concurrent.rs`); `--once` is the deterministic
+  single-connection test mode.
+- `serve --p9 HOST:PORT` exports the served namespace as raw 9P over TCP
+  (default-bound to loopback) on a dedicated accept thread (`serve/raw9p`,
+  which reuses the retired `p9-listen` grant/accept logic). It is a serve mode,
+  not a subcommand. Because it speaks raw TCP 9P, `mount-write tcp://HOST:PORT
+  '#sites/<host>' 'dir /abs'` mutates a *live* `serve` namespace from the CLI.
+  `--peer`/`--grant` build the server through `P9Server::with_policy`
+  (default-deny `AttachPolicy`); `--grant` requires `--peer`, and a policy
+  without `--p9` is a usage error.
+
+The standalone `p9-listen` (raw TCP) and `p9-ws` (WebSocket listener)
+subcommands are **retired**: their session loops duplicated the one core, and
+their reusable accept/grant logic now lives under serve. The trust boundary
+lives on this edge — `--wanix-services` (which binds the `#task`/`#agent` exec
+devices = RCE) is refused whenever either 9P door (the websocket door on the
+HTTP listener, or the raw `--p9` door) is bound to a non-loopback address;
+the previously silent `--listen :PORT --wanix-services` RCE hole is now a hard
+usage error.
 
 The discovery document at `/.well-known/wanix.json`
 (`crates/wanix-cli/src/serve/discovery.rs`) is the contract the cockpit and v86

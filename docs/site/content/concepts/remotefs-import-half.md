@@ -39,21 +39,21 @@ Wanix could always *export*: it served its filesystems as 9P over a process pipe
 
 ## Show it: bind a remote at /n/remote and read through it
 
-The shipped `wanix-rust mount` subcommands are the smallest possible proof. One process exports a tree; another dials it, builds a `RemoteFs`, binds it into a fresh `Namespace`, and runs exactly one filesystem operation *through the namespace* (`crates/wanix-cli/src/mount.rs:1-29`):
+The shipped `wanix-rust mount-*` subcommands are the smallest possible proof. One process exports a tree; another dials it, builds a `RemoteFs`, binds it into a fresh `Namespace`, and runs exactly one filesystem operation *through the namespace* (`crates/wanix-cli/src/mount.rs:1-29`):
 
 ```sh
 cargo build --package wanix-cli
 alias wanix-rust='./target/debug/wanix-rust'
 
-# Process A: export a host directory as 9P over TCP.
-wanix-rust p9-listen --addr 127.0.0.1:5640 ./shared &
+# Process A: export a host directory as raw 9P over TCP (a serve mode).
+wanix-rust serve --root ./shared --p9 127.0.0.1:5640 &
 
 # Process B: dial it, bind the export at /n/remote, list through the namespace.
-wanix-rust mount ls 127.0.0.1:5640 /n/remote
+wanix-rust mount-ls tcp://127.0.0.1:5640
 # -> the entries of ./shared, fetched over the wire
 ```
 
-Nothing in `mount ls` reaches into `./shared` directly. The bytes traverse `Namespace -> RemoteFs -> 9P -> server` and back (`docs/mesh-the-missing-half-of-9p.md:440-449`). What you just did is Plan 9's **import**: `RemoteFs` is the client end of `bind`, `/n/remote` is the mount point, and the remote namespace is now spliced into yours. Swap the TCP transport for a QUIC stream and the same import reaches a peer across the internet — see [9P over iroh QUIC](/concepts/9p-over-iroh-quic).
+Nothing in `mount-ls` reaches into `./shared` directly. The bytes traverse `Namespace -> RemoteFs -> 9P -> server` and back (`docs/mesh-the-missing-half-of-9p.md:440-449`). What you just did is Plan 9's **import**: `RemoteFs` is the client end of `bind`, `/n/remote` is the mount point, and the remote namespace is now spliced into yours. Swap the `tcp://` transport for an `iroh://` peer and the same import reaches a node across the internet — see [9P over iroh QUIC](/concepts/9p-over-iroh-quic).
 
 ## It is the negative of the server, sharing one wire format
 

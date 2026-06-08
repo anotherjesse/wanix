@@ -53,15 +53,15 @@ wanix-rust serve ./root --bundle workbench-fs9p --wanix-services
 ```
 
 - **root** (positional, or `--root DIR`) — the directory exported as the served filesystem. Defaults to `.` (`command.rs:160-168`).
-- **`--addr` / `--listen ADDR`** — the bind address. Default is `127.0.0.1:7654` (`command.rs:6`, `DEFAULT_SERVE_ADDR`). The default is loopback, which is what makes the loopback-only routes below the common case.
+- **`--listen ADDR`** — the HTTP/websocket bind address. Default is `127.0.0.1:7654` (`command.rs:6`, `DEFAULT_SERVE_ADDR`). The default is loopback, which is what makes the loopback-only routes below the common case. (`--addr` is a deprecated hidden synonym; prefer `--listen`.)
 - **`--bundle NAME`** — selects a browser bundle page: `fs9p`, `workbench-fs9p`, or `direct-v86` (the three bundle names live in `serve.rs:26-27` and `direct_v86.rs:10`). See [three serve bundles](/concepts/three-serve-bundles).
 - **`--wanix-services`** — binds the service-device set onto the namespace and flips the services-gated routes from `disabled` to `available`.
 - **`--once`** — accept exactly one connection then exit, for scripted tests (`command.rs:144-150`).
 
-- **`--p9 HOST:PORT [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]`** — binds a raw 9P listener over TCP alongside HTTP (default loopback), exporting the same served namespace as the websocket door over one per-connection session core. Capability-gated by `--peer`/`--grant`. Refused with `--wanix-services` off-loopback (ADR 0006).
-- **`--listen HOST:PORT`** — the HTTP/websocket listener address (`--addr` is the deprecated synonym).
+- **`--p9 HOST:PORT [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]`** — binds a raw 9P listener over TCP alongside HTTP (default loopback), exporting the same served namespace as the websocket door over one per-connection session core. Capability-gated by `--peer`/`--grant`. Over raw TCP `--peer` is asserted, not cryptographically proven — only the mesh's iroh QUIC transport proves identity. A bound `--p9` door also advertises a `routes.p9.tcp` URL in discovery.
+- **`--listen HOST:PORT`** — the HTTP/websocket listener address (`--addr` is the deprecated synonym; prefer `--listen`).
 
-Each flag is single-shot; passing it twice is a usage error (`command.rs:127-158`). `p9-stdio` remains a separate subcommand for raw 9P over the process pipe (the QEMU-v86 bridge); raw 9P over TCP (`--p9`) and the binary 9P websocket (`/.well-known/export9p`) are both `serve` doors over one session core. The retired `p9-listen`/`p9-ws` subcommands folded into `serve`.
+Each flag is single-shot; passing it twice is a usage error (`command.rs:127-158`). `p9-stdio` remains a separate subcommand for raw 9P over the process pipe (the QEMU-v86 bridge); raw 9P over TCP (`--p9`) and the binary 9P websocket (`/.well-known/export9p`) are both `serve` doors over one per-connection session core — neither is a second server implementation. The retired `p9-listen`/`p9-ws` subcommands folded into `serve` (ADR 0006). `--wanix-services` binds the `#task`/`#agent` exec devices (remote code execution) and is therefore refused if either door — the HTTP/websocket listener or the raw `--p9` door — is bound to a non-loopback address; loopback is the local-trust control.
 
 ## The discovery document: `/.well-known/wanix.json`
 
@@ -73,6 +73,7 @@ A GET to `/.well-known/wanix.json` returns the discovery JSON built in `serve_di
   "runtime": "wanix-rust",
   "routes": {
     "p9":      { "websocket": "ws://HOST/.well-known/export9p",
+                 "tcp": "tcp://127.0.0.1:9999",
                  "transport": "direct-binary-websocket",
                  "protocol": "9p2000.L",
                  "supportedProtocols": ["9P2000.L", "9P2000.L.Google.2"] },
@@ -87,7 +88,7 @@ A GET to `/.well-known/wanix.json` returns the discovery JSON built in `serve_di
 }
 ```
 
-The `p9` route is the always-present anchor: the WebSocket export and the two negotiable protocol levels (base 9P2000.L and the Google.2 `walkgetattr` extension). The `v86` block carries the direct-v86 asset paths, boot hints, and 9P `msize`/memory knobs regardless of bundle. `ethernet` is advertised but its handler returns `501 not-implemented` (`routes.rs:150-155`) — it is a placeholder, not a working bridge.
+The `p9` route is the always-present anchor: the WebSocket export and the two negotiable protocol levels (base 9P2000.L and the Google.2 `walkgetattr` extension). The `websocket` door is always advertised; the `tcp` field (e.g. `tcp://127.0.0.1:9999`) appears only when `--p9` bound a raw 9P-over-TCP door. Both doors are thin adapters over one per-connection 9P session core (ADR 0006). The `v86` block carries the direct-v86 asset paths, boot hints, and 9P `msize`/memory knobs regardless of bundle. `ethernet` is advertised but its handler returns `501 not-implemented` (`routes.rs:150-155`) — it is a placeholder, not a working bridge.
 
 `qjsShell` and `httpApp` are **services-gated**: with `--wanix-services` they report `"status":"available"` and the route details; without it they report `"status":"disabled"` (`discovery.rs:173-188`, `http/app.rs:35-46`). The `httpApp` route advertises `"route":"/.wanix/app/<name>"`, `"source":"apps/<name>.js|apps/<name>.wasm"`, and `"scope":"loopback"` — the HTTP-app surface, served from a `.js`/`.wasm` program in the namespace and reachable only from loopback.
 
@@ -140,6 +141,7 @@ Two JSON document kinds describe how to boot a guest from a prepared root. They 
 - **Discovery and handoffs are hand-built `format!` strings, not typed structs.** The driver-list drift is already fixed (drivers derive from the registry), but the remaining fragments in `discovery.rs`, `rootfs/handoff.rs`, and `qemu/json.rs` are string templates; converting them to typed structs with shape-pinning tests is a queued cleanup ([queued follow-ups](/reference/queued-follow-ups)).
 - **The execution and handoff routes are loopback-only.** `/.wanix/app/<name>` and `POST /agent` require loopback and `--wanix-services`; `/.well-known/rootfs.json` requires loopback. They are not exposed to untrusted peers.
 - **The served `#agent` is a deterministic `FakeEngine`,** not a live LLM; the real codex engine is the local-trust `wanix agent` CLI path only.
+- **`--wanix-services` is refused off-loopback on either 9P door.** Because it binds the `#task`/`#agent` exec devices (remote code execution), serve refuses it when the HTTP/websocket listener or the raw `--p9` door is bound to a non-loopback address. Over raw TCP `--peer` is asserted, not cryptographically proven — only the mesh's iroh QUIC transport proves identity.
 - **`#kv` is in-memory** for the serve process lifetime; persist via a capsule.
 - **serve handles one 9P frame at a time per connection,** so a blocking `#plumb` recv cannot interleave with a write on the same connection — use a second connection for live pub/sub.
 - **The `ethernet` route is advertised but returns `not-implemented`.**

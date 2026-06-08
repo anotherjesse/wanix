@@ -42,7 +42,9 @@ Concretely:
    WebSocket-framed 9P, without WASM-binding the sync Rust client. Full mesh
    peerhood (ed25519 identity, iroh QUIC in the browser) is deferred behind a
    discovery flag; the first deliverable is **trusted-loopback browser-as-peer
-   over WebSocket**, which the existing `p9-ws` listener already accepts.
+   over WebSocket**, which the serve WebSocket 9P door
+   (`/.well-known/export9p`, an adapter over the one session core; ADR 0006)
+   already accepts.
 5. Retire what no longer fits: the Go-served `globalThis.Wanix` bridge,
    `direct-v86` MessagePort/CBOR coupling, the `workbench-fs9p` plain bundle
    path as the primary cockpit entry, and any demo that relied on a runtime

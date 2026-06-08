@@ -10,8 +10,8 @@ sourceRefs:
   - crates/wanix-id/src/grant.rs:16-161
   - crates/wanix-9p/src/lib.rs:73-151
   - crates/wanix-9p/src/session.rs:31-74
-  - crates/wanix-cli/src/p9_listen/grant.rs:24-115
-  - crates/wanix-cli/src/p9_listen/command.rs:168-194
+  - crates/wanix-cli/src/serve/raw9p/grant.rs:24-115
+  - crates/wanix-cli/src/serve/command/options.rs:11-16
   - crates/wanix-cli/src/mesh/serve.rs:30-149
   - crates/wanix-vfs/src/subtree.rs:14-49
   - crates/wanix-mesh/src/dialer.rs:62-101
@@ -80,7 +80,7 @@ A `SubtreeFs` is the backing filesystem re-rooted at `prefix` and gated by `Righ
 
 ## Verified-PeerId keying
 
-The grant key is a cryptographic identity, never a client-claimed string. On the QUIC mesh, the handler reads the proven peer key from the verified handshake before any `Tattach` is served, and never uses a client `uname` (`crates/wanix-mesh/src/handler.rs:102-106`). On plain TCP `p9-listen` there is no handshake to verify a key, so the operator supplies the peer explicitly with `--peer HEX` (`crates/wanix-cli/src/p9_listen/grant.rs:9-16`). Either way, the `PeerId` that keys the grant table is the address — see [the key is the address](/concepts/key-is-the-address).
+The grant key is a cryptographic identity, never a client-claimed string. On the QUIC mesh, the handler reads the proven peer key from the verified handshake before any `Tattach` is served, and never uses a client `uname` (`crates/wanix-mesh/src/handler.rs:102-106`). On the serve raw-9P door (`serve --p9`) there is no handshake to verify a key, so the operator supplies the peer explicitly with `--peer HEX` (`crates/wanix-cli/src/serve/raw9p/grant.rs:9-16`). The two paths share the grant grammar and the `PeerId` keying, but they differ in trust: on the mesh the peer is cryptographically proven, while over raw TCP `--peer` is an *operator assertion*, not proof. Either way, the `PeerId` that keys the grant table is the address — see [the key is the address](/concepts/key-is-the-address).
 
 ## Tauth = ENOSYS
 
@@ -92,21 +92,21 @@ There is no 9P authentication handshake. `Tauth` always replies `ENOSYS` (`crate
 
 The mesh dialer is the matching import half: `dial_attach(addr, aname)` sends a specific attach name to import a scoped capability, while `dial` sends the empty root `aname` for the unscoped case (`crates/wanix-mesh/src/dialer.rs:62-101`). The plain TCP `mount-*` verbs always attach the default root and discard `aname`.
 
-## p9-listen grant grammar
+## serve `--p9` grant grammar
 
-The CLI grant spec is a colon triple — `ANAME:PREFIX:RIGHTS` (`crates/wanix-cli/src/p9_listen/grant.rs:24-58`):
+Raw 9P over TCP is a serve mode (`serve --p9 ADDR`), not a separate daemon — the retired `p9-listen`/`p9-ws` subcommands folded their grant/policy plumbing into the serve raw-9P door unchanged. The CLI grant spec is a colon triple — `ANAME:PREFIX:RIGHTS` (`crates/wanix-cli/src/serve/raw9p/grant.rs:24-58`):
 
 ```sh
 cargo build --package wanix-cli
 alias wanix-rust='./target/debug/wanix-rust'
 
-wanix-rust p9-listen --root . --addr 127.0.0.1:9999 \
+wanix-rust serve --root . --p9 127.0.0.1:9999 \
   --peer <64-hex-ed25519-pubkey> \
   --grant projects/foo:projects/foo:rw \
   --grant docs:docs:ro
 ```
 
-`RIGHTS` is `rw` or `ro` and nothing else; `ANAME` and `PREFIX` are Wanix paths that may contain `/` but not `:` (`grant.rs:34-52`). `--peer` is exactly 64 hex digits (`grant.rs:71-85`). `--grant` repeats; every spec is scoped to the server's `--root` (`grant.rs:104-115`). `--grant` without `--peer` is a usage error (`crates/wanix-cli/src/p9_listen/command.rs:129-133`). `--once` serves a single connection then exits. The mesh `mesh-serve` path takes the same `--peer`/`--grant` grammar over QUIC (`crates/wanix-cli/src/mesh/serve.rs:46-91`).
+`RIGHTS` is `rw` or `ro` and nothing else; `ANAME` and `PREFIX` are Wanix paths that may contain `/` but not `:` (`grant.rs:34-52`). `--peer` is exactly 64 hex digits (`grant.rs:71-85`). `--grant` repeats; every spec is scoped to the serve `--p9` root (`grant.rs:104-115`). `--grant` without `--peer` is a usage error, and a policy without `--p9` is a usage error. The `--p9` door defaults to loopback; over raw TCP `--peer` is asserted by the operator, not cryptographically proven. The mesh `mesh-serve` path takes the same `--peer`/`--grant` grammar over QUIC, where the peer key *is* proven by the handshake (`crates/wanix-cli/src/mesh/serve.rs:46-91`).
 
 ## --insecure-open
 
@@ -118,11 +118,11 @@ wanix-rust p9-listen --root . --addr 127.0.0.1:9999 \
 - [AttachPolicy](/concepts/attach-policy) — the single-place trust decision.
 - [The key is the address](/concepts/key-is-the-address) and [Tauth is ENOSYS](/concepts/tauth-is-enosys) — verified-identity keying with no in-protocol auth.
 - [`#kv`](/devices/kv) — a device that imports across the mesh once a grant lets the peer attach.
-- [CLI command index](/reference/cli-command-index) — `p9-listen`, `mount`, and `mesh-serve` in full.
+- [CLI command index](/reference/cli-command-index) — `serve --p9`, the `mount-*` verbs, and `mesh-serve` in full.
 
 ## Status / honest limits
 
 - **Single attach per connection (v1).** The most recent authorized `Tattach` defines the connection's root; the server overwrites `self.root` on each successful attach (`crates/wanix-9p/src/lib.rs:133-135`, `session.rs:58-69`). Per-fid root scoping for multiple concurrent attaches — and the per-principal namespaces and grant-lifecycle work that build on it — is a deferred fid-namespace change, designed but unshipped.
 - **`/n/<peer>` is a convention, not a code path.** The shipped CLI mount binds one slot, `/n/remote` (`crates/wanix-cli/src/mount.rs:26`). Per-peer `/n/<peer-id>` is designed-but-unshipped; use `/n/<peer>` only as a label.
-- **Exec devices are local-trust only.** `--wanix-services` binds `#task`/`#agent` (remote code execution) and is refused on any public endpoint even with grants or `--insecure-open` (`crates/wanix-cli/src/mesh/serve.rs:120-139`). Grants gate *which subtree*; they do not make exec safe for untrusted peers, and there are no hard CPU/memory limits yet.
-- **No 9P auth.** `Tauth` is `ENOSYS` (`session.rs:71-74`); identity comes from the transport handshake, so plain TCP requires an out-of-band `--peer HEX`.
+- **Exec devices are local-trust only.** `--wanix-services` binds `#task`/`#agent` (remote code execution). On the mesh it is refused on the public endpoint even with grants or `--insecure-open` (`crates/wanix-cli/src/mesh/serve.rs:120-139`); on `serve` it is refused whenever either 9P door (the websocket door on the HTTP listener, or the raw `--p9` door) is bound non-loopback (ADR 0006). Grants gate *which subtree*; they do not make exec safe for untrusted peers, and there are no hard CPU/memory limits yet.
+- **No 9P auth.** `Tauth` is `ENOSYS` (`session.rs:71-74`); identity comes from the transport handshake, so the raw-TCP serve `--p9` door requires an out-of-band `--peer HEX` — and over raw TCP that `--peer` is asserted, not proven. Only the iroh QUIC mesh edge binds and verifies a NodeID, so cross-machine cryptographic trust stays the mesh's job.

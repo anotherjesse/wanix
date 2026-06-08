@@ -191,7 +191,7 @@ A shared hazard the IA must defuse for both: the repo root still carries **Go-er
 
 **Concepts he needs.** Everything-is-a-file; the `FileSystem` trait; service devices (`#name`); task drivers + register-from-above; the 9P contract; protocol vs server split; import/export and `/n/`; devices import across the mesh for free; a-capability-is-a-bind; the blocking-stream EOF contract; identity-is-the-address; the local-trust-only exec boundary; crate layering & async/iroh confinement.
 
-**Demos he wants.** The `#kv` device as a `FileSystem` template; create/control a child task via `#task`; mesh import across two processes (`p9-listen` + `mount-ls`/`mount-cat`/`mount-write`); a device imported for free over the mesh (`/n/A/#kv/...`); `#cas` write-then-read-hash round trip; `#pipe` Unix-pipe composition; the cockpit service inspector rendering a device.
+**Demos he wants.** The `#kv` device as a `FileSystem` template; create/control a child task via `#task`; mesh import across two processes (`serve --p9` raw-TCP door + `mount-ls`/`mount-cat`/`mount-write`); a device imported for free over the mesh (`/n/A/#kv/...`); `#cas` write-then-read-hash round trip; `#pipe` Unix-pipe composition; the cockpit service inspector rendering a device.
 
 **Tone.** Pragmatic and payoff-forward. Lead with "here's the one trait and here's what you get for free," then the honest constraints so he doesn't overclaim. Copy-pasteable code paths and real file references, minimal philosophy unless it changes what he builds.
 

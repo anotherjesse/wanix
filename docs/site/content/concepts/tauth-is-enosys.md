@@ -19,7 +19,7 @@ prerequisites:
   - concepts/key-is-the-address
 usedInFlows: []
 honestLimits:
-  - Over plain stdio or TCP (p9-stdio, p9-listen, the local serve websocket) there is no transport identity at all; those paths are local-trust only.
+  - Over plain stdio or TCP (p9-stdio, the serve raw-9P --p9 door, the local serve websocket) there is no transport identity at all; those paths are loopback/local-trust only.
   - handle_attach decodes uname/aname but discards uname entirely; the trust gate keys on the QUIC-verified PeerId, not on anything the client claims in-band.
   - The Tauth path returns ENOSYS unconditionally — there is no 9P auth-file handshake to fall back to.
 canonicalCaveatFor: [tauth-enosys]
@@ -67,7 +67,7 @@ This is the whole point of pushing identity below 9P. A client can *claim* to be
 
 ## When there is no transport identity at all
 
-The flip side of "identity is a transport property" is blunt: a transport with no identity confers no identity. When `ServeConfig::open` exports a root with `policy: None`, the namespace is exported wholesale, "exactly as an unguarded `p9-listen`" (`crates/wanix-mesh/src/handler.rs:39-48`). Over plain stdio (`p9-stdio`), raw TCP (`p9-listen`), or the local serve websocket, there is no QUIC handshake, so there is no proven key, so there is nothing for a policy to gate on. Those paths are **local-trust only**. Tauth being ENOSYS does not make them safer — it just means the missing authentication is honestly absent rather than faked by a half-built in-band scheme. Real peer authentication exists only on the QUIC mesh edge, and only there does the attach policy have a verified principal to evaluate.
+The flip side of "identity is a transport property" is blunt: a transport with no identity confers no identity. When `ServeConfig::open` exports a root with `policy: None`, the namespace is exported wholesale, with no key to gate on (`crates/wanix-mesh/src/handler.rs:39-48`). Over plain stdio (`p9-stdio`), the serve raw-9P door (`serve --p9`), or the local serve websocket, there is no QUIC handshake, so there is no proven key, so there is nothing for a policy to gate on. Those doors default to loopback and are **local-trust only**. Tauth being ENOSYS does not make them safer — it just means the missing authentication is honestly absent rather than faked by a half-built in-band scheme. The serve raw-9P door can carry an explicit `--peer`/`--grant` policy, but over raw TCP that `--peer` is *asserted by the operator*, not cryptographically proven — only the QUIC mesh edge binds and verifies a NodeID, and only there does the attach policy have a verified principal to evaluate.
 
 ## See also
 
@@ -80,5 +80,5 @@ The flip side of "identity is a transport property" is blunt: a transport with n
 
 - **Tauth is ENOSYS unconditionally.** There is no fallback in-band auth handshake; a client expecting an auth file will not find one (`crates/wanix-9p/src/session.rs:71-74`).
 - **`uname` is decoded and discarded.** The trust gate keys exclusively on the QUIC-verified `PeerId`, never on the client-claimed username (`crates/wanix-mesh/src/identity.rs:23-31`).
-- **No transport identity off the QUIC edge.** `p9-stdio`, `p9-listen`, and the local serve websocket have no handshake-proven peer key, so they are local-trust only and any attach policy there has nothing to evaluate (`crates/wanix-mesh/src/handler.rs:39-48`, `AGENTS.md:246-247`).
+- **No transport identity off the QUIC edge.** `p9-stdio`, the serve raw-9P `--p9` door, and the local serve websocket have no handshake-proven peer key, so they are loopback/local-trust only. The `--p9` door accepts `--peer`/`--grant`, but raw TCP cannot *prove* a peer key — that `--peer` is an operator assertion, so the policy gates the subtree without a cryptographic principal (`crates/wanix-mesh/src/handler.rs:39-48`, `AGENTS.md:246-247`).
 - **Public/multi-user auth is explicitly unimplemented.** Beyond the per-attach key gate, broader multi-user and public-facing authentication remains open trust-boundary work (`AGENTS.md:246-247`).
