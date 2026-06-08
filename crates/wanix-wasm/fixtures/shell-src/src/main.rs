@@ -57,6 +57,23 @@ impl NamespaceOps for WasiNamespace {
             .map_err(|err| ShellError::Io(format!("#pipe/{id}/data: {err}")))
     }
 
+    fn read_file(&mut self, path: &str) -> ShellResult<Vec<u8>> {
+        std::fs::read(path).map_err(|err| ShellError::Io(format!("{path}: {err}")))
+    }
+
+    fn write_file(&mut self, path: &str, bytes: &[u8], append: bool) -> ShellResult<()> {
+        let result = if append {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut file| file.write_all(bytes))
+        } else {
+            std::fs::write(path, bytes)
+        };
+        result.map_err(|err| ShellError::Io(format!("{path}: {err}")))
+    }
+
     fn spawn(&mut self, spec: &SpawnSpec) -> ShellResult<i32> {
         // Allocate a child task whose kind is auto-selected by the program's
         // extension (`.wasm` -> wasm driver, `.js` -> qjs driver, …).
@@ -65,6 +82,12 @@ impl NamespaceOps for WasiNamespace {
         let base = format!("#task/{child}");
 
         write_service(&format!("{base}/cmd"), &command_line(spec))?;
+        // A `>` to a file: pre-truncate so the child writing from offset 0 leaves
+        // no stale tail. (Append to a file for externals is rejected upstream.)
+        if let OutputSink::File { path, .. } = &spec.stdout {
+            let path = path.clone();
+            self.write_file(&path, b"", false)?;
+        }
         if !spec.env.is_empty() {
             let env_lines = spec
                 .env
@@ -91,17 +114,19 @@ fn input_bind(stdin: &InputSource, self_id: &str) -> (String, Option<&'static st
     match stdin {
         InputSource::Inherit => (format!("#task/{self_id}/fd/0"), None),
         InputSource::Pipe(id) => (format!("#pipe/{id}/data"), Some("r")),
+        InputSource::File(path) => (path.clone(), Some("r")),
     }
 }
 
 /// The (sink path, open-mode) a child's stdout should bind to.
 ///
-/// A `#pipe` write end must open write-only — it rejects a read-write open — so
-/// it carries an explicit `w` mode.
+/// A `#pipe` write end (and a file fd 1) must open write-only — a pipe rejects a
+/// read-write open — so these carry an explicit `w` mode.
 fn output_bind(stdout: &OutputSink, self_id: &str) -> (String, Option<&'static str>) {
     match stdout {
         OutputSink::Inherit => (format!("#task/{self_id}/fd/1"), None),
         OutputSink::Pipe(id) => (format!("#pipe/{id}/data"), Some("w")),
+        OutputSink::File { path, .. } => (path.clone(), Some("w")),
     }
 }
 

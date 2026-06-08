@@ -16,6 +16,8 @@ pub enum InputSource {
     Inherit,
     /// Read the named `#pipe` channel (the read end).
     Pipe(String),
+    /// Read the named file (a `<` redirection).
+    File(String),
 }
 
 /// Where a command stage writes its standard output to.
@@ -25,6 +27,13 @@ pub enum OutputSink {
     Inherit,
     /// Write the named `#pipe` channel (the write end).
     Pipe(String),
+    /// Write the named file (a `>` or, when `append`, `>>` redirection).
+    File {
+        /// Target path.
+        path: String,
+        /// Append rather than truncate.
+        append: bool,
+    },
 }
 
 /// A request to launch an external command as a child task.
@@ -78,6 +87,21 @@ pub trait NamespaceOps {
     /// Returns an error only if existence cannot be determined (e.g. an I/O
     /// failure distinct from "not found").
     fn exists(&self, path: &str) -> ShellResult<bool>;
+
+    /// Reads a file's full contents (for a `<` redirection on a builtin).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read.
+    fn read_file(&mut self, path: &str) -> ShellResult<Vec<u8>>;
+
+    /// Writes bytes to a file, truncating unless `append` (for `>`/`>>` on a
+    /// builtin).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written.
+    fn write_file(&mut self, path: &str, bytes: &[u8], append: bool) -> ShellResult<()>;
 
     /// Allocates a new `#pipe` channel and returns its id.
     ///

@@ -10,12 +10,36 @@ use brush_parser::ast;
 
 use crate::error::{ShellError, ShellResult};
 
+/// A file redirection operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedirectOp {
+    /// `<`: read input from the target file.
+    Read,
+    /// `>`: write (truncate) output to the target file.
+    Write,
+    /// `>>`: append output to the target file.
+    Append,
+}
+
+/// A single file redirection on a stage (target kept raw, expanded at exec).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Redirect {
+    /// The affected fd (0 for `<`, 1 for `>`/`>>` unless given explicitly).
+    pub fd: u32,
+    /// The operator.
+    pub op: RedirectOp,
+    /// The raw target word.
+    pub target: String,
+}
+
 /// A single simple command as raw (unexpanded) word strings; `argv[0]` is the
 /// command name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stage {
     /// The raw argument words, expanded at execution time.
     pub argv: Vec<String>,
+    /// File redirections applied to this stage.
+    pub redirects: Vec<Redirect>,
 }
 
 /// A pipeline: one or more [`Stage`]s connected stdout-to-stdin by pipes.
@@ -115,6 +139,7 @@ fn lower_simple(simple: &ast::SimpleCommand) -> ShellResult<Stage> {
     }
 
     let mut argv = Vec::new();
+    let mut redirects = Vec::new();
     if let Some(name) = &simple.word_or_name {
         argv.push(name.value.clone());
     }
@@ -127,8 +152,8 @@ fn lower_simple(simple: &ast::SimpleCommand) -> ShellResult<Stage> {
                 ast::CommandPrefixOrSuffixItem::AssignmentWord(_, word) => {
                     argv.push(word.value.clone());
                 }
-                ast::CommandPrefixOrSuffixItem::IoRedirect(_) => {
-                    return Err(ShellError::Unsupported("redirections".into()));
+                ast::CommandPrefixOrSuffixItem::IoRedirect(io) => {
+                    redirects.push(lower_redirect(io)?);
                 }
                 ast::CommandPrefixOrSuffixItem::ProcessSubstitution(_, _) => {
                     return Err(ShellError::Unsupported("process substitution".into()));
@@ -140,7 +165,34 @@ fn lower_simple(simple: &ast::SimpleCommand) -> ShellResult<Stage> {
     if argv.is_empty() {
         return Err(ShellError::Unsupported("empty command".into()));
     }
-    Ok(Stage { argv })
+    Ok(Stage { argv, redirects })
+}
+
+fn lower_redirect(io: &ast::IoRedirect) -> ShellResult<Redirect> {
+    let ast::IoRedirect::File(io_fd, kind, target) = io else {
+        return Err(ShellError::Unsupported(
+            "here-documents, here-strings, and '&>' redirects".into(),
+        ));
+    };
+    let op = match kind {
+        ast::IoFileRedirectKind::Read => RedirectOp::Read,
+        ast::IoFileRedirectKind::Write => RedirectOp::Write,
+        ast::IoFileRedirectKind::Append => RedirectOp::Append,
+        _ => return Err(ShellError::Unsupported("this redirection operator".into())),
+    };
+    let target = match target {
+        ast::IoFileRedirectTarget::Filename(word) => word.value.clone(),
+        _ => {
+            return Err(ShellError::Unsupported(
+                "fd-duplication / process-substitution redirects".into(),
+            ));
+        }
+    };
+    let default_fd = if matches!(op, RedirectOp::Read) { 0 } else { 1 };
+    let fd_i32 = (*io_fd).unwrap_or(default_fd);
+    let fd = u32::try_from(fd_i32)
+        .map_err(|_| ShellError::Unsupported("redirect to a negative fd".into()))?;
+    Ok(Redirect { fd, op, target })
 }
 
 #[cfg(test)]
@@ -198,9 +250,40 @@ mod tests {
     }
 
     #[test]
-    fn redirections_are_unsupported_honestly() {
+    fn lowers_file_redirects() {
+        let plan = plan_of("cat < in.txt > out.txt").expect("lowers");
+        let stage = &plan.lists[0].first.stages[0];
+        assert_eq!(stage.argv, ["cat"]);
+        assert_eq!(
+            stage.redirects,
+            vec![
+                Redirect {
+                    fd: 0,
+                    op: RedirectOp::Read,
+                    target: "in.txt".into(),
+                },
+                Redirect {
+                    fd: 1,
+                    op: RedirectOp::Write,
+                    target: "out.txt".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn lowers_append_redirect() {
+        let plan = plan_of("echo hi >> log").expect("lowers");
+        assert_eq!(
+            plan.lists[0].first.stages[0].redirects[0].op,
+            RedirectOp::Append
+        );
+    }
+
+    #[test]
+    fn dup_redirects_are_unsupported_honestly() {
         assert!(matches!(
-            plan_of("echo a > f").unwrap_err(),
+            plan_of("echo hi >&2").unwrap_err(),
             ShellError::Unsupported(_)
         ));
     }

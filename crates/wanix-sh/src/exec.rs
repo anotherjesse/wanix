@@ -10,7 +10,7 @@
 
 use crate::builtins::{builtin, is_special, special_builtin};
 use crate::error::{ShellError, ShellResult};
-use crate::lower::{AndOrList, Connector, Pipeline, Plan, Stage};
+use crate::lower::{AndOrList, Connector, Pipeline, Plan, Redirect, RedirectOp, Stage};
 use crate::ns::{InputSource, NamespaceOps, OutputSink, SpawnSpec};
 use crate::state::ShellState;
 
@@ -128,7 +128,13 @@ fn run_single_stage(
     if let Some(special) = special_builtin(name) {
         return Ok(Outcome::Status(special(&argv, state)));
     }
-    dispatch(&argv, InputSource::Inherit, OutputSink::Inherit, state, ns).map(Outcome::Status)
+    let (stdin, stdout) = apply_redirects(
+        &stage.redirects,
+        InputSource::Inherit,
+        OutputSink::Inherit,
+        state,
+    )?;
+    dispatch(&argv, stdin, stdout, state, ns).map(Outcome::Status)
 }
 
 fn run_stage(
@@ -139,7 +145,38 @@ fn run_stage(
     ns: &mut dyn NamespaceOps,
 ) -> ShellResult<i32> {
     let argv = expand_argv(&stage.argv, state)?;
+    // A stage's own redirects override the pipe-derived wiring (bash precedence).
+    let (stdin, stdout) = apply_redirects(&stage.redirects, stdin, stdout, state)?;
     dispatch(&argv, stdin, stdout, state, ns)
+}
+
+/// Applies a stage's redirects over its pipe-derived stdin/stdout wiring.
+fn apply_redirects(
+    redirects: &[Redirect],
+    mut stdin: InputSource,
+    mut stdout: OutputSink,
+    state: &ShellState,
+) -> ShellResult<(InputSource, OutputSink)> {
+    for redirect in redirects {
+        let target = crate::expand::expand_word(&redirect.target, state)?;
+        match (redirect.fd, redirect.op) {
+            (0, RedirectOp::Read) => stdin = InputSource::File(target),
+            (1, RedirectOp::Write) => {
+                stdout = OutputSink::File {
+                    path: target,
+                    append: false,
+                };
+            }
+            (1, RedirectOp::Append) => {
+                stdout = OutputSink::File {
+                    path: target,
+                    append: true,
+                };
+            }
+            _ => return Err(ShellError::Unsupported("this redirection".into())),
+        }
+    }
+    Ok((stdin, stdout))
 }
 
 fn dispatch(
@@ -173,6 +210,13 @@ fn run_external(
     state: &ShellState,
     ns: &mut dyn NamespaceOps,
 ) -> ShellResult<i32> {
+    // A bound file fd opens at offset 0, so append (`>>`) to an external command
+    // is not expressible yet; builtins handle `>>` themselves via write_file.
+    if matches!(stdout, OutputSink::File { append: true, .. }) {
+        return Err(ShellError::Unsupported(
+            "'>>' append to a file for an external command".into(),
+        ));
+    }
     let program = crate::resolve::resolve_command(&argv[0], &*ns)?;
     let spec = SpawnSpec {
         program,
@@ -197,6 +241,7 @@ fn gather_input(source: &InputSource, ns: &mut dyn NamespaceOps) -> ShellResult<
     match source {
         InputSource::Inherit => Ok(Vec::new()),
         InputSource::Pipe(id) => ns.pipe_read_all(id),
+        InputSource::File(path) => ns.read_file(path),
     }
 }
 
@@ -204,6 +249,7 @@ fn emit_output(sink: &OutputSink, bytes: &[u8], ns: &mut dyn NamespaceOps) -> Sh
     match sink {
         OutputSink::Inherit => ns.write_stdout(bytes),
         OutputSink::Pipe(id) => ns.pipe_write_all_and_close(id, bytes),
+        OutputSink::File { path, append } => ns.write_file(path, bytes, *append),
     }
 }
 
@@ -229,7 +275,7 @@ mod tests {
         err: Vec<u8>,
         commands: HashMap<String, FakeCmd>,
         pipes: HashMap<String, Vec<u8>>,
-        files: std::collections::HashSet<String>,
+        files: HashMap<String, Vec<u8>>,
         spawns: Vec<SpawnSpec>,
         next_pipe: u32,
     }
@@ -241,13 +287,14 @@ mod tests {
 
         /// Pretends a file exists at `path` (for command resolution tests).
         fn seed_file(&mut self, path: &str) {
-            self.files.insert(path.to_owned());
+            self.files.entry(path.to_owned()).or_default();
         }
 
         fn read_source(&mut self, source: &InputSource) -> Vec<u8> {
             match source {
                 InputSource::Inherit => Vec::new(),
                 InputSource::Pipe(id) => self.pipes.remove(id).unwrap_or_default(),
+                InputSource::File(path) => self.files.get(path).cloned().unwrap_or_default(),
             }
         }
 
@@ -259,6 +306,13 @@ mod tests {
                         .entry(id.clone())
                         .or_default()
                         .extend_from_slice(bytes);
+                }
+                OutputSink::File { path, append } => {
+                    let entry = self.files.entry(path.clone()).or_default();
+                    if !append {
+                        entry.clear();
+                    }
+                    entry.extend_from_slice(bytes);
                 }
             }
         }
@@ -274,7 +328,21 @@ mod tests {
             Ok(())
         }
         fn exists(&self, path: &str) -> ShellResult<bool> {
-            Ok(self.files.contains(path))
+            Ok(self.files.contains_key(path))
+        }
+        fn read_file(&mut self, path: &str) -> ShellResult<Vec<u8>> {
+            self.files
+                .get(path)
+                .cloned()
+                .ok_or_else(|| crate::ShellError::Io(format!("{path}: not found")))
+        }
+        fn write_file(&mut self, path: &str, bytes: &[u8], append: bool) -> ShellResult<()> {
+            let entry = self.files.entry(path.to_owned()).or_default();
+            if !append {
+                entry.clear();
+            }
+            entry.extend_from_slice(bytes);
+            Ok(())
         }
         fn pipe_new(&mut self) -> ShellResult<String> {
             let id = self.next_pipe.to_string();
@@ -596,5 +664,54 @@ mod tests {
         let (code, ns) = run("false && echo a || echo b");
         assert_eq!(code, 0);
         assert_eq!(String::from_utf8(ns.out).unwrap(), "b\n");
+    }
+
+    // ---- redirects ------------------------------------------------------
+
+    #[test]
+    fn builtin_writes_to_file_not_terminal() {
+        let mut state = ShellState::new();
+        let mut ns = FakeNs::default();
+        run_with("echo hi > out.txt", &mut state, &mut ns);
+        assert_eq!(ns.files.get("out.txt").unwrap(), b"hi\n");
+        assert!(ns.out.is_empty());
+    }
+
+    #[test]
+    fn builtin_appends_to_file() {
+        let mut state = ShellState::new();
+        let mut ns = FakeNs::default();
+        run_with("echo a > out.txt", &mut state, &mut ns);
+        run_with("echo b >> out.txt", &mut state, &mut ns);
+        assert_eq!(ns.files.get("out.txt").unwrap(), b"a\nb\n");
+    }
+
+    #[test]
+    fn builtin_reads_from_file() {
+        let mut state = ShellState::new();
+        let mut ns = FakeNs::default();
+        ns.write_file("in.txt", b"file contents", false).unwrap();
+        run_with("cat < in.txt", &mut state, &mut ns);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "file contents");
+    }
+
+    #[test]
+    fn redirect_overrides_pipe_sink() {
+        // `echo hi | cat > out.txt`: cat's stdout goes to the file, not stdout.
+        let mut state = ShellState::new();
+        let mut ns = FakeNs::default();
+        run_with("echo hi | cat > out.txt", &mut state, &mut ns);
+        assert_eq!(ns.files.get("out.txt").unwrap(), b"hi\n");
+        assert!(ns.out.is_empty());
+    }
+
+    #[test]
+    fn external_append_is_unsupported() {
+        let mut state = ShellState::new();
+        let mut ns = FakeNs::default();
+        ns.register("prog", |_in, _args| (b"x".to_vec(), 0));
+        let code = run_with("prog >> out.txt", &mut state, &mut ns);
+        assert_eq!(code, 1);
+        assert!(String::from_utf8(ns.err).unwrap().contains("not supported"));
     }
 }

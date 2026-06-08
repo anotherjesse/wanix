@@ -449,6 +449,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn shell_redirects_to_and_from_a_real_file() {
+        // `echo hello > out.txt` writes a real file; `cat < out.txt` reads it.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell");
+
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let shell = table
+            .allocate_root_with_namespace("auto", namespace_with_pipe(&fs))
+            .expect("allocate shell");
+        shell
+            .set_cmd("shell.wasm -c \"echo hello > out.txt; cat < out.txt\"")
+            .expect("set cmd");
+        let cap = wire_shell_stdio(&shell);
+
+        table.start(shell.id()).expect("run shell");
+        let err = String::from_utf8_lossy(&cap.read_file("err").expect("read err")).into_owned();
+        assert_eq!(shell.exit(), "0", "shell should exit 0; stderr={err:?}");
+
+        assert_eq!(
+            fs.read_file("out.txt").expect("out.txt written"),
+            b"hello\n",
+            "`>` should write the file"
+        );
+        let out = String::from_utf8(cap.read_file("out").expect("read out")).expect("utf8");
+        assert_eq!(out, "hello\n", "`<` should feed the file to cat");
+    }
+
     fn run_shell_with_bin(cmd: &str) -> (String, String) {
         let fs = Arc::new(MemFs::new());
         fs.write_file("shell.wasm", SHELL_GUEST)
