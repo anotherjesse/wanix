@@ -23,6 +23,7 @@ use crate::dialer::MeshDialer;
 use crate::error::{MeshError, MeshResult};
 use crate::handler::{P9ProtocolHandler, ServeConfig};
 use crate::identity::{peer_id_for, secret_key_for};
+use crate::wire_handler::{NativeFsHandler, NativeServeConfig};
 
 /// Default per-operation deadline on mesh streams, bounding slow-peer stalls.
 pub const DEFAULT_OP_DEADLINE: Duration = Duration::from_secs(30);
@@ -207,6 +208,26 @@ impl MeshNode {
         self.router = Some(router);
     }
 
+    /// Starts serving `config` over the **native** wire on
+    /// [`crate::WANIX_FS_ALPN`].
+    ///
+    /// This is the native analog of [`Self::serve`]: a hand-rolled `postcard`
+    /// frame, one bidi stream per op / per open file, the full
+    /// [`wanix_fs::FileSystem`] trait with typed errors, and a per-connection
+    /// principal bound from `remote_id()`. The spawned [`Router`] is held by the
+    /// node; dropping the node shuts it down. Serving and dialing share the one
+    /// endpoint and identity, and the endpoint advertises both ALPNs, so a node
+    /// can speak the 9P and native wires at once during the transition.
+    pub fn serve_native(&mut self, config: NativeServeConfig) {
+        let handler = self.native_handler(config);
+        let router = self.runtime.block_on(async {
+            Router::builder(self.endpoint.clone())
+                .accept(crate::WANIX_FS_ALPN, handler)
+                .spawn()
+        });
+        self.router = Some(router);
+    }
+
     /// Starts serving 9P (`config`) on [`crate::WANIX_9P_ALPN`] *and* the blob
     /// data plane (`cas`) on [`crate::BLOBS_ALPN`] from one shared [`Router`].
     ///
@@ -326,6 +347,14 @@ impl MeshNode {
         )
     }
 
+    /// Builds the deadline-bound native-wire protocol handler for `config`.
+    fn native_handler(&self, config: NativeServeConfig) -> NativeFsHandler {
+        NativeFsHandler::new(
+            config.with_deadline(self.deadline),
+            self.runtime.handle().clone(),
+        )
+    }
+
     /// Returns a [`MeshDialer`] over this node's endpoint and runtime.
     #[must_use]
     pub fn dialer(&self) -> MeshDialer {
@@ -351,15 +380,25 @@ enum Binding {
     Local(std::net::SocketAddr),
 }
 
+/// The ALPNs a Wanix endpoint advertises at bind time.
+///
+/// A node speaks both control-plane wires: the 9P plane (the foreign-edge
+/// gateway) and the native `wanix-mesh-wire` plane (the Wanix↔Wanix mesh path).
+/// Both ride one identity-bound endpoint, so the bind-time ALPN set lists both;
+/// `Router::spawn` further unions in whatever the registered handlers accept.
+fn endpoint_alpns() -> Vec<Vec<u8>> {
+    vec![crate::WANIX_9P_ALPN.to_vec(), crate::WANIX_FS_ALPN.to_vec()]
+}
+
 /// Builds and binds the iroh endpoint for `binding`.
 async fn build_endpoint(secret: iroh::SecretKey, binding: Binding) -> Result<Endpoint, String> {
     let builder = match binding {
         Binding::Public => Endpoint::builder(presets::N0)
             .secret_key(secret)
-            .alpns(vec![crate::WANIX_9P_ALPN.to_vec()]),
+            .alpns(endpoint_alpns()),
         Binding::Local(addr) => Endpoint::builder(presets::Minimal)
             .secret_key(secret)
-            .alpns(vec![crate::WANIX_9P_ALPN.to_vec()])
+            .alpns(endpoint_alpns())
             .relay_mode(iroh::RelayMode::Disabled)
             .bind_addr(addr)
             .map_err(|err| err.to_string())?,

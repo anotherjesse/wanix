@@ -142,9 +142,31 @@ impl BlockingDuplex {
         handle: Handle,
         deadline: Option<Duration>,
     ) -> Self {
+        Self::with_deadlines(send, recv, handle, deadline, deadline)
+    }
+
+    /// Wraps both halves with independent read and write deadlines.
+    ///
+    /// The native-wire server needs an **asymmetric** duplex: the read of the
+    /// next `FileOp` on an open-file stream is the idle wait of a live, possibly
+    /// never-EOF subscription (e.g. `#agent/events`, `#plumb/recv`), so it must
+    /// carry **no** deadline — a deadline there would tear down a healthy session.
+    /// The write of a `FileReply` is in-flight work, so it carries the per-op
+    /// deadline (a stalled peer must not park a blocking-pool thread forever).
+    /// This is the same idle-read-vs-in-flight-write split the 9P handler makes
+    /// across its separate [`BlockingReader`]/[`BlockingWriter`]; the native
+    /// `serve_one` takes one `Read + Write`, so the split lives in the duplex.
+    #[must_use]
+    pub fn with_deadlines(
+        send: SendStream,
+        recv: RecvStream,
+        handle: Handle,
+        read_deadline: Option<Duration>,
+        write_deadline: Option<Duration>,
+    ) -> Self {
         Self {
-            reader: BlockingReader::new(recv, handle.clone(), deadline),
-            writer: BlockingWriter::new(send, handle, deadline),
+            reader: BlockingReader::new(recv, handle.clone(), read_deadline),
+            writer: BlockingWriter::new(send, handle, write_deadline),
         }
     }
 }

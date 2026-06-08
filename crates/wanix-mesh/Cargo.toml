@@ -29,6 +29,7 @@ wanix-cas = { path = "../wanix-cas" }
 wanix-cpu = { path = "../wanix-cpu" }
 wanix-fs = { path = "../wanix-fs" }
 wanix-id = { path = "../wanix-id" }
+wanix-mesh-wire = { path = "../wanix-mesh-wire" }
 wanix-plumb = { version = "0.1.0", path = "../wanix-plumb" }
 wanix-task = { path = "../wanix-task" }
 wanix-vfs = { path = "../wanix-vfs" }

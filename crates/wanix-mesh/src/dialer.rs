@@ -15,9 +15,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr};
 use tokio::runtime::Handle;
 use wanix_9p_client::RemoteFs;
+use wanix_mesh_wire::{Duplex, NativeFs, StreamFactory};
 
 use crate::duplex::BlockingDuplex;
 use crate::error::{MeshError, MeshResult};
@@ -110,6 +112,62 @@ impl MeshDialer {
         ))
     }
 
+    /// Dials `addr` over [`crate::WANIX_FS_ALPN`] and returns the imported peer
+    /// namespace as a native-wire [`NativeFs`].
+    ///
+    /// Unlike [`Self::dial`] (9P, one shared serial connection), the native wire
+    /// opens **one fresh bidi stream per op / per open file** over a single held
+    /// [`Connection`]. The returned [`NativeFs`] is a synchronous
+    /// [`wanix_fs::FileSystem`] that can be bound into a [`wanix_vfs::Namespace`]
+    /// at `/n/<node>`; every op opens a stream, frames one `postcard` request,
+    /// and reads one reply — with typed [`wanix_mesh_wire::WireFsError`]s, not an
+    /// errno round-trip, and with each never-EOF open file on its own stream so
+    /// it cannot stall any sibling op.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MeshError::Dial`] when the QUIC connection cannot be established.
+    pub fn dial_native(&self, addr: EndpointAddr) -> MeshResult<Arc<NativeFs<IrohStreamFactory>>> {
+        self.dial_native_attach(addr, "")
+    }
+
+    /// Dials `addr` over the native plane, reserving `aname` for the future
+    /// scoped-attach path.
+    ///
+    /// The native wire binds the principal from the verified `remote_id()` and
+    /// the v1 server resolves the connection root from that principal alone
+    /// (`AttachPolicy` evaluated at the root attach name), so a default-deny
+    /// rejection surfaces lazily as a per-op transport fault rather than at dial
+    /// time. `aname` is threaded for symmetry with [`Self::dial_attach`] and a
+    /// future per-attach scoping path; v1 does not yet carry it on the wire.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MeshError::Dial`] when the QUIC connection cannot be established.
+    pub fn dial_native_attach(
+        &self,
+        addr: EndpointAddr,
+        aname: &str,
+    ) -> MeshResult<Arc<NativeFs<IrohStreamFactory>>> {
+        let _ = aname;
+        let connection = self.connect_native(addr)?;
+        let factory = IrohStreamFactory {
+            connection,
+            handle: self.handle.clone(),
+            deadline: self.deadline,
+        };
+        Ok(Arc::new(NativeFs::new(factory)))
+    }
+
+    /// Connects to `addr` over the native ALPN, returning the held connection the
+    /// per-op stream factory opens fresh bidi streams over.
+    fn connect_native(&self, addr: EndpointAddr) -> MeshResult<Connection> {
+        let endpoint = self.endpoint.clone();
+        self.handle
+            .block_on(async move { endpoint.connect(addr, crate::WANIX_FS_ALPN).await })
+            .map_err(|err| MeshError::Dial(err.to_string()))
+    }
+
     /// Connects and opens one bidi stream, returning the bridged duplex.
     fn open_stream(&self, addr: EndpointAddr) -> MeshResult<BlockingDuplex> {
         let endpoint = self.endpoint.clone();
@@ -126,6 +184,43 @@ impl MeshDialer {
             self.handle.clone(),
             self.deadline,
         ))
+    }
+}
+
+/// The native-wire [`StreamFactory`]: opens a fresh iroh bidi stream per op.
+///
+/// This is the mesh's implementation of the wire crate's transport seam. It
+/// holds one iroh [`Connection`] and the node's runtime [`Handle`], and for each
+/// native-wire op (`open_stream`) opens a new bidi stream on that connection and
+/// wraps it in the existing [`BlockingDuplex`], so `wanix-mesh-wire` only ever
+/// sees the sync [`Duplex`] and stays iroh/tokio-free. The held connection must
+/// outlive every op (the [`BlockingDuplex`] holds a non-owning [`Handle`]); the
+/// owning [`crate::MeshNode`]/import keeps it alive.
+#[derive(Clone)]
+pub struct IrohStreamFactory {
+    connection: Connection,
+    handle: Handle,
+    deadline: Option<Duration>,
+}
+
+impl StreamFactory for IrohStreamFactory {
+    fn open_stream(&self) -> std::io::Result<Box<dyn Duplex>> {
+        let connection = self.connection.clone();
+        // Open the bidi stream on the held runtime. The first byte the wire crate
+        // writes (its request frame) is what makes the peer's `accept_bi`
+        // resolve, exactly as the 9P `Tversion` write does today.
+        let (send, recv) = self
+            .handle
+            .block_on(async move { connection.open_bi().await })
+            .map_err(|err| std::io::Error::other(format!("native dial open_bi failed: {err}")))?;
+        // The client keeps the deadline on both halves: its read always follows a
+        // request write, so the per-op deadline is a sane response timeout.
+        Ok(Box::new(BlockingDuplex::new(
+            send,
+            recv,
+            self.handle.clone(),
+            self.deadline,
+        )))
     }
 }
 

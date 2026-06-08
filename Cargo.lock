@@ -5094,6 +5094,7 @@ dependencies = [
  "wanix-fs",
  "wanix-id",
  "wanix-kv",
+ "wanix-mesh-wire",
  "wanix-plumb",
  "wanix-task",
  "wanix-term",
