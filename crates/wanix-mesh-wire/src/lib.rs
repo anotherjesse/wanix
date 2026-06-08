@@ -41,6 +41,19 @@
 //!   over a [`Duplex`]-producing factory.
 //!
 //! Binding this codec to iroh QUIC (the async/iroh edge) lands in `wanix-mesh`.
+//!
+//! # Conformance suite (test-support)
+//!
+//! This crate also exports [`conformance`], a reusable
+//! [`wanix_fs::FileSystem`]-contract suite runnable against **any**
+//! `dyn FileSystem`. Phase 5's differential test drives it against both a native
+//! and a 9P import of one shared `MemFs` to prove the two encodings stay
+//! behaviorally identical. It is pure test-support — it pulls in no extra
+//! dependency and only ever operates on the public `FileSystem` trait through
+//! `assert!`/`panic!` — so it is always compiled, matching the workspace's
+//! no-feature-flag convention and keeping the quality gate exercising it.
+
+pub mod conformance;
 
 mod client;
 mod error;
