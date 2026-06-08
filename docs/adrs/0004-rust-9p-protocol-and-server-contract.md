@@ -8,6 +8,29 @@ implemented** (today the mesh tunnels 9P over iroh via
 `wanix-9p-client::RemoteFs`). Implementation status lives in tests, examples,
 and commit messages, not here.
 
+**Wire encoding decided — the hand-rolled fallback, not `irpc`.** §Decision below
+names `irpc` as primary with "a hand-rolled minimal frame over raw QUIC streams"
+as the explicit fallback "if the open-file/streaming mapping proves awkward." We
+take the fallback, deliberately, judged through the project's *simple-not-easy*
+mandate. The deciding facts: (1) `irpc`'s turnkey server loop discards the
+ed25519 `remote_id()` and takes a bare `noq::Connection`, so the **per-principal
+identity** requirement forces a hand-rolled accept loop anyway — `irpc`'s
+headline value is the part we would throw away; and (2) the hand-rolled frame
+reuses the **already-shipped** sync `Duplex` boundary + `BlockingDuplex` bridge
+(`wanix-9p-client::transport`, `wanix-mesh::duplex`) verbatim with zero new
+bridge code, whereas `irpc` would layer a second async-over-sync seam onto the
+sync `FileSystem` boundary. The precedent already ships twice
+(`wanix-cpu/src/wire.rs`, `event.rs`): typed structs, length-prefixed framing,
+bounded decode. The honest cost is ~100–150 LOC of framing/dispatch boilerplate
+`irpc`'s derive would generate — the "not easy" tax, accepted for fewer
+interleaved concerns, total wire control, and near-zero `irpc`/`n0` pre-release
+lock-in. Both options were compile-spiked against the locked versions
+(`iroh =1.0.0-rc.1`, `irpc =0.16.0`); both built, so the tie-break is the
+simplicity weighting, not a build failure.
+
+The full wire contract and the op-by-op, phased implementation plan live in
+**[docs/design/native-mesh-wire.md](../design/native-mesh-wire.md)**.
+
 ## Context
 
 The root contract is the **`FileSystem` / `NamespaceOps` trait** in `wanix-fs` /
@@ -155,13 +178,31 @@ retrofits. 9P interop is preserved exactly where it is needed (Linux/VM, externa
 tools, the current cockpit). The everything-is-a-file *interface* is unchanged on
 both wires; what changes is that the mesh wire is typed and stream-native.
 
-The cost is real: the native `irpc` wire is new work (a new mesh codec plus the
-import-site swap from `RemoteFs` to a native `Fs`; core filesystem, namespace,
-task, and device crates are untouched), and the project now maintains two
-encodings. The standing discipline is that both stay thin codecs over the one
-trait. `irpc` maturity / n0 stack lock-in is an accepted risk given the existing
-iroh commitment; a hand-rolled minimal frame over raw QUIC streams is the
-fallback if the open-file/streaming mapping proves awkward.
+The cost is real: the native wire is new work (a new mesh codec — the crate
+`wanix-mesh-wire` — plus the import-site swap from `RemoteFs` to a native `Fs`;
+core filesystem, namespace, task, and device crates are untouched), and the
+project now maintains two encodings. The standing discipline is that both stay
+thin codecs over the one trait.
+
+The wire is the **hand-rolled frame**, not `irpc` (see Status). It is a
+`postcard`-encoded, length-prefixed frame over the existing sync `Duplex`
+boundary, defined in a transport-agnostic, async-free `wanix-mesh-wire` crate
+(deps: `wanix-fs`, `wanix-vfs`, `serde`, `postcard` — no iroh/tokio/irpc);
+`wanix-mesh` binds it to QUIC on a second ALPN (`b"wanix/fs/1"`) beside
+`WANIX_9P_ALPN` and supplies the streams + held runtime `Handle` via the existing
+`BlockingDuplex` bridge. One bidi QUIC stream per call (one-shot ops) or per open
+file (stateful, streaming) — no tags, no `msize`; `FsError` travels as a typed
+`WireFsError`, not an errno table; `StreamingImportFs` and its `StreamPredicate`
+retire because every open file is on its own stream by construction; and the
+per-principal identity is the existing `peer_id_for(remote_id()) →
+AttachPolicy::evaluate → per-connection root` resolution (the same three hops 9P
+uses, minus `Tattach`/`uname`), reusing `wanix-id`'s `AttachPolicy`/`GrantTable`
+unchanged. Dropping `irpc` removes the `irpc`/`n0-error`/pre-release-`noq`
+lock-in this ADR previously accepted as a risk. The fallback trigger is now
+inverted: reconsider `irpc` only if the hand-rolled open-file streaming
+sub-protocol (backpressure/EOF/mid-stream typed-error/clean drop) proves
+materially harder to get correct than `irpc`'s typed bidi channels would be, and
+then for that op alone — not the base wire.
 
 Future work updates this ADR only when it changes the FileSystem contract, the
 mesh wire model, the 9P edge contract, the authentication/trust boundary, or the
