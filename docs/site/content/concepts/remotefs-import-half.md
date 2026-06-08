@@ -53,7 +53,9 @@ wanix-rust mount-ls tcp://127.0.0.1:5640
 # -> the entries of ./shared, fetched over the wire
 ```
 
-Nothing in `mount-ls` reaches into `./shared` directly. The bytes traverse `Namespace -> RemoteFs -> 9P -> server` and back (`docs/mesh-the-missing-half-of-9p.md:440-449`). What you just did is Plan 9's **import**: `RemoteFs` is the client end of `bind`, `/n/remote` is the mount point, and the remote namespace is now spliced into yours. Swap the `tcp://` transport for an `iroh://` peer and the same import reaches a node across the internet — see [9P over iroh QUIC](/concepts/9p-over-iroh-quic).
+Nothing in `mount-ls` reaches into `./shared` directly. The bytes traverse `Namespace -> RemoteFs -> 9P -> server` and back (`docs/mesh-the-missing-half-of-9p.md:440-449`). What you just did is Plan 9's **import**: `RemoteFs` is the client end of `bind`, `/n/remote` is the mount point, and the remote namespace is now spliced into yours.
+
+`RemoteFs` is the **9P** import half — the right tool for a *foreign* peer that already speaks 9P (the `tcp://` mount path here, plus Linux/v86/external 9P). Between two *Wanix* nodes the mesh's default import is now the [native FileSystem-over-iroh wire](/concepts/missing-half-of-9p) (`NativeFs`), which carries the same `FileSystem` contract without 9P's tags/`msize`/head-of-line costs. Both are clients of the *same* `bind` at `/n/<peer>`; the rest of this page is the 9P import half that the native wire generalizes off 9P, and that still backs the foreign edge.
 
 ## It is the negative of the server, sharing one wire format
 

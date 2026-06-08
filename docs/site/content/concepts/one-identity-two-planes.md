@@ -35,10 +35,13 @@ A 9P `Tread` window is the wrong tool for a 256 MiB rootfs image. Crawling a fro
 
 ## The one-liner and the two ALPNs
 
-A mesh node binds exactly one `iroh::Endpoint` from its persisted secret key (`crates/wanix-mesh/src/node.rs`). Everything rides that endpoint. What distinguishes a 9P walk from a blob fetch is the ALPN — the application protocol label QUIC negotiates at connect time:
+A mesh node binds exactly one `iroh::Endpoint` from its persisted secret key (`crates/wanix-mesh/src/node.rs`). Everything rides that endpoint. What distinguishes a filesystem walk from a blob fetch is the ALPN — the application protocol label QUIC negotiates at connect time:
 
-- **`wanix/9p/1`** — the control plane. 9P walk, stat, read, write, mutation (`WANIX_9P_ALPN`).
+- **`wanix/fs/1`** — the control plane between two Wanix nodes: the [native FileSystem-over-iroh wire](/concepts/missing-half-of-9p) (`WANIX_FS_ALPN`). Walk, stat, read, write, mutation as `postcard` frames.
+- **`wanix/9p/1`** — the same control plane for a *foreign* peer that speaks only 9P (`WANIX_9P_ALPN`).
 - **iroh-blobs' own ALPN** (`BLOBS_ALPN`, re-exported from `iroh_blobs::ALPN`) — the data plane. BLAKE3 bulk blobs.
+
+This page's split is control plane vs **data** plane — structure vs bulk bytes — and that distinction is unchanged whichever control-plane ALPN a peer negotiates. The worked example below uses the 9P control plane because the surrounding code (`p9_handler`) predates the native wire; a `serve_native` node accepts `WANIX_FS_ALPN` the same way.
 
 The node serves both from one `Router` (`crates/wanix-mesh/src/node.rs:218`):
 

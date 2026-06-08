@@ -1,6 +1,8 @@
 # Native Mesh Wire — Design & Op-by-Op Implementation Plan
 
-Status: design accepted, unimplemented. Authoritative decision record:
+Status: **implemented** (the crate `wanix-mesh-wire` + its QUIC binding in
+`wanix-mesh`; proofs in `crates/wanix-mesh/tests/mesh_native*.rs`). This document
+remains the op-by-op design reference. Authoritative decision record:
 [ADR 0004](../adrs/0004-rust-9p-protocol-and-server-contract.md). Per-principal
 trust boundary: [ADR 0006](../adrs/0006-serve-9p-transport-and-trust-boundary.md).
 Forcing function for the per-principal identity this wire bakes in:

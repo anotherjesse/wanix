@@ -30,7 +30,7 @@ canonicalCaveatFor: []
 
 # Crate Map & Dependency Direction
 
-Wanix's Rust core is a Cargo workspace of 22 crates, and the whole thing is organized around one rule: dependencies point **downward**. The base — filesystem, namespace, task, and protocol semantics — knows nothing about Wasmtime, nothing about tokio, nothing about iroh. The execution substrate sits on top of that base; the service devices are plain filesystems hanging off it; and every byte of async networking lives in exactly one crate at the very edge. If you keep the arrows pointing down, you can reason about any layer in isolation, swap an engine or a transport without touching the kernel, and trust that a `wanix-fs` change can't accidentally drag Wasmtime into a crate that should never see it. This page is the map. ([ADR 0001](/reference/adr-index) records the ownership rule; `AGENTS.md:100-138` is the canonical text.)
+Wanix's Rust core is a Cargo workspace, and the whole thing is organized around one rule: dependencies point **downward**. The base — filesystem, namespace, task, and protocol semantics — knows nothing about Wasmtime, nothing about tokio, nothing about iroh. The execution substrate sits on top of that base; the service devices are plain filesystems hanging off it; the mesh wire codecs (9P and the native `wanix-mesh-wire`) are transport-agnostic and async-free; and every byte of async networking lives in exactly one crate at the very edge. If you keep the arrows pointing down, you can reason about any layer in isolation, swap an engine or a transport without touching the kernel, and trust that a `wanix-fs` change can't accidentally drag Wasmtime into a crate that should never see it. This page is the map. ([ADR 0001](/reference/adr-index) records the ownership rule; `AGENTS.md:100-138` is the canonical text.)
 
 ## The layered diagram
 
@@ -40,7 +40,7 @@ Read it bottom-up. Each crate depends only on crates below it.
                          wanix-cli            <- orchestration / demos
    ──────────────────────────────────────────────────────────────────
                          wanix-mesh           <- THE async/iroh edge
-            wanix-cpu        wanix-9p-client   <- Plan 9 import half
+   wanix-cpu  wanix-9p-client  wanix-mesh-wire <- import half + native wire
    ──────────────────────────────────────────────────────────────────
    wanix-kv  wanix-pipe  wanix-plumb          <- service devices
    wanix-agent  wanix-cas  wanix-id              (plain FileSystems)
@@ -94,13 +94,14 @@ The mesh's quiet superpower lives here. Each service device is just a `FileSyste
 
 Adding a new one? See [add a service device](/learn/add-a-service-device) and [extension points](/reference/extension-points) — the pattern is "implement `FileSystem`, bind it into the namespace, get mesh reach for free."
 
-## The 9P import half + the mesh edge
+## The import half (native wire + 9P) + the mesh edge
 
-Plan 9's other half is *import*: mounting a remote namespace as local files. Three crates realize it.
+Plan 9's other half is *import*: mounting a remote namespace as local files. Four crates realize it — one native codec, one 9P codec, the cpu plane, and the async edge.
 
-- **`wanix-9p-client`** — `RemoteFs` mounts a remote 9P export as a local `FileSystem`, sharing the synchronous 9P core with `wanix-9p`. Its runtime dependencies are only `wanix-fs + wanix-protocol`; `wanix-9p` and `wanix-kv` appear as **dev-dependencies** for tests, not in the shipped graph. (`AGENTS.md` lists them inline; the Cargo.toml is the precise word.)
+- **`wanix-mesh-wire`** — the **native FileSystem-over-iroh wire** and the default Wanix↔Wanix codec. It is the native analog of `wanix-9p` + `wanix-9p-client`: a transport-agnostic, **async-free** codec for the `FileSystem`/`File` op-set (`postcard` frames, a typed `WireFsError`, one stream per call/open-file) over the existing sync `Duplex` boundary. Its deps are only `wanix-fs + wanix-vfs + serde + postcard` — **no iroh, no tokio** (`crates/wanix-mesh-wire/Cargo.toml`). It exposes `serve_one` (server), `NativeFs`/`NativeFile` (client), and a `StreamFactory` seam the mesh implements.
+- **`wanix-9p-client`** — `RemoteFs` mounts a remote 9P export as a local `FileSystem`, sharing the synchronous 9P core with `wanix-9p`. This is the **foreign edge** import half (Linux/v86/external 9P, and the `tcp://` mount). Its runtime dependencies are only `wanix-fs + wanix-protocol`; `wanix-9p` and `wanix-kv` appear as **dev-dependencies** for tests, not in the shipped graph.
 - **`wanix-cpu`** — Plan 9 `cpu(1)` over the mesh: a `#cpu` acceptor runs a task against the caller's reverse-exported namespace (`-> wanix-9p + wanix-9p-client + wanix-fs + wanix-task + wanix-vfs`).
-- **`wanix-mesh`** — the network edge, and the **only async crate in the workspace.** It binds one `iroh::Endpoint` per node from the `wanix-id` secret key, exports a namespace as 9P over QUIC, and dials peers to import theirs. Its deps include `iroh`, `iroh-blobs`, `iroh-gossip`, and `tokio` alongside `wanix-9p`, `-9p-client`, `-cas`, `-cpu`, `-plumb`, `-kv`, `-agent`, `-id`, `-task`, `-term`, and `-vfs` (`crates/wanix-mesh/Cargo.toml`).
+- **`wanix-mesh`** — the network edge, and the **only async crate in the mesh stack.** It binds one `iroh::Endpoint` per node from the `wanix-id` secret key, exports a namespace over QUIC on two ALPNs (the native wire `wanix/fs/1` and the foreign-edge 9P `wanix/9p/1`), and dials peers to import theirs. It composes both codecs onto iroh by wrapping each bidi stream in `BlockingDuplex`. Its deps include `iroh`, `iroh-blobs`, `iroh-gossip`, and `tokio` alongside `wanix-mesh-wire`, `wanix-9p`, `-9p-client`, `-cas`, `-cpu`, `-plumb`, `-kv`, `-agent`, `-id`, `-task`, `-term`, and `-vfs` (`crates/wanix-mesh/Cargo.toml`).
 
 How a single async crate drives a synchronous 9P core is its own subject — see [the async/sync bridge](/concepts/async-sync-bridge).
 
@@ -112,7 +113,7 @@ Two invariants keep the graph honest. Both are checked in CI by what compiles.
 
 1. **`wanix-task` must not depend on `wanix-wasi`, `wanix-qjs`, or `wanix-wasm`.** Tasks are a kernel concept; runtimes are drivers that plug *into* the task model. The arrow always runs runtime → task, never the reverse — that is what lets you add a third task driver without editing the task crate.
 
-2. **Keep tokio and iroh out of every crate but `wanix-mesh`.** Verified directly: grepping the workspace, `iroh` appears in exactly one `Cargo.toml` (`wanix-mesh`), and so does `tokio`. Likewise `wasmtime` appears in exactly four crates, all in the runtime tier. The synchronous 9P core that the mesh reuses stays synchronous; the mesh is where the world becomes async, and nowhere else.
+2. **Keep tokio and iroh out of every crate but `wanix-mesh`.** Verified directly: grepping the workspace, `iroh` appears in exactly one `Cargo.toml` (`wanix-mesh`), and so does `tokio`. Likewise `wasmtime` appears in exactly four crates, all in the runtime tier. The synchronous cores the mesh reuses stay synchronous — including `wanix-mesh-wire`, the native wire codec, which is deliberately async-free and depends only on `wanix-fs + wanix-vfs + serde + postcard`. The mesh is where the world becomes async, and nowhere else; it is the single crate that binds both the native wire and the 9P codec to QUIC.
 
 These aren't style preferences. They are why you can run the entire core — tasks, namespaces, devices, 9P server — in a plain synchronous test with no runtime engine and no network stack linked in.
 

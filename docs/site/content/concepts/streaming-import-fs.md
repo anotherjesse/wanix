@@ -2,9 +2,9 @@
 title: StreamingImportFs — One Stream per Blocking Open
 slug: concepts/streaming-import-fs
 pageType: concept
-oneLiner: A near-never-EOF read like #agent/<id>/events would freeze the serial import connection, so each blocking streaming open dials its own dedicated bidi stream.
+oneLiner: A near-never-EOF read like #agent/<id>/events would freeze the serial 9P import connection, so each blocking streaming open dials its own dedicated bidi stream — a 9P-plane workaround now made structural (and retired) by the native wire, where every open file is already its own stream.
 audience: [developer]
-tags: [mesh, shipped, caveat, local-trust-only]
+tags: [mesh, 9p-plane, superseded, caveat, local-trust-only]
 sourceRefs:
   - crates/wanix-mesh/src/streaming.rs:1-139
   - crates/wanix-mesh/src/streaming/predicate.rs:20-52
@@ -29,9 +29,11 @@ honestLimits:
 
 # StreamingImportFs — One Stream per Blocking Open
 
-A near-never-EOF read like `#agent/<id>/events` would freeze the serial import connection, so each blocking streaming open dials its own dedicated bidi stream.
+A near-never-EOF read like `#agent/<id>/events` would freeze the serial 9P import connection, so each blocking streaming open dials its own dedicated bidi stream.
 
-Import a remote node and most operations are short: a walk, a stat, a read of a small file, a write. They take turns on one connection and nobody notices. But a handful of imported files are *streams* — you `read` and the read parks until something happens on the far side, maybe forever. Put one of those on the shared connection and it parks the whole import. `StreamingImportFs` is the wrapper that keeps those reads from doing that, by giving each one its own pipe.
+> **Superseded on the native wire.** This page documents a workaround for the **9P import plane** (`RemoteFs` over a single serial connection). The native FileSystem-over-iroh wire — now the default Wanix↔Wanix path — makes the same property *structural*: every open file already rides its own QUIC stream by construction, so a never-EOF read parks only its own stream and the dedicated-stream wrapper is unnecessary. `StreamingImportFs` and its `StreamPredicate` are **retired on the native path**; they survive only as long as the 9P import plane does. See [the missing half of 9P](/concepts/missing-half-of-9p) for the native wire, and read this page for the 9P-plane mechanics it replaces.
+
+Import a remote node over 9P and most operations are short: a walk, a stat, a read of a small file, a write. They take turns on one connection and nobody notices. But a handful of imported files are *streams* — you `read` and the read parks until something happens on the far side, maybe forever. Put one of those on the shared 9P connection and it parks the whole import. `StreamingImportFs` is the wrapper that keeps those reads from doing that, by giving each one its own pipe — the hand-discovered version of what the native wire gets for free.
 
 ## The deadlock it avoids
 
@@ -83,7 +85,8 @@ The boundary it preserves is the layering boundary. The dedicated-stream decisio
 
 ## Status / honest limits
 
-- **Read opens only.** A dedicated stream is dialed only for a *read* open that matches the predicate. Write opens and every ordinary file still ride the shared serial import — by design, since they never park the stream (`crates/wanix-mesh/src/streaming.rs:98-106`).
-- **The streaming set is a default, not a universal rule.** Out of the box only `#agent/<id>/events`, `#agent/<id>/reply`, and `#plumb/<topic>/recv` get their own stream (`crates/wanix-mesh/src/streaming/predicate.rs:20-52`). Any other never-EOF service file you import would block the shared connection unless you pass a custom `StreamPredicate`.
+- **Retired on the native wire.** This wrapper exists for the **9P import plane** only. On the native FileSystem-over-iroh wire (the default Wanix↔Wanix path) every open file already rides its own QUIC stream, so `StreamingImportFs` and `StreamPredicate` are removed there — a never-EOF read parks only its own stream with no wrapper. The mechanics below describe the 9P-plane behavior the native wire makes unnecessary.
+- **Read opens only (9P plane).** A dedicated stream is dialed only for a *read* open that matches the predicate. Write opens and every ordinary file still ride the shared serial import — by design, since they never park the stream.
+- **The streaming set is a default, not a universal rule (9P plane).** Out of the box only `#agent/<id>/events`, `#agent/<id>/reply`, and `#plumb/<topic>/recv` get their own stream. Any other never-EOF service file you import over 9P would block the shared connection unless you pass a custom `StreamPredicate`.
 - **This fixes the import side, not the export side.** `StreamingImportFs` keeps blocking imported reads from freezing each other across the mesh. The *served* side still handles one 9P frame at a time per connection, so a blocking `#plumb/<topic>/recv` cannot interleave with a write on that same served connection — that is a separate caveat, addressed where it lives.
 - **The mesh exec/agent plane is local-trust only.** The `#agent` streams this routes are part of the local-trust exec surface; the mesh trust boundary still gates who may attach at all, and these conveniences do not change that the exec devices are not for arbitrary untrusted peers.

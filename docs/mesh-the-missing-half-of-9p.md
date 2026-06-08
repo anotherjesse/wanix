@@ -1,5 +1,20 @@
 # The Mesh: The Missing Half of 9P
 
+> **Update (native mesh wire implemented).** This post tells the story of
+> building the **import half** as a 9P client (`RemoteFs`) — still exactly how
+> Wanix reaches a *foreign* 9P peer, and the right way to read this document.
+> But between two **Wanix** nodes the mesh's default path is now the **native
+> FileSystem-over-iroh wire** (`wanix-mesh-wire`, ALPN `wanix/fs/1`): the same
+> `bind` at `/n/<peer>`, but the imported `FileSystem` is a `NativeFs` rather
+> than a `RemoteFs`, carrying the `FileSystem` op-set as `postcard` frames with
+> a typed `WireFsError`, one QUIC stream per call/open-file (no tags/`msize`),
+> and per-connection principal identity. It is the import half generalized off
+> 9P, and it makes the `StreamingImportFs` head-of-line workaround structural
+> (one stream per open file) and therefore retired on the native path. 9P stays
+> the foreign edge. See
+> [docs/adrs/0004-rust-9p-protocol-and-server-contract.md](adrs/0004-rust-9p-protocol-and-server-contract.md)
+> and [docs/design/native-mesh-wire.md](design/native-mesh-wire.md).
+
 Wanix is Plan 9 reincarnated. It has per-task namespaces, file-like services
 (`#task`, `#term`, `#kv`, `#pipe`, `#agent`), programs that are just files you
 run, and a 9P server that can export any of it over a socket. For a long time

@@ -3,10 +3,14 @@
 ## Status
 
 **Accepted — supersedes the prior "9P is the wire across all transports"
-stance.** The direction below is decided; the native mesh wire is **not yet
-implemented** (today the mesh tunnels 9P over iroh via
-`wanix-9p-client::RemoteFs`). Implementation status lives in tests, examples,
-and commit messages, not here.
+stance.** The direction below is decided, and the native mesh wire is now
+**implemented**: the mesh's default Wanix↔Wanix path is the hand-rolled
+FileSystem-over-iroh wire (`wanix-mesh-wire` bound to QUIC on `WANIX_FS_ALPN` by
+`wanix-mesh`), not 9P over iroh. The 9P import path (`wanix-9p-client::RemoteFs`)
+remains available and is the foreign edge. Implementation status lives in tests,
+examples, and commit messages, not here — see `crates/wanix-mesh-wire` (codec +
+client/server) and `crates/wanix-mesh/tests/mesh_native*.rs` (real-QUIC round
+trip, differential-vs-9P, per-principal identity).
 
 **Wire encoding decided — the hand-rolled fallback, not `irpc`.** §Decision below
 names `irpc` as primary with "a hand-rolled minimal frame over raw QUIC streams"
@@ -70,21 +74,23 @@ boundary. Three zones:
 a local `FileSystem` is direct trait calls. 9P is never involved. (Already true;
 stated so it is not re-litigated.)
 
-**2. Wanix ↔ Wanix across the mesh: a native FileSystem-over-iroh wire, built on
-`irpc`.** This is the primary internal mesh wire. The `FileSystem` /
-`NamespaceOps` contract is expressed as an `irpc` service over iroh QUIC:
+**2. Wanix ↔ Wanix across the mesh: a native FileSystem-over-iroh wire (the
+hand-rolled frame; see Status).** This is the primary internal mesh wire, and it
+is implemented. The `FileSystem` / `NamespaceOps` contract is expressed as a
+`postcard`-encoded, length-prefixed frame over iroh QUIC bidi streams:
 
 - **one stream per call / per open file** → no tags, no head-of-line blocking;
 - **QUIC flow control** → no `msize` negotiation (keep at most an `iounit`-style
   chunk hint);
-- **typed operations and typed errors** (the `FsError` enum on the wire, not
-  `Rerror` strings); postcard encoding via `irpc`;
+- **typed operations and typed errors** (`FsError` travels as a typed
+  `WireFsError`, not an `Rerror` string or an errno table); `postcard` encoding;
 - **not chatty**: compound path-resolve + stat, bulk `readdir`, and streaming
   reads, so sequential I/O is not per-message round trips;
 - **per-principal identity is built in**: iroh authenticates every connection by
-  the caller's ed25519 pubkey, and the wire carries that principal down to each
-  operation (the per-principal seam ADR 0006 needs for attribution/authorization)
-  rather than retrofitting it onto 9P's `attach`/`uname` path.
+  the caller's ed25519 pubkey, and the server binds that principal once per
+  connection to a principal-scoped `FileSystem` view (the per-principal seam
+  ADR 0006 needs for attribution/authorization) rather than retrofitting it onto
+  9P's `attach`/`uname` path. The principal is never carried on the wire.
 
 An open `File` is stateful (handle, seek, streaming), so `open()` returns a
 handle and subsequent reads/writes reference it over the file's own stream — the
@@ -178,11 +184,13 @@ retrofits. 9P interop is preserved exactly where it is needed (Linux/VM, externa
 tools, the current cockpit). The everything-is-a-file *interface* is unchanged on
 both wires; what changes is that the mesh wire is typed and stream-native.
 
-The cost is real: the native wire is new work (a new mesh codec — the crate
-`wanix-mesh-wire` — plus the import-site swap from `RemoteFs` to a native `Fs`;
-core filesystem, namespace, task, and device crates are untouched), and the
-project now maintains two encodings. The standing discipline is that both stay
-thin codecs over the one trait.
+The cost is real: the native wire was new work (the new mesh codec crate
+`wanix-mesh-wire`, plus the import-site swap from `RemoteFs` to the native
+`NativeFs` at the mesh dial/mount sites in `wanix-mesh`/`wanix-cli`; core
+filesystem, namespace, task, and device crates were untouched), and the project
+now maintains two encodings. The standing discipline is that both stay thin
+codecs over the one trait. The `tcp://` foreign-edge mount path stays on
+`RemoteFs` (9P) deliberately — it is the foreign edge, not mesh.
 
 The wire is the **hand-rolled frame**, not `irpc` (see Status). It is a
 `postcard`-encoded, length-prefixed frame over the existing sync `Duplex`

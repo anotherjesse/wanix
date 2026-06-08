@@ -64,7 +64,7 @@ The 9P server is transport-agnostic, and there is exactly one per-connection ses
 - `p9-stdio` — 9P over the process stdin/stdout pipe (the QEMU-v86 console bridge); the only remaining standalone 9P subcommand.
 - the 9P-over-WebSocket door at `/.well-known/export9p` — a `WebSocketDuplex` framing adapter on the `serve` HTTP listener.
 - a raw 9P-over-TCP door, bound by `serve --p9 HOST:PORT` (loopback by default, capability-gated by `--peer`/`--grant`).
-- the iroh QUIC stream the mesh uses.
+- the mesh's foreign-edge 9P-over-iroh plane (`wanix/9p/1`), for a peer that speaks only 9P. (Between two Wanix nodes the mesh uses the [native FileSystem-over-iroh wire](/concepts/missing-half-of-9p) instead — a different codec, not a door over this 9P session core.)
 
 `serve` is the richest path: it does not *replace* those doors, it *composes* the WebSocket and (optional) raw-TCP 9P doors with HTTP, discovery, the terminal socket, bundles, and the app route. Same session core, same filesystem, more adapters in front of it. The standalone `p9-listen`/`p9-ws` subcommands were retired and folded into `serve` under ADR 0006 — raw 9P over TCP is now the `--p9` mode, and the websocket door is a framing adapter rather than a second server implementation.
 

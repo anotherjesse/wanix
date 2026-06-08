@@ -7,17 +7,21 @@ Wasmtime as the execution substrate and QuickJS/WASI as the first serious task
 runtime. Browser support becomes a frontend or deployment option, not the
 runtime foundation. The same core now also reaches across machines: a Plan 9
 style mesh imports remote namespaces as local files, so devices, agents, and
-compute compose across nodes through the one 9P contract.
+compute compose across nodes through the one `FileSystem` contract. Between two
+Wanix nodes that contract rides a native FileSystem-over-iroh wire
+(`wanix-mesh-wire`); 9P stays the foreign-edge gateway (Linux/v86/QEMU,
+external 9P tools, the cockpit).
 
 ## Current Big Targets
 
 The baseline qjs, terminal, 9P, direct-v86, and native QEMU paths exist, and on
 top of them the mesh/agent layer is built out: service devices (`#pipe`, `#kv`,
-`#plumb`, `#cas`, `#agent`), the 9P client (`wanix-9p-client`) that mounts
-remote namespaces, 9P over iroh QUIC with ed25519 identity and default-deny
-capability binds, the `#cpu` exec plane, `wanix capsule` world snapshots, and a
-browser cockpit (VS Code workbench extension) that operates all of it over
-direct 9P.
+`#plumb`, `#cas`, `#agent`), the native FileSystem-over-iroh mesh wire
+(`wanix-mesh-wire`, the default Wanix↔Wanix path) and the 9P client
+(`wanix-9p-client`) that still mounts foreign namespaces, both over iroh QUIC
+with ed25519 identity and default-deny capability binds, the `#cpu` exec plane,
+`wanix capsule` world snapshots, and a browser cockpit (VS Code workbench
+extension) that operates all of it over direct 9P.
 
 Highest-leverage next work: deepen interactive shells and terminal lifecycle,
 broaden Linux/v86/editor 9P compatibility, finish QEMU/v86 boot workflows,
@@ -77,9 +81,19 @@ Service-device and mesh crates (the distributed layer; each device is a plain
   write-then-read-hash, `have/<hash>` probe), and CAS-backed `.wcap` capsules.
 - `wanix-id`: node identity (persisted ed25519 `NodeIdentity`) and default-deny
   capability grants (`AttachPolicy`, `GrantTable`) for the mesh trust boundary.
+- `wanix-mesh-wire`: the native FileSystem-over-iroh wire — a transport-agnostic,
+  async-free codec for the `FileSystem`/`File` op-set over the existing sync
+  `Duplex` boundary (`postcard` + a 4-byte-LE length-prefixed frame; the QUIC
+  stream is the transaction, no tags/`msize`). One stream per call (one-shot
+  ops) or per open file (stateful streaming). Carries a typed `WireFsError`
+  mirror of `FsError` (lossless, incl. `InvalidPath(String)`/`Other(String)`).
+  Exposes `serve_one` (sync server dispatch), `NativeFs`/`NativeFile` (the sync
+  client `FileSystem`), and a `StreamFactory` seam the mesh implements. The
+  native analog of `wanix-9p` + `wanix-9p-client`. Depends only on `wanix-fs` +
+  `wanix-vfs` + `serde` + `postcard` — no iroh/tokio/irpc.
 - `wanix-9p-client`: 9P client backed by Wanix filesystem contracts — the
-  import half of Plan 9. `RemoteFs` mounts a remote 9P export as a local
-  `FileSystem`; shares the synchronous 9P core with `wanix-9p`.
+  import half of Plan 9, and the foreign edge. `RemoteFs` mounts a remote 9P
+  export as a local `FileSystem`; shares the synchronous 9P core with `wanix-9p`.
 - `wanix-cpu`: Plan 9 cpu over the mesh — a `#cpu` acceptor that runs a task
   against a reverse-exported caller namespace, plus the sync, transport-agnostic
   CPU control protocol.
@@ -88,10 +102,17 @@ Service-device and mesh crates (the distributed layer; each device is a plain
   codex app-server engine on the local-trust CLI path and a deterministic
   `FakeEngine` on the served path; approvals are files.
 - `wanix-mesh`: the network edge and the only async crate. Binds one
-  `iroh::Endpoint` per node from the `wanix-id` secret key, exports a namespace
-  as 9P over QUIC (ALPN), and dials peers to import their namespaces as
-  `RemoteFs`. Reuses the synchronous 9P core; composes `wanix-cas`/`-cpu`/
-  `-plumb`/`-kv`/`-agent`/`-term` across nodes.
+  `iroh::Endpoint` per node from the `wanix-id` secret key and exports/imports a
+  namespace over QUIC on two ALPNs: the native wire `WANIX_FS_ALPN`
+  (`b"wanix/fs/1"`, the default Wanix↔Wanix path — `dial_native` returns a
+  `NativeFs`) and `WANIX_9P_ALPN` for foreign/legacy 9P. It composes
+  `wanix-mesh-wire`'s sync codec onto iroh by wrapping each bidi stream in the
+  existing `BlockingDuplex` and running `serve_one` on the blocking pool; the
+  verified `remote_id()` binds a per-connection principal-scoped `FileSystem`
+  view via `wanix-id`'s `AttachPolicy` (default-deny). Reuses the synchronous
+  cores unchanged; composes `wanix-cas`/`-cpu`/`-plumb`/`-kv`/`-agent`/`-term`
+  across nodes. Because every open file rides its own stream, the old
+  `StreamingImportFs` dedicated-stream machinery is retired on the native path.
 
 - `wanix-cli`: native CLI and demo runner (includes `serve`, the mesh
   subcommands, and `capsule`).
@@ -127,11 +148,13 @@ wanix-kv | wanix-pipe | wanix-plumb | wanix-agent -> wanix-fs (+ wanix-vfs)
 wanix-cas -> wanix-fs + wanix-module-cache
 wanix-id  -> wanix-fs + wanix-vfs
 
-# 9P import half + mesh
+# native mesh wire (transport-agnostic, async-free) + 9P import half + mesh
+wanix-mesh-wire -> wanix-fs + wanix-vfs + serde + postcard   (NO iroh/tokio/irpc)
 wanix-9p-client -> wanix-fs + wanix-protocol + wanix-9p + wanix-kv
 wanix-cpu       -> wanix-9p + wanix-9p-client + wanix-fs + wanix-task + wanix-vfs + wanix-protocol
-wanix-mesh      -> wanix-9p + wanix-9p-client + wanix-cas + wanix-cpu + wanix-plumb
-                   + wanix-kv + wanix-agent + wanix-id + wanix-task + wanix-term + wanix-vfs + iroh/tokio
+wanix-mesh      -> wanix-mesh-wire + wanix-9p + wanix-9p-client + wanix-cas + wanix-cpu
+                   + wanix-plumb + wanix-kv + wanix-agent + wanix-id + wanix-task + wanix-term
+                   + wanix-vfs + iroh/tokio
 
 wanix-cli  -> runtime crates for orchestration
 ```
@@ -140,8 +163,9 @@ wanix-cli  -> runtime crates for orchestration
 runner). No upward dependencies: `wanix-task` must not depend on `wanix-wasi`,
 `wanix-qjs`, or `wanix-wasm`. Keep core filesystem and namespace crates free of
 Wasmtime. `wanix-mesh` is the single async/iroh edge: keep tokio and iroh out
-of every other crate, including the service devices and the synchronous 9P core
-that the mesh reuses.
+of every other crate, including the service devices, the synchronous 9P core,
+and `wanix-mesh-wire` (the native wire codec is async-free and speaks only the
+sync `Duplex` boundary; `wanix-mesh` is the only crate that binds it to QUIC).
 
 ## Current Capability Map
 
@@ -253,13 +277,23 @@ tests.
   and emits a shell or `wanix-qemu-virtio9p.v1` JSON handoff with discovered or
   explicit initrd support plus an explicit 9P `msize` boot knob; `--exec` is an
   explicit foreground launch, not a Wanix VM supervisor.
-- The mesh (Plan 9 import realized): `wanix-9p-client::RemoteFs` mounts a remote
-  9P export as a local `FileSystem`, and `wanix-mesh` carries 9P over iroh QUIC.
-  A node binds an `iroh::Endpoint` from its persisted ed25519 identity
-  (`wanix-id`), exports its namespace under the Wanix ALPN, and dials peers to
-  import theirs at `/n/<peer>`. Attach is capability-gated (default-deny grants),
-  and because every device is a plain `FileSystem`, `#kv`/`#cas`/`#plumb`/
-  `#agent` import across the mesh for free (`/n/A/#kv/...`).
+- The mesh (Plan 9 import realized): between two Wanix nodes `wanix-mesh` carries
+  the **native FileSystem-over-iroh wire** (`wanix-mesh-wire`) — `dial_native`
+  imports a peer's namespace as a `NativeFs` bound at `/n/<peer>`, one
+  `postcard`-framed QUIC bidi stream per call and one per open file (no tags, no
+  `msize`), with `FsError` crossing as a typed `WireFsError`. A node binds an
+  `iroh::Endpoint` from its persisted ed25519 identity (`wanix-id`) and exports
+  its namespace under `WANIX_FS_ALPN` (the native wire) alongside
+  `WANIX_9P_ALPN` (the foreign/legacy 9P edge; `wanix-9p-client::RemoteFs` is
+  the import half there and the `tcp://` mount path). Attach is capability-gated
+  (default-deny grants), bound once per connection from the verified
+  `remote_id()` to a principal-scoped `FileSystem` view via `AttachPolicy` — the
+  identity is taken from the transport, never carried on the wire. Because every
+  device is a plain `FileSystem`, `#kv`/`#cas`/`#plumb`/`#agent` import across
+  the mesh for free (`/n/A/#kv/...`); because every open file rides its own
+  stream, never-EOF reads need no dedicated-stream machinery
+  (`StreamingImportFs` is retired on the native path). Proofs:
+  `crates/wanix-mesh/tests/mesh_native*.rs`.
 - `#cpu` exec plane: a `wanix-cpu` acceptor runs a task against the caller's
   reverse-exported namespace, so a node can run compute on a peer that operates
   on the caller's files — Plan 9 cpu(1) over the mesh.
@@ -275,12 +309,14 @@ tests.
 
 The biggest missing pieces remain interactive shell/session depth, broader
 Linux/v86/editor 9P compatibility, QEMU/v86 boot workflows, and hardening the
-mesh trust boundary (per-principal namespaces, grant lifecycle). The serve 9P
-websocket handles one frame at a time per connection, so a blocking read (e.g.
-`#plumb/<topic>/recv`) cannot be interleaved with a write on the same
-connection — live pub/sub needs a second connection or concurrent frame
-handling. Ethernet/vnet and public/multi-user auth remain explicitly
-unimplemented trust-boundary work.
+mesh trust boundary (grant lifecycle, and per-fid per-principal namespaces on
+the 9P plane — the native wire already binds a per-connection principal-scoped
+view from the verified `remote_id()`). The serve 9P websocket handles one frame
+at a time per connection, so a blocking read (e.g. `#plumb/<topic>/recv`) cannot
+be interleaved with a write on the same connection — live pub/sub needs a second
+connection or concurrent frame handling. (The native wire does not have this
+constraint: every open file rides its own QUIC stream.) Ethernet/vnet and
+public/multi-user auth remain explicitly unimplemented trust-boundary work.
 
 ## Code Quality Guardrails
 
@@ -340,14 +376,19 @@ current-state docs, and commit messages instead of active ADRs.
   iroh identity → Layer 1 naming → Layer 2/3 authorization). A discussion draft,
   to be split into accepted ADRs once its contracts stabilize.
 
-The mesh/agent layer (9P-over-QUIC transport, ed25519 identity + capability
-binds, the `#agent` device, and the `#kv`/`#pipe`/`#plumb`/`#cas`/`#cpu`
-service contracts) does not yet have ADRs; its design is captured in
-[docs/mesh-blueprint.md](docs/mesh-blueprint.md) and
-[docs/mesh-the-missing-half-of-9p.md](docs/mesh-the-missing-half-of-9p.md), and
-the cockpit↔mesh integration in [docs/integration/](docs/integration/). Promote
-the durable boundaries (mesh transport + identity; agent-as-device; the service
-device contracts) into consecutive ADRs when those contracts stabilize.
+The mesh/agent layer (the native FileSystem-over-iroh wire, ed25519 identity +
+capability binds, the `#agent` device, and the `#kv`/`#pipe`/`#plumb`/`#cas`/
+`#cpu` service contracts) does not yet have its own ADRs; the native wire's
+contract is owned by [ADR 0004](docs/adrs/0004-rust-9p-protocol-and-server-contract.md)
+(FileSystem contract, native mesh wire, and the 9P edge gateway) with the
+op-by-op design in
+[docs/design/native-mesh-wire.md](docs/design/native-mesh-wire.md). The rest of
+the layer is captured in [docs/mesh-blueprint.md](docs/mesh-blueprint.md) and
+[docs/mesh-the-missing-half-of-9p.md](docs/mesh-the-missing-half-of-9p.md) (both
+written against the earlier 9P-over-iroh build; see their update notes), and the
+cockpit↔mesh integration in [docs/integration/](docs/integration/). Promote the
+durable boundaries (mesh identity/trust; agent-as-device; the service device
+contracts) into consecutive ADRs when those contracts stabilize.
 
 ## Runtime Guardrails
 
@@ -430,11 +471,16 @@ more feature work.
   and direct-v86 handoffs are still hand-built `format!` JSON. The driver-list
   drift is fixed (discovery now derives drivers from the registry), but convert
   the remaining fragments to typed structs with shape-pinning tests as a cleanup.
-- 9P session/namespace seam: `handle_attach` decodes `uname`/`aname` and discards
-  them; every fid resolves through one shared `P9Server.root`. A per-principal
-  `NamespaceProvider` only lands cleanly alongside per-fid root storage and a
-  first consumer (HTTP-worker or per-user namespaces) — do not add the trait as a
-  no-op seam, since a discarded provider result is a dead abstraction.
+- 9P session/namespace seam: on the **9P plane**, `handle_attach` decodes
+  `uname`/`aname` and discards them in the no-policy path; every fid resolves
+  through one shared `P9Server.root`. (The **native wire** does the non-no-op
+  version already: it binds the verified `remote_id()` once per connection to a
+  principal-scoped `FileSystem` view via `AttachPolicy`, never a client-claimed
+  `uname` — see `crates/wanix-mesh/tests/mesh_native_identity.rs`.) On 9P, a
+  per-fid per-principal root for multiple concurrent attaches only lands cleanly
+  alongside per-fid root storage and a first consumer (HTTP-worker or per-user
+  namespaces) — do not add a no-op seam, since a discarded provider result is a
+  dead abstraction.
 - Continue `qjs-shell` interactivity with true resize wakeups independent of
   stdin handling, persistent foreground child-task terminal ownership,
   cancellation, command execution beyond the current built-ins and synchronous

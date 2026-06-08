@@ -2,9 +2,9 @@
 title: The 9P Contract
 slug: concepts/the-9p-contract
 pageType: concept
-oneLiner: 9P2000.L (plus the Google.1/.2 extensions) is the one wire protocol that lets Linux, v86, editors, browsers, and the mesh browse and mutate any Wanix namespace.
+oneLiner: 9P2000.L (plus the Google.1/.2 extensions) is the foreign-edge wire that lets Linux, v86, editors, and browsers browse and mutate any Wanix namespace; between two Wanix nodes the mesh now uses the native FileSystem-over-iroh wire instead.
 audience: [developer, visionary]
-tags: [shipped, mesh, protocol, caveat, trust-boundary]
+tags: [shipped, foreign-edge, mesh, protocol, caveat, trust-boundary]
 sourceRefs:
   - docs/adrs/0004-rust-9p-protocol-and-server-contract.md
   - crates/wanix-9p/src/dispatch.rs:1-101
@@ -30,9 +30,11 @@ honestLimits:
 
 # The 9P Contract
 
-9P2000.L (plus the Google.1/.2 extensions) is the one wire protocol that lets Linux, v86, editors, browsers, and the mesh browse and mutate any Wanix namespace.
+9P2000.L (plus the Google.1/.2 extensions) is the foreign-edge wire that lets Linux, v86, editors, and browsers browse and mutate any Wanix namespace.
 
-[Everything is a file](/concepts/everything-is-a-file) is the *shape* of Wanix; 9P is the *wire* that carries that shape off the machine. Once every capability is a `FileSystem`, you need exactly one protocol to reach all of them — and it is the same protocol whether the client is a Linux guest, a browser cockpit, an editor, or a peer on the mesh. This page pins down the operation set Wanix actually serves, how version negotiation works, why authentication is deliberately absent from the wire, and what the server refuses to fake.
+[Everything is a file](/concepts/everything-is-a-file) is the *shape* of Wanix; 9P is one *wire* that carries that shape off the machine — the one a *foreign* peer already speaks. Once every capability is a `FileSystem`, a single protocol reaches all of them, and it is the same protocol whether the client is a Linux guest, a browser cockpit, or an editor. This page pins down the operation set Wanix actually serves, how version negotiation works, why authentication is deliberately absent from the wire, and what the server refuses to fake.
+
+> **9P is the foreign edge, not the mesh wire.** Between two *Wanix* nodes — both of which speak the `FileSystem` trait natively — the mesh now uses the [native FileSystem-over-iroh wire](/concepts/missing-half-of-9p), not 9P, because tunnelling 9P between two trait-speakers buys nothing and costs chattiness, head-of-line blocking, tags, and `msize`. 9P stays exactly where a peer genuinely needs it: Linux `v9fs`, v86/QEMU virtio-9p, external 9P tools, and the browser cockpit's `p9.ts`. [ADR 0004](/reference/adr-index) records this split — one `FileSystem` contract, the native wire inward, 9P at the foreign edge.
 
 ## One protocol, every external client
 
@@ -45,7 +47,7 @@ alias wanix-rust='./target/debug/wanix-rust'
 wanix-rust p9-stdio --root .
 ```
 
-That speaks 9P frames on stdin/stdout. The same server reaches the world over `wanix-rust serve` — which carries 9P both over a WebSocket door (`/.well-known/export9p`) and, with `--p9 HOST:PORT`, over a raw TCP door — and over the mesh's iroh QUIC. The transports differ; the contract does not. There is exactly one per-connection 9P session core (`P9Server::serve_duplex`); every transport is a thin byte adapter over it, not a second server (the standalone `p9-listen`/`p9-ws` subcommands were retired and folded into `serve` under ADR 0006). ADR 0004 states it plainly: stdio, TCP, WebSocket, and `serve` are *adapters over the same server contract*, and each must preserve binary frame boundaries and keep diagnostics out of the binary stream (`docs/adrs/0004-rust-9p-protocol-and-server-contract.md`). A Linux `mount -t 9p`, a v86 guest, the VS Code workbench, and a mesh peer all hit `P9Server::handle_frame`; none of them invent filesystem semantics of their own.
+That speaks 9P frames on stdin/stdout. The same server reaches foreign clients over `wanix-rust serve` — which carries 9P both over a WebSocket door (`/.well-known/export9p`) and, with `--p9 HOST:PORT`, over a raw TCP door — and over iroh QUIC on the foreign-edge ALPN (`wanix/9p/1`) for a peer that speaks only 9P. The transports differ; the contract does not. There is exactly one per-connection 9P session core (`P9Server::serve_duplex`); every transport is a thin byte adapter over it, not a second server (the standalone `p9-listen`/`p9-ws` subcommands were retired and folded into `serve` under ADR 0006). ADR 0004 states it plainly: stdio, TCP, WebSocket, and `serve` are *adapters over the same server contract*, and each must preserve binary frame boundaries and keep diagnostics out of the binary stream (`docs/adrs/0004-rust-9p-protocol-and-server-contract.md`). A Linux `mount -t 9p`, a v86 guest, and the VS Code workbench all hit `P9Server::handle_frame`; none of them invent filesystem semantics of their own. (A *Wanix* mesh peer does not — it uses the native wire's `serve_one` dispatch instead, against the same `FileSystem`.)
 
 That one entry point is the whole server. `handle_frame` dispatches a decoded request through five groups — session, walk, I/O, metadata, mutation — and any message type that matches none of them returns `EOPNOTSUPP` (`crates/wanix-9p/src/dispatch.rs:23-40`). The grouping is just code organization; to a client it is one flat operation set.
 

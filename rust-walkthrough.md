@@ -478,7 +478,48 @@ cmdline. If you replace the full cmdline with `--cmdline`, include the matching
 > stay explicit because they affect the guest boot contract and host filesystem
 > trust boundary.
 
-## 10. Snapshot And Restore In One Command
+## 10. Reach Another Node Over The Mesh
+
+The same namespace shape also reaches *across machines*. Between two Wanix nodes
+the mesh no longer tunnels 9P — it speaks the **native FileSystem-over-iroh
+wire**: one `postcard`-framed bidi QUIC stream per filesystem call and one
+dedicated stream per open file. A node binds an `iroh::Endpoint` from its
+persisted ed25519 identity, exports its namespace under the native ALPN
+(`wanix/fs/1`), and a dialer imports a peer's namespace as a plain
+`wanix_fs::FileSystem` bound at `/n/<peer>`. Because every device is already a
+`FileSystem`, a peer's `#kv`, `#cas`, `#plumb`, and `#agent` import across the
+mesh for free (`/n/A/#kv/<key>`).
+
+This path is not a linear copy/paste demo — it needs two endpoints and an
+exchanged ticket — so treat it as a capability map. The end-to-end proofs live
+in the workspace tests:
+
+```sh
+cargo test --package wanix-mesh --locked mesh_native
+```
+
+That runs the real-QUIC round trip (`mesh_native`), the differential test that
+asserts a native import and a 9P import of the same backing filesystem behave
+identically (`mesh_native_differential`), and the per-principal identity test
+(`mesh_native_identity`).
+
+> Developer aside: the native wire is `wanix-mesh-wire` — a transport-agnostic,
+> async-free crate (`wanix-fs` + `wanix-vfs` + `serde` + `postcard`, no
+> iroh/tokio) that speaks the `FileSystem`/`File` op-set over the existing sync
+> `Duplex` boundary. `wanix-mesh` is still the single async/iroh edge: it wraps
+> each QUIC bidi stream in the existing `BlockingDuplex` bridge and runs the sync
+> dispatch on the blocking pool. `FsError` crosses the wire as a typed
+> `WireFsError` (so `InvalidPath("a/../b")` arrives intact, not as a lossy
+> errno), and the verified ed25519 peer id binds a per-connection,
+> principal-scoped `FileSystem` view through the existing `AttachPolicy` —
+> default-deny, never a client-claimed name. Because every open file rides its
+> own stream, a never-EOF read (`#agent/events`, `#plumb/recv`) parks only its
+> own stream, so the old `StreamingImportFs` dedicated-stream machinery is
+> retired on this path. 9P is **not** gone: it stays the foreign-edge gateway
+> for Linux `v9fs`, v86/QEMU virtio-9p, external 9P tools, the cockpit's
+> `p9.ts`, and the `tcp://` mount path.
+
+## 11. Snapshot And Restore In One Command
 
 Run the restore demo:
 
@@ -509,7 +550,7 @@ What happened:
 > around the restored QuickJS memory image. Open dynamic fds currently block
 > snapshots, which keeps the boundary explicit.
 
-## 11. Persist A Snapshot Across CLI Invocations
+## 12. Persist A Snapshot Across CLI Invocations
 
 Create a host directory and snapshot path:
 
@@ -574,7 +615,7 @@ host after task 1
 > and env are supplied again during resume; they are not stored as ambient host
 > capabilities inside the snapshot.
 
-## 12. Run The Rust Quality Gate
+## 13. Run The Rust Quality Gate
 
 Before committing an improvement cycle, use the workspace gate:
 
@@ -589,7 +630,7 @@ cargo test --workspace --locked
 > on `wanix-wasi` or `wanix-qjs`; `wanix-qjs-engine` must not learn Wanix task
 > identity. When adding behavior, keep the ownership boundary sharp.
 
-## 13. Clean Up Temporary Files
+## 14. Clean Up Temporary Files
 
 ```sh
 rm -rf /tmp/wanix-walkthrough \

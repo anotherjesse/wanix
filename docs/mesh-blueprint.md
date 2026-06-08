@@ -1,5 +1,25 @@
 # Wanix Mesh — Architecture Blueprint (synthesized, adversarially verified)
 
+> **Update (native mesh wire implemented).** This blueprint was written for the
+> first mesh build, which carried **9P over iroh QUIC** as the Wanix↔Wanix wire.
+> That worked and shipped, but between two Wanix nodes — both of which speak the
+> `FileSystem` trait natively — 9P is a middle layer that costs chattiness,
+> single-stream head-of-line blocking, tags, and `msize`. The mesh now uses a
+> **native FileSystem-over-iroh wire** (`wanix-mesh-wire`, ALPN `wanix/fs/1`) as
+> the default Wanix↔Wanix path: one `postcard`-framed bidi QUIC stream per call
+> and one per open file (no tags/`msize`), a **typed `WireFsError`** that fixes
+> the very `errno_for_fs` non-injectivity this document flags in its first
+> paragraph (`InvalidPath(s)` now survives the round trip), and per-connection
+> principal identity bound from the verified `remote_id()`. Because every open
+> file rides its own stream, `StreamingImportFs` is retired on the native path.
+> **9P stays the foreign edge** (Linux/v86/QEMU, external 9P tools, the cockpit).
+> The decision and op-by-op wire are in
+> [docs/adrs/0004-rust-9p-protocol-and-server-contract.md](adrs/0004-rust-9p-protocol-and-server-contract.md)
+> and [docs/design/native-mesh-wire.md](design/native-mesh-wire.md); the
+> sections below remain valuable for the identity, capability, cpu, data-plane,
+> and agent-mesh designs, which are unchanged, and for the 9P-import mechanics
+> that the native wire generalizes off 9P.
+
 All confirmed. The constants to invert (`errno_for_fs`, `O_*`, `attr_for_metadata`/`DT_*`/`P9_MODE_*`) are crate-private/`pub(super)`/`pub(crate)` in `wanix-9p` — so the "lift to `wanix-protocol`" correction is mandatory and real. `errno_for_fs` is non-injective (`EINVAL` ← InvalidPath/InvalidOffset/InvalidTime/Other), so the "exact inverse" claim is false; the client needs its own canonical errno→FsError table.
 
 I now have enough ground truth to write a blueprint that is accurate to *this* tree rather than the phase0 tree the subsystems were verified against. Writing the document.

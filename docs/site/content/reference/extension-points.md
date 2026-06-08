@@ -89,6 +89,8 @@ Add your driver with a fourth line, give it a `check`, and a matching `cmd` auto
 
 The 9P codec, fid state, metadata mapping, and compatibility probes all live in `wanix-9p` and `wanix-9p-client` (see [protocol vs. server split](/concepts/protocol-vs-server-split)). A new transport adds *none* of that. It adds a way to get bytes in and out.
 
+(A new *encoding* is the rarer fourth move, and the [native mesh wire](/concepts/missing-half-of-9p) is the worked precedent: `wanix-mesh-wire` is a second codec over the *same* `FileSystem` contract — `postcard` frames and a typed `WireFsError` instead of 9P messages — sitting beside the 9P codec, both consumed by `wanix-mesh`. You only reach for that when the peer is another Wanix node and 9P's transport-era costs buy nothing; for a foreign peer, add a 9P transport adapter as below.)
+
 On the **export** side, `P9Server::serve_stream` takes any `Read` + `Write` and drives the whole server loop over it: it reads request frames, dispatches each, and writes the response frames until EOF (`crates/wanix-9p/src/transport.rs:95-126`). Your adapter's only job is to hand `serve_stream` a reader and a writer — a TCP socket, a WebSocket data channel, a process pipe — and let the existing codec do the rest.
 
 On the **import** side, `RemoteFs::connect` takes a `Box<dyn Duplex>`, where `Duplex` is the blanket trait over `Read + Write + Send` (`crates/wanix-9p-client/src/transport.rs:24-32`, `crates/wanix-9p-client/src/remote.rs:56-61`). Any blocking bidirectional byte stream satisfies it; the crate brings no transport of its own. `connect_with_aname` (`remote.rs:74-79`) is the capability-scoped variant the mesh uses to import a grant-gated subtree.

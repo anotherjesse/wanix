@@ -55,7 +55,7 @@ echo 'done' > '/n/A/#kv/result'       # write A's value
 ls   '/n/A/#kv'                        # enumerate A's keys
 ```
 
-Every line is open, read, write, list — the same four verbs you would use on a local `#kv`. The bytes ride a `Twalk` + `Tlopen` + `Tread`/`Twrite` over the imported `RemoteFs`, over the same QUIC bidi stream that carried regular files (`docs/mesh-the-missing-half-of-9p.md:1319-1338`). The `#kv` device never learns it is on a network; the network never learns it is carrying a key store.
+Every line is open, read, write, list — the same four verbs you would use on a local `#kv`. The bytes ride the imported `FileSystem` over a QUIC stream — `Read`/`Write` `FileOp` frames on the native wire (or `Tread`/`Twrite` on the 9P import), over the same stream machinery that carried regular files. The `#kv` device never learns it is on a network; the network never learns it is carrying a key store. The "for free" property is wire-agnostic by construction: it falls out of `#kv` being a plain `FileSystem`, so it holds identically whether the import is `NativeFs` (the native wire) or `RemoteFs` (9P).
 
 This is also where "send the agent to the data" stops being rhetoric: an agent that operates a key store as `cat`/`write`/`ls` over its *local* `#kv` operates a *remote* node's `#kv` with the identical vocabulary the moment `/n/A` is bound. The data stays put as files on A; the operator works it from B.
 
@@ -85,7 +85,7 @@ Each device is a `FileSystem` plus one bind, so each one imports the moment it i
 
 ## Why a new device gets all three for free
 
-Write one new device that satisfies the `FileSystem` trait and you get three capabilities at once, with no extra code: it can be **served** over 9P (the server adapter takes any `FileSystem`), it can be **imported** across the mesh (bind a `RemoteFs` at `/n/<peer>` and resolution into it becomes 9P), and it shows up in the **cockpit inspector** (the operator surface drives the served namespace over direct 9P, so any file-shaped device is already inspectable). You wrote a 9P client once; a new file-shaped service becomes reachable across every node the moment it exists.
+Write one new device that satisfies the `FileSystem` trait and you get three capabilities at once, with no extra code: it can be **served** to a foreign peer over 9P (the server adapter takes any `FileSystem`), it can be **imported** across the mesh (bind the imported `FileSystem` at `/n/<peer>` — `NativeFs` over the native wire between Wanix nodes, `RemoteFs` over 9P at the foreign edge), and it shows up in the **cockpit inspector** (the operator surface drives the served namespace over direct 9P, so any file-shaped device is already inspectable). You wrote no per-device wire code at all; a new file-shaped service becomes reachable across every node the moment it exists.
 
 ## See also
 
@@ -99,7 +99,7 @@ Write one new device that satisfies the `FileSystem` trait and you get three cap
 ## Status / honest limits
 
 - **The `/n/<peer>` slot is a convention, not yet per-peer.** The shipped CLI mount binds a single fixed slot `/n/remote` (`crates/wanix-cli/src/mount.rs:26`); per-peer `/n/<peer-id>` addressing is designed but unshipped. Read `/n/A` here as a labelled convention.
-- **Blocking streaming devices need a dedicated stream.** A `#plumb/<topic>/recv` parks until something arrives, which would freeze the shared import connection. `StreamingImportFs` gives each blocking imported open its own stream (`crates/wanix-mesh/src/streaming.rs:1-97`); ordinary opens still share one. The served side still handles one 9P frame at a time per connection, so a blocking recv cannot interleave with a write on that same served connection.
+- **Blocking streaming devices: structural on the native wire, wrapped on 9P.** A `#plumb/<topic>/recv` parks until something arrives, which would freeze a shared serial import connection. On the **native wire** every open file already rides its own QUIC stream, so a blocking recv parks only itself — no wrapper. On the **9P import** `StreamingImportFs` gave each blocking open its own stream; that wrapper is retired on the native path. The WS-served side still handles one 9P frame at a time per connection, so there a blocking recv cannot interleave with a write on that same served connection.
 - **Exec devices are local-trust only.** `--wanix-services` binds `#task`/`#agent`/`#cpu`, which run guest code. The flag is refused on the public endpoint regardless of grants, and allowed only on a direct-address-only `--addr` socket whose ticket is traded out of band. This is cheap, scalable isolation, not a sandbox safe for arbitrary untrusted code; there are no hard CPU/memory limits yet.
 - **The served `#agent` is a deterministic FakeEngine,** not a live LLM. Real codex is the local-trust `wanix agent` CLI path only.
 - **`#kv` is in-memory.** A peer's keys live only as long as that node's serve process; freeze a world to a capsule to persist.

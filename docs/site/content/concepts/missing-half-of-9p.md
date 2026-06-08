@@ -87,7 +87,19 @@ Once import exists, the rest of the mesh is "fill in the Plan 9 cast, in order" 
 - **cpu(1) → `#cpu`.** Plan 9's `cpu` rebuilt your namespace on a remote machine and ran your shell there with your local devices imported back. The Wanix move is "send the agent to the data": an agent operating `/n/<node>` is already operating a remote namespace by file; `#cpu` relocates the *compute* next to the files. See [send the agent to the data](/concepts/send-agent-to-the-data).
 - **plumber → `#plumb`.** Plan 9's `plumber` routed messages between programs by pattern. Across a mesh that becomes best-effort gossip, riding the same identity and transport. See [the plumb device](/devices/plumb).
 
-The transport under all of it is iroh QUIC, which provides the NAT traversal and relays that let `/n/<node>` reach a machine on the open internet instead of just `127.0.0.1`. See [9P over iroh QUIC](/concepts/9p-over-iroh-quic).
+The transport under all of it is iroh QUIC, which provides the NAT traversal and relays that let `/n/<node>` reach a machine on the open internet instead of just `127.0.0.1`. See [the FileSystem contract over iroh QUIC](/concepts/9p-over-iroh-quic).
+
+## Between two Wanix nodes, import rides the native wire — not 9P
+
+The import half above was first built *as* a 9P client (`RemoteFs`), and that is still how Wanix reaches a *foreign* 9P peer. But between two **Wanix** nodes — both of which speak the `FileSystem` trait natively — tunnelling 9P buys nothing and costs chattiness, single-stream head-of-line blocking, tags, and `msize` negotiation. So the default Wanix↔Wanix mesh path is now the **native FileSystem-over-iroh wire** (the crate `wanix-mesh-wire`, ALPN `wanix/fs/1`): the same `bind` at `/n/<peer>`, but the imported `FileSystem` is a `NativeFs` instead of a `RemoteFs`. It is the import half generalized off 9P.
+
+What the native wire changes, and why it is the right shape for a mesh of file-shaped services:
+
+- **One stream per call, one per open file.** The QUIC stream *is* the transaction — no tags, no `msize`. A never-EOF read (`#agent/<id>/events`, `#plumb/<topic>/recv`) parks only its own stream, so the head-of-line freeze that 9P's serial connection has (and that [`StreamingImportFs`](/concepts/streaming-import-fs) hand-patches) simply cannot happen. Streaming is structural.
+- **Typed errors.** `FsError` crosses as a typed `WireFsError`, so `InvalidPath("a/../b")` arrives with its message intact — not flattened to a lossy `errno`, as the 9P round trip does.
+- **Identity built in.** The verified ed25519 `remote_id()` binds a per-connection, principal-scoped `FileSystem` view via the capability policy — the principal comes from the transport, never the payload.
+
+9P does **not** go away: it stays the foreign-edge gateway — Linux `v9fs`, v86/QEMU virtio-9p, external 9P tools, the browser cockpit's `p9.ts`, and the `tcp://` mount path. The decision and the op-by-op wire are recorded in [ADR 0004](/reference/adr-index). One trait, two encodings: the native wire inward, 9P at the foreign edge.
 
 ## See also
 
@@ -100,7 +112,7 @@ The transport under all of it is iroh QUIC, which provides the NAT traversal and
 
 ## Status / honest limits
 
-- **No ADRs yet.** The mesh and agent layer — 9P-over-QUIC transport, ed25519 identity, capability binds, and the service device contracts — is captured in design docs (`docs/mesh-the-missing-half-of-9p.md`), not ratified architecture records. The contracts are fast-moving; treat them as current direction, not frozen API.
+- **Partial ADR coverage.** The native FileSystem-over-iroh wire is now recorded in [ADR 0004](/reference/adr-index) (FileSystem contract + native mesh wire + 9P edge gateway), with the op-by-op design in `docs/design/native-mesh-wire.md`. The rest of the mesh/agent layer — ed25519 identity, capability binds, and the service device contracts — is still captured in design docs (`docs/mesh-the-missing-half-of-9p.md`), not ratified records. Treat the un-ADR'd parts as current direction, not frozen API.
 - **`/n/<peer>` is a convention, not a feature.** The shipped CLI mount binds a *single* slot at `/n/remote` (`crates/wanix-cli/src/mount.rs:26`). Per-peer `/n/<peer-id>` addressing is designed but not shipped; the multi-peer `/n/A`, `/n/B` paths in this page are a labelled convention for how it will read.
 - **Exec across an import is local-trust only.** Reaching `#task`, `#cpu`, or `#agent` over an import gives "cheap, scalable isolation," not "safe for arbitrary untrusted code" — there are no hard CPU or memory limits yet, and these devices are not exposed to untrusted public peers. The served `#agent` is a deterministic `FakeEngine`, not a live LLM; real codex is the local-trust `wanix agent` CLI path only.
 - **Tauth stays ENOSYS.** There is no 9P auth handshake; the trust boundary is the capability bind and the QUIC identity, not in-band 9P authentication.
