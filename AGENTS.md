@@ -356,9 +356,12 @@ current-state docs, and commit messages instead of active ADRs.
 - [ADR 0003](docs/adrs/0003-terminal-device-and-shell-lifecycle.md):
   `wanix-term` and terminal-backed native, served, editor, and VM sessions
   share one terminal device and shell lifecycle contract.
-- [ADR 0004](docs/adrs/0004-rust-9p-protocol-and-server-contract.md):
-  `wanix-protocol` and `wanix-9p` own the Rust 9P frame, codec, fid, metadata,
-  mutation, and compatibility contract across transports.
+- [ADR 0004](docs/adrs/0004-rust-9p-protocol-and-server-contract.md): the
+  `FileSystem`/`NamespaceOps` trait is the source of truth; the native
+  FileSystem-over-iroh wire (`wanix-mesh-wire`) is the Wanix↔Wanix mesh encoding
+  and 9P (`wanix-protocol`/`wanix-9p`) is the foreign-edge gateway codec. Carries
+  open questions on per-attach (`aname`) scoping, in-band device EOF, and the
+  read-chunk clamp (ADR 0004 §Open questions).
 - [ADR 0005](docs/adrs/0005-serve-and-client-handoffs.md): Rust `serve`,
   browser filesystem/workbench, direct-v86, rootfs prep, and native QEMU share
   explicit discovery and handoff contracts instead of becoming runtime
@@ -438,6 +441,17 @@ more feature work.
 
 ## Queued Follow-ups
 
+- Native mesh wire open questions ([ADR 0004](docs/adrs/0004-rust-9p-protocol-and-server-contract.md)
+  §Open questions): (a) **read-chunk clamp** — bind it to the advertised
+  `iounit_hint` (`min(max, MAX_CHUNK_LEN, iounit_hint)`); a cheap latent-coupling
+  fix, do it before any open path advertises a smaller per-file hint. (b)
+  **`FileReply::Eof`** — decide drop-as-YAGNI (the simple default; no server path
+  emits it) vs keep-reserved for a device needing in-band close distinct from a
+  stream drop. (c) **per-attach `aname` scoping** — the native wire resolves
+  `AttachPolicy` at the root attach name only (`dial_native` discards `aname`), so
+  9P-style `ANAME`-keyed sub-scoping is unreachable; settle it *with* the
+  ADR 0006/0007 authorization layer (thread `aname` 1:1 vs a native
+  scope-selection shape), not before. (a) and (b) are small cleanup-cycle items.
 - Shell pipeline concurrency (HIGH — address ASAP once the `wanix-sh` foundation
   works): pipeline stages currently run SEQUENTIALLY against the unbounded
   in-memory `#pipe` (stage a fully buffers its output, then b drains), a

@@ -216,3 +216,43 @@ Future work updates this ADR only when it changes the FileSystem contract, the
 mesh wire model, the 9P edge contract, the authentication/trust boundary, or the
 backing filesystem semantics. The per-principal identity seam, when built,
 graduates into its own ADR alongside the ADR 0006 trust-boundary records.
+
+## Open questions: native wire contract
+
+Held-open decisions on the v1 native wire (§Decision zone 2). The wire is
+implemented and green; these are deliberately reserved, not bugs. File:line refs
+and the longer discussion live in
+[docs/design/native-mesh-wire.md](../design/native-mesh-wire.md) and its review.
+
+1. **Per-attach scoping: port 9P's `aname`, or choose a native scope-selection
+   shape?** The v1 wire binds the per-*principal* root once from the verified
+   `remote_id()` and resolves `AttachPolicy` at the empty attach name only
+   (`dial_native` discards `aname`; the server uses `ROOT_ANAME = ""`). So a peer
+   gets exactly one root, and 9P's per-*attach* sub-scoping — the same peer
+   attaching different named subtrees in one connection, i.e. a
+   `--grant ANAME:PREFIX:RIGHTS` keyed on a non-empty `aname` — is **not reachable
+   over the native wire** (native-plane grants must key at the root attach name).
+   Open: when sub-scoping is needed (the ADR 0006/0007 authorization layer), do we
+   thread the client `aname` onto the wire 1:1 (additive; empty stays the default)
+   or adopt a cleaner native shape (attach-then-bind, or a typed scope request)?
+   Decide it *with* the authorization layer — operations are 9P-shaped, but we did
+   not reflexively copy 9P's attach ceremony before knowing the native wire wants
+   exactly that shape.
+
+2. **In-band device EOF (`FileReply::Eof`): keep reserved, or drop as YAGNI?**
+   The wire defines (and the client decodes) `FileReply::Eof` — an explicit
+   in-band device close, distinct from regular-file `Chunk(empty)` and from the
+   stream drop / half-close that signals close today — but **no server path emits
+   it** (stream-drop already conveys device close). Open: remove it as speculative
+   generality (one fewer concept — the simple default) or keep it reserved for a
+   future device that needs in-band close distinct from a stream drop? No
+   correctness impact either way.
+
+3. **Bind the read chunk clamp to the advertised `iounit_hint`.** The server
+   clamps a read to `min(max, MAX_CHUNK_LEN)`, identical to the intended
+   `min(max, MAX_CHUNK_LEN, iounit_hint)` *only because* every open advertises
+   `iounit_hint == MAX_CHUNK_LEN`. This is a latent coupling, not a live bug: if
+   any open path ever advertises a smaller per-file `iounit_hint`, a client could
+   pull a chunk larger than the advertised hint. Resolution: add the third clamp
+   term so the read bound is decoupled from that invariant — cheap; do it before a
+   device advertises a non-default hint.
