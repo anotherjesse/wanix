@@ -94,8 +94,9 @@ fn run_external(
     stdout: OutputSink,
     ns: &mut dyn NamespaceOps,
 ) -> ShellResult<i32> {
+    let program = crate::resolve::resolve_command(&stage.argv[0], &*ns)?;
     let spec = SpawnSpec {
-        program: stage.argv[0].clone(),
+        program,
         args: stage.argv[1..].to_vec(),
         stdin,
         stdout,
@@ -178,12 +179,18 @@ mod tests {
         err: Vec<u8>,
         commands: HashMap<String, FakeCmd>,
         pipes: HashMap<String, Vec<u8>>,
+        files: std::collections::HashSet<String>,
         next_pipe: u32,
     }
 
     impl FakeNs {
         fn register(&mut self, name: &str, cmd: FakeCmd) {
             self.commands.insert(name.to_owned(), cmd);
+        }
+
+        /// Pretends a file exists at `path` (for command resolution tests).
+        fn seed_file(&mut self, path: &str) {
+            self.files.insert(path.to_owned());
         }
 
         fn read_source(&mut self, source: &InputSource) -> Vec<u8> {
@@ -214,6 +221,9 @@ mod tests {
         fn write_stderr(&mut self, bytes: &[u8]) -> ShellResult<()> {
             self.err.extend_from_slice(bytes);
             Ok(())
+        }
+        fn exists(&self, path: &str) -> ShellResult<bool> {
+            Ok(self.files.contains(path))
         }
         fn pipe_new(&mut self) -> ShellResult<String> {
             let id = self.next_pipe.to_string();
@@ -356,5 +366,56 @@ mod tests {
         let (code, ns) = run("echo hello | cat");
         assert_eq!(code, 0);
         assert_eq!(String::from_utf8(ns.out).unwrap(), "hello\n");
+    }
+
+    // ---- command resolution ---------------------------------------------
+
+    fn resolve(name: &str, ns: &FakeNs) -> String {
+        crate::resolve::resolve_command(name, ns).expect("resolve")
+    }
+
+    #[test]
+    fn resolve_literal_path_passes_through() {
+        let ns = FakeNs::default();
+        assert_eq!(resolve("usr/bin/cat", &ns), "usr/bin/cat");
+    }
+
+    #[test]
+    fn resolve_finds_wasm_in_bin() {
+        let mut ns = FakeNs::default();
+        ns.seed_file("bin/jaq.wasm");
+        assert_eq!(resolve("jaq", &ns), "bin/jaq.wasm");
+    }
+
+    #[test]
+    fn resolve_prefers_wasm_over_bare() {
+        let mut ns = FakeNs::default();
+        ns.seed_file("bin/tool");
+        ns.seed_file("bin/tool.wasm");
+        assert_eq!(resolve("tool", &ns), "bin/tool.wasm");
+    }
+
+    #[test]
+    fn resolve_searches_usr_bin() {
+        let mut ns = FakeNs::default();
+        ns.seed_file("usr/bin/thing.wasm");
+        assert_eq!(resolve("thing", &ns), "usr/bin/thing.wasm");
+    }
+
+    #[test]
+    fn resolve_missing_returns_bare_name() {
+        let ns = FakeNs::default();
+        assert_eq!(resolve("nope", &ns), "nope");
+    }
+
+    #[test]
+    fn external_command_resolves_from_bin_then_runs() {
+        let mut ns = FakeNs::default();
+        ns.seed_file("bin/lister.wasm");
+        ns.register("bin/lister.wasm", |_in, args| {
+            (format!("ran {}\n", args.join(",")).into_bytes(), 0)
+        });
+        assert_eq!(run_on("lister a b", &mut ns), 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "ran a,b\n");
     }
 }

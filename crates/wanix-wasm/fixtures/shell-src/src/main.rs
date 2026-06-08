@@ -24,6 +24,14 @@ impl NamespaceOps for WasiNamespace {
             .map_err(|err| ShellError::Io(err.to_string()))
     }
 
+    fn exists(&self, path: &str) -> ShellResult<bool> {
+        match std::fs::metadata(path) {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(ShellError::Io(format!("{path}: {err}"))),
+        }
+    }
+
     fn pipe_new(&mut self) -> ShellResult<String> {
         read_service("#pipe/new")
     }

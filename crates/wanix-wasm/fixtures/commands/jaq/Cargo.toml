@@ -1,0 +1,21 @@
+[package]
+name = "jaq"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "jaq"
+path = "src/main.rs"
+
+[dependencies]
+jaq-core = "3.0.0"
+jaq-std = "3.0.0"
+jaq-json = { version = "2.0.0", features = ["std"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"
+
+[workspace]

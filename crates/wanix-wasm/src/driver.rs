@@ -381,4 +381,80 @@ mod tests {
             "listing entry missing: {out:?}"
         );
     }
+
+    #[test]
+    fn shell_resolves_external_command_from_bin() {
+        // `lister` (no slash, not a builtin) resolves to bin/lister.wasm and runs.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell");
+        fs.create_dir_all("bin").expect("make bin");
+        fs.write_file("bin/lister.wasm", RUST_GUEST)
+            .expect("seed bin command");
+        fs.create_dir_all("dir").expect("make dir");
+        fs.write_file("dir/alpha.txt", b"a").expect("seed file");
+
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let shell = table
+            .allocate_root_with_namespace("auto", namespace_with_pipe(&fs))
+            .expect("allocate shell");
+        shell
+            .set_cmd("shell.wasm -c \"lister --list /dir\"")
+            .expect("set cmd");
+        let cap = wire_shell_stdio(&shell);
+
+        table.start(shell.id()).expect("run shell");
+        let err = String::from_utf8_lossy(&cap.read_file("err").expect("read err")).into_owned();
+        assert_eq!(shell.exit(), "0", "shell should exit 0; stderr={err:?}");
+        let out = String::from_utf8(cap.read_file("out").expect("read out")).expect("utf8");
+        assert!(
+            out.contains("/dir has 1 entries"),
+            "resolved bin command should run: {out:?}"
+        );
+    }
+
+    fn run_shell_with_bin(cmd: &str) -> (String, String) {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell");
+
+        let mut ns = namespace_with_pipe(&fs);
+        // Mount the installable command set (jaq, …) at `bin`; children inherit it.
+        ns.bind(crate::command_bin(), ".", "bin", BindOptions::default())
+            .expect("bind command bin");
+
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let shell = table
+            .allocate_root_with_namespace("auto", ns)
+            .expect("allocate shell");
+        shell.set_cmd(cmd).expect("set cmd");
+        let cap = wire_shell_stdio(&shell);
+
+        table.start(shell.id()).expect("run shell");
+        let out = String::from_utf8(cap.read_file("out").expect("read out")).expect("utf8");
+        let err = String::from_utf8_lossy(&cap.read_file("err").expect("read err")).into_owned();
+        assert_eq!(shell.exit(), "0", "shell should exit 0; stderr={err:?}");
+        (out, err)
+    }
+
+    #[test]
+    fn shell_pipes_echo_into_jaq_map() {
+        // The flagship: jaq is a plain external command resolved from bin, fed by
+        // a builtin producer through a real #pipe. No shell special-casing of jq.
+        let (out, _err) = run_shell_with_bin("shell.wasm -c \"echo '[1,2,3]' | jaq 'map(.+1)'\"");
+        assert_eq!(out.trim(), "[2,3,4]", "echo array | jaq map: {out:?}");
+    }
+
+    #[test]
+    fn shell_pipes_echo_into_jaq_stdlib_add() {
+        // `add` exercises the jaq stdlib wiring through the resolved command.
+        let (out, _err) = run_shell_with_bin("shell.wasm -c \"echo '[1,2,3]' | jaq add\"");
+        assert_eq!(out.trim(), "6", "echo array | jaq add: {out:?}");
+    }
 }

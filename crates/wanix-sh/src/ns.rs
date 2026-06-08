@@ -66,6 +66,17 @@ pub trait NamespaceOps {
     /// Returns [`ShellError::Io`](crate::ShellError::Io) if the write fails.
     fn write_stderr(&mut self, bytes: &[u8]) -> ShellResult<()>;
 
+    /// Reports whether a path exists in the namespace (file or directory).
+    ///
+    /// Returns `Ok(false)` when the path is simply absent — that is not an error.
+    /// Used by command resolution to find a program in the search directories.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if existence cannot be determined (e.g. an I/O
+    /// failure distinct from "not found").
+    fn exists(&self, path: &str) -> ShellResult<bool>;
+
     /// Allocates a new `#pipe` channel and returns its id.
     ///
     /// # Errors

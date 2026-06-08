@@ -24,6 +24,7 @@ mod error;
 mod exec;
 mod lower;
 mod ns;
+mod resolve;
 mod syntax;
 
 pub use error::{ShellError, ShellResult};
