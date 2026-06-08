@@ -2,10 +2,12 @@
 //!
 //! The peer id IS the resource identity; `?addr=IP:PORT` is only a direct-route
 //! HINT, never identity (see `docs/better-iroh-discovery.md`). So
-//! `iroh://<64-hex-peer-id>` is the canonical resource address — on the public
-//! network it is dialable via relay/DNS discovery — and `?addr=IP:PORT` query
-//! parameters carry direct routes for LAN/offline first contact (today the only
-//! working route on the `--addr`/loopback path, which disables discovery).
+//! `iroh://<64-hex-peer-id>` is the canonical resource address: every mesh
+//! endpoint runs always-on mDNS local discovery, so a bare `iroh://PEER` dials on
+//! the LAN or same machine with no `addr=` — and a peer that restarts on a new
+//! port is still found by its stable id. On the public network it also resolves
+//! via relay/DNS. `?addr=IP:PORT` query parameters are an optional direct-route
+//! shortcut/fallback.
 //!
 //! Crucially, a stale or wrong `addr=` cannot mount the wrong resource: every
 //! route still authenticates as the requested peer id, so a bad hint fails the

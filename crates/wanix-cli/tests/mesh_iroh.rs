@@ -278,3 +278,34 @@ fn mount_survives_the_dialer_function_returning() {
         b"runtime still alive"
     );
 }
+
+#[test]
+fn mdns_discovers_a_bare_peer_id_without_a_direct_addr() {
+    // Always-on mDNS local discovery: a peer is reachable by a BARE `iroh://PEER`
+    // (no `addr=` hint) on the same machine because every endpoint advertises and
+    // resolves over mDNS. This is the fix for stale/rotating direct ports — a
+    // restarted server on a new port is still found by its stable id.
+    let (server_ns, host) = services_namespace();
+    host.write_file("marker.txt", b"found-via-mdns").unwrap();
+    let server_identity = NodeIdentity::from_secret_bytes([41u8; 32]);
+    let mut server = MeshNode::bind_local(&server_identity, loopback()).unwrap();
+    server.serve_native(NativeServeConfig::open(Arc::new(server_ns)));
+
+    // Bare endpoint address: peer id ONLY, no direct addr. The dial must resolve a
+    // route purely through mDNS.
+    let bare =
+        wanix_mesh::EndpointAddr::new(wanix_mesh::endpoint_id_for(server.peer_id()).unwrap());
+
+    let client_identity = NodeIdentity::from_secret_bytes([42u8; 32]);
+    let client = MeshNode::bind_local(&client_identity, loopback()).unwrap();
+    let remote = client.dialer().dial_native(bare).unwrap();
+    let mut namespace = Namespace::new();
+    namespace
+        .bind(remote, ".", MOUNT_POINT, BindOptions::default())
+        .unwrap();
+
+    assert_eq!(
+        read_through(&namespace, &mounted("marker.txt")),
+        b"found-via-mdns"
+    );
+}

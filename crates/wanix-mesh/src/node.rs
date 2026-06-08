@@ -82,9 +82,11 @@ impl MeshNode {
         Self::bind_with(identity, Binding::Public)
     }
 
-    /// Binds a node for fully offline, direct-address-only use: relays and DNS
-    /// disabled, the IP socket pinned to `addr`. This is the testable form, and
-    /// the form for a LAN where peers exchange direct [`EndpointAddr`] tickets.
+    /// Binds a node for local/LAN use: relays and the public DNS address lookup
+    /// disabled, the IP socket pinned to `addr`. mDNS local discovery is still on
+    /// (see [`build_endpoint`]), so LAN peers can reach it by a bare `iroh://PEER`
+    /// as well as via an exchanged direct [`EndpointAddr`] ticket. The testable
+    /// form, and the form for a LAN.
     ///
     /// # Errors
     ///
@@ -441,6 +443,13 @@ fn endpoint_alpns() -> Vec<Vec<u8>> {
 }
 
 /// Builds and binds the iroh endpoint for `binding`.
+///
+/// Every endpoint enables mDNS local-network address lookup (advertise +
+/// resolve), so a peer is reachable by a bare `iroh://PEER` on the LAN/same
+/// machine without a direct `addr=` hint — and a restarted node on a new port is
+/// rediscovered by its stable id. This is on by default for both bindings;
+/// `Public` keeps N0 DNS/Pkarr too, `Local` keeps relays disabled. (An opt-out
+/// can be added later if an environment without multicast needs it.)
 async fn build_endpoint(secret: iroh::SecretKey, binding: Binding) -> Result<Endpoint, String> {
     let builder = match binding {
         Binding::Public => Endpoint::builder(presets::N0)
@@ -453,5 +462,7 @@ async fn build_endpoint(secret: iroh::SecretKey, binding: Binding) -> Result<End
             .bind_addr(addr)
             .map_err(|err| err.to_string())?,
     };
+    let builder = builder
+        .address_lookup(iroh_mdns_address_lookup::MdnsAddressLookup::builder().advertise(true));
     builder.bind().await.map_err(|err| err.to_string())
 }

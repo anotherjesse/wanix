@@ -196,9 +196,18 @@ Acceptance:
 - Tests continue to use direct tickets for deterministic loopback.
 - Catalog-related docs never store `addr=` as the durable resource id.
 
-### Phase 1: Add an iroh local discovery option
+### Phase 1: Add an iroh local discovery option — SHIPPED (always-on mDNS)
 
-Add a Wanix-controlled option to enable iroh local discovery on mesh endpoints.
+**Shipped:** every mesh endpoint enables mDNS local-network address lookup
+(`iroh-mdns-address-lookup`, advertise + resolve) in
+`wanix-mesh::MeshNode::build_endpoint`. It is **always on, not a flag** — a bare
+`iroh://PEER` dials on the LAN/same machine with no `addr=`, and a peer that
+restarts on a new port is rediscovered by its stable id. We deliberately did not
+add a `--discovery local` flag; an opt-out can be added later only if an
+environment without multicast (some CI) needs it. Proof:
+`crates/wanix-cli/tests/mesh_iroh.rs::mdns_discovers_a_bare_peer_id_without_a_direct_addr`.
+Direct `addr=` still works as a shortcut/fallback, and identity is unchanged: a
+wrong hint fails the dial, never mounts another peer.
 
 > Investigated (Phase 0): with the pinned `iroh = =1.0.0-rc.1`,
 > `MeshNode::bind` uses `presets::N0` (relay + DNS/Pkarr discovery) and

@@ -21,6 +21,7 @@ bytes = "1.11.1"
 iroh = "=1.0.0-rc.1"
 iroh-blobs = "0.102.0"
 iroh-gossip = "0.100.0"
+iroh-mdns-address-lookup = "0.3.0"
 n0-future = "0.3.2"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "sync", "io-util", "time", "macros"] }
 wanix-9p = { path = "../wanix-9p" }
