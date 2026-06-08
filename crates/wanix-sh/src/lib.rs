@@ -27,12 +27,14 @@ mod exec;
 mod expand;
 mod lower;
 mod ns;
+mod prompt;
 mod resolve;
 mod state;
 mod syntax;
 
 pub use error::{ShellError, ShellResult};
 pub use ns::{InputSource, NamespaceOps, OutputSink, SpawnSpec};
+pub use prompt::{DEFAULT_PS1, render as render_prompt};
 pub use state::ShellState;
 
 use exec::execute;
