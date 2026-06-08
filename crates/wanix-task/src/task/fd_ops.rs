@@ -34,9 +34,24 @@ impl Task {
     /// `ctl bind <src> fd/<n>`. The file is opened outside the task lock so
     /// service files can safely reenter task state.
     pub fn bind_fd_from_namespace(&self, source: impl AsRef<str>, fd: Fd) -> FsResult<()> {
+        self.bind_fd_from_namespace_with(source, fd, fd_bind_open_options(fd))
+    }
+
+    /// Opens a namespace path with explicit options and installs it at a fd.
+    ///
+    /// Like [`bind_fd_from_namespace`](Self::bind_fd_from_namespace) but lets the
+    /// caller choose the open mode instead of defaulting it from the fd number.
+    /// This is needed to bind a strictly unidirectional source — for example a
+    /// `#pipe` write end, which rejects a read-write open — onto fd 1/2.
+    pub fn bind_fd_from_namespace_with(
+        &self,
+        source: impl AsRef<str>,
+        fd: Fd,
+        options: OpenOptions,
+    ) -> FsResult<()> {
         let source = NormalizedPath::new(source)?;
         let namespace = self.namespace();
-        let file = namespace.open(&source, fd_bind_open_options(fd))?;
+        let file = namespace.open(&source, options)?;
         self.insert_fd(fd, file, source)
     }
 

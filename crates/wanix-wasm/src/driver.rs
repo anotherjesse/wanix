@@ -77,6 +77,7 @@ mod tests {
     use std::sync::Arc;
 
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
+    use wanix_pipe::PipeDevice;
     use wanix_task::{Fd, Task, TaskDriver, TaskTable};
     use wanix_vfs::{BindOptions, Namespace};
 
@@ -280,36 +281,8 @@ mod tests {
             .set_cmd("shell.wasm -c \"guest.wasm --list /dir\"")
             .expect("set cmd");
 
-        // Wire the shell's stdout + stderr to sinks the child inherits.
-        let cap = Arc::new(MemFs::new());
-        cap.write_file("out", b"").expect("seed out");
-        cap.write_file("err", b"").expect("seed err");
-        let stdout = cap
-            .open(
-                &NormalizedPath::new("out").expect("path"),
-                OpenOptions::read_write(),
-            )
-            .expect("open out");
-        let stderr = cap
-            .open(
-                &NormalizedPath::new("err").expect("path"),
-                OpenOptions::read_write(),
-            )
-            .expect("open err");
-        shell
-            .insert_fd(
-                Fd::STDOUT,
-                stdout,
-                NormalizedPath::new("out").expect("path"),
-            )
-            .expect("install fd 1");
-        shell
-            .insert_fd(
-                Fd::STDERR,
-                stderr,
-                NormalizedPath::new("err").expect("path"),
-            )
-            .expect("install fd 2");
+        // Wire the shell's stdio (fd 0/1/2); the child inherits these.
+        let cap = wire_shell_stdio(&shell);
 
         table.start(shell.id()).expect("run shell");
         let err = String::from_utf8_lossy(&cap.read_file("err").expect("read err")).into_owned();
@@ -323,6 +296,89 @@ mod tests {
         assert!(
             out.contains("alpha.txt file"),
             "child listing should appear: {out:?}"
+        );
+    }
+
+    fn namespace_with_pipe(fs: &Arc<MemFs>) -> Namespace {
+        let mut ns = namespace_on(fs);
+        ns.bind(
+            Arc::new(PipeDevice::new()),
+            ".",
+            "#pipe",
+            BindOptions::default(),
+        )
+        .expect("bind #pipe");
+        ns
+    }
+
+    /// Wires the shell's fd 0/1/2 to capture files and returns the capture fs.
+    fn wire_shell_stdio(shell: &Task) -> Arc<MemFs> {
+        let cap = Arc::new(MemFs::new());
+        for (fd, name) in [(Fd::STDIN, "in"), (Fd::STDOUT, "out"), (Fd::STDERR, "err")] {
+            cap.write_file(name, b"").expect("seed capture file");
+            let file = cap
+                .open(
+                    &NormalizedPath::new(name).expect("path"),
+                    OpenOptions::read_write(),
+                )
+                .expect("open capture");
+            shell
+                .insert_fd(fd, file, NormalizedPath::new(name).expect("path"))
+                .expect("install fd");
+        }
+        cap
+    }
+
+    fn run_shell_pipeline(cmd: &str) -> (String, String) {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell");
+        // rust-guest provides `--cat` (stdin->stdout) and `--list`.
+        fs.write_file("guest.wasm", RUST_GUEST).expect("seed guest");
+        fs.create_dir_all("dir").expect("make /dir");
+        fs.write_file("dir/alpha.txt", b"a").expect("seed file");
+
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let shell = table
+            .allocate_root_with_namespace("auto", namespace_with_pipe(&fs))
+            .expect("allocate shell");
+        shell.set_cmd(cmd).expect("set cmd");
+        let cap = wire_shell_stdio(&shell);
+
+        table.start(shell.id()).expect("run shell");
+        let out = String::from_utf8(cap.read_file("out").expect("read out")).expect("utf8");
+        let err = String::from_utf8_lossy(&cap.read_file("err").expect("read err")).into_owned();
+        assert_eq!(shell.exit(), "0", "shell should exit 0; stderr={err:?}");
+        (out, err)
+    }
+
+    #[test]
+    fn shell_pipes_builtin_producer_into_external_consumer() {
+        // echo (builtin) fills a #pipe; `guest.wasm --cat` (external) drains it.
+        // Exercises the shell opening the pipe writer and closing it for EOF.
+        let (out, _err) = run_shell_pipeline("shell.wasm -c \"echo hi | guest.wasm --cat\"");
+        assert_eq!(
+            out, "hi\n",
+            "piped bytes should reach the consumer's stdout"
+        );
+    }
+
+    #[test]
+    fn shell_pipes_external_producer_into_external_consumer() {
+        // `guest.wasm --list` (external) writes a #pipe via a write-only bind;
+        // its exit drops the writer; `guest.wasm --cat` (external) drains it.
+        let (out, _err) =
+            run_shell_pipeline("shell.wasm -c \"guest.wasm --list /dir | guest.wasm --cat\"");
+        assert!(
+            out.contains("rust-wasm: /dir has 1 entries"),
+            "producer listing should flow through the pipe: {out:?}"
+        );
+        assert!(
+            out.contains("alpha.txt file"),
+            "listing entry missing: {out:?}"
         );
     }
 }

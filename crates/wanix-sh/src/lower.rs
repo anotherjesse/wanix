@@ -2,8 +2,8 @@
 //!
 //! This is where "scope honesty" lives: any AST node the executor does not yet
 //! handle is turned into a clear [`ShellError::Unsupported`] rather than being
-//! silently dropped. As the executor grows (pipelines, redirects, control flow),
-//! the matching arms here move from "unsupported" to real lowering.
+//! silently dropped. As the executor grows (redirects, control flow), the
+//! matching arms here move from "unsupported" to real lowering.
 
 use brush_parser::{ast, unquote_str};
 
@@ -11,16 +11,23 @@ use crate::error::{ShellError, ShellResult};
 
 /// A single simple command after word resolution: `argv[0]` is the command name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SimpleCmd {
+pub struct Stage {
     /// The resolved argument vector.
     pub argv: Vec<String>,
 }
 
-/// A lowered program: a sequence of simple commands run in order.
+/// A pipeline: one or more [`Stage`]s connected stdout-to-stdin by pipes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pipeline {
+    /// The stages, in left-to-right order.
+    pub stages: Vec<Stage>,
+}
+
+/// A lowered program: a sequence of pipelines run in order (`;` / newline).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Plan {
-    /// Commands to run in sequence (`;` / newline separated).
-    pub commands: Vec<SimpleCmd>,
+    /// Pipelines to run in sequence.
+    pub pipelines: Vec<Pipeline>,
 }
 
 /// Lowers a parsed [`ast::Program`] into a [`Plan`].
@@ -28,33 +35,33 @@ pub struct Plan {
 /// # Errors
 ///
 /// Returns [`ShellError::Unsupported`] for any construct outside the current
-/// executor subset (pipelines, redirects, `&&`/`||`, control flow, …).
+/// executor subset (redirects, `&&`/`||`, control flow, …).
 pub fn lower(program: &ast::Program) -> ShellResult<Plan> {
-    let mut commands = Vec::new();
+    let mut pipelines = Vec::new();
     for complete_command in &program.complete_commands {
         for item in &complete_command.0 {
             let and_or_list = &item.0;
             if !and_or_list.additional.is_empty() {
                 return Err(ShellError::Unsupported("'&&' / '||' lists".into()));
             }
-            lower_pipeline(&and_or_list.first, &mut commands)?;
+            pipelines.push(lower_pipeline(&and_or_list.first)?);
         }
     }
-    Ok(Plan { commands })
+    Ok(Plan { pipelines })
 }
 
-fn lower_pipeline(pipeline: &ast::Pipeline, out: &mut Vec<SimpleCmd>) -> ShellResult<()> {
+fn lower_pipeline(pipeline: &ast::Pipeline) -> ShellResult<Pipeline> {
     if pipeline.bang {
         return Err(ShellError::Unsupported("pipeline negation ('!')".into()));
     }
-    if pipeline.seq.len() != 1 {
-        return Err(ShellError::Unsupported("pipelines ('|')".into()));
+    let mut stages = Vec::with_capacity(pipeline.seq.len());
+    for command in &pipeline.seq {
+        stages.push(lower_command(command)?);
     }
-    out.push(lower_command(&pipeline.seq[0])?);
-    Ok(())
+    Ok(Pipeline { stages })
 }
 
-fn lower_command(command: &ast::Command) -> ShellResult<SimpleCmd> {
+fn lower_command(command: &ast::Command) -> ShellResult<Stage> {
     match command {
         ast::Command::Simple(simple) => lower_simple(simple),
         ast::Command::Compound(_, _) => Err(ShellError::Unsupported(
@@ -67,7 +74,7 @@ fn lower_command(command: &ast::Command) -> ShellResult<SimpleCmd> {
     }
 }
 
-fn lower_simple(simple: &ast::SimpleCommand) -> ShellResult<SimpleCmd> {
+fn lower_simple(simple: &ast::SimpleCommand) -> ShellResult<Stage> {
     if simple
         .prefix
         .as_ref()
@@ -102,7 +109,7 @@ fn lower_simple(simple: &ast::SimpleCommand) -> ShellResult<SimpleCmd> {
     if argv.is_empty() {
         return Err(ShellError::Unsupported("empty command".into()));
     }
-    Ok(SimpleCmd { argv })
+    Ok(Stage { argv })
 }
 
 /// Resolves a single word to its final value.
@@ -123,32 +130,39 @@ mod tests {
         lower(&parse_program(input).expect("parses"))
     }
 
+    fn argv(plan: &Plan, pipeline: usize, stage: usize) -> &[String] {
+        &plan.pipelines[pipeline].stages[stage].argv
+    }
+
     #[test]
     fn lowers_simple_command_with_args() {
         let plan = plan_of("echo hi there").expect("lowers");
-        assert_eq!(plan.commands.len(), 1);
-        assert_eq!(plan.commands[0].argv, vec!["echo", "hi", "there"]);
+        assert_eq!(plan.pipelines.len(), 1);
+        assert_eq!(plan.pipelines[0].stages.len(), 1);
+        assert_eq!(argv(&plan, 0, 0), ["echo", "hi", "there"]);
     }
 
     #[test]
     fn unquotes_words() {
         let plan = plan_of("echo \"hi there\" 'a b'").expect("lowers");
-        assert_eq!(plan.commands[0].argv, vec!["echo", "hi there", "a b"]);
+        assert_eq!(argv(&plan, 0, 0), ["echo", "hi there", "a b"]);
     }
 
     #[test]
     fn lowers_sequence_separated_by_semicolons() {
         let plan = plan_of("echo a; echo b").expect("lowers");
-        assert_eq!(plan.commands.len(), 2);
-        assert_eq!(plan.commands[1].argv, vec!["echo", "b"]);
+        assert_eq!(plan.pipelines.len(), 2);
+        assert_eq!(argv(&plan, 1, 0), ["echo", "b"]);
     }
 
     #[test]
-    fn pipelines_are_unsupported_honestly() {
-        assert!(matches!(
-            plan_of("echo a | wc").unwrap_err(),
-            ShellError::Unsupported(_)
-        ));
+    fn lowers_a_pipeline_into_stages() {
+        let plan = plan_of("echo hi | wc -c | cat").expect("lowers");
+        assert_eq!(plan.pipelines.len(), 1);
+        assert_eq!(plan.pipelines[0].stages.len(), 3);
+        assert_eq!(argv(&plan, 0, 0), ["echo", "hi"]);
+        assert_eq!(argv(&plan, 0, 1), ["wc", "-c"]);
+        assert_eq!(argv(&plan, 0, 2), ["cat"]);
     }
 
     #[test]

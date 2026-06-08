@@ -527,6 +527,29 @@ fn ctl_bind_installs_fd_from_task_namespace() {
 }
 
 #[test]
+fn ctl_bind_accepts_explicit_open_mode() {
+    // The optional 4th token selects the open mode (r/w/rw). Write-only binds are
+    // what let a #pipe write end (which rejects a read-write open) land on fd 1.
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let root = Arc::new(MemFs::new());
+    root.write_file("stdout", b"").unwrap();
+    task.bind(root.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    write_file(&taskfs, "self/ctl", b"bind stdout fd/1 w\n");
+
+    assert_eq!(entry_names(&taskfs, "self/fd"), ["1"]);
+    write_file(&taskfs, "self/fd/1", b"written via w-mode bind");
+    assert_eq!(
+        root.read_file("stdout").unwrap(),
+        b"written via w-mode bind"
+    );
+}
+
+#[test]
 fn ctl_bind_parses_shell_quoted_source_paths() {
     let table = TaskTable::new();
     table.register_noop_driver("qjs").unwrap();

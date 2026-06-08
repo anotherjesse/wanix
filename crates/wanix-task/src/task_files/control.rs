@@ -1,4 +1,4 @@
-use wanix_fs::{File, FsError, FsResult, Metadata};
+use wanix_fs::{File, FsError, FsResult, Metadata, OpenOptions};
 
 use super::{FileAccess, TASK_FILE_READ_WRITE_MODE, file_metadata};
 use crate::cmd::parse_cmd_argv;
@@ -39,8 +39,15 @@ impl File for ControlFile {
                 self.table.start(self.task.id())?;
                 self.data.clear();
             }
-            ControlCommand::Bind { source, fd } => {
-                self.task.bind_fd_from_namespace(source, fd)?;
+            ControlCommand::Bind {
+                source,
+                fd,
+                options,
+            } => {
+                match options {
+                    Some(options) => self.task.bind_fd_from_namespace_with(source, fd, options)?,
+                    None => self.task.bind_fd_from_namespace(source, fd)?,
+                }
                 self.data.clear();
             }
         }
@@ -55,7 +62,11 @@ impl File for ControlFile {
 enum ControlCommand {
     Pending,
     Start,
-    Bind { source: String, fd: Fd },
+    Bind {
+        source: String,
+        fd: Fd,
+        options: Option<OpenOptions>,
+    },
 }
 
 fn parse_control_command(task: &Task, command: &str) -> FsResult<ControlCommand> {
@@ -101,22 +112,40 @@ fn parse_complete_control_command(task: &Task, parts: &[String]) -> FsResult<Con
     if control_parts_are_pending(parts) {
         return Ok(ControlCommand::Pending);
     }
-    if let Some((source, destination)) = bind_command_parts(parts) {
+    if let Some((source, destination, mode)) = bind_command_parts(parts) {
+        let options = mode.map(parse_bind_options).transpose()?;
         return Ok(ControlCommand::Bind {
             source: source.to_owned(),
             fd: control_fd_destination(task, destination)?,
+            options,
         });
     }
     Err(FsError::NotSupported)
+}
+
+/// Parses an optional `bind` open-mode token: `r`, `w`, or `rw`.
+fn parse_bind_options(mode: &str) -> FsResult<OpenOptions> {
+    match mode {
+        "r" => Ok(OpenOptions::read()),
+        "w" => Ok(OpenOptions {
+            write: true,
+            ..OpenOptions::default()
+        }),
+        "rw" => Ok(OpenOptions::read_write()),
+        _ => Err(FsError::NotSupported),
+    }
 }
 
 fn control_parts_are_pending(parts: &[String]) -> bool {
     parts.is_empty() || ("bind".starts_with(parts[0].as_str()) && parts.len() < 3)
 }
 
-fn bind_command_parts(parts: &[String]) -> Option<(&str, &str)> {
+fn bind_command_parts(parts: &[String]) -> Option<(&str, &str, Option<&str>)> {
     match parts {
-        [command, source, destination] if command == "bind" => Some((source, destination)),
+        [command, source, destination] if command == "bind" => Some((source, destination, None)),
+        [command, source, destination, mode] if command == "bind" => {
+            Some((source, destination, Some(mode)))
+        }
         _ => None,
     }
 }

@@ -17,6 +17,7 @@ const COMMANDS: &[(&str, CommandHandler)] = &[
     ("--pi", pi_command),
     ("--utime", utime_command),
     ("--echo", echo_command),
+    ("--cat", cat_command),
 ];
 
 pub(crate) fn run(args: &[String]) -> bool {
@@ -83,4 +84,14 @@ fn utime_command(args: &[String]) {
 
 fn echo_command(_args: &[String]) {
     files::echo();
+}
+
+/// Copies standard input to standard output (a `cat` with no file args), so the
+/// shell's pipeline tests have a real stdin-reading consumer.
+fn cat_command(_args: &[String]) {
+    use std::io::{Read, Write};
+    let mut input = Vec::new();
+    if std::io::stdin().read_to_end(&mut input).is_ok() {
+        let _ = std::io::stdout().write_all(&input);
+    }
 }

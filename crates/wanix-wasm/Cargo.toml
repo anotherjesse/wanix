@@ -19,6 +19,9 @@ wasmtime = { version = "45.0.0", default-features = false, features = [
     "std",
 ] }
 
+[dev-dependencies]
+wanix-pipe = { path = "../wanix-pipe" }
+
 [lib]
 name = "wanix_wasm"
 path = "src/lib.rs"

@@ -1,13 +1,13 @@
 //! The `wanix-sh` shell as a `wasm32-wasip1` command guest.
 //!
 //! It backs the shell's [`NamespaceOps`] surface with WASI: standard I/O for the
-//! shell's own output, and the `#task` device for launching child commands. The
-//! Wanix `wanix-wasm` driver wires this guest's fd 0/1/2 to the task's stdio, so
-//! writes here flow to the task's standard output/error.
+//! shell's own output, the `#task` device for launching child commands, and
+//! `#pipe` for byte channels between pipeline stages. The Wanix `wanix-wasm`
+//! driver wires this guest's fd 0/1/2 to the task's stdio.
 
-use std::io::Write;
+use std::io::{Read, Write};
 
-use wanix_sh::{NamespaceOps, ShellError, ShellResult, SpawnSpec, run_shell};
+use wanix_sh::{InputSource, NamespaceOps, OutputSink, ShellError, ShellResult, SpawnSpec, run_shell};
 
 struct WasiNamespace;
 
@@ -24,6 +24,31 @@ impl NamespaceOps for WasiNamespace {
             .map_err(|err| ShellError::Io(err.to_string()))
     }
 
+    fn pipe_new(&mut self) -> ShellResult<String> {
+        read_service("#pipe/new")
+    }
+
+    fn pipe_read_all(&mut self, id: &str) -> ShellResult<Vec<u8>> {
+        let mut file = std::fs::File::open(format!("#pipe/{id}/data"))
+            .map_err(|err| ShellError::Io(format!("#pipe/{id}/data: {err}")))?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|err| ShellError::Io(format!("#pipe/{id}/data: {err}")))?;
+        Ok(bytes)
+    }
+
+    fn pipe_write_all_and_close(&mut self, id: &str, bytes: &[u8]) -> ShellResult<()> {
+        // Open the write end only; dropping it closes the writer so the reader
+        // observes EOF.
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(format!("#pipe/{id}/data"))
+            .map_err(|err| ShellError::Io(format!("#pipe/{id}/data: {err}")))?;
+        writer
+            .write_all(bytes)
+            .map_err(|err| ShellError::Io(format!("#pipe/{id}/data: {err}")))
+    }
+
     fn spawn(&mut self, spec: &SpawnSpec) -> ShellResult<i32> {
         // Allocate a child task whose kind is auto-selected by the program's
         // extension (`.wasm` -> wasm driver, `.js` -> qjs driver, …).
@@ -32,21 +57,44 @@ impl NamespaceOps for WasiNamespace {
         let base = format!("#task/{child}");
 
         write_service(&format!("{base}/cmd"), &command_line(spec))?;
-        // Inherit the shell's stdout/stderr so the child's output reaches the
-        // same place the shell writes. (stdin inheritance + redirection arrive
-        // with pipelines.)
-        for fd in [1, 2] {
-            write_service(
-                &format!("{base}/ctl"),
-                &format!("bind #task/{self_id}/fd/{fd} fd/{fd}"),
-            )?;
-        }
+        bind_fd(&base, 0, &input_bind(&spec.stdin, &self_id))?;
+        bind_fd(&base, 1, &output_bind(&spec.stdout, &self_id))?;
+        // stderr is always inherited.
+        bind_fd(&base, 2, &(format!("#task/{self_id}/fd/2"), None))?;
         write_service(&format!("{base}/ctl"), "start")?;
 
         let exit = read_service(&format!("{base}/exit"))?;
         exit.parse::<i32>()
             .map_err(|_| ShellError::Io(format!("invalid exit status {exit:?}")))
     }
+}
+
+/// The (source path, open-mode) a child's stdin should bind to.
+fn input_bind(stdin: &InputSource, self_id: &str) -> (String, Option<&'static str>) {
+    match stdin {
+        InputSource::Inherit => (format!("#task/{self_id}/fd/0"), None),
+        InputSource::Pipe(id) => (format!("#pipe/{id}/data"), Some("r")),
+    }
+}
+
+/// The (sink path, open-mode) a child's stdout should bind to.
+///
+/// A `#pipe` write end must open write-only — it rejects a read-write open — so
+/// it carries an explicit `w` mode.
+fn output_bind(stdout: &OutputSink, self_id: &str) -> (String, Option<&'static str>) {
+    match stdout {
+        OutputSink::Inherit => (format!("#task/{self_id}/fd/1"), None),
+        OutputSink::Pipe(id) => (format!("#pipe/{id}/data"), Some("w")),
+    }
+}
+
+fn bind_fd(base: &str, fd: u32, target: &(String, Option<&str>)) -> ShellResult<()> {
+    let (path, mode) = target;
+    let line = match mode {
+        Some(mode) => format!("bind {} fd/{fd} {mode}", quote(path)),
+        None => format!("bind {} fd/{fd}", quote(path)),
+    };
+    write_service(&format!("{base}/ctl"), &line)
 }
 
 /// Builds a shell-quoted command line from a spawn spec.
@@ -61,7 +109,11 @@ fn command_line(spec: &SpawnSpec) -> String {
 
 /// Single-quotes a word so the `#task` cmd parser keeps it as one argument.
 fn quote(word: &str) -> String {
-    if !word.is_empty() && word.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b)) {
+    if !word.is_empty()
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-/#".contains(&b))
+    {
         return word.to_owned();
     }
     format!("'{}'", word.replace('\'', "'\\''"))
