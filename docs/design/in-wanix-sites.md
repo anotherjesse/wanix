@@ -235,21 +235,21 @@ file-driven replacement (and `cas <hash>` is the publish form). The device
 parses/round-trips/serves all three sources (`memory` placeholder, `dir`, `cas`)
 and is unit-tested.
 
-**Open transport gap.** Writing `#sites` *live against a running `serve`* needs a
-9P client that speaks serve's transport — and serve's 9P rides a **websocket
-upgrade**, while the CLI's `mount-write` is **raw-TCP 9P only** (and `p9-listen`,
-which is raw 9P, does not expose `--wanix-services`). So today `#sites` is
-writable in-browser by the cockpit (over the websocket) or in-process, but not
-from the CLI against a live serve. Until that client exists, the CLI demo
-(`docs/site/serve-from-wanix.sh`) serves the generated tree via `--root`.
+**Transport gap (CLOSED).** Writing `#sites` *live against a running `serve`*
+needs a 9P client that speaks serve's transport. serve's 9P rides a **websocket
+upgrade**, while the CLI's `mount-write` is **raw-TCP 9P only**. This is closed
+by `serve --p9 ADDR` (ADR 0006): serve now binds a **raw 9P listener alongside
+HTTP** on the serve endpoint (default loopback), exporting the same served
+namespace as the websocket door over one per-connection session core. So
+`wanix mount-write tcp://HOST:PORT '#sites/<host>' 'dir /abs'` writes `#sites`
+against a live serve from the CLI, and the cockpit keeps writing it over the
+websocket — both doors, one core. The bound raw-9P address is reported in
+startup status and discovery (`routes.p9.tcp`).
 
-Options to close it (pick one):
-- **9P-over-websocket client** in the CLI (`mount-write ws://host:port …`) — the
-  most general fix; the CLI then does file operations against any served
-  namespace, exactly like the cockpit.
-- **Startup namespace/site profile** — `serve` reads a file of bind operations
-  (Plan 9 `/lib/namespace` style); file-driven config with no per-site flag.
-- **Raw 9P listener** alongside HTTP on the serve endpoint.
+The browser-only alternative (a **9P-over-websocket client** in the CLI,
+`mount-write ws://host:port …`) is still the more general fix for contexts that
+cannot dial raw TCP, and remains an option; the raw `--p9` door covers the CLI
+case today.
 
 ## Next steps (Phase 4 — not in this workflow)
 

@@ -47,6 +47,9 @@ fn parse_serve_uses_go_like_defaults_and_options() {
     assert_eq!(default_command.bundle, None);
     assert!(!default_command.wanix_services);
     assert!(!default_command.once);
+    assert_eq!(default_command.p9_addr, None);
+    assert_eq!(default_command.peer, None);
+    assert!(default_command.grants.is_empty());
 
     let command = parse_serve_command(&[
         OsString::from("examples"),
@@ -87,6 +90,220 @@ fn parse_serve_reports_missing_option_values() {
 }
 
 #[test]
+fn parse_serve_accepts_p9_door_with_peer_and_grants() {
+    let command = parse_serve_command(&[
+        OsString::from("--p9"),
+        OsString::from("127.0.0.1:0"),
+        OsString::from("--peer"),
+        OsString::from("ab".repeat(32)),
+        OsString::from("--grant"),
+        OsString::from("projects/foo:projects/foo:rw"),
+        OsString::from("--grant"),
+        OsString::from("docs:docs:ro"),
+    ])
+    .unwrap();
+
+    assert_eq!(command.p9_addr.as_deref(), Some("127.0.0.1:0"));
+    assert!(command.peer.is_some());
+    assert_eq!(command.grants.len(), 2);
+}
+
+#[test]
+fn parse_serve_normalizes_bare_port_p9_to_non_loopback() {
+    let command = parse_serve_command(&[OsString::from("--p9"), OsString::from(":9999")]).unwrap();
+    // `:PORT` normalizes to `0.0.0.0` (non-loopback), which trips the
+    // `--wanix-services` trust guard at bind time.
+    assert_eq!(command.p9_addr.as_deref(), Some("0.0.0.0:9999"));
+}
+
+#[test]
+fn parse_serve_rejects_grant_without_peer() {
+    let error = parse_serve_command(&[
+        OsString::from("--p9"),
+        OsString::from("127.0.0.1:0"),
+        OsString::from("--grant"),
+        OsString::from("docs:docs:ro"),
+    ])
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("--grant requires --peer"),
+        "{error}"
+    );
+}
+
+#[test]
+fn parse_serve_rejects_peer_without_p9_door() {
+    let error = parse_serve_command(&[OsString::from("--peer"), OsString::from("ab".repeat(32))])
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("require --p9 HOST:PORT"),
+        "{error}"
+    );
+}
+
+#[test]
+fn parse_serve_reports_missing_p9_option_values() {
+    for (option, expected) in [
+        ("--p9", "serve --p9 expects HOST:PORT"),
+        ("--peer", "serve --peer expects HEX"),
+        ("--grant", "serve --grant expects ANAME:PREFIX:RIGHTS"),
+    ] {
+        let error = parse_serve_command(&[OsString::from(option)]).unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "{option} produced {error}"
+        );
+    }
+}
+
+#[test]
+fn run_serve_p9_door_reports_bind_errors() {
+    let command = ServeCommand {
+        root_path: PathBuf::from("."),
+        addr: "127.0.0.1:0".to_owned(),
+        bundle: None,
+        wanix_services: false,
+        once: true,
+        p9_addr: Some("127.0.0.1:notaport".to_owned()),
+        peer: None,
+        grants: Vec::new(),
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut stderr = Vec::new();
+
+    let error = run_serve_with_listener(command, listener, &mut stderr).unwrap_err();
+
+    assert_eq!(error.exit_code(), 1);
+    assert!(
+        error
+            .to_string()
+            .contains("failed to bind serve --p9 address"),
+        "{error}"
+    );
+}
+
+#[test]
+fn run_serve_refuses_wanix_services_on_non_loopback_p9_door() {
+    // The HTTP door is loopback, but the raw `--p9` door binds 0.0.0.0; the
+    // trust guard must still refuse `--wanix-services` (RCE devices) on it.
+    let command = ServeCommand {
+        root_path: PathBuf::from("."),
+        addr: "127.0.0.1:0".to_owned(),
+        bundle: None,
+        wanix_services: true,
+        once: true,
+        p9_addr: Some("0.0.0.0:0".to_owned()),
+        peer: None,
+        grants: Vec::new(),
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut stderr = Vec::new();
+
+    let error = run_serve_with_listener(command, listener, &mut stderr).unwrap_err();
+
+    assert_eq!(error.exit_code(), 2);
+    assert!(
+        error.to_string().contains("the raw --p9 9P door"),
+        "{error}"
+    );
+}
+
+#[test]
+fn run_serve_p9_door_serves_services_namespace_over_raw_tcp() {
+    // Drive a LIVE serve with a loopback raw-9P door (`--p9`) over the services
+    // namespace, then mount-style raw TCP 9P: write a `#sites/<host>` binding
+    // and read the round-tripped bytes back, proving `mount-write tcp://...`
+    // can mutate the served namespace against a running serve.
+    let root = temp_dir("wanix-cli-serve-p9-sites");
+    fs::write(root.join("index.html"), b"home").unwrap();
+    let http_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let http_addr = http_listener.local_addr().unwrap();
+    let command = ServeCommand {
+        root_path: root.clone(),
+        addr: http_addr.to_string(),
+        bundle: None,
+        wanix_services: true,
+        once: true,
+        // `:0` -> 0.0.0.0:0 would trip the trust guard with --wanix-services;
+        // bind the raw door explicitly to loopback so it is allowed.
+        p9_addr: Some("127.0.0.1:0".to_owned()),
+        peer: None,
+        grants: Vec::new(),
+    };
+
+    let serve_thread = thread::spawn(move || {
+        let mut stderr = Vec::new();
+        let exit_code = run_serve_with_listener(command, http_listener, &mut stderr).unwrap();
+        (exit_code, String::from_utf8(stderr).unwrap())
+    });
+
+    // Learn the raw-9P bound port from the discovery JSON over the single
+    // allowed HTTP (once) connection; the raw door lives on its own thread and
+    // outlives the HTTP handler.
+    let mut http = TcpStream::connect(http_addr).unwrap();
+    http.write_all(b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut response = Vec::new();
+    http.read_to_end(&mut response).unwrap();
+    let (exit_code, stderr) = serve_thread.join().unwrap();
+    assert_eq!(exit_code, 0);
+    assert!(
+        stderr.contains("raw 9P listening on tcp://127.0.0.1:"),
+        "startup status must advertise the raw door: {stderr}"
+    );
+
+    let response = String::from_utf8(response).unwrap();
+    let tcp_url = extract_json_tcp_route(&response).expect("discovery advertises tcp route");
+    assert!(tcp_url.starts_with("tcp://127.0.0.1:"), "{tcp_url}");
+
+    // Drive the raw door exactly like `wanix mount-write tcp://... '#sites/<host>'`
+    // followed by `mount-cat`, proving a mount-style raw-TCP 9P client can both
+    // mutate and read the served services namespace against a live serve.
+    let dir_source = format!("dir {}", root.display());
+    crate::mount::run_mount_command(
+        crate::mount::parse_mount_command(
+            "mount-write",
+            &[
+                OsString::from(tcp_url.clone()),
+                OsString::from("#sites/blog.localhost"),
+                OsString::from(dir_source.clone()),
+            ],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    let readback = crate::mount::run_mount_command(
+        crate::mount::parse_mount_command(
+            "mount-cat",
+            &[
+                OsString::from(tcp_url),
+                OsString::from("#sites/blog.localhost"),
+            ],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let descriptor = String::from_utf8_lossy(readback.stdout());
+    assert!(
+        descriptor.contains(&dir_source),
+        "the #sites binding written over raw 9P must round-trip: {descriptor}"
+    );
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// Extracts `routes.p9.tcp` from a discovery HTTP response body (a thin scan to
+/// avoid a JSON dep in tests).
+fn extract_json_tcp_route(response: &str) -> Option<String> {
+    let key = "\"tcp\":\"";
+    let start = response.find(key)? + key.len();
+    let rest = &response[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_owned())
+}
+
+#[test]
 fn run_serve_streaming_reports_bind_errors() {
     let command = ServeCommand {
         root_path: PathBuf::from("."),
@@ -94,6 +311,9 @@ fn run_serve_streaming_reports_bind_errors() {
         bundle: None,
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
     let mut stderr = Vec::new();
 
@@ -121,6 +341,9 @@ fn serve_once_returns_static_file_with_browser_isolation_headers() {
         bundle: None,
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -173,6 +396,9 @@ fn serve_once_returns_mjs_static_file_as_javascript() {
         bundle: None,
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -209,6 +435,9 @@ fn serve_once_reports_bundle_url_when_configured() {
         bundle: Some("vm-workbench".to_owned()),
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -246,6 +475,9 @@ fn serve_once_returns_direct_v86_bundle_page() {
         bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -503,6 +735,9 @@ fn serve_once_returns_fs9p_bundle_page() {
         bundle: Some(FS9P_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -596,6 +831,9 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
         bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -733,6 +971,9 @@ fn serve_once_returns_workbench_assets_outside_served_root() {
         bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -786,6 +1027,9 @@ std.out.puts("target " + target + "\n");
         bundle: None,
         wanix_services: true,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
     let handle = thread::spawn(move || {
         let mut stderr = Vec::new();
@@ -816,6 +1060,9 @@ fn serve_once_returns_direct_v86_embedded_asset_over_static_collision() {
         bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -916,6 +1163,9 @@ fn serve_once_keeps_direct_v86_asset_paths_static_without_direct_bundle() {
         bundle: Some("vm-workbench".to_owned()),
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -958,6 +1208,9 @@ fn serve_once_keeps_other_bundles_on_static_root() {
         bundle: Some("vm-workbench".to_owned()),
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -994,6 +1247,9 @@ fn serve_once_returns_well_known_discovery_document() {
         bundle: Some("vm-workbench".to_owned()),
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1102,6 +1358,9 @@ fn serve_once_returns_rootfs_handoff_manifest() {
         bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
         wanix_services: true,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1164,6 +1423,9 @@ fn serve_rootfs_handoff_reports_unprepared_roots_and_reserves_route() {
         bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1685,6 +1947,41 @@ fn serve_discovery_falls_back_to_listener_address_without_host_header() {
 }
 
 #[test]
+fn serve_discovery_advertises_raw_p9_tcp_route_only_when_bound() {
+    let root = temp_dir("wanix-cli-serve-discovery-p9-tcp");
+    let without = ServeRoots::new(&root, "127.0.0.1:7654".parse().unwrap(), None, false).unwrap();
+    let body = serve_discovery_json(
+        &without,
+        b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+        "127.0.0.1:12345".parse().unwrap(),
+    );
+    assert!(
+        body.contains("\"websocket\":\"ws://demo.local:7654/.well-known/export9p\""),
+        "{body}"
+    );
+    assert!(!body.contains("\"tcp\":"), "no raw door bound: {body}");
+
+    let with = ServeRoots::new(&root, "127.0.0.1:7654".parse().unwrap(), None, false)
+        .unwrap()
+        .with_p9_tcp_addr(Some("127.0.0.1:5640".parse().unwrap()));
+    let body = serve_discovery_json(
+        &with,
+        b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654\r\n\r\n",
+        "127.0.0.1:12345".parse().unwrap(),
+    );
+    assert!(
+        body.contains("\"tcp\":\"tcp://127.0.0.1:5640\""),
+        "raw door bound: {body}"
+    );
+    // The websocket route stays present and unchanged (the cockpit reads it).
+    assert!(
+        body.contains("\"websocket\":\"ws://demo.local:7654/.well-known/export9p\""),
+        "{body}"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn serve_discovery_finds_direct_v86_legacy_top_level_kernel() {
     let root = temp_dir("wanix-cli-serve-discovery-legacy-kernel");
     fs::write(root.join("bzImage"), b"kernel").unwrap();
@@ -1869,6 +2166,9 @@ fn serve_once_exports_9p_over_binary_websocket() {
         bundle: None,
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1924,6 +2224,9 @@ fn serve_concurrent_loop_serves_http_while_9p_websocket_stays_open() {
         bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
         wanix_services: false,
         once: false,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1970,6 +2273,9 @@ fn serve_concurrent_loop_serves_two_9p_websockets() {
         bundle: None,
         wanix_services: false,
         once: false,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2022,6 +2328,9 @@ fn serve_once_exports_9p_on_well_known_export_path() {
         bundle: None,
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2090,6 +2399,9 @@ fn serve_once_exports_symlink_readlink_over_direct_9p() {
         bundle: None,
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2204,6 +2516,9 @@ std.exit(6);
         bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         wanix_services: true,
         once: false,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2351,6 +2666,9 @@ fn serve_once_exports_google_2_walkgetattr_on_well_known_path() {
         bundle: None,
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2406,6 +2724,9 @@ fn serve_once_exports_9p_compatibility_probes_on_well_known_path() {
         bundle: None,
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2484,6 +2805,9 @@ fn serve_once_rejects_reserved_ethernet_websocket_path() {
         bundle: None,
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2529,6 +2853,9 @@ fn serve_http_keeps_well_known_routes_reserved() {
         bundle: None,
         wanix_services: false,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2569,6 +2896,9 @@ fn serve_http_keeps_qjs_shell_route_reserved_when_services_enabled() {
         bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         wanix_services: true,
         once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
     };
 
     let handle = thread::spawn(move || {

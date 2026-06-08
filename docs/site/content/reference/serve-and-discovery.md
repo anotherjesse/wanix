@@ -58,7 +58,10 @@ wanix-rust serve ./root --bundle workbench-fs9p --wanix-services
 - **`--wanix-services`** — binds the service-device set onto the namespace and flips the services-gated routes from `disabled` to `available`.
 - **`--once`** — accept exactly one connection then exit, for scripted tests (`command.rs:144-150`).
 
-Each flag is single-shot; passing it twice is a usage error (`command.rs:127-158`). The lower-level export modes — `p9-stdio`, `p9-listen`, `p9-ws` — are separate subcommands for raw 9P over process, TCP, and WebSocket; `serve` is the HTTP composition layer on top.
+- **`--p9 HOST:PORT [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]`** — binds a raw 9P listener over TCP alongside HTTP (default loopback), exporting the same served namespace as the websocket door over one per-connection session core. Capability-gated by `--peer`/`--grant`. Refused with `--wanix-services` off-loopback (ADR 0006).
+- **`--listen HOST:PORT`** — the HTTP/websocket listener address (`--addr` is the deprecated synonym).
+
+Each flag is single-shot; passing it twice is a usage error (`command.rs:127-158`). `p9-stdio` remains a separate subcommand for raw 9P over the process pipe (the QEMU-v86 bridge); raw 9P over TCP (`--p9`) and the binary 9P websocket (`/.well-known/export9p`) are both `serve` doors over one session core. The retired `p9-listen`/`p9-ws` subcommands folded into `serve`.
 
 ## The discovery document: `/.well-known/wanix.json`
 

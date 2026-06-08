@@ -16,7 +16,7 @@ use super::http::{HttpStatus, StaticResponse};
 use super::terminal_ws::QJS_SHELL_WEBSOCKET_PATH;
 
 mod host;
-pub(super) use host::display_host;
+pub(super) use host::{display_host, is_loopback_addr};
 use host::{is_loopback_peer, request_host};
 
 pub(super) fn serve_discovery_response(
@@ -39,6 +39,7 @@ pub(super) fn serve_discovery_json(
 ) -> String {
     let host = request_host(request).unwrap_or_else(|| display_host(roots.local_addr));
     let p9_url = format!("ws://{host}/.well-known/export9p");
+    let p9_route = serve_p9_route_json(roots, &p9_url);
     let rootfs_url = format!("http://{host}/.well-known/rootfs.json");
     let qjs_shell_url = format!("ws://{host}{QJS_SHELL_WEBSOCKET_PATH}");
     let app_url = format!("http://{host}/.wanix/app/{{name}}");
@@ -57,8 +58,7 @@ pub(super) fn serve_discovery_json(
         "{{\"version\":1,\
          \"runtime\":\"wanix-rust\",\
          \"routes\":{{\
-         \"p9\":{{\"websocket\":{},\"transport\":\"direct-binary-websocket\",\"protocol\":\"9p2000.L\",\
-         \"supportedProtocols\":[\"9P2000.L\",\"9P2000.L.Google.2\"]}},\
+         \"p9\":{},\
          \"rootfs\":{},\
          \"qjsShell\":{},\
          \"httpApp\":{},\
@@ -69,7 +69,7 @@ pub(super) fn serve_discovery_json(
          \"defaultCmdline\":{},\"p9Msize\":{},\"memorySize\":{},\"vgaMemorySize\":{},\"virtioConsole\":true}},\
          \"services\":{},\
          \"bundle\":{}}}",
-        json_string(&p9_url),
+        p9_route,
         rootfs_route,
         qjs_shell_route,
         app_route,
@@ -148,6 +148,22 @@ fn serve_rootfs_route_json(static_root: &Path, url: &str, peer_addr: SocketAddr)
     if let Some(error) = error {
         fields.push(format!("\"error\":{}", json_string(&error)));
     }
+    format!("{{{}}}", fields.join(","))
+}
+
+fn serve_p9_route_json(roots: &ServeRoots, websocket_url: &str) -> String {
+    // `websocket` is always present (browsers can only dial the ws door). `tcp`
+    // is additive, present only when `serve --p9` bound a raw door, and carries
+    // that door's own bound (loopback) address — not the HTTP host header — so a
+    // `mount-write tcp://HOST:PORT ...` client can find it.
+    let mut fields = vec![format!("\"websocket\":{}", json_string(websocket_url))];
+    if let Some(tcp_addr) = roots.p9_tcp_addr {
+        let tcp_url = format!("tcp://{tcp_addr}");
+        fields.push(format!("\"tcp\":{}", json_string(&tcp_url)));
+    }
+    fields.push("\"transport\":\"direct-binary-websocket\"".to_owned());
+    fields.push("\"protocol\":\"9p2000.L\"".to_owned());
+    fields.push("\"supportedProtocols\":[\"9P2000.L\",\"9P2000.L.Google.2\"]".to_owned());
     format!("{{{}}}", fields.join(","))
 }
 

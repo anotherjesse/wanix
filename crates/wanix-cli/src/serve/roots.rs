@@ -36,6 +36,12 @@ pub(super) struct ServeRoots {
     /// consults it and every request falls through to `--root`).
     pub(super) sites: Arc<SitesDevice>,
     pub(super) p9_root: Arc<dyn FileSystem>,
+    /// The bound raw-9P-over-TCP door address, present only when `serve --p9`
+    /// is set. Advertised in discovery (`routes.p9.tcp`) and startup status so a
+    /// `mount-write tcp://HOST:PORT ...` client can find the raw door. The HTTP
+    /// `host` header drives the websocket URL; this is the raw door's own bound
+    /// loopback address.
+    pub(super) p9_tcp_addr: Option<SocketAddr>,
     /// Task driver kinds advertised by service discovery, captured from the
     /// registry at build time so the discovery JSON cannot drift from what
     /// `serve_task_table` actually registers. Empty when services are disabled.
@@ -78,11 +84,20 @@ impl ServeRoots {
             site_root,
             sites: sites_device,
             p9_root,
+            p9_tcp_addr: None,
             driver_kinds,
             local_addr,
             bundle,
             wanix_services,
         })
+    }
+
+    /// Records the bound raw-9P door address so discovery and startup status can
+    /// advertise the `tcp://` route. Zero churn for the existing `ServeRoots::new`
+    /// call sites, which never bind a raw door.
+    pub(super) fn with_p9_tcp_addr(mut self, addr: Option<SocketAddr>) -> Self {
+        self.p9_tcp_addr = addr;
+        self
     }
 }
 

@@ -13,9 +13,7 @@ mod mesh;
 mod mount;
 mod native;
 mod new;
-mod p9_listen;
 mod p9_stdio;
-mod p9_ws;
 mod process_io;
 mod qemu;
 mod qjs;
@@ -615,8 +613,12 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-resume"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-restore"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-stdio"));
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-listen"));
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-ws"));
+        // p9-listen and p9-ws are retired: raw 9P is now `serve --p9` and the
+        // websocket 9P door lives inside serve.
+        assert!(!String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-listen"));
+        assert!(!String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-ws"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("serve [--root DIR | DIR]"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("[--p9 HOST:PORT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust rootfs"));
         assert!(
             String::from_utf8_lossy(output.stdout())

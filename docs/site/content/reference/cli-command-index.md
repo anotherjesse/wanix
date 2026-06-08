@@ -68,11 +68,10 @@ See [QuickJS snapshots are VM images](/concepts/quickjs-snapshots-are-vm-images)
 
 These export a Wanix filesystem over a single transport, with binary protocol traffic kept off the diagnostic channel.
 
-- **`p9-stdio --root DIR`** — 9P over the process's stdin/stdout.
-- **`p9-listen --root DIR --addr HOST:PORT [--once] [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]`** — 9P over TCP, with capability grants per peer.
-- **`p9-ws --root DIR --addr HOST:PORT [--once]`** — 9P over WebSocket.
+- **`p9-stdio --root DIR`** — 9P over the process's stdin/stdout (the QEMU-v86 console bridge).
+- **`serve --root DIR --p9 HOST:PORT [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]`** — 9P over TCP, with capability grants per peer. Raw 9P over TCP is now a `serve` mode, not a standalone subcommand; the websocket door (`/.well-known/export9p`) rides the same `serve` HTTP listener. The retired `p9-listen` and `p9-ws` subcommands folded into `serve` (ADR 0006).
 
-The `--once` flag serves a single connection and exits, which is what the import demos pair against. See [the 9P contract](/concepts/the-9p-contract) and [serve and discovery](/reference/serve-and-discovery).
+See [the 9P contract](/concepts/the-9p-contract) and [serve and discovery](/reference/serve-and-discovery).
 
 ## serve — the composition layer
 
