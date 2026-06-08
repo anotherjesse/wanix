@@ -249,4 +249,75 @@ mod tests {
         let out = String::from_utf8(sink.read_file("out").expect("read sink")).expect("utf8");
         assert_eq!(out, "hi\n", "shell -c \"echo hi\" should print hi");
     }
+
+    #[test]
+    fn shell_guest_launches_child_wasm_command() {
+        // End-to-end: the shell (a wasm task) launches another wasm command as a
+        // child task via the #task device, and the child's stdout — inherited
+        // from the shell — flows to the shell's captured fd 1.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell.wasm");
+        fs.write_file("guest.wasm", RUST_GUEST)
+            .expect("seed guest.wasm");
+        fs.create_dir_all("dir").expect("make /dir");
+        fs.write_file("dir/alpha.txt", b"a").expect("seed file");
+
+        // The real wasm driver runs both the shell and its child.
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let shell = table
+            .allocate_root_with_namespace("auto", namespace_on(&fs))
+            .expect("allocate shell");
+        shell
+            .set_cmd("shell.wasm -c \"guest.wasm --list /dir\"")
+            .expect("set cmd");
+
+        // Wire the shell's stdout + stderr to sinks the child inherits.
+        let cap = Arc::new(MemFs::new());
+        cap.write_file("out", b"").expect("seed out");
+        cap.write_file("err", b"").expect("seed err");
+        let stdout = cap
+            .open(
+                &NormalizedPath::new("out").expect("path"),
+                OpenOptions::read_write(),
+            )
+            .expect("open out");
+        let stderr = cap
+            .open(
+                &NormalizedPath::new("err").expect("path"),
+                OpenOptions::read_write(),
+            )
+            .expect("open err");
+        shell
+            .insert_fd(
+                Fd::STDOUT,
+                stdout,
+                NormalizedPath::new("out").expect("path"),
+            )
+            .expect("install fd 1");
+        shell
+            .insert_fd(
+                Fd::STDERR,
+                stderr,
+                NormalizedPath::new("err").expect("path"),
+            )
+            .expect("install fd 2");
+
+        table.start(shell.id()).expect("run shell");
+        let err = String::from_utf8_lossy(&cap.read_file("err").expect("read err")).into_owned();
+        assert_eq!(shell.exit(), "0", "shell should exit 0; stderr={err:?}");
+
+        let out = String::from_utf8(cap.read_file("out").expect("read out")).expect("utf8");
+        assert!(
+            out.contains("rust-wasm: /dir has 1 entries"),
+            "child task output should appear on inherited stdout: {out:?}"
+        );
+        assert!(
+            out.contains("alpha.txt file"),
+            "child listing should appear: {out:?}"
+        );
+    }
 }

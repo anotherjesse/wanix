@@ -14,10 +14,11 @@
 //! ## Supported subset (today)
 //!
 //! Simple commands and arguments with quote removal, `;` / newline sequences,
-//! and the `echo`, `true`, `false`, `:`, and `exit` builtins. Pipelines,
-//! redirections, `&&`/`||`, control flow, expansion, and external command launch
-//! are recognized by the parser but reported as
-//! [`ShellError::Unsupported`] until their executor support lands.
+//! the `echo`, `true`, `false`, `:`, and `exit` builtins, and external command
+//! launch (child tasks via the `#task` device, with inherited stdio). Pipelines,
+//! redirections, `&&`/`||`, control flow, and expansion are recognized by the
+//! parser but reported as [`ShellError::Unsupported`] until their executor
+//! support lands.
 
 mod error;
 mod exec;
@@ -26,7 +27,7 @@ mod ns;
 mod syntax;
 
 pub use error::{ShellError, ShellResult};
-pub use ns::NamespaceOps;
+pub use ns::{NamespaceOps, SpawnSpec};
 
 use exec::execute;
 use lower::lower;
