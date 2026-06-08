@@ -264,6 +264,29 @@ mod mesh_mount_tests {
         SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)
     }
 
+    /// Serves `host` over the native mesh wire and returns the node plus the
+    /// dialable `iroh://` URL (built the way `mesh-serve` announces it).
+    fn serve_native(host: Arc<dyn FileSystem>, identity_seed: u8) -> (MeshNode, String) {
+        let identity = NodeIdentity::from_secret_bytes([identity_seed; 32]);
+        let mut server = MeshNode::bind_local(&identity, loopback()).unwrap();
+        server.serve_native(NativeServeConfig::open(host));
+        let peer = server.peer_id();
+        let addrs: Vec<String> = server
+            .ticket()
+            .ip_addrs()
+            .map(|addr| format!("addr={addr}"))
+            .collect();
+        (server, format!("{IROH_SCHEME}{peer}?{}", addrs.join("&")))
+    }
+
+    /// A fresh single-task `noop` table, mirroring `allocate_qjs_term_task`'s
+    /// self-contained table (the returned `Task` does not borrow the table).
+    fn noop_task() -> wanix_task::Task {
+        let table = TaskTable::new();
+        table.register_noop_driver("noop").unwrap();
+        table.allocate_root("noop").unwrap()
+    }
+
     fn read_through(namespace: &Namespace, path: &str) -> Vec<u8> {
         let mut file = namespace
             .open(&NormalizedPath::new(path).unwrap(), OpenOptions::read())
@@ -289,22 +312,8 @@ mod mesh_mount_tests {
     fn mesh_mount_binds_into_task_namespace_and_stays_alive() {
         let host = Arc::new(MemFs::new());
         host.write_file("seed.txt", b"served-by-A").unwrap();
-        let server_identity = NodeIdentity::from_secret_bytes([3u8; 32]);
-        let mut server = MeshNode::bind_local(&server_identity, loopback()).unwrap();
-        server.serve_native(NativeServeConfig::open(host.clone() as Arc<dyn FileSystem>));
-
-        // Build the dialable iroh URL the way `mesh-serve` announces it.
-        let peer = server.peer_id();
-        let addrs: Vec<String> = server
-            .ticket()
-            .ip_addrs()
-            .map(|addr| format!("addr={addr}"))
-            .collect();
-        let url = format!("{IROH_SCHEME}{peer}?{}", addrs.join("&"));
-
-        let table = TaskTable::new();
-        table.register_noop_driver("noop").unwrap();
-        let task = table.allocate_root("noop").unwrap();
+        let (server, url) = serve_native(host.clone() as Arc<dyn FileSystem>, 3);
+        let task = noop_task();
 
         let spec = MeshMountSpec {
             addr: url,
@@ -338,6 +347,54 @@ mod mesh_mount_tests {
         // Mirror PreparedQjsTermExecution drop order: task before the keepalive.
         drop(task);
         drop(keepalive);
+        drop(server);
+    }
+
+    /// Slice 2 proof: two independent mesh mounts (two dialer nodes, as two
+    /// separate `qjs-shell` processes would be) against ONE served open volume —
+    /// a write through one mount is visible through the other. This is the
+    /// resource-composition experience before any naming layer exists.
+    #[test]
+    fn two_task_namespaces_share_one_open_volume() {
+        let host = Arc::new(MemFs::new());
+        let (server, url) = serve_native(host.clone() as Arc<dyn FileSystem>, 4);
+        let spec = MeshMountSpec {
+            addr: url,
+            guest_path: NormalizedPath::new("vol").unwrap(),
+        };
+
+        // Two independent task namespaces, each dialing its own mount/keepalive.
+        let task_a = noop_task();
+        let keep_a = bind_mesh_mounts(&task_a, std::slice::from_ref(&spec)).unwrap();
+        let task_b = noop_task();
+        let keep_b = bind_mesh_mounts(&task_b, std::slice::from_ref(&spec)).unwrap();
+
+        // Shell A writes /vol/shared.txt; shell B reads it back over its own mount.
+        let payload = b"written-by-A-read-by-B";
+        let namespace_a = task_a.namespace();
+        let mut file = namespace_a
+            .open(
+                &NormalizedPath::new("vol/shared.txt").unwrap(),
+                OpenOptions {
+                    read: false,
+                    write: true,
+                    create: true,
+                    truncate: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(file.write(payload).unwrap(), payload.len());
+        drop(file);
+
+        let namespace_b = task_b.namespace();
+        assert_eq!(read_through(&namespace_b, "vol/shared.txt"), payload);
+        // The single served root holds the shared byte stream.
+        assert_eq!(host.read_file("shared.txt").unwrap(), payload);
+
+        drop(task_a);
+        drop(task_b);
+        drop(keep_a);
+        drop(keep_b);
         drop(server);
     }
 }
