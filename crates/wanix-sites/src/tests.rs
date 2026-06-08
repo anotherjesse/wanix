@@ -1,8 +1,38 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
+use wanix_cas::{CasError, CasResult, ContentStore};
+use wanix_fs::{ContentHash, FileSystem, MemFs, NormalizedPath, OpenOptions};
 
 use crate::{Host, SiteSource, SitesDevice};
+
+/// A trivial in-memory [`ContentStore`] for the publish/rollback tests, so a
+/// site can be frozen and served by hash without any host disk.
+#[derive(Default)]
+struct MemStore {
+    blobs: Mutex<HashMap<ContentHash, Vec<u8>>>,
+}
+
+impl ContentStore for MemStore {
+    fn put(&self, bytes: &[u8]) -> CasResult<ContentHash> {
+        let hash = wanix_cas::hash_bytes(bytes);
+        self.blobs.lock().unwrap().insert(hash, bytes.to_vec());
+        Ok(hash)
+    }
+
+    fn get(&self, hash: &ContentHash) -> CasResult<Vec<u8>> {
+        self.blobs
+            .lock()
+            .unwrap()
+            .get(hash)
+            .cloned()
+            .ok_or(CasError::NotFound)
+    }
+
+    fn has(&self, hash: &ContentHash) -> CasResult<bool> {
+        Ok(self.blobs.lock().unwrap().contains_key(hash))
+    }
+}
 
 fn path(raw: &str) -> NormalizedPath {
     NormalizedPath::new(raw).unwrap()
@@ -154,4 +184,70 @@ fn removing_a_host_unbinds_it() {
             .is_none()
     );
     assert!(device.read_dir(&path(".")).unwrap().is_empty());
+}
+
+#[test]
+fn cas_source_resolves_to_none_without_a_store() {
+    // A device built with `new()` records a `cas` binding but has no store to
+    // load blobs from, so it cannot serve it.
+    let device = SitesDevice::new();
+    device.bind_site(
+        Host::registered("docs.localhost").unwrap(),
+        SiteSource::Cas("00".repeat(32)),
+    );
+    assert!(
+        device
+            .resolve(&Host::parse("docs.localhost").unwrap())
+            .is_none()
+    );
+}
+
+#[test]
+fn publish_freezes_serves_by_hash_and_rolls_back() {
+    let store: Arc<dyn ContentStore> = Arc::new(MemStore::default());
+    let device = SitesDevice::with_store(Arc::clone(&store));
+    let host = Host::registered("docs.localhost").unwrap();
+
+    // Publish v1.
+    let v1_site = MemFs::new();
+    v1_site.write_file("index.html", b"<h1>v1</h1>").unwrap();
+    let v1 = device.publish(host.clone(), &v1_site, ".").unwrap();
+
+    // The host now serves the frozen v1 by hash.
+    let served = device
+        .resolve(&Host::parse("docs.localhost").unwrap())
+        .unwrap();
+    assert_eq!(read_file(served.as_ref(), "index.html"), b"<h1>v1</h1>");
+
+    // Mutate the source and publish v2: a new hash serves new content.
+    let v2_site = MemFs::new();
+    v2_site.write_file("index.html", b"<h1>v2</h1>").unwrap();
+    let v2 = device.publish(host.clone(), &v2_site, ".").unwrap();
+    assert_ne!(v1, v2);
+    let served_v2 = device
+        .resolve(&Host::parse("docs.localhost").unwrap())
+        .unwrap();
+    assert_eq!(read_file(served_v2.as_ref(), "index.html"), b"<h1>v2</h1>");
+
+    // The old hash still serves the old content (immutability) — binding the
+    // host back to v1 is an instant rollback with no file copying.
+    device.bind_site(host, SiteSource::Cas(v1.to_hex()));
+    let rolled_back = device
+        .resolve(&Host::parse("docs.localhost").unwrap())
+        .unwrap();
+    assert_eq!(
+        read_file(rolled_back.as_ref(), "index.html"),
+        b"<h1>v1</h1>"
+    );
+}
+
+#[test]
+fn publish_without_store_is_an_error() {
+    let device = SitesDevice::new();
+    let site = MemFs::new();
+    site.write_file("index.html", b"x").unwrap();
+    assert!(matches!(
+        device.publish(Host::registered("x.localhost").unwrap(), &site, "."),
+        Err(crate::PublishError::NoStore)
+    ));
 }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use wanix_agent::{AgentDevice, FakeEngine};
-use wanix_cas::{CasDevice, LocalCasStore};
+use wanix_cas::{CasDevice, ContentStore, LocalCasStore};
 use wanix_fs::{FileSystem, LocalFs};
 use wanix_kv::KvDevice;
 use wanix_pipe::PipeDevice;
@@ -60,10 +60,21 @@ impl ServeRoots {
             )
         })?;
         let site_root = open_host_p9_root(root_path)?;
-        let sites_device = Arc::new(SitesDevice::new());
+        // One owner-private store backs both `#cas` and `#sites`, so a blob
+        // ingested via `#cas` (or written by a publish freeze) is readable by a
+        // site by hash. The `#sites` device is built `with_store` so a
+        // `cas <root-hash>` binding resolves to an immutable `CasSiteFs`.
+        let cas_store = Arc::new(LocalCasStore::open_default());
+        let sites_device = Arc::new(SitesDevice::with_store(
+            Arc::clone(&cas_store) as Arc<dyn ContentStore>
+        ));
         register_startup_sites(&sites_device, sites)?;
-        let (p9_root, driver_kinds) =
-            serve_p9_root(root_path, wanix_services, Arc::clone(&sites_device))?;
+        let (p9_root, driver_kinds) = serve_p9_root(
+            root_path,
+            wanix_services,
+            Arc::clone(&sites_device),
+            Arc::clone(&cas_store) as Arc<dyn ContentStore>,
+        )?;
         Ok(Self {
             static_root,
             site_root,
@@ -101,10 +112,11 @@ fn serve_p9_root(
     root_path: &Path,
     wanix_services: bool,
     sites: Arc<SitesDevice>,
+    cas_store: Arc<dyn ContentStore>,
 ) -> Result<(Arc<dyn FileSystem>, Vec<String>), CliError> {
     let host_root = open_host_p9_root(root_path)?;
     match wanix_services {
-        true => serve_services_root(host_root, sites),
+        true => serve_services_root(host_root, sites, cas_store),
         false => Ok((host_root, Vec::new())),
     }
 }
@@ -124,10 +136,11 @@ fn open_host_p9_root(root_path: &Path) -> Result<Arc<dyn FileSystem>, CliError> 
 fn serve_services_root(
     host_root: Arc<dyn FileSystem>,
     sites: Arc<SitesDevice>,
+    cas_store: Arc<dyn ContentStore>,
 ) -> Result<(Arc<dyn FileSystem>, Vec<String>), CliError> {
     let table = serve_task_table()?;
     let driver_kinds = table.driver_kinds();
-    let namespace = serve_services_namespace(host_root, sites, &table)?;
+    let namespace = serve_services_namespace(host_root, sites, cas_store, &table)?;
     Ok((Arc::new(namespace), driver_kinds))
 }
 
@@ -142,17 +155,20 @@ pub(crate) fn services_namespace_for_root(
     root_path: &Path,
 ) -> Result<Arc<dyn FileSystem>, CliError> {
     let host_root = open_host_p9_root(root_path)?;
-    let (namespace, _kinds) = serve_services_root(host_root, Arc::new(SitesDevice::new()))?;
+    let cas_store = Arc::new(LocalCasStore::open_default()) as Arc<dyn ContentStore>;
+    let sites = Arc::new(SitesDevice::with_store(Arc::clone(&cas_store)));
+    let (namespace, _kinds) = serve_services_root(host_root, sites, cas_store)?;
     Ok(namespace)
 }
 
 fn serve_services_namespace(
     host_root: Arc<dyn FileSystem>,
     sites: Arc<SitesDevice>,
+    cas_store: Arc<dyn ContentStore>,
     table: &TaskTable,
 ) -> Result<Namespace, CliError> {
     let mut namespace = Namespace::new();
-    bind_host_and_terminal(&mut namespace, host_root, sites)?;
+    bind_host_and_terminal(&mut namespace, host_root, sites, cas_store)?;
     bind_task_service(&mut namespace, table)?;
     Ok(namespace)
 }
@@ -169,6 +185,7 @@ fn bind_host_and_terminal(
     namespace: &mut Namespace,
     host_root: Arc<dyn FileSystem>,
     sites: Arc<SitesDevice>,
+    cas_store: Arc<dyn ContentStore>,
 ) -> Result<(), CliError> {
     let terminal = Arc::new(TermDevice::new());
     namespace.bind(host_root, ".", ".", BindOptions::default())?;
@@ -200,9 +217,11 @@ fn bind_host_and_terminal(
     // `#cas/ingest` is write-then-read-hash, `#cas/have/<hash>` probes presence.
     // Like `#kv` it is just a `FileSystem`, so it imports across the mesh for
     // free (`/n/A/#cas/...`). It is backed by the owner-private on-disk store, so
-    // blobs an agent ingests here persist and dedup against capsules.
+    // blobs an agent ingests here persist and dedup against capsules. It shares
+    // the same store instance as `#sites`, so a blob ingested here (or written by
+    // a publish freeze) is readable by a site by hash.
     namespace.bind(
-        Arc::new(CasDevice::new(Arc::new(LocalCasStore::open_default()))),
+        Arc::new(CasDevice::new(cas_store)),
         ".",
         "#cas",
         BindOptions::default(),

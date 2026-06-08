@@ -17,9 +17,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
 
+use wanix_cas::ContentStore;
 use wanix_fs::{
     DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
 };
+use wanix_site_cas::{CasRootHash, CasSiteFs};
 
 mod files;
 mod host;
@@ -43,8 +45,9 @@ pub enum SiteSource {
     /// A live filesystem: an in-memory generator output, a `LocalFs`, etc.
     Memory(Arc<dyn FileSystem>),
     /// An immutable CAS snapshot, named by its root hash (hex). Resolving this
-    /// to a servable filesystem is Phase 3 (CAS-backed serving); until then it
-    /// records the binding but does not serve.
+    /// to a servable filesystem requires the device to be built with a backing
+    /// content store ([`SitesDevice::with_store`]); it then loads a
+    /// [`CasSiteFs`] over that root hash.
     Cas(String),
 }
 
@@ -75,6 +78,32 @@ impl SiteSource {
     }
 }
 
+/// The error surface of [`SitesDevice::publish`].
+#[derive(Debug)]
+pub enum PublishError {
+    /// The device was built without a content store, so nothing can be frozen.
+    NoStore,
+    /// Freezing the site filesystem failed.
+    Freeze(wanix_site_cas::FreezeError),
+}
+
+impl fmt::Display for PublishError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoStore => f.write_str("sites device has no backing content store"),
+            Self::Freeze(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for PublishError {}
+
+impl From<wanix_site_cas::FreezeError> for PublishError {
+    fn from(err: wanix_site_cas::FreezeError) -> Self {
+        Self::Freeze(err)
+    }
+}
+
 impl fmt::Debug for SiteSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -88,6 +117,10 @@ impl fmt::Debug for SiteSource {
 #[derive(Clone)]
 pub struct SitesDevice {
     bindings: Bindings,
+    /// The content store that backs [`SiteSource::Cas`] resolution. `None` when
+    /// the device was built without one ([`SitesDevice::new`]); a `Cas` source
+    /// then records its binding but cannot be served.
+    store: Option<Arc<dyn ContentStore>>,
 }
 
 impl fmt::Debug for SitesDevice {
@@ -112,11 +145,31 @@ impl Default for SitesDevice {
 }
 
 impl SitesDevice {
-    /// Creates an empty site-binding device.
+    /// Creates an empty site-binding device with no CAS backing.
+    ///
+    /// A [`SiteSource::Cas`] binding registered on such a device resolves to
+    /// `None` (it has no store to load blobs from); use [`Self::with_store`] to
+    /// serve immutable CAS snapshots.
     #[must_use]
     pub fn new() -> Self {
         Self {
             bindings: Arc::new(RwLock::new(BTreeMap::new())),
+            store: None,
+        }
+    }
+
+    /// Creates an empty site-binding device backed by `store`, so a
+    /// [`SiteSource::Cas`] binding can be resolved to an immutable
+    /// [`CasSiteFs`] over its root hash.
+    ///
+    /// Sharing the *same* store instance with the `#cas` device means a blob
+    /// ingested through `#cas` (or written by a freeze) is readable by a site by
+    /// hash — publishing is then a pure name repoint with no file copying.
+    #[must_use]
+    pub fn with_store(store: Arc<dyn ContentStore>) -> Self {
+        Self {
+            bindings: Arc::new(RwLock::new(BTreeMap::new())),
+            store: Some(store),
         }
     }
 
@@ -129,12 +182,41 @@ impl SitesDevice {
         }
     }
 
+    /// Freezes `site` (rooted at `root`, normally `"."`) into this device's
+    /// content store and binds `host` to the resulting immutable snapshot,
+    /// returning its root hash.
+    ///
+    /// This is the publish operation: freeze the current output → get a root
+    /// hash → repoint the host binding to it. Because the prior binding's blobs
+    /// stay in the store, an earlier root hash keeps serving its bytes, so a
+    /// later [`bind_site`](Self::bind_site) to that hash is an instant rollback.
+    /// The freeze reads `site` purely through the [`FileSystem`] trait and never
+    /// holds the `#sites` binding lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PublishError::NoStore`] when the device has no backing store
+    /// and [`PublishError::Freeze`] when the site cannot be frozen.
+    pub fn publish(
+        &self,
+        host: Host,
+        site: &dyn FileSystem,
+        root: &str,
+    ) -> Result<CasRootHash, PublishError> {
+        let store = self.store.clone().ok_or(PublishError::NoStore)?;
+        let root_hash = wanix_site_cas::freeze_fs(store.as_ref(), site, root)?;
+        self.bind_site(host, SiteSource::Cas(root_hash.to_hex()));
+        Ok(root_hash)
+    }
+
     /// Resolves a host to the filesystem to serve.
     ///
-    /// The `Arc<dyn FileSystem>` is cloned out of the binding lock before
-    /// returning, so the caller never holds the `#sites` lock while reading the
-    /// served filesystem. A [`SiteSource::Cas`] resolves to `None` until Phase 3
-    /// wires CAS-backed serving.
+    /// The source is cloned out of the binding lock before any filesystem is
+    /// built, so the caller never holds the `#sites` lock while reading (or, for
+    /// a CAS source, while fetching and parsing the manifest blob). A
+    /// [`SiteSource::Cas`] resolves to a read-only [`CasSiteFs`] when the device
+    /// has a backing store and the root hash and manifest load; otherwise it
+    /// resolves to `None`.
     #[must_use]
     pub fn resolve(&self, host: &Host) -> Option<Arc<dyn FileSystem>> {
         let source = {
@@ -143,8 +225,18 @@ impl SitesDevice {
         };
         match source {
             SiteSource::Memory(fs) => Some(fs),
-            SiteSource::Cas(_) => None,
+            SiteSource::Cas(hash) => self.resolve_cas(&hash),
         }
+    }
+
+    /// Builds a read-only [`CasSiteFs`] for a `cas <hash>` binding. Runs entirely
+    /// outside the binding lock. Returns `None` when there is no backing store,
+    /// the hash is malformed, or the manifest blob is missing/corrupt.
+    fn resolve_cas(&self, hash: &str) -> Option<Arc<dyn FileSystem>> {
+        let store = self.store.clone()?;
+        let root = CasRootHash::from_hex(hash)?;
+        let site = CasSiteFs::open_root(store, root).ok()?;
+        Some(Arc::new(site))
     }
 
     fn descriptor_bytes(&self, host: &Host) -> FsResult<Vec<u8>> {

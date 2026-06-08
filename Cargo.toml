@@ -16,6 +16,7 @@ members = [
     "crates/wanix-protocol",
     "crates/wanix-qjs",
     "crates/wanix-qjs-engine",
+    "crates/wanix-site-cas",
     "crates/wanix-site-fs",
     "crates/wanix-site-gen",
     "crates/wanix-sites",

@@ -34,6 +34,7 @@ impl SiteRequestPath {
 }
 
 /// Outcome of resolving a URL path against a site filesystem.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SiteFile {
     /// A regular file: its bytes and the lowercased trailing extension (if any)
     /// used by the caller's content-type table.

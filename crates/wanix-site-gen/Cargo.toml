@@ -16,6 +16,9 @@ wanix-task = { path = "../wanix-task" }
 wanix-vfs = { path = "../wanix-vfs" }
 wanix-wasm = { path = "../wanix-wasm" }
 wanix-site-fs = { path = "../wanix-site-fs" }
+wanix-cas = { path = "../wanix-cas" }
+wanix-site-cas = { path = "../wanix-site-cas" }
+wanix-sites = { path = "../wanix-sites" }
 
 [lib]
 name = "wanix_site_gen"

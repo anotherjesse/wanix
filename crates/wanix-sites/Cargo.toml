@@ -9,6 +9,8 @@ version.workspace = true
 
 [dependencies]
 wanix-fs = { path = "../wanix-fs" }
+wanix-cas = { path = "../wanix-cas" }
+wanix-site-cas = { path = "../wanix-site-cas" }
 
 [lib]
 name = "wanix_sites"

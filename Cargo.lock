@@ -4933,6 +4933,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wanix-site-cas"
+version = "0.1.0"
+dependencies = [
+ "wanix-cas",
+ "wanix-fs",
+ "wanix-site-fs",
+]
+
+[[package]]
 name = "wanix-site-fs"
 version = "0.1.0"
 dependencies = [
@@ -4944,8 +4953,11 @@ name = "wanix-site-gen"
 version = "0.1.0"
 dependencies = [
  "pulldown-cmark",
+ "wanix-cas",
  "wanix-fs",
+ "wanix-site-cas",
  "wanix-site-fs",
+ "wanix-sites",
  "wanix-task",
  "wanix-vfs",
  "wanix-wasm",
@@ -4955,7 +4967,9 @@ dependencies = [
 name = "wanix-sites"
 version = "0.1.0"
 dependencies = [
+ "wanix-cas",
  "wanix-fs",
+ "wanix-site-cas",
 ]
 
 [[package]]
