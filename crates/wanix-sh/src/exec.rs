@@ -10,7 +10,7 @@
 
 use crate::builtins::{builtin, is_special, special_builtin};
 use crate::error::{ShellError, ShellResult};
-use crate::lower::{Pipeline, Plan, Stage};
+use crate::lower::{AndOrList, Connector, Pipeline, Plan, Stage};
 use crate::ns::{InputSource, NamespaceOps, OutputSink, SpawnSpec};
 use crate::state::ShellState;
 
@@ -28,8 +28,8 @@ enum Outcome {
 /// `$?` see each pipeline's effect.
 pub fn execute(plan: &Plan, state: &mut ShellState, ns: &mut dyn NamespaceOps) -> i32 {
     let mut status = 0;
-    for pipeline in &plan.pipelines {
-        match run_pipeline(pipeline, state, ns) {
+    for list in &plan.lists {
+        match run_and_or_list(list, state, ns) {
             Ok(Outcome::Status(code)) => status = code,
             Ok(Outcome::Exit(code)) => {
                 state.set_last_status(code);
@@ -43,6 +43,33 @@ pub fn execute(plan: &Plan, state: &mut ShellState, ns: &mut dyn NamespaceOps) -
         state.set_last_status(status);
     }
     status
+}
+
+/// Runs an and-or list, short-circuiting `&&`/`||` on the running exit status.
+fn run_and_or_list(
+    list: &AndOrList,
+    state: &mut ShellState,
+    ns: &mut dyn NamespaceOps,
+) -> ShellResult<Outcome> {
+    let mut status = match run_pipeline(&list.first, state, ns)? {
+        Outcome::Status(code) => code,
+        exit @ Outcome::Exit(_) => return Ok(exit),
+    };
+    state.set_last_status(status);
+    for (connector, pipeline) in &list.rest {
+        let run = match connector {
+            Connector::And => status == 0,
+            Connector::Or => status != 0,
+        };
+        if run {
+            status = match run_pipeline(pipeline, state, ns)? {
+                Outcome::Status(code) => code,
+                exit @ Outcome::Exit(_) => return Ok(exit),
+            };
+            state.set_last_status(status);
+        }
+    }
+    Ok(Outcome::Status(status))
 }
 
 fn run_pipeline(
@@ -531,5 +558,43 @@ mod tests {
         let (code, ns) = run("echo $(echo hi)");
         assert_eq!(code, 1);
         assert!(String::from_utf8(ns.err).unwrap().contains("not supported"));
+    }
+
+    // ---- && / || short-circuit ------------------------------------------
+
+    #[test]
+    fn and_runs_on_success() {
+        let (code, ns) = run("true && echo yes");
+        assert_eq!(code, 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "yes\n");
+    }
+
+    #[test]
+    fn and_skips_on_failure() {
+        let (code, ns) = run("false && echo yes");
+        assert_eq!(code, 1);
+        assert!(ns.out.is_empty());
+    }
+
+    #[test]
+    fn or_runs_on_failure() {
+        let (code, ns) = run("false || echo recovered");
+        assert_eq!(code, 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "recovered\n");
+    }
+
+    #[test]
+    fn or_skips_on_success() {
+        let (code, ns) = run("true || echo no");
+        assert_eq!(code, 0);
+        assert!(ns.out.is_empty());
+    }
+
+    #[test]
+    fn and_or_chain_short_circuits() {
+        // false && echo a || echo b : `a` skipped (status 1), `b` runs.
+        let (code, ns) = run("false && echo a || echo b");
+        assert_eq!(code, 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "b\n");
     }
 }

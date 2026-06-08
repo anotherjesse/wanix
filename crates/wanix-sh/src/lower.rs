@@ -25,11 +25,29 @@ pub struct Pipeline {
     pub stages: Vec<Stage>,
 }
 
-/// A lowered program: a sequence of pipelines run in order (`;` / newline).
+/// How a following pipeline is gated on the previous one's exit status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Connector {
+    /// `&&`: run only if the previous pipeline succeeded (status 0).
+    And,
+    /// `||`: run only if the previous pipeline failed (status != 0).
+    Or,
+}
+
+/// An and-or list: a first pipeline plus `&&`/`||`-connected followers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AndOrList {
+    /// The leading pipeline (always runs).
+    pub first: Pipeline,
+    /// Followers, each gated by its [`Connector`].
+    pub rest: Vec<(Connector, Pipeline)>,
+}
+
+/// A lowered program: a sequence of and-or lists run in order (`;` / newline).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Plan {
-    /// Pipelines to run in sequence.
-    pub pipelines: Vec<Pipeline>,
+    /// And-or lists to run in sequence.
+    pub lists: Vec<AndOrList>,
 }
 
 /// Lowers a parsed [`ast::Program`] into a [`Plan`].
@@ -39,17 +57,26 @@ pub struct Plan {
 /// Returns [`ShellError::Unsupported`] for any construct outside the current
 /// executor subset (redirects, `&&`/`||`, control flow, …).
 pub fn lower(program: &ast::Program) -> ShellResult<Plan> {
-    let mut pipelines = Vec::new();
+    let mut lists = Vec::new();
     for complete_command in &program.complete_commands {
         for item in &complete_command.0 {
-            let and_or_list = &item.0;
-            if !and_or_list.additional.is_empty() {
-                return Err(ShellError::Unsupported("'&&' / '||' lists".into()));
-            }
-            pipelines.push(lower_pipeline(&and_or_list.first)?);
+            lists.push(lower_and_or_list(&item.0)?);
         }
     }
-    Ok(Plan { pipelines })
+    Ok(Plan { lists })
+}
+
+fn lower_and_or_list(and_or_list: &ast::AndOrList) -> ShellResult<AndOrList> {
+    let first = lower_pipeline(&and_or_list.first)?;
+    let mut rest = Vec::with_capacity(and_or_list.additional.len());
+    for and_or in &and_or_list.additional {
+        let (connector, pipeline) = match and_or {
+            ast::AndOr::And(pipeline) => (Connector::And, pipeline),
+            ast::AndOr::Or(pipeline) => (Connector::Or, pipeline),
+        };
+        rest.push((connector, lower_pipeline(pipeline)?));
+    }
+    Ok(AndOrList { first, rest })
 }
 
 fn lower_pipeline(pipeline: &ast::Pipeline) -> ShellResult<Pipeline> {
@@ -125,15 +152,15 @@ mod tests {
         lower(&parse_program(input).expect("parses"))
     }
 
-    fn argv(plan: &Plan, pipeline: usize, stage: usize) -> &[String] {
-        &plan.pipelines[pipeline].stages[stage].argv
+    fn argv(plan: &Plan, list: usize, stage: usize) -> &[String] {
+        &plan.lists[list].first.stages[stage].argv
     }
 
     #[test]
     fn lowers_simple_command_with_args() {
         let plan = plan_of("echo hi there").expect("lowers");
-        assert_eq!(plan.pipelines.len(), 1);
-        assert_eq!(plan.pipelines[0].stages.len(), 1);
+        assert_eq!(plan.lists.len(), 1);
+        assert_eq!(plan.lists[0].first.stages.len(), 1);
         assert_eq!(argv(&plan, 0, 0), ["echo", "hi", "there"]);
     }
 
@@ -147,16 +174,27 @@ mod tests {
     #[test]
     fn lowers_sequence_separated_by_semicolons() {
         let plan = plan_of("echo a; echo b").expect("lowers");
-        assert_eq!(plan.pipelines.len(), 2);
+        assert_eq!(plan.lists.len(), 2);
         assert_eq!(argv(&plan, 1, 0), ["echo", "b"]);
     }
 
     #[test]
     fn lowers_a_pipeline_into_stages() {
         let plan = plan_of("echo hi | wc -c | cat").expect("lowers");
-        assert_eq!(plan.pipelines.len(), 1);
-        assert_eq!(plan.pipelines[0].stages.len(), 3);
+        assert_eq!(plan.lists.len(), 1);
+        assert_eq!(plan.lists[0].first.stages.len(), 3);
         assert_eq!(argv(&plan, 0, 1), ["wc", "-c"]);
+    }
+
+    #[test]
+    fn lowers_and_or_connectors() {
+        let plan = plan_of("true && echo ok || echo no").expect("lowers");
+        assert_eq!(plan.lists.len(), 1);
+        let list = &plan.lists[0];
+        assert_eq!(list.first.stages[0].argv, ["true"]);
+        assert_eq!(list.rest.len(), 2);
+        assert_eq!(list.rest[0].0, Connector::And);
+        assert_eq!(list.rest[1].0, Connector::Or);
     }
 
     #[test]
