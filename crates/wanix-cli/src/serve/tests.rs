@@ -209,6 +209,85 @@ fn run_serve_refuses_wanix_services_on_non_loopback_p9_door() {
 }
 
 #[test]
+fn run_serve_refuses_wanix_services_on_non_loopback_http_door() {
+    // The websocket 9P door rides the HTTP listener and is unauthenticated; with
+    // `--wanix-services` it binds the `#task`/`#agent` exec devices (RCE). A
+    // `--listen :PORT` (0.0.0.0, all interfaces) HTTP door must be refused before
+    // any connection is served — this is the previously-silent RCE-on-all-
+    // interfaces hole. The guard fires regardless of whether `--p9` is set.
+    let command = ServeCommand {
+        root_path: PathBuf::from("."),
+        addr: "0.0.0.0:0".to_owned(),
+        bundle: None,
+        wanix_services: true,
+        once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
+    };
+    // Bind 0.0.0.0:0 so `local_addr()` reports an unspecified (non-loopback) IP.
+    let listener = TcpListener::bind("0.0.0.0:0").unwrap();
+    let mut stderr = Vec::new();
+
+    let error = run_serve_with_listener(command, listener, &mut stderr).unwrap_err();
+
+    assert_eq!(error.exit_code(), 2);
+    assert!(
+        error.to_string().contains("the HTTP/websocket 9P door"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("refused"),
+        "the refusal must explain why it refused: {error}"
+    );
+}
+
+#[test]
+fn run_serve_allows_wanix_services_on_loopback_http_door() {
+    // The companion to the off-loopback refusal: a loopback HTTP door is the
+    // trusted local-operator surface, so `--wanix-services` is allowed there and
+    // the served namespace exposes the service devices. Driving one `--once`
+    // HTTP request proves the guard passed and serve ran (rather than refusing).
+    let root = temp_dir("wanix-cli-serve-services-loopback");
+    fs::write(root.join("index.html"), b"home").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let command = ServeCommand {
+        root_path: root.clone(),
+        addr: addr.to_string(),
+        bundle: None,
+        wanix_services: true,
+        once: true,
+        p9_addr: None,
+        peer: None,
+        grants: Vec::new(),
+    };
+
+    let handle = thread::spawn(move || {
+        let mut stderr = Vec::new();
+        let exit_code = run_serve_with_listener(command, listener, &mut stderr).unwrap();
+        (exit_code, String::from_utf8(stderr).unwrap())
+    });
+
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    let (exit_code, stderr) = handle.join().unwrap();
+
+    assert_eq!(
+        exit_code, 0,
+        "loopback --wanix-services must serve: {stderr}"
+    );
+    let response = String::from_utf8(response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn run_serve_p9_door_serves_services_namespace_over_raw_tcp() {
     // Drive a LIVE serve with a loopback raw-9P door (`--p9`) over the services
     // namespace, then mount-style raw TCP 9P: write a `#sites/<host>` binding
