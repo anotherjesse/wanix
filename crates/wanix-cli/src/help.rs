@@ -45,6 +45,8 @@ pub(super) const USAGE: &str = concat!(
     "       wanix-rust mount-ls (tcp://HOST:PORT | iroh://PEER[?addr=IP:PORT]) [PATH]\n",
     "       wanix-rust mount-cat (tcp://HOST:PORT | iroh://PEER) PATH\n",
     "       wanix-rust mount-write (tcp://HOST:PORT | iroh://PEER) PATH TEXT\n",
+    "         (iroh://PEER is the resource identity; ?addr=IP:PORT is only a direct-route hint, ",
+    "not a separate resource — a wrong hint fails the dial, it never mounts another peer)\n",
     "       wanix-rust rootfs --archive FILE.tgz --out DIR [--json]\n",
     "       wanix-rust new (--js NAME | --rust NAME) [--dir DIR]\n",
     "       wanix-rust volume (create NAME | ls)   (persistent volumes under ~/.wanix/volumes)\n",

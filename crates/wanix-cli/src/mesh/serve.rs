@@ -429,6 +429,79 @@ mod tests {
         drop(server);
     }
 
+    /// Address-model guarantee (better-iroh-discovery.md): `addr=` is only a
+    /// route HINT, never identity. Dialing one peer's id at a different peer's
+    /// socket must FAIL the cryptographic identity check, never silently mount the
+    /// peer that happens to live at that address. The bad outcome is "route
+    /// failed", never "mounted the wrong resource".
+    #[test]
+    fn wrong_direct_route_fails_identity_and_never_mounts_another_peer() {
+        use wanix_fs::{MemFs, NormalizedPath, OpenOptions};
+        use wanix_vfs::{BindOptions, Namespace};
+
+        use crate::mesh::IROH_SCHEME;
+
+        // One real server B, with a recognizable marker file.
+        let host_b = Arc::new(MemFs::new());
+        host_b.write_file("who.txt", b"server-B").unwrap();
+        let identity_b = NodeIdentity::from_secret_bytes([21u8; 32]);
+        let server_b = build_and_serve(
+            &parse_mesh_serve_command(&args(&["--root", "/unused", "--addr", "127.0.0.1:0"]))
+                .unwrap(),
+            &identity_b,
+            &(host_b.clone() as Arc<dyn FileSystem>),
+        )
+        .unwrap();
+        let b_query: String = server_b
+            .ticket()
+            .ip_addrs()
+            .map(|addr| format!("addr={addr}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        assert!(
+            !b_query.is_empty(),
+            "loopback ticket must carry a direct addr"
+        );
+
+        // A DIFFERENT peer id pointed at B's socket. `addr=` is a hint for that id;
+        // since B cannot authenticate as this id, the dial must error — not mount B.
+        let other_peer = NodeIdentity::from_secret_bytes([22u8; 32]).peer_id();
+        let wrong = format!("{IROH_SCHEME}{other_peer}?{b_query}");
+        assert!(
+            crate::mesh::dial_iroh_remote(&wrong, "").is_err(),
+            "a wrong-identity direct route must fail, never mount the peer at that address"
+        );
+
+        // Positive control: the CORRECT id at the same hint dials and mounts B.
+        // Proves the failure above was identity verification, not a dead socket,
+        // and that `addr=` is a usable route hint for the right peer.
+        let right = format!("{IROH_SCHEME}{}?{b_query}", server_b.peer_id());
+        let mount = crate::mesh::dial_iroh_remote(&right, "").unwrap();
+        let mut namespace = Namespace::new();
+        namespace
+            .bind(mount.remote.clone(), ".", "n", BindOptions::default())
+            .unwrap();
+        let mut file = namespace
+            .open(
+                &NormalizedPath::new("n/who.txt").unwrap(),
+                OpenOptions::read(),
+            )
+            .unwrap();
+        let mut got = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let read = file.read(&mut chunk).unwrap();
+            if read == 0 {
+                break;
+            }
+            got.extend_from_slice(&chunk[..read]);
+        }
+        assert_eq!(got, b"server-B");
+
+        drop(mount);
+        drop(server_b);
+    }
+
     #[test]
     fn parse_requires_root_or_volume() {
         let error = parse_mesh_serve_command(&args(&["--addr", "127.0.0.1:0"])).unwrap_err();

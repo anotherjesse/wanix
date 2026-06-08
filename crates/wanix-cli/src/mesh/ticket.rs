@@ -1,10 +1,15 @@
 //! The `iroh://` ticket scheme: parse a peer address and dial it over QUIC.
 //!
-//! A ticket is `iroh://<64-hex-peer-id>` for relay/DNS-discovered dialing on the
-//! public network, optionally with `?addr=IP:PORT` query parameters carrying
-//! direct addresses for LAN or offline first contact. The blueprint prefers a
-//! ticket with direct addresses for first contact because `online()` does not
-//! guarantee dialability immediately.
+//! The peer id IS the resource identity; `?addr=IP:PORT` is only a direct-route
+//! HINT, never identity (see `docs/better-iroh-discovery.md`). So
+//! `iroh://<64-hex-peer-id>` is the canonical resource address — on the public
+//! network it is dialable via relay/DNS discovery — and `?addr=IP:PORT` query
+//! parameters carry direct routes for LAN/offline first contact (today the only
+//! working route on the `--addr`/loopback path, which disables discovery).
+//!
+//! Crucially, a stale or wrong `addr=` cannot mount the wrong resource: every
+//! route still authenticates as the requested peer id, so a bad hint fails the
+//! dial rather than connecting to whoever happens to answer at that socket.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -26,8 +31,8 @@ pub(crate) type MeshFs = NativeFs<IrohStreamFactory>;
 /// URL scheme that selects a QUIC mesh dial instead of a raw TCP 9P dial.
 pub(crate) const IROH_SCHEME: &str = "iroh://";
 
-/// A parsed `iroh://` dial target: a verified peer id plus optional direct
-/// addresses for first contact.
+/// A parsed `iroh://` dial target: a verified peer id (the resource identity)
+/// plus optional direct-route hints for first contact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MeshTicket {
     peer: EndpointId,
