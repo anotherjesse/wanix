@@ -24,6 +24,7 @@
 mod builtins;
 mod error;
 mod exec;
+mod expand;
 mod lower;
 mod ns;
 mod resolve;

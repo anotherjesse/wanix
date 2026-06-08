@@ -91,14 +91,17 @@ fn run_single_stage(
     state: &mut ShellState,
     ns: &mut dyn NamespaceOps,
 ) -> ShellResult<Outcome> {
-    let name = stage.argv[0].as_str();
+    // Expand against the *current* state so a command sees earlier same-line
+    // effects (`false; echo $?`, `export X=1; echo $X`).
+    let argv = expand_argv(&stage.argv, state)?;
+    let name = argv[0].as_str();
     if name == "exit" {
-        return Ok(Outcome::Exit(parse_exit_code(&stage.argv)));
+        return Ok(Outcome::Exit(parse_exit_code(&argv)));
     }
     if let Some(special) = special_builtin(name) {
-        return Ok(Outcome::Status(special(&stage.argv, state)));
+        return Ok(Outcome::Status(special(&argv, state)));
     }
-    run_stage(stage, InputSource::Inherit, OutputSink::Inherit, state, ns).map(Outcome::Status)
+    dispatch(&argv, InputSource::Inherit, OutputSink::Inherit, state, ns).map(Outcome::Status)
 }
 
 fn run_stage(
@@ -108,27 +111,45 @@ fn run_stage(
     state: &ShellState,
     ns: &mut dyn NamespaceOps,
 ) -> ShellResult<i32> {
-    if let Some(builtin) = builtin(&stage.argv[0]) {
-        let input = gather_input(&stdin, ns)?;
-        let (output, status) = builtin(&stage.argv, &input, state);
-        emit_output(&stdout, &output, ns)?;
-        Ok(status)
-    } else {
-        run_external(stage, stdin, stdout, state, ns)
-    }
+    let argv = expand_argv(&stage.argv, state)?;
+    dispatch(&argv, stdin, stdout, state, ns)
 }
 
-fn run_external(
-    stage: &Stage,
+fn dispatch(
+    argv: &[String],
     stdin: InputSource,
     stdout: OutputSink,
     state: &ShellState,
     ns: &mut dyn NamespaceOps,
 ) -> ShellResult<i32> {
-    let program = crate::resolve::resolve_command(&stage.argv[0], &*ns)?;
+    if let Some(builtin) = builtin(&argv[0]) {
+        let input = gather_input(&stdin, ns)?;
+        let (output, status) = builtin(argv, &input, state);
+        emit_output(&stdout, &output, ns)?;
+        Ok(status)
+    } else {
+        run_external(argv, stdin, stdout, state, ns)
+    }
+}
+
+/// Expands each raw word with the current state (quote removal + `$VAR`/`$?`).
+fn expand_argv(raw: &[String], state: &ShellState) -> ShellResult<Vec<String>> {
+    raw.iter()
+        .map(|word| crate::expand::expand_word(word, state))
+        .collect()
+}
+
+fn run_external(
+    argv: &[String],
+    stdin: InputSource,
+    stdout: OutputSink,
+    state: &ShellState,
+    ns: &mut dyn NamespaceOps,
+) -> ShellResult<i32> {
+    let program = crate::resolve::resolve_command(&argv[0], &*ns)?;
     let spec = SpawnSpec {
         program,
-        args: stage.argv[1..].to_vec(),
+        args: argv[1..].to_vec(),
         env: state
             .env_iter()
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -485,5 +506,30 @@ mod tests {
         run_with("export A=1; prog", &mut state, &mut ns);
         let last = ns.spawns.last().expect("a child was spawned");
         assert_eq!(last.env, vec![("A".to_owned(), "1".to_owned())]);
+    }
+
+    // ---- expansion (at execution time) ----------------------------------
+
+    #[test]
+    fn echo_expands_var_set_earlier_on_same_line() {
+        // Proves expansion happens at execution time: `echo $X` sees the export
+        // that ran earlier on the same line.
+        let (code, ns) = run("export X=hi; echo $X");
+        assert_eq!(code, 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "hi\n");
+    }
+
+    #[test]
+    fn dollar_question_reflects_previous_status() {
+        let (code, ns) = run("false; echo $?");
+        assert_eq!(code, 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "1\n");
+    }
+
+    #[test]
+    fn unsupported_expansion_is_honest_at_runtime() {
+        let (code, ns) = run("echo $(echo hi)");
+        assert_eq!(code, 1);
+        assert!(String::from_utf8(ns.err).unwrap().contains("not supported"));
     }
 }

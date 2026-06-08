@@ -1,18 +1,20 @@
-//! Lowers the `brush-parser` AST into a flat, executable [`Plan`].
+//! Lowers the `brush-parser` AST into a flat [`Plan`] of raw word stages.
 //!
-//! This is where "scope honesty" lives: any AST node the executor does not yet
-//! handle is turned into a clear [`ShellError::Unsupported`] rather than being
-//! silently dropped. As the executor grows (redirects, control flow), the
-//! matching arms here move from "unsupported" to real lowering.
+//! Lowering is structural only: it shapes pipelines and sequences and rejects
+//! constructs the executor does not handle (honest [`ShellError::Unsupported`],
+//! never a silent no-op). Word **values are kept raw** — quote removal and
+//! `$VAR`/`$?` expansion happen at execution time (see [`crate::expand`]) so a
+//! command sees state changes made earlier on the same line.
 
-use brush_parser::{ast, unquote_str};
+use brush_parser::ast;
 
 use crate::error::{ShellError, ShellResult};
 
-/// A single simple command after word resolution: `argv[0]` is the command name.
+/// A single simple command as raw (unexpanded) word strings; `argv[0]` is the
+/// command name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stage {
-    /// The resolved argument vector.
+    /// The raw argument words, expanded at execution time.
     pub argv: Vec<String>,
 }
 
@@ -87,16 +89,16 @@ fn lower_simple(simple: &ast::SimpleCommand) -> ShellResult<Stage> {
 
     let mut argv = Vec::new();
     if let Some(name) = &simple.word_or_name {
-        argv.push(resolve_word(&name.value));
+        argv.push(name.value.clone());
     }
     if let Some(suffix) = &simple.suffix {
         for item in &suffix.0 {
             match item {
-                ast::CommandPrefixOrSuffixItem::Word(word) => argv.push(resolve_word(&word.value)),
+                ast::CommandPrefixOrSuffixItem::Word(word) => argv.push(word.value.clone()),
                 // After the command word, a `name=value` token is an ordinary
                 // argument (e.g. `export A=1`, `echo A=1`), not an assignment.
                 ast::CommandPrefixOrSuffixItem::AssignmentWord(_, word) => {
-                    argv.push(resolve_word(&word.value));
+                    argv.push(word.value.clone());
                 }
                 ast::CommandPrefixOrSuffixItem::IoRedirect(_) => {
                     return Err(ShellError::Unsupported("redirections".into()));
@@ -112,15 +114,6 @@ fn lower_simple(simple: &ast::SimpleCommand) -> ShellResult<Stage> {
         return Err(ShellError::Unsupported("empty command".into()));
     }
     Ok(Stage { argv })
-}
-
-/// Resolves a single word to its final value.
-///
-/// For now this only removes quotes via `brush_parser::unquote_str`. Real
-/// expansion (variables, command substitution, globbing) is a later phase; words
-/// containing those constructs pass through unexpanded today.
-fn resolve_word(raw: &str) -> String {
-    unquote_str(raw)
 }
 
 #[cfg(test)]
@@ -145,9 +138,10 @@ mod tests {
     }
 
     #[test]
-    fn unquotes_words() {
-        let plan = plan_of("echo \"hi there\" 'a b'").expect("lowers");
-        assert_eq!(argv(&plan, 0, 0), ["echo", "hi there", "a b"]);
+    fn keeps_words_raw_for_execution_time_expansion() {
+        // Quotes/`$VAR` survive lowering; expansion happens in exec.
+        let plan = plan_of("echo \"hi there\" $NAME").expect("lowers");
+        assert_eq!(argv(&plan, 0, 0), ["echo", "\"hi there\"", "$NAME"]);
     }
 
     #[test]
@@ -162,9 +156,7 @@ mod tests {
         let plan = plan_of("echo hi | wc -c | cat").expect("lowers");
         assert_eq!(plan.pipelines.len(), 1);
         assert_eq!(plan.pipelines[0].stages.len(), 3);
-        assert_eq!(argv(&plan, 0, 0), ["echo", "hi"]);
         assert_eq!(argv(&plan, 0, 1), ["wc", "-c"]);
-        assert_eq!(argv(&plan, 0, 2), ["cat"]);
     }
 
     #[test]
