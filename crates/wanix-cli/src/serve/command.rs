@@ -15,6 +15,8 @@ pub(crate) struct ServeCommand {
     pub(super) bundle: Option<String>,
     pub(super) wanix_services: bool,
     pub(super) once: bool,
+    /// `--site HOST=PATH` startup bindings registered with the `#sites` device.
+    pub(super) sites: Vec<(String, PathBuf)>,
 }
 
 pub(crate) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, CliError> {
@@ -73,6 +75,7 @@ impl<'a> ServeCommandParser<'a> {
             ServeValueOption::Root => self.parts.set_root(value, "serve accepts only one --root"),
             ServeValueOption::Addr | ServeValueOption::Listen => self.parts.set_addr(value),
             ServeValueOption::Bundle => self.parts.set_bundle(value),
+            ServeValueOption::Site => self.parts.add_site(value),
         }
     }
 
@@ -113,6 +116,7 @@ struct ServeCommandParts {
     bundle: Option<String>,
     wanix_services: bool,
     once: bool,
+    sites: Vec<(String, PathBuf)>,
 }
 
 impl ServeCommandParts {
@@ -157,6 +161,22 @@ impl ServeCommandParts {
         Ok(())
     }
 
+    /// Parses a `--site HOST=PATH` binding. The host names a site for the
+    /// `*.localhost` gateway; the path is a directory served as that site.
+    fn add_site(&mut self, value: &OsString) -> Result<(), CliError> {
+        let raw = value.to_string_lossy();
+        let (host, path) = raw.split_once('=').ok_or_else(|| {
+            CliError::usage(format!("serve --site expects HOST=PATH, got {raw:?}"))
+        })?;
+        if host.is_empty() || path.is_empty() {
+            return Err(CliError::usage(format!(
+                "serve --site expects HOST=PATH, got {raw:?}"
+            )));
+        }
+        self.sites.push((host.to_owned(), PathBuf::from(path)));
+        Ok(())
+    }
+
     fn finish(self) -> ServeCommand {
         ServeCommand {
             root_path: self.root_path.unwrap_or_else(|| PathBuf::from(".")),
@@ -164,6 +184,7 @@ impl ServeCommandParts {
             bundle: self.bundle,
             wanix_services: self.wanix_services,
             once: self.once,
+            sites: self.sites,
         }
     }
 }

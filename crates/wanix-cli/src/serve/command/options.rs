@@ -7,6 +7,7 @@ pub(super) const SERVE_VALUE_OPTIONS: &[(&str, ServeValueOption)] = &[
     ("--addr", ServeValueOption::Addr),
     ("--listen", ServeValueOption::Listen),
     ("--bundle", ServeValueOption::Bundle),
+    ("--site", ServeValueOption::Site),
 ];
 
 pub(super) const SERVE_FLAG_OPTIONS: &[(&str, ServeFlagOption)] = &[
@@ -35,6 +36,7 @@ pub(super) enum ServeValueOption {
     Addr,
     Listen,
     Bundle,
+    Site,
 }
 
 impl ServeValueOption {
@@ -44,6 +46,7 @@ impl ServeValueOption {
             Self::Addr => "serve --addr",
             Self::Listen => "serve --listen",
             Self::Bundle => "serve --bundle",
+            Self::Site => "serve --site",
         }
     }
 
@@ -52,6 +55,7 @@ impl ServeValueOption {
             Self::Root => "DIR",
             Self::Addr | Self::Listen => "HOST:PORT",
             Self::Bundle => "NAME",
+            Self::Site => "HOST=PATH",
         }
     }
 }

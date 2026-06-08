@@ -18,6 +18,7 @@ members = [
     "crates/wanix-qjs-engine",
     "crates/wanix-site-fs",
     "crates/wanix-site-gen",
+    "crates/wanix-sites",
     "crates/wanix-task",
     "crates/wanix-term",
     "crates/wanix-vfs",

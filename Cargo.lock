@@ -4810,6 +4810,7 @@ dependencies = [
  "wanix-protocol",
  "wanix-qjs",
  "wanix-site-fs",
+ "wanix-sites",
  "wanix-task",
  "wanix-term",
  "wanix-vfs",
@@ -4948,6 +4949,13 @@ dependencies = [
  "wanix-task",
  "wanix-vfs",
  "wanix-wasm",
+]
+
+[[package]]
+name = "wanix-sites"
+version = "0.1.0"
+dependencies = [
+ "wanix-fs",
 ]
 
 [[package]]

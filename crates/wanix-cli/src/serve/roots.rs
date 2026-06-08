@@ -10,6 +10,7 @@ use wanix_kv::KvDevice;
 use wanix_pipe::PipeDevice;
 use wanix_plumb::PlumbDevice;
 use wanix_qjs::QuickJsTaskDriver;
+use wanix_sites::{Host, SiteSource, SitesDevice};
 use wanix_task::TaskTable;
 use wanix_term::TermDevice;
 use wanix_vfs::{BindOptions, BindPosition, Namespace};
@@ -27,6 +28,13 @@ pub(super) struct ServeRoots {
     /// phases serve other filesystems (an in-memory generator output, a CAS
     /// snapshot) through this same field.
     pub(super) site_root: Arc<dyn FileSystem>,
+    /// The `#sites` device: a host→filesystem binding table. The HTTP gateway
+    /// reads the request `Host` header and serves `sites.resolve(host)` through
+    /// the same FS-backed static handler as `site_root`. Shared with the bound
+    /// `#sites` in the services namespace so 9P writes and the gateway agree.
+    /// An empty device when services are disabled (the gateway then never
+    /// consults it and every request falls through to `--root`).
+    pub(super) sites: Arc<SitesDevice>,
     pub(super) p9_root: Arc<dyn FileSystem>,
     /// Task driver kinds advertised by service discovery, captured from the
     /// registry at build time so the discovery JSON cannot drift from what
@@ -43,6 +51,7 @@ impl ServeRoots {
         local_addr: SocketAddr,
         bundle: Option<String>,
         wanix_services: bool,
+        sites: &[(String, PathBuf)],
     ) -> Result<Self, CliError> {
         let static_root = fs::canonicalize(root_path).map_err(|error| {
             CliError::new(
@@ -51,10 +60,14 @@ impl ServeRoots {
             )
         })?;
         let site_root = open_host_p9_root(root_path)?;
-        let (p9_root, driver_kinds) = serve_p9_root(root_path, wanix_services)?;
+        let sites_device = Arc::new(SitesDevice::new());
+        register_startup_sites(&sites_device, sites)?;
+        let (p9_root, driver_kinds) =
+            serve_p9_root(root_path, wanix_services, Arc::clone(&sites_device))?;
         Ok(Self {
             static_root,
             site_root,
+            sites: sites_device,
             p9_root,
             driver_kinds,
             local_addr,
@@ -64,13 +77,34 @@ impl ServeRoots {
     }
 }
 
+/// Registers each `--site HOST=PATH` startup binding as a live `LocalFs`
+/// [`SiteSource::Memory`] source, so the gateway serves that host immediately.
+fn register_startup_sites(
+    device: &SitesDevice,
+    sites: &[(String, PathBuf)],
+) -> Result<(), CliError> {
+    for (raw_host, path) in sites {
+        let host = Host::registered(raw_host)
+            .ok_or_else(|| CliError::usage(format!("invalid --site host: {raw_host:?}")))?;
+        let fs = Arc::new(LocalFs::new(path).map_err(|error| {
+            CliError::new(
+                format!("failed to open --site root {}: {error}", path.display()),
+                1,
+            )
+        })?);
+        device.bind_site(host, SiteSource::Memory(fs));
+    }
+    Ok(())
+}
+
 fn serve_p9_root(
     root_path: &Path,
     wanix_services: bool,
+    sites: Arc<SitesDevice>,
 ) -> Result<(Arc<dyn FileSystem>, Vec<String>), CliError> {
     let host_root = open_host_p9_root(root_path)?;
     match wanix_services {
-        true => serve_services_root(host_root),
+        true => serve_services_root(host_root, sites),
         false => Ok((host_root, Vec::new())),
     }
 }
@@ -89,10 +123,11 @@ fn open_host_p9_root(root_path: &Path) -> Result<Arc<dyn FileSystem>, CliError> 
 
 fn serve_services_root(
     host_root: Arc<dyn FileSystem>,
+    sites: Arc<SitesDevice>,
 ) -> Result<(Arc<dyn FileSystem>, Vec<String>), CliError> {
     let table = serve_task_table()?;
     let driver_kinds = table.driver_kinds();
-    let namespace = serve_services_namespace(host_root, &table)?;
+    let namespace = serve_services_namespace(host_root, sites, &table)?;
     Ok((Arc::new(namespace), driver_kinds))
 }
 
@@ -107,16 +142,17 @@ pub(crate) fn services_namespace_for_root(
     root_path: &Path,
 ) -> Result<Arc<dyn FileSystem>, CliError> {
     let host_root = open_host_p9_root(root_path)?;
-    let (namespace, _kinds) = serve_services_root(host_root)?;
+    let (namespace, _kinds) = serve_services_root(host_root, Arc::new(SitesDevice::new()))?;
     Ok(namespace)
 }
 
 fn serve_services_namespace(
     host_root: Arc<dyn FileSystem>,
+    sites: Arc<SitesDevice>,
     table: &TaskTable,
 ) -> Result<Namespace, CliError> {
     let mut namespace = Namespace::new();
-    bind_host_and_terminal(&mut namespace, host_root)?;
+    bind_host_and_terminal(&mut namespace, host_root, sites)?;
     bind_task_service(&mut namespace, table)?;
     Ok(namespace)
 }
@@ -125,12 +161,14 @@ fn serve_services_namespace(
 /// discovery so the cockpit can list and inspect them. Must stay in sync with
 /// the binds in [`bind_host_and_terminal`] and [`bind_task_service`]; the
 /// `serve_wanix_services_*` tests exercise each one over 9P.
-pub(super) const INSPECTABLE_SERVICE_DEVICES: &[&str] =
-    &["#task", "#term", "#kv", "#pipe", "#plumb", "#cas", "#agent"];
+pub(super) const INSPECTABLE_SERVICE_DEVICES: &[&str] = &[
+    "#task", "#term", "#kv", "#pipe", "#plumb", "#cas", "#agent", "#sites",
+];
 
 fn bind_host_and_terminal(
     namespace: &mut Namespace,
     host_root: Arc<dyn FileSystem>,
+    sites: Arc<SitesDevice>,
 ) -> Result<(), CliError> {
     let terminal = Arc::new(TermDevice::new());
     namespace.bind(host_root, ".", ".", BindOptions::default())?;
@@ -177,6 +215,12 @@ fn bind_host_and_terminal(
         "#agent",
         BindOptions::default(),
     )?;
+    // `#sites` binds a host to a filesystem source: `#sites/<host>` lists/reads/
+    // writes the binding, and the serve HTTP gateway serves `resolve(host)` for a
+    // matching `Host` header. The same `SitesDevice` Arc backs the gateway, so a
+    // 9P write to `#sites/<host>` and the gateway agree. Like the other devices
+    // it is a plain `FileSystem`, so it imports across the mesh for free.
+    namespace.bind(sites, ".", "#sites", BindOptions::default())?;
     Ok(())
 }
 

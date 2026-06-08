@@ -18,9 +18,14 @@ use wanix_protocol::{
     p9_tversion, p9_twalk, p9_twalkgetattr, p9_twrite, p9_txattrcreate, p9_txattrwalk,
 };
 
+use std::sync::Arc;
+
+use wanix_fs::MemFs;
+use wanix_sites::{Host, SiteSource};
+
 use super::direct_v86::{DIRECT_V86_BUNDLE, direct_v86_asset_response};
 use super::discovery::{rootfs_handoff_response, serve_discovery_json};
-use super::http::HttpStatus;
+use super::http::{HttpStatus, http_response};
 use super::roots::{ServeRoots, serve_task_table};
 use super::terminal_ws::{parse_terminal_resize_message, qjs_shell_cwd_from_target};
 use super::{
@@ -89,6 +94,7 @@ fn run_serve_streaming_reports_bind_errors() {
         bundle: None,
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
     let mut stderr = Vec::new();
 
@@ -116,6 +122,7 @@ fn serve_once_returns_static_file_with_browser_isolation_headers() {
         bundle: None,
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -168,6 +175,7 @@ fn serve_once_returns_mjs_static_file_as_javascript() {
         bundle: None,
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -204,6 +212,7 @@ fn serve_once_reports_bundle_url_when_configured() {
         bundle: Some("vm-workbench".to_owned()),
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -241,6 +250,7 @@ fn serve_once_returns_direct_v86_bundle_page() {
         bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -498,6 +508,7 @@ fn serve_once_returns_fs9p_bundle_page() {
         bundle: Some(FS9P_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -591,6 +602,7 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
         bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -728,6 +740,7 @@ fn serve_once_returns_workbench_assets_outside_served_root() {
         bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -781,6 +794,7 @@ std.out.puts("target " + target + "\n");
         bundle: None,
         wanix_services: true,
         once: true,
+        sites: Vec::new(),
     };
     let handle = thread::spawn(move || {
         let mut stderr = Vec::new();
@@ -811,6 +825,7 @@ fn serve_once_returns_direct_v86_embedded_asset_over_static_collision() {
         bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -853,6 +868,7 @@ fn direct_v86_embedded_asset_table_serves_browser_runtime_assets() {
         "127.0.0.1:0".parse().unwrap(),
         Some(DIRECT_V86_BUNDLE.to_owned()),
         false,
+        &[],
     )
     .unwrap();
 
@@ -893,6 +909,7 @@ fn direct_v86_embedded_asset_table_serves_browser_runtime_assets() {
         "127.0.0.1:0".parse().unwrap(),
         Some("vm-workbench".to_owned()),
         false,
+        &[],
     )
     .unwrap();
     assert!(direct_v86_asset_response(&other_roots, Path::new("v86/bundle/v86.wasm")).is_none());
@@ -911,6 +928,7 @@ fn serve_once_keeps_direct_v86_asset_paths_static_without_direct_bundle() {
         bundle: Some("vm-workbench".to_owned()),
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -953,6 +971,7 @@ fn serve_once_keeps_other_bundles_on_static_root() {
         bundle: Some("vm-workbench".to_owned()),
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -989,6 +1008,7 @@ fn serve_once_returns_well_known_discovery_document() {
         bundle: Some("vm-workbench".to_owned()),
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1097,6 +1117,7 @@ fn serve_once_returns_rootfs_handoff_manifest() {
         bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
         wanix_services: true,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1159,6 +1180,7 @@ fn serve_rootfs_handoff_reports_unprepared_roots_and_reserves_route() {
         bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1189,7 +1211,7 @@ fn serve_rootfs_handoff_rejects_non_loopback_peers_without_paths() {
     fs::create_dir_all(root.join("boot")).unwrap();
     fs::write(root.join("boot/bzImage"), b"kernel").unwrap();
     write_boot_init(&root);
-    let roots = ServeRoots::new(&root, "0.0.0.0:7654".parse().unwrap(), None, false).unwrap();
+    let roots = ServeRoots::new(&root, "0.0.0.0:7654".parse().unwrap(), None, false, &[]).unwrap();
     let response = rootfs_handoff_response(&roots, "192.0.2.1:12345".parse().unwrap());
     let status = response.status.status_line();
     let body = String::from_utf8(response.body).unwrap();
@@ -1209,6 +1231,7 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
         "127.0.0.1:7654".parse().unwrap(),
         Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         true,
+        &[],
     )
     .unwrap();
 
@@ -1221,7 +1244,7 @@ fn serve_wanix_services_root_exports_task_and_terminal_services() {
         discovery.contains(
             "\"services\":{\"task\":\"#task\",\"term\":\"#term\",\
                  \"drivers\":[\"auto\",\"noop\",\"qjs\",\"wasm\"],\
-                 \"devices\":[\"#task\",\"#term\",\"#kv\",\"#pipe\",\"#plumb\",\"#cas\",\"#agent\"]}"
+                 \"devices\":[\"#task\",\"#term\",\"#kv\",\"#pipe\",\"#plumb\",\"#cas\",\"#agent\",\"#sites\"]}"
         ),
         "{discovery}"
     );
@@ -1309,7 +1332,7 @@ fn serve_wanix_services_binds_cas_data_plane_device() {
     // ordinary file. A `have/<hash>` probe against the (locally absent) blob is
     // hermetic: it reads `0\n` without writing anything to the on-disk store.
     let root = temp_dir("wanix-cli-serve-cas-device");
-    let roots = ServeRoots::new(&root, "127.0.0.1:7655".parse().unwrap(), None, true).unwrap();
+    let roots = ServeRoots::new(&root, "127.0.0.1:7655".parse().unwrap(), None, true, &[]).unwrap();
 
     let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
     let response = server
@@ -1344,7 +1367,7 @@ fn serve_wanix_services_binds_plumb_bus_device() {
     // namespace: subscribe to `build/recv`, write an envelope to `build/send`,
     // then read it back from the subscription — the same bytes, line-delimited.
     let root = temp_dir("wanix-cli-serve-plumb-device");
-    let roots = ServeRoots::new(&root, "127.0.0.1:7655".parse().unwrap(), None, true).unwrap();
+    let roots = ServeRoots::new(&root, "127.0.0.1:7655".parse().unwrap(), None, true, &[]).unwrap();
 
     let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
     assert_eq!(
@@ -1410,7 +1433,7 @@ fn discovery_services_advertises_every_registered_driver() {
     // registered-but-hidden. Compare the advertised list against the registry.
     let root = temp_dir("wanix-cli-serve-services-drivers");
     fs::write(root.join("host.txt"), b"host file").unwrap();
-    let roots = ServeRoots::new(&root, "127.0.0.1:7655".parse().unwrap(), None, true).unwrap();
+    let roots = ServeRoots::new(&root, "127.0.0.1:7655".parse().unwrap(), None, true, &[]).unwrap();
 
     let discovery = serve_discovery_json(
         &roots,
@@ -1444,6 +1467,7 @@ fn serve_wanix_services_terminal_winch_broadcasts_over_9p() {
         "127.0.0.1:7654".parse().unwrap(),
         Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         true,
+        &[],
     )
     .unwrap();
     let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
@@ -1504,6 +1528,7 @@ fn serve_wanix_services_terminal_ctl_close_is_visible_over_9p() {
         "127.0.0.1:7654".parse().unwrap(),
         Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         true,
+        &[],
     )
     .unwrap();
     let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
@@ -1591,6 +1616,7 @@ std.writeFile("generated.txt", "generated by task " + id);
         "127.0.0.1:7654".parse().unwrap(),
         Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         true,
+        &[],
     )
     .unwrap();
     let mut server = wanix_9p::P9Server::new(roots.p9_root.clone());
@@ -1649,6 +1675,7 @@ fn serve_discovery_falls_back_to_listener_address_without_host_header() {
         "0.0.0.0:7654".parse().unwrap(),
         Some("quote\"bundle".to_owned()),
         false,
+        &[],
     )
     .unwrap();
     let body = serve_discovery_json(
@@ -1667,7 +1694,8 @@ fn serve_discovery_falls_back_to_listener_address_without_host_header() {
         "{body}"
     );
 
-    let ipv6_roots = ServeRoots::new(&root, "[::1]:7654".parse().unwrap(), None, false).unwrap();
+    let ipv6_roots =
+        ServeRoots::new(&root, "[::1]:7654".parse().unwrap(), None, false, &[]).unwrap();
     let ipv6_body = serve_discovery_json(
         &ipv6_roots,
         b"GET /.well-known/wanix.json HTTP/1.1\r\n\r\n",
@@ -1688,6 +1716,7 @@ fn serve_discovery_finds_direct_v86_legacy_top_level_kernel() {
         "127.0.0.1:7654".parse().unwrap(),
         Some(DIRECT_V86_BUNDLE.to_owned()),
         false,
+        &[],
     )
     .unwrap();
 
@@ -1714,6 +1743,7 @@ fn serve_discovery_reports_direct_v86_boot_readiness_gaps() {
         "127.0.0.1:7654".parse().unwrap(),
         Some(DIRECT_V86_BUNDLE.to_owned()),
         false,
+        &[],
     )
     .unwrap();
 
@@ -1744,6 +1774,7 @@ fn serve_discovery_requires_executable_direct_v86_init() {
         "127.0.0.1:7654".parse().unwrap(),
         Some(DIRECT_V86_BUNDLE.to_owned()),
         false,
+        &[],
     )
     .unwrap();
 
@@ -1774,6 +1805,7 @@ fn serve_discovery_reports_rootfs_handoff_status() {
         "0.0.0.0:7654".parse().unwrap(),
         Some(DIRECT_V86_BUNDLE.to_owned()),
         false,
+        &[],
     )
     .unwrap();
 
@@ -1814,6 +1846,7 @@ fn serve_discovery_does_not_overpromise_invalid_rootfs_handoff() {
         "127.0.0.1:7654".parse().unwrap(),
         Some(DIRECT_V86_BUNDLE.to_owned()),
         false,
+        &[],
     )
     .unwrap();
 
@@ -1839,7 +1872,8 @@ fn serve_discovery_does_not_overpromise_invalid_rootfs_handoff() {
 #[test]
 fn serve_discovery_ignores_unsafe_host_header() {
     let root = temp_dir("wanix-cli-serve-discovery-unsafe-host");
-    let roots = ServeRoots::new(&root, "127.0.0.1:7654".parse().unwrap(), None, false).unwrap();
+    let roots =
+        ServeRoots::new(&root, "127.0.0.1:7654".parse().unwrap(), None, false, &[]).unwrap();
     let body = serve_discovery_json(
         &roots,
         b"GET /.well-known/wanix.json HTTP/1.1\r\nHost: demo.local:7654/escape\r\n\r\n",
@@ -1864,6 +1898,7 @@ fn serve_once_exports_9p_over_binary_websocket() {
         bundle: None,
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1919,6 +1954,7 @@ fn serve_concurrent_loop_serves_http_while_9p_websocket_stays_open() {
         bundle: Some(DIRECT_V86_BUNDLE.to_owned()),
         wanix_services: false,
         once: false,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1965,6 +2001,7 @@ fn serve_concurrent_loop_serves_two_9p_websockets() {
         bundle: None,
         wanix_services: false,
         once: false,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2017,6 +2054,7 @@ fn serve_once_exports_9p_on_well_known_export_path() {
         bundle: None,
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2085,6 +2123,7 @@ fn serve_once_exports_symlink_readlink_over_direct_9p() {
         bundle: None,
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2199,6 +2238,7 @@ std.exit(6);
         bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         wanix_services: true,
         once: false,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2346,6 +2386,7 @@ fn serve_once_exports_google_2_walkgetattr_on_well_known_path() {
         bundle: None,
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2401,6 +2442,7 @@ fn serve_once_exports_9p_compatibility_probes_on_well_known_path() {
         bundle: None,
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2479,6 +2521,7 @@ fn serve_once_rejects_reserved_ethernet_websocket_path() {
         bundle: None,
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2524,6 +2567,7 @@ fn serve_http_keeps_well_known_routes_reserved() {
         bundle: None,
         wanix_services: false,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2564,6 +2608,7 @@ fn serve_http_keeps_qjs_shell_route_reserved_when_services_enabled() {
         bundle: Some(WORKBENCH_FS9P_BUNDLE.to_owned()),
         wanix_services: true,
         once: true,
+        sites: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2728,4 +2773,99 @@ fn write_boot_init(root: &Path) {
 
         fs::set_permissions(init, fs::Permissions::from_mode(0o755)).unwrap();
     }
+}
+
+/// Builds a `ServeRoots` with `--wanix-services` enabled over a throwaway root,
+/// so the `#sites` gateway is active for the host-routing tests.
+fn services_roots(name: &str) -> (PathBuf, ServeRoots) {
+    let root = temp_dir(name);
+    fs::write(root.join("index.html"), b"<h1>fallback root</h1>").unwrap();
+    let roots = ServeRoots::new(&root, "127.0.0.1:7654".parse().unwrap(), None, true, &[]).unwrap();
+    (root, roots)
+}
+
+fn site_get(roots: &ServeRoots, host: &str) -> super::http::StaticResponse {
+    let request = format!("GET / HTTP/1.1\r\nHost: {host}\r\n\r\n");
+    http_response(
+        roots,
+        request.as_bytes(),
+        "127.0.0.1:12345".parse().unwrap(),
+    )
+}
+
+#[test]
+fn site_gateway_routes_distinct_hosts_to_distinct_filesystems() {
+    let (_root, roots) = services_roots("wanix-cli-serve-sites-gateway");
+
+    let blog = MemFs::new();
+    blog.write_file("index.html", b"<h1>blog site</h1>")
+        .unwrap();
+    let docs = MemFs::new();
+    docs.write_file("index.html", b"<h1>docs site</h1>")
+        .unwrap();
+    roots.sites.bind_site(
+        Host::registered("blog.localhost").unwrap(),
+        SiteSource::Memory(Arc::new(blog)),
+    );
+    roots.sites.bind_site(
+        Host::registered("docs.localhost").unwrap(),
+        SiteSource::Memory(Arc::new(docs)),
+    );
+
+    // Different Host headers route to different in-memory filesystems.
+    let blog_response = site_get(&roots, "blog.localhost:7654");
+    assert_eq!(blog_response.status.status_line(), "200 OK");
+    assert_eq!(blog_response.body, b"<h1>blog site</h1>");
+
+    let docs_response = site_get(&roots, "docs.localhost:7654");
+    assert_eq!(docs_response.status.status_line(), "200 OK");
+    assert_eq!(docs_response.body, b"<h1>docs site</h1>");
+}
+
+#[test]
+fn site_gateway_falls_back_to_root_for_bare_and_unbound_hosts() {
+    let (_root, roots) = services_roots("wanix-cli-serve-sites-fallback");
+    let blog = MemFs::new();
+    blog.write_file("index.html", b"<h1>blog site</h1>")
+        .unwrap();
+    roots.sites.bind_site(
+        Host::registered("blog.localhost").unwrap(),
+        SiteSource::Memory(Arc::new(blog)),
+    );
+
+    // Bare `localhost` is not a site host, so it serves the `--root` index.
+    let bare = site_get(&roots, "localhost:7654");
+    assert_eq!(bare.status.status_line(), "200 OK");
+    assert_eq!(bare.body, b"<h1>fallback root</h1>");
+
+    // An unbound site host also falls back to `--root`.
+    let unbound = site_get(&roots, "absent.localhost:7654");
+    assert_eq!(unbound.body, b"<h1>fallback root</h1>");
+
+    // The bound host still routes to its own filesystem.
+    let blog = site_get(&roots, "blog.localhost:7654");
+    assert_eq!(blog.body, b"<h1>blog site</h1>");
+}
+
+#[test]
+fn parse_serve_collects_repeated_site_bindings() {
+    let command = parse_serve_command(&[
+        OsString::from("--site"),
+        OsString::from("blog.localhost=./blog"),
+        OsString::from("--site"),
+        OsString::from("docs.localhost=./docs"),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        command.sites,
+        vec![
+            ("blog.localhost".to_owned(), PathBuf::from("./blog")),
+            ("docs.localhost".to_owned(), PathBuf::from("./docs")),
+        ]
+    );
+
+    let error =
+        parse_serve_command(&[OsString::from("--site"), OsString::from("nopath")]).unwrap_err();
+    assert!(error.to_string().contains("HOST=PATH"), "{error}");
 }

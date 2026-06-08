@@ -1,7 +1,7 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
 fmt:
-    @cargo fmt --package wanix-9p --package wanix-9p-client --package wanix-agent --package wanix-cas --package wanix-cli --package wanix-cpu --package wanix-fs --package wanix-id --package wanix-kv --package wanix-mesh --package wanix-module-cache --package wanix-pipe --package wanix-plumb --package wanix-protocol --package wanix-qjs --package wanix-qjs-engine --package wanix-site-fs --package wanix-site-gen --package wanix-task --package wanix-term --package wanix-vfs --package wanix-wasi --package wanix-wasi-host --package wanix-wasm --check
+    @cargo fmt --package wanix-9p --package wanix-9p-client --package wanix-agent --package wanix-cas --package wanix-cli --package wanix-cpu --package wanix-fs --package wanix-id --package wanix-kv --package wanix-mesh --package wanix-module-cache --package wanix-pipe --package wanix-plumb --package wanix-protocol --package wanix-qjs --package wanix-qjs-engine --package wanix-site-fs --package wanix-site-gen --package wanix-sites --package wanix-task --package wanix-term --package wanix-vfs --package wanix-wasi --package wanix-wasi-host --package wanix-wasm --check
 
 module-lines:
     @bash tools/check-module-lines.sh
