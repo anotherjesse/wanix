@@ -6,10 +6,9 @@
 terse ADR on purpose: it carries the *motivation story* for how a user builds
 things in Wanix, then proposes the primitives that story implies, then collects
 the open questions we still need to answer. Once the contracts here stabilize,
-split the durable boundaries (the catalog format, the native resource-scope
-selection shape, the host-wrapper service contract, the Layer-2/3 authorization
-model) into consecutive accepted ADRs and let this draft retire into commit
-history.
+split the durable boundaries (the catalog format, the resource address model,
+the host-wrapper service contract, the Layer-2/3 authorization model) into
+consecutive accepted ADRs and let this draft retire into commit history.
 
 ---
 
@@ -26,9 +25,9 @@ The resources in your catalog are things you (or others) created:
 
 - A **data volume** — a read/write filesystem you spun up to hold photos,
   notes, datasets, app state. You created it with a standalone command, or you
-  parked it on a small **volume server** (one Wanix binary that exposes several
-  named volumes). Either way, the volume is now a resource, so it goes in the
-  catalog.
+  parked it on a small **volume server** (one Wanix binary that serves several
+  named volumes, each with its own resource ticket). Either way, the volume is
+  now a resource, so it goes in the catalog.
 
 - A **service** — you took a normal local CLI program on your Mac (say,
   `whisper` for speech-to-text) and wrapped it with a **host wrapper**. The
@@ -82,9 +81,10 @@ What is missing is mostly a *naming layer* and one *new kind of device*.
 - Layer-0 identity is already cryptographic: iroh authenticates the peer's
   ed25519 pubkey on every connection. The existing `AttachPolicy`/`GrantTable`
   machinery is the enforcement primitive, but the v1 native wire currently
-  resolves only the empty/root scope. Non-root `ANAME` grants are a 9P-shaped
-  surface that must become a native resource-scope selection contract before
-  private multi-resource catalog entries are honest.
+  resolves only the empty/root scope. The v0 resource-server path should avoid
+  non-root scope entirely by making each ticket address exactly one resource
+  root. Native subresource selection is a later optimization/authorization shape,
+  not required for the first volume/catalog loop.
 
 > Wire-protocol direction (ADR 0004): the Wanix↔Wanix mesh path is now the
 > hand-rolled native `wanix-mesh-wire` over iroh QUIC, not 9P-over-iroh and not
@@ -104,6 +104,10 @@ What is missing is mostly a *naming layer* and one *new kind of device*.
   single operation, but `qjs-shell`/`qjs`/`wasm` launch mounts are still host-dir
   mounts. The headline demo needs `--mount-mesh iroh://...=/vol` (or the catalog
   equivalent) so a running shell uses the remote volume as an ordinary path.
+- **There is no resource server that emits per-resource tickets.** A single host
+  process should be able to serve several local volumes by running several native
+  mesh endpoints internally — one root `FileSystem` and one ticket per volume —
+  while clients compose only the tickets they were handed.
 - **There is no way to project a single local CLI program onto the mesh
   safely.** `#cpu` exists, but it runs *arbitrary* caller-supplied job specs —
   the wrong direction for "expose exactly this one capability of my machine."
@@ -133,8 +137,10 @@ is a file; listing the directory lists your resources; tags enable queries
 The `address` is a **tagged union**, and the tag dictates how to mount and
 whether the resource can be offline:
 
-- `iroh://<pubkey>[?addr=...]` plus an optional resource scope — a **live** node,
-  volume, or service. May be down; needs a probe.
+- `iroh://<pubkey>[?addr=...]` — a **live** node, volume, or service. In the v0
+  resource-server model the endpoint root *is* the resource; a volume server may
+  run many endpoints and print one ticket per volume. May be down; needs a
+  probe.
 - `cas:<hash>` — a **static** blob or `.wcap` capsule. Always loadable, never
   offline.
 - `local:<path>` — something on this machine.
@@ -146,18 +152,40 @@ name/tags but they do not behave the same.
 
 ### 2. The volume server
 
-"A single Wanix binary that exposes any volumes." The first useful version is
-deliberately smaller: one open, writable `LocalFs` served over the native mesh
-wire, mounted into a shell by address. After that works, `wanix volume create
-photos` can become a thin persistent-dir wrapper, and the volume server can
-generalize from one root to *N named data volumes*, each registering a catalog
-entry on creation.
+"A single Wanix binary that exposes volumes." The important v0 shape is **one
+process, many resource endpoints**, not one aggregate `/vol/*` root. The process
+owns local volume dirs and starts one native mesh endpoint per served volume:
 
-The N-volume form is the first place the old 9P `aname` question becomes a
-native design question. The product concept is not "copy 9P attach"; it is
-**resource scope selection**: a catalog entry should be able to say "this iroh
-endpoint, scope `volumes/photos`" and the native server should authorize
-`(verified-peer, scope)` before returning the scoped `FileSystem`.
+```
+volume server process
+  notes   -> MeshNode A -> iroh://A...?addr=...  (root = notes LocalFs)
+  photos  -> MeshNode B -> iroh://B...?addr=...  (root = photos LocalFs)
+  data    -> MeshNode C -> iroh://C...?addr=...  (root = data LocalFs)
+```
+
+The client remains the composer:
+
+```
+qjs-shell \
+  --mount-mesh iroh://A...?addr=...=/vol/notes \
+  --mount-mesh iroh://B...?addr=...=/vol/photos
+```
+
+This keeps the bearer-capability story simple: if someone has the `notes`
+ticket, they can reach the `notes` resource root; they cannot discover `photos`
+by editing a path component in the ticket. It also works with the native wire as
+implemented today because `dial_native` asks for the endpoint root and the
+endpoint root is exactly the resource.
+
+`wanix volume create photos` is a thin persistent-dir wrapper. A single-volume
+serve (`mesh-serve --volume photos`) is still a useful debugging/development
+shorthand, but the resource-server mode should print/list one ticket per served
+volume rather than exporting all volumes under one shared namespace.
+
+Remote volume administration is a separate resource, not an accidental side
+effect of serving data volumes. Creating/deleting/renaming volumes and editing
+ACLs stays CLI-local until an explicit `#volume`/admin device and authorization
+model exists.
 
 ### 3. The host wrapper — the genuinely new device
 
@@ -186,7 +214,7 @@ The wrapper process binds an iroh endpoint from its own `~/.wanix/node.key`,
 exports that one device over the native mesh wire, and spawns
 `whisper <fixed-flags>` per session, feeding `in`→stdin and stdout→`out`. It can
 run open in the Layer-1 prototype; once Layer 2 lands it should default-deny
-through the same resource-scoped ACL machinery as volumes.
+through the same per-resource endpoint ACL machinery as volumes.
 
 Two contract flavors, declared per service:
 
@@ -251,8 +279,10 @@ and changes what "open" even means:
   allow-lists keyed on the Layer-0 pubkey. The default-deny policy machinery
   (`AttachPolicy`/`GrantTable` in `crates/wanix-id`) is already the enforcement
   primitive, but the operator surface is still 9P-shaped and static
-  (`--grant ANAME:PREFIX:RIGHTS --peer <hex>`). The native catalog path needs a
-  resource-scope shape before per-resource private entries are honest.
+  (`--grant ANAME:PREFIX:RIGHTS --peer <hex>`). With per-resource endpoints, the
+  first private shape can authorize the endpoint root itself. Scoped subresources
+  become necessary only when one endpoint intentionally exposes more than one
+  independently grantable resource.
 
 - **Layer 3 — Ownership & delegation.** Who may *edit* a resource's ACL, can
   access be delegated, can it be revoked. This is the genuinely unbuilt deep
@@ -367,22 +397,25 @@ is solid.
 2. **Two shells, one open volume.** Start two shell sessions with the same
    `--mount-mesh` volume; one writes `/vol/x`, the other reads it. This proves
    the resource-composition experience before naming exists.
-3. **`wanix volume create`.** Create persistent local volume dirs (for example
-   under `~/.wanix/volumes/<name>`) and add a `mesh-serve --volume <name>`
-   shorthand over the same native serve path.
-4. **`#catalog` device backed by a volume.** Entries as files; model on
+3. **`wanix volume create` and per-resource volume serving.** Create persistent
+   local volume dirs (for example under `~/.wanix/volumes/<name>`). Add a
+   single-volume serve shorthand for development, then a volume-server mode that
+   runs one native endpoint per served volume and prints one ticket per volume.
+4. **Client composition across multiple served resources.** Mount two different
+   volume tickets into one shell/task namespace with repeated `--mount-mesh`
+   flags and prove writes stay scoped to their target volumes.
+5. **`#catalog` device backed by a volume.** Entries as files; model on
    `#kv`/`#agent`. The first catalog can be local or a normal mounted volume.
-5. **Make commands register entries and mount by name.** `volume create` /
+6. **Make commands register entries and mount by name.** `volume create` /
    `mesh-serve` write catalog entries; `wanix mount <name>` resolves a catalog
    name -> address -> `bind` at `/n/<name>` or `/vol/<name>`.
-6. **The host wrapper** as an `#agent`-shaped device (Whisper is the perfect
+7. **The host wrapper** as an `#agent`-shaped device (Whisper is the perfect
    first target), request/response only.
-7. **Recipes.**
-8. **Native resource-scope selection and authorization (Layer 2).** Replace the
-   leaky 9P-shaped `ANAME` surface with a native scope carried in the catalog
-   address / dial path, then evaluate `(verified-peer, scope)` against an ACL.
-   Ownership/delegation is Layer 3.
-9. **Streaming wrappers and cockpit/serve edge concurrency.** The native mesh
+8. **Recipes.**
+9. **Authorization (Layer 2) and ownership/delegation (Layer 3).** Start with
+   per-resource endpoint ACLs. Re-evaluate scoped subresources only if one
+   endpoint must intentionally expose multiple independently grantable resources.
+10. **Streaming wrappers and cockpit/serve edge concurrency.** The native mesh
    path is stream-per-open-file already; the remaining concurrency problem is the
    9P websocket edge.
 
@@ -395,15 +428,14 @@ These are the seams we should talk through before committing contracts.
 1. **The authorization model (Layer 2/3) — the deferred-but-inevitable
    project.** Naming (the catalog) does not need this; security-that-is-not-
    obscurity does. What is the per-resource ACL — a file under the resource
-   (`#whisper/acl`) listing allowed pubkeys? What native **scope** does an ACL
-   protect: the whole endpoint, `volumes/photos`, `services/whisper`, or a typed
-   resource id? Who is the *owner* that may edit it, and how is ownership
-   established? Can a grantee *delegate* (re-grant) access, and can grants be
-   *revoked*? Where does the optional pairing handshake fit — out-of-band ticket
-   exchange, a `#pair` device, or an interactive approve-this-key prompt on the
-   host (like the `#agent` approval files)? Note that Layer 0 already hands every
-   resource the caller's authenticated pubkey, so this is purely a
-   policy/ownership question, not an identity one.
+   (`#whisper/acl`) listing allowed pubkeys? In the per-resource endpoint model,
+   the first ACL protects the endpoint root. Who is the *owner* that may edit it,
+   and how is ownership established? Can a grantee *delegate* (re-grant) access,
+   and can grants be *revoked*? Where does the optional pairing handshake fit —
+   out-of-band ticket exchange, a `#pair` device, or an interactive
+   approve-this-key prompt on the host (like the `#agent` approval files)? Note
+   that Layer 0 already hands every resource the caller's authenticated pubkey,
+   so this is purely a policy/ownership question, not an identity one.
 
 2. **Catalog as a synced volume vs. local-only.** Single-node first is obvious.
    But multi-device sync needs a merge story (last-writer-wins? CRDT? a
@@ -436,20 +468,39 @@ These are the seams we should talk through before committing contracts.
    names only, or both with name-as-hint?
 
 7. **Address format / portability.** Is the catalog `address` the existing
-   `iroh://<hex>?addr=...` ticket string, or a richer typed value? If a live
-   resource needs a scope (`volumes/photos`, `services/whisper`), is that a URL
-   query parameter, a fragment, or a structured field beside the endpoint ticket?
-   How do `cas:` and `local:` entries coexist with scoped iroh entries in one
-   resolver?
+   `iroh://<hex>?addr=...` ticket string, or a richer typed value? In the v0
+   model the live iroh ticket names one resource root. How do `cas:` and
+   `local:` entries coexist with iroh resource tickets in one resolver?
 
-8. **Display names / petnames (the chatroom surfaces this).** Layer 0 gives
+8. **When to re-evaluate scoped subresources.** Per-resource endpoints are the
+   simple default and have a useful bearer-capability property: knowing the
+   `notes` ticket does not imply any way to guess or request sibling resources.
+   Revisit native subresource selection only after one of these pressures is
+   real:
+
+   - endpoint-per-resource overhead is measurably painful (too many sockets,
+     runtimes, relays, identities, or printed tickets for ordinary use);
+   - users need one stable host identity with many resources addressed beneath it
+     for pairing, reputation, petnames, or revocation UX;
+   - a resource genuinely has independently grantable children that should share
+     one connection/identity (for example a managed project workspace with
+     sub-volumes); or
+   - catalog/recipe portability clearly benefits from `host + resource-id`
+     records more than opaque per-resource tickets.
+
+   If that point comes, do not import 9P's `aname` ceremony blindly. Define a
+   native resource selector, decide whether it is in the ticket URL or a
+   structured catalog field, and require the server to authorize
+   `(verified-peer, selector)` before returning the scoped `FileSystem`.
+
+9. **Display names / petnames (the chatroom surfaces this).** Layer 0 gives
    unforgeable but unreadable pubkeys. Human names are Zooko's triangle. Is the
    answer purely catalog-as-petname-store (each viewer names the pubkeys they
    have met), or do some resources (a chatroom) also want an owner-assigned
    name map? How does a petname assigned in the catalog flow into a rendered
    `stream`/`who`?
 
-9. **Principal-aware resources on the mesh wire.** The chatroom is the first
+10. **Principal-aware resources on the mesh wire.** The chatroom is the first
    consumer that needs the authenticated pubkey to reach the resource
    implementation as the acting principal (so `post` can be attributed and `who`
    can be computed). The native mesh wire (ADR 0004) is the place to build this
@@ -458,9 +509,9 @@ These are the seams we should talk through before committing contracts.
    principal-scoped filesystem wrapper, a device-local session context, or a
    narrower resource-specific trait.
 
-10. **Where does this become ADRs?** Likely five durable boundaries: the catalog
-    format, native resource-scope selection, the host-wrapper service contract,
-    the Layer-2/3 authorization model, and the principal-aware resource seam.
+11. **Where does this become ADRs?** Likely five durable boundaries: the catalog
+    format, the resource address model, the host-wrapper service contract, the
+    Layer-2/3 authorization model, and the principal-aware resource seam.
     Confirm that split before promoting any of them out of this draft.
 
 ---

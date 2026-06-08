@@ -5,7 +5,7 @@ use crate::wasm_args::parse_wasm_command;
 use crate::{
     CliError, CliOutput, agent, agent_exec_server, capsule, cpu, mesh, mount, new, p9_stdio,
     parse_qjs_command, parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term, rootfs,
-    serve, wasm,
+    serve, volume, wasm,
 };
 
 pub(super) fn run_collected_command(
@@ -32,6 +32,7 @@ pub(super) fn run_collected_command(
             "agent-exec-server",
         ),
         Some("new") => new::run_new_command(new::parse_new_command(rest)?),
+        Some("volume") => volume::run_volume_command(volume::parse_volume_command(rest)?),
         Some("rootfs") => rootfs::run_rootfs_command(rootfs::parse_rootfs_command(rest)?),
         Some("qemu") => qemu::run_qemu_command(qemu::parse_qemu_command(rest)?),
         Some("serve") => require_live_process_io(serve::parse_serve_command(rest), "serve"),

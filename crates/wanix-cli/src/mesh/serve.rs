@@ -25,10 +25,20 @@ use crate::{CliError, write_process_output};
 /// How long to wait for public-network connectivity before printing a ticket.
 const ONLINE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What `mesh-serve` exports: a host directory (`--root`) or a named persistent
+/// volume (`--volume`, resolved under `~/.wanix/volumes`). The two are mutually
+/// exclusive. Per ADR 0007 a volume serve is the single-volume shorthand — one
+/// endpoint, one resource root — not an aggregate `/vol/*`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ServeRoot {
+    Dir(PathBuf),
+    Volume(String),
+}
+
 /// A parsed `mesh-serve` invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MeshServeCommand {
-    root_path: PathBuf,
+    root: ServeRoot,
     key_path: Option<PathBuf>,
     local_addr: Option<SocketAddr>,
     peer_hex: Option<String>,
@@ -46,18 +56,21 @@ pub(crate) struct MeshServeCommand {
     wanix_services: bool,
 }
 
-/// Parses `mesh-serve --root DIR [--key FILE] [--addr IP:PORT] [--peer HEX]
-/// [--grant ANAME:PREFIX:RIGHTS]... [--insecure-open] [--wanix-services]`.
+/// Parses `mesh-serve (--root DIR | --volume NAME) [--key FILE] [--addr IP:PORT]
+/// [--peer HEX] [--grant ANAME:PREFIX:RIGHTS]... [--insecure-open]
+/// [--wanix-services]`.
 ///
 /// # Errors
 ///
-/// Returns a usage error when `--root` is missing, an option lacks its value, a
-/// grant/peer/address token is malformed, or the public endpoint would be
-/// exported with no grants and no explicit `--insecure-open` opt-in.
+/// Returns a usage error when neither (or both) of `--root`/`--volume` is given,
+/// an option lacks its value, a grant/peer/address token is malformed, or the
+/// public endpoint would be exported with no grants and no explicit
+/// `--insecure-open` opt-in.
 pub(crate) fn parse_mesh_serve_command(
     args: &[std::ffi::OsString],
 ) -> Result<MeshServeCommand, CliError> {
     let mut root_path = None;
+    let mut volume_name = None;
     let mut key_path = None;
     let mut local_addr = None;
     let mut peer_hex = None;
@@ -84,6 +97,7 @@ pub(crate) fn parse_mesh_serve_command(
                 continue;
             }
             "--root" => root_path = Some(PathBuf::from(value()?)),
+            "--volume" => volume_name = Some(value()?),
             "--key" => key_path = Some(PathBuf::from(value()?)),
             "--addr" => {
                 local_addr = Some(value()?.parse::<SocketAddr>().map_err(|error| {
@@ -100,7 +114,20 @@ pub(crate) fn parse_mesh_serve_command(
         }
         index += 2;
     }
-    let root_path = root_path.ok_or_else(|| CliError::usage("mesh-serve requires --root DIR"))?;
+    let root = match (root_path, volume_name) {
+        (Some(_), Some(_)) => {
+            return Err(CliError::usage(
+                "mesh-serve --root and --volume are mutually exclusive",
+            ));
+        }
+        (Some(path), None) => ServeRoot::Dir(path),
+        (None, Some(name)) => ServeRoot::Volume(name),
+        (None, None) => {
+            return Err(CliError::usage(
+                "mesh-serve requires --root DIR or --volume NAME",
+            ));
+        }
+    };
     if !grants.is_empty() && peer_hex.is_none() {
         return Err(CliError::usage(
             "mesh-serve --grant requires --peer HEX to name the authorized peer",
@@ -141,7 +168,7 @@ pub(crate) fn parse_mesh_serve_command(
         ));
     }
     Ok(MeshServeCommand {
-        root_path,
+        root,
         key_path,
         local_addr,
         peer_hex,
@@ -207,21 +234,33 @@ fn load_identity(command: &MeshServeCommand) -> Result<NodeIdentity, CliError> {
 }
 
 fn load_root(command: &MeshServeCommand) -> Result<Arc<dyn FileSystem>, CliError> {
+    let root_dir = resolve_serve_root(command)?;
     if command.wanix_services {
         // Export the full services namespace so `#kv`/`#term`/`#task` (and the
         // rest) cross the mesh: a remote node imports `/n/A/#kv/<key>` as files.
-        return services_namespace_for_root(&command.root_path);
+        return services_namespace_for_root(&root_dir);
     }
-    let root = LocalFs::new(&command.root_path).map_err(|error| {
+    let root = LocalFs::new(&root_dir).map_err(|error| {
         CliError::new(
             format!(
                 "failed to open mesh-serve root {}: {error}",
-                command.root_path.display()
+                root_dir.display()
             ),
             1,
         )
     })?;
     Ok(Arc::new(root))
+}
+
+/// Resolves the served root to a host directory: `--root` is used verbatim;
+/// `--volume NAME` resolves under `~/.wanix/volumes` and must already exist.
+fn resolve_serve_root(command: &MeshServeCommand) -> Result<PathBuf, CliError> {
+    match &command.root {
+        ServeRoot::Dir(path) => Ok(path.clone()),
+        ServeRoot::Volume(name) => {
+            crate::volume::resolve_existing_volume(&crate::volume::volumes_root()?, name)
+        }
+    }
 }
 
 fn bind_node(command: &MeshServeCommand, identity: &NodeIdentity) -> Result<MeshNode, CliError> {
@@ -409,10 +448,29 @@ mod tests {
             "projects/foo:projects/foo:rw",
         ]))
         .unwrap();
-        assert_eq!(command.root_path, PathBuf::from("/tmp/x"));
+        assert_eq!(command.root, ServeRoot::Dir(PathBuf::from("/tmp/x")));
         assert_eq!(command.local_addr, Some("127.0.0.1:7000".parse().unwrap()));
         assert!(command.peer_hex.is_some());
         assert_eq!(command.grants.len(), 1);
+    }
+
+    #[test]
+    fn parse_accepts_volume_as_root_source() {
+        let command =
+            parse_mesh_serve_command(&args(&["--volume", "notes", "--addr", "127.0.0.1:0"]))
+                .unwrap();
+        assert_eq!(command.root, ServeRoot::Volume("notes".to_owned()));
+    }
+
+    #[test]
+    fn parse_rejects_root_and_volume_together() {
+        let error = parse_mesh_serve_command(&args(&["--root", "/tmp/x", "--volume", "notes"]))
+            .unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        assert!(
+            error.to_string().contains("mutually exclusive"),
+            "got {error}"
+        );
     }
 
     #[test]

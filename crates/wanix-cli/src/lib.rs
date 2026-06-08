@@ -26,6 +26,7 @@ mod serve;
 mod terminal_mode;
 #[cfg(unix)]
 mod unix_fd;
+mod volume;
 mod wasm;
 mod wasm_args;
 

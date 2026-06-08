@@ -303,6 +303,21 @@ mod mesh_mount_tests {
         bytes
     }
 
+    fn write_through(namespace: &Namespace, path: &str, bytes: &[u8]) {
+        let mut file = namespace
+            .open(
+                &NormalizedPath::new(path).unwrap(),
+                OpenOptions {
+                    read: false,
+                    write: true,
+                    create: true,
+                    truncate: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(file.write(bytes).unwrap(), bytes.len());
+    }
+
     /// Slice 1 runtime proof: a `--mount-mesh` spec dialed by `bind_mesh_mounts`
     /// binds a remote native-wire volume into a task namespace, and the task can
     /// read a seeded file and write a new one (the served root observes it) while
@@ -396,5 +411,57 @@ mod mesh_mount_tests {
         drop(keep_a);
         drop(keep_b);
         drop(server);
+    }
+
+    /// Per-resource composition (ADR 0007 step 4): one namespace mounts TWO
+    /// independently served volume resources via repeated `--mount-mesh`, and
+    /// writes stay scoped to their target volume. This is the per-resource-ticket
+    /// model — no aggregate `/vol/*` root, the client composes the tickets.
+    #[test]
+    fn one_namespace_composes_two_independently_served_volumes() {
+        let notes = Arc::new(MemFs::new());
+        let photos = Arc::new(MemFs::new());
+        let (notes_server, notes_url) = serve_native(notes.clone() as Arc<dyn FileSystem>, 5);
+        let (photos_server, photos_url) = serve_native(photos.clone() as Arc<dyn FileSystem>, 6);
+
+        let specs = [
+            MeshMountSpec {
+                addr: notes_url,
+                guest_path: NormalizedPath::new("vol/notes").unwrap(),
+            },
+            MeshMountSpec {
+                addr: photos_url,
+                guest_path: NormalizedPath::new("vol/photos").unwrap(),
+            },
+        ];
+
+        let task = noop_task();
+        let keepalives = bind_mesh_mounts(&task, &specs).unwrap();
+        assert_eq!(keepalives.len(), 2, "both mounts must be held alive");
+
+        let namespace = task.namespace();
+        write_through(&namespace, "vol/notes/a.txt", b"note-a");
+        write_through(&namespace, "vol/photos/b.txt", b"photo-b");
+
+        // Writes are scoped: each landed only in its own served volume.
+        assert_eq!(notes.read_file("a.txt").unwrap(), b"note-a");
+        assert_eq!(photos.read_file("b.txt").unwrap(), b"photo-b");
+        assert!(
+            notes.read_file("b.txt").is_err(),
+            "a photos write must not leak into the notes volume"
+        );
+        assert!(
+            photos.read_file("a.txt").is_err(),
+            "a notes write must not leak into the photos volume"
+        );
+
+        // Both are readable from the one composed namespace.
+        assert_eq!(read_through(&namespace, "vol/notes/a.txt"), b"note-a");
+        assert_eq!(read_through(&namespace, "vol/photos/b.txt"), b"photo-b");
+
+        drop(task);
+        drop(keepalives);
+        drop(notes_server);
+        drop(photos_server);
     }
 }
