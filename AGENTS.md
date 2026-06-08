@@ -55,6 +55,12 @@ keep growing the cockpit's coverage of the mesh devices.
   both `wanix-qjs-engine` and `wanix-wasm`.
 - `wanix-wasm`: compiled-`wasm32-wasi` task driver (`WasmTaskDriver`) and
   free-standing `WasiRunner`, the second WASI task runtime alongside `wanix-qjs`.
+  Also ships the installable command package (`COMMANDS`/`command_bin()` over
+  `fixtures/commands/<name>.wasm`, e.g. `jaq`).
+- `wanix-sh`: the Wanix-native shell — `brush-parser` for bash syntax plus a
+  Wanix executor (parse → lower → execute against one `NamespaceOps` seam),
+  compiled to `wasm32-wasip1` and run as an ordinary `#task`. Pure of deps except
+  `brush-parser`; the guest binary lives at `crates/wanix-wasm/fixtures/shell-src`.
 
 Service-device and mesh crates (the distributed layer; each device is a plain
 `FileSystem`, so it imports across the mesh for free):
@@ -160,6 +166,22 @@ tests.
   run a Rust wasm task and a qjs task against one `MemFs` and observe identical
   filesystem state, proving the compiled-vs-interpreted tier on one substrate.
   It is a command-style WASI subset (no `poll_oneoff` readiness).
+- `wanix-sh` (`shell.wasm -c "<line>"`): the Wanix-native shell, run as an
+  ordinary `.wasm` task. `brush-parser` syntax → a flat `Plan` (and-or lists →
+  pipelines → stages, honest `Unsupported` for anything outside the subset) →
+  an executor over one `NamespaceOps` seam. Non-interactive today: `;` sequences,
+  `|` pipelines (sequential, `#pipe`-backed, EOF via `task-exit-closes-fds`),
+  `&&`/`||` short-circuit, `< > >>` redirects, `$VAR`/`${VAR}`/`$?` expansion at
+  execution time, the `echo`/`cat`/`pwd`/`env`/`true`/`false`/`:`/`exit` pipeable
+  builtins and the `cd`/`export`/`unset` special builtins (single-stage), and
+  external command launch resolved from a `bin` dir (so `jaq` is just a command —
+  `echo '[1,2,3]' | jaq 'map(.+1)'` works) with exported env propagated to
+  children. cwd is shell-local (children run at root). A pure `render_prompt`
+  exists for the future REPL. Interactive input (line editing, tab completion,
+  live prompt) is the named next step — it needs a blocking `#term` read +
+  `poll_oneoff` in `wanix-wasi-host` on a dedicated thread. See
+  [docs/site/content/concepts/wanix-sh.md](docs/site/content/concepts/wanix-sh.md)
+  and `shell-command-resolution.md`.
 - `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
   shell modes and served shell sessions use the same `#term` device contract,
