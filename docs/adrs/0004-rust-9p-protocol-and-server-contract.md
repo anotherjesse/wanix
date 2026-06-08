@@ -1,59 +1,169 @@
-# ADR 0004: Rust 9P Protocol and Server Contract
+# ADR 0004: FileSystem Contract, Native Mesh Wire, and the 9P Edge Gateway
 
 ## Status
 
-Accepted
+**Accepted — supersedes the prior "9P is the wire across all transports"
+stance.** The direction below is decided; the native mesh wire is **not yet
+implemented** (today the mesh tunnels 9P over iroh via
+`wanix-9p-client::RemoteFs`). Implementation status lives in tests, examples,
+and commit messages, not here.
 
 ## Context
 
-9P is the main protocol path for Linux, v86, editor, and browser filesystem
-clients to browse and mutate a Wanix namespace from outside the runtime. The
-Rust port needs a protocol stack that keeps wire codecs, server fid state,
-filesystem semantics, and transports separate enough to evolve safely.
+The root contract is the **`FileSystem` / `NamespaceOps` trait** in `wanix-fs` /
+`wanix-vfs`, not any wire protocol. 9P is one *encoding* of that contract:
+qids/fids/tags/msize never appear in the trait or in any service device, and the
+9P stack (`wanix-protocol` + `wanix-9p` + `wanix-9p-client`) is a swappable codec
+that ~90% of the workspace never sees.
 
-This ADR covers the Rust-owned 9P boundary. Per-operation coverage belongs in
-protocol/server tests and current-state docs unless a new operation changes the
-public filesystem or trust contract.
+Treating 9P as the *universal* wire was a mistake once the mesh moved onto iroh
+QUIC. Between two Wanix nodes — both of which speak the trait natively — 9P is a
+middle layer that buys nothing and costs:
+
+- **chattiness**: `walk → open → read` is a round trip each, and a read costs
+  ~2× latency; this is documented WAN pain, not a micro-optimization;
+- **single-stream head-of-line blocking**: a never-EOF read (`#agent/events`,
+  `#plumb/recv`) parks the whole import, which the codebase already works around
+  by hanging dedicated QUIC streams off those files (`StreamingImportFs`);
+- **tags** (a request-correlation key needed only because many requests share
+  one ordered stream — redundant when a QUIC stream *is* the transaction); and
+- **`msize` negotiation** (redundant with QUIC framing + flow control).
+
+iroh already provides what 9P-over-TCP lacked: many independent flow-controlled
+streams *and* connection-authenticated ed25519 identity. The right move is to
+separate the **interface** (the trait) from its **encodings**, and stop paying
+9P's transport-era costs where there is no foreign peer to interoperate with.
+
+9P remains genuinely required at one place: a peer that already speaks 9P — the
+Linux kernel (`v9fs`), v86/QEMU virtio-9p, external 9P tooling, and the current
+browser cockpit (`workbench/src/wanix/p9.ts`).
 
 ## Decision
 
-`wanix-protocol` owns dependency-free 9P frame splitting, tag extraction,
-version negotiation, and typed operation codecs. It covers the server-facing
-9P2000.L surface and selected compatibility codecs only when clients require
-them.
+Encodings of the one `FileSystem` / `NamespaceOps` contract are chosen per
+boundary. Three zones:
 
-`wanix-9p` owns the server state that maps fids to Wanix filesystem objects and
-open-file state. It translates filesystem results into 9P replies and Linux-ish
-errno errors while leaving listener, socket, stdio, and browser policy to
-adapters.
+**1. Local (same process/machine): no wire.** A `wasm`/`qjs`/shell task hitting
+a local `FileSystem` is direct trait calls. 9P is never involved. (Already true;
+stated so it is not re-litigated.)
 
-The supported contract includes:
+**2. Wanix ↔ Wanix across the mesh: a native FileSystem-over-iroh wire, built on
+`irpc`.** This is the primary internal mesh wire. The `FileSystem` /
+`NamespaceOps` contract is expressed as an `irpc` service over iroh QUIC:
 
-- explicit version negotiation and rejection of unsupported protocol versions;
-- fid lifecycle, attach, walk, open, create, read, write, clunk, and error
-  mapping;
+- **one stream per call / per open file** → no tags, no head-of-line blocking;
+- **QUIC flow control** → no `msize` negotiation (keep at most an `iounit`-style
+  chunk hint);
+- **typed operations and typed errors** (the `FsError` enum on the wire, not
+  `Rerror` strings); postcard encoding via `irpc`;
+- **not chatty**: compound path-resolve + stat, bulk `readdir`, and streaming
+  reads, so sequential I/O is not per-message round trips;
+- **per-principal identity is built in**: iroh authenticates every connection by
+  the caller's ed25519 pubkey, and the wire carries that principal down to each
+  operation (the per-principal seam ADR 0006 needs for attribution/authorization)
+  rather than retrofitting it onto 9P's `attach`/`uname` path.
+
+An open `File` is stateful (handle, seek, streaming), so `open()` returns a
+handle and subsequent reads/writes reference it over the file's own stream — the
+expected fid-shaped lifecycle, which is fine. The *operations* are deliberately
+9P-shaped (they are file operations); only the *encoding* is native.
+
+**3. Wanix ↔ foreign at the edge: 9P, as a gateway.** `wanix-protocol` and
+`wanix-9p` remain the 9P codec/server, but 9P is demoted to a compatibility
+gateway at the foreign edge — Linux `v9fs`, v86/QEMU, external 9P clients, and
+the current cockpit — *generated from the same trait*. The existing 9P `serve`
+paths keep running for the cockpit now; the Linux/VM 9P path is added when the
+v86/QEMU workflow lands. The foreign-edge 9P contract is unchanged:
+
+- explicit version negotiation and rejection of unsupported versions;
+- fid lifecycle: attach, walk, open, create, read, write, clunk, error mapping;
 - directory iteration with opaque cookies;
-- metadata, statfs, permissions, size, timestamp, link, rename, remove, mkdir,
-  and append behavior where the backing Wanix filesystem supports it;
-- compatibility probes for client feature detection; and
-- selected protocol extensions needed by Linux, v86, editor, or browser clients.
+- metadata, statfs, permissions, size, timestamps, link, rename, remove, mkdir,
+  append where the backing filesystem supports it;
+- compatibility probes and selected extensions (e.g. `walkgetattr`) only when a
+  client requires them;
+- stdio/TCP/WebSocket/`serve` transports are adapters that preserve binary frame
+  boundaries and keep diagnostics out of binary response streams.
 
-Stdio, TCP, WebSocket, and `serve` transports are adapters over the same server
-contract. They must preserve binary frame boundaries and keep diagnostic/status
-output out of binary response streams.
+**Both wires are thin codecs over the single `FileSystem` / `NamespaceOps`
+contract — never parallel first-class architectures.** The trait is the source
+of truth. Neither wire fakes auth, special-file, xattr, ownership, inode-link,
+or device semantics the trait cannot actually provide; unsupported features
+return deliberate errors.
 
-Unsupported features should return deliberate protocol errors until Wanix has a
-backing contract. Rust Wanix should not fake auth, special-file, extended
-attribute, ownership, inode-link, or device semantics beyond what the Wanix
-filesystem contract can actually provide.
+## The cockpit edge: viewer, composing client, or node?
+
+The question "should the browser cockpit speak 9P/WS or iroh/native?" is
+downstream of a prior one: **does the browser client have native Wanix
+capabilities, or does it always talk back to a host?** The wire falls out of
+that choice. There are three positions on the spectrum:
+
+1. **Pure viewer** — the browser holds no namespace; every operation is a remote
+   call against one host's namespace. This is essentially today's cockpit
+   browsing `wanix:/` over 9P/WS.
+2. **Composing client** — the browser runs the *namespace layer* (`wanix-vfs`)
+   locally and `bind`s remote hosts/peers into its **own** local namespace,
+   delegating file ops to the remote `FileSystem`s. It can compose more than one
+   host at once; a pure viewer cannot.
+3. **Full node** — the browser runs the whole core in wasm: local namespace +
+   local `wasm`/`qjs` tasks + local devices + a mesh endpoint. It can run compute
+   locally and even export resources to the mesh. This is the original
+   in-browser Wanix.
+
+**Hard constraint:** browsers cannot open raw UDP/QUIC, so iroh from the browser
+requires a relay or WebTransport — a browser mesh-node is relay-dependent and
+second-class — whereas a WebSocket link to a local/nearby host is trivial and
+fast. This asymmetry, plus the north star ("browser is a frontend/deployment
+option, not the runtime foundation"), drives the decision:
+
+- **Default: the cockpit is a viewer / composing client (positions 1–2) talking
+  to a host that is the full node and the cockpit's gateway into the mesh.**
+  Browser ↔ host over WS; host ↔ mesh over iroh QUIC. The cockpit reaches
+  `/n/<peer>` *through* its host and is never itself an iroh endpoint. The host
+  is the single trust anchor (it holds the ed25519 key; the browser holds none).
+- **Wire:** a pure viewer (position 1) is well served by **9P over WS** — it is a
+  single low-latency local link where 9P's WAN costs do not bite, and `p9.ts`
+  already exists, so this is a legitimate stable foreign edge. A composing client
+  (position 2) mounts remote `FileSystem`s, which is Wanix↔Wanix and therefore
+  pulls toward the **native protocol over WS** (a TS or wasm client of the native
+  wire). The cockpit need not move off 9P/WS until it becomes a composing client.
+- **Browser-as-node (position 3) is kept as a distinct deployment mode** —
+  "Wanix in the browser, no host," reached via relay/WebTransport — valuable for
+  no-install/serverless use, but explicitly *a deployment option, not the
+  cockpit's foundation*. It is the one case that genuinely needs iroh/native in
+  the browser and browser-side key custody.
+
+Open questions (tracked with the ADR 0006 trust work where they overlap):
+
+- Does the cockpit need to mount more than one host at once? If yes, it must
+  become a composing client (run `wanix-vfs` in the browser), which is the line
+  between "9P/WS viewer" and "native client."
+- Is "Wanix in the browser, no host" a product goal? If yes, position 3 needs
+  browser identity/key custody (non-extractable WebCrypto?) and a relay/
+  WebTransport path — and that browser key is weaker custody than a native host,
+  which should bound what a browser node may export or be granted.
+- Does the cockpit's WS edge stay 9P (stable, `p9.ts` exists) or adopt the
+  native wire (unifies with the mesh, gains typed errors / per-principal
+  identity)? This relates to ADR 0005's browser/workbench client scope.
 
 ## Consequences
 
-External 9P clients can mount or browse a Wanix namespace through native,
-browser, v86, and editor paths without each transport inventing filesystem
-semantics. Operation-by-operation coverage belongs in codec/server tests and
-current-state docs, not in one ADR per operation.
+The mesh stops paying 9P's chattiness, head-of-line, tag, and `msize` costs
+between Wanix nodes, and gains typed errors, native streaming, and
+per-principal identity as first-class properties of the wire instead of
+retrofits. 9P interop is preserved exactly where it is needed (Linux/VM, external
+tools, the current cockpit). The everything-is-a-file *interface* is unchanged on
+both wires; what changes is that the mesh wire is typed and stream-native.
 
-Future 9P work should update or add ADRs only when it changes the protocol
-contract, authentication/trust boundary, transport multiplexing model, or
-backing Wanix filesystem semantics.
+The cost is real: the native `irpc` wire is new work (a new mesh codec plus the
+import-site swap from `RemoteFs` to a native `Fs`; core filesystem, namespace,
+task, and device crates are untouched), and the project now maintains two
+encodings. The standing discipline is that both stay thin codecs over the one
+trait. `irpc` maturity / n0 stack lock-in is an accepted risk given the existing
+iroh commitment; a hand-rolled minimal frame over raw QUIC streams is the
+fallback if the open-file/streaming mapping proves awkward.
+
+Future work updates this ADR only when it changes the FileSystem contract, the
+mesh wire model, the 9P edge contract, the authentication/trust boundary, or the
+backing filesystem semantics. The per-principal identity seam, when built,
+graduates into its own ADR alongside the ADR 0006 trust-boundary records.
