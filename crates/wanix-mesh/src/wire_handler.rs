@@ -59,7 +59,10 @@ const ROOT_ANAME: &str = "";
 /// `p9-listen`.
 #[derive(Clone)]
 pub struct NativeServeConfig {
-    root: Arc<dyn FileSystem>,
+    /// The wholesale root served when no policy is installed. `None` only in
+    /// the [`NativeServeConfig::per_peer`] shape, where the policy is the sole
+    /// root source.
+    root: Option<Arc<dyn FileSystem>>,
     policy: Option<Arc<dyn AttachPolicy>>,
     deadline: Option<Duration>,
 }
@@ -69,7 +72,7 @@ impl NativeServeConfig {
     #[must_use]
     pub fn open(root: Arc<dyn FileSystem>) -> Self {
         Self {
-            root,
+            root: Some(root),
             policy: None,
             deadline: None,
         }
@@ -79,7 +82,22 @@ impl NativeServeConfig {
     #[must_use]
     pub fn guarded(root: Arc<dyn FileSystem>, policy: Arc<dyn AttachPolicy>) -> Self {
         Self {
-            root,
+            root: Some(root),
+            policy: Some(policy),
+            deadline: None,
+        }
+    }
+
+    /// Serves a per-peer root resolved entirely by `policy` — the per-peer
+    /// root-factory shape for principal-scoped devices (e.g. a ToolFS view
+    /// bound to the verified peer). There is no shared fallback root: every
+    /// connection gets exactly the filesystem the policy builds for its
+    /// cryptographically verified peer id, and a `None` from the policy still
+    /// denies the attach.
+    #[must_use]
+    pub fn per_peer(policy: Arc<dyn AttachPolicy>) -> Self {
+        Self {
+            root: None,
             policy: Some(policy),
             deadline: None,
         }
@@ -100,7 +118,7 @@ impl NativeServeConfig {
     /// the connection — the native analog of the 9P `EACCES` attach rejection.
     fn resolve_root(&self, peer: PeerId) -> Option<Arc<dyn FileSystem>> {
         match &self.policy {
-            None => Some(Arc::clone(&self.root)),
+            None => self.root.clone(),
             Some(policy) => policy
                 .evaluate(peer, ROOT_ANAME)
                 .map(|authorization| authorization.root),
@@ -206,4 +224,43 @@ fn serve_one_stream(
     // asymmetric BlockingDuplex above) is what actually bounds the in-flight
     // write. Pass it through for symmetry with the documented contract.
     wanix_mesh_wire::serve_one(root, duplex, deadline);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use wanix_fs::MemFs;
+    use wanix_id::{Authorization, PeerId};
+    use wanix_vfs::Rights;
+
+    use super::*;
+
+    /// A per-peer root factory granting exactly one peer its own fresh root.
+    struct OnlyPeerPolicy(PeerId);
+
+    impl AttachPolicy for OnlyPeerPolicy {
+        fn evaluate(&self, peer: PeerId, _aname: &str) -> Option<Authorization> {
+            (peer == self.0)
+                .then(|| Authorization::new(Arc::new(MemFs::new()), Rights::read_write()))
+        }
+    }
+
+    #[test]
+    fn open_config_serves_the_shared_root_to_every_peer() {
+        let root: Arc<dyn FileSystem> = Arc::new(MemFs::new());
+        let config = NativeServeConfig::open(Arc::clone(&root));
+        let resolved = config.resolve_root(PeerId::from_bytes([1u8; 32])).unwrap();
+        assert!(Arc::ptr_eq(&resolved, &root));
+    }
+
+    #[test]
+    fn per_peer_config_resolves_through_the_policy_alone() {
+        let granted = PeerId::from_bytes([2u8; 32]);
+        let config = NativeServeConfig::per_peer(Arc::new(OnlyPeerPolicy(granted)));
+        // The granted peer gets the policy-built root; everyone else is denied
+        // (default-deny, the native EACCES) — there is no fallback root.
+        assert!(config.resolve_root(granted).is_some());
+        assert!(config.resolve_root(PeerId::from_bytes([3u8; 32])).is_none());
+    }
 }

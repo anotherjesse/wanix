@@ -4,8 +4,8 @@ use std::io::{Read, Write};
 mod fd;
 
 use crate::{
-    CliError, agent_exec_server, cpu, mesh, p9_stdio, qemu, qjs_term, run_collected, serve, volume,
-    write_process_output,
+    CliError, agent_exec_server, cpu, mesh, p9_stdio, qemu, qjs_term, run_collected, serve, tool,
+    volume, write_process_output,
 };
 
 /// Unix fd pair used by terminal-aware CLI entrypoints.
@@ -141,6 +141,20 @@ fn run_streaming_command(
         // `volume serve` parks (one mesh endpoint per volume); `volume create`/`ls`
         // are filesystem-only and fall through to the collected path.
         Some("volume") => run_volume_streaming_command(rest, io),
+        // `tool serve` parks too (one mesh endpoint per tool).
+        Some("tool") => run_tool_streaming_command(rest, io),
+        _ => Ok(None),
+    }
+}
+
+fn run_tool_streaming_command(
+    rest: &[OsString],
+    io: &mut ProcessIo<'_>,
+) -> Result<Option<i32>, CliError> {
+    match rest.split_first() {
+        Some((sub, serve_rest)) if sub.to_str() == Some("serve") => Ok(Some(
+            tool::run_tool_serve_streaming(tool::parse_tool_serve_command(serve_rest)?, io.stderr)?,
+        )),
         _ => Ok(None),
     }
 }

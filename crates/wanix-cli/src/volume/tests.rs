@@ -2,9 +2,10 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use super::{
-    VolumeCommand, create_volume_in, list_volumes_in, load_identity_at, parse_volume_command,
+    VolumeCommand, create_volume_in, list_volumes_in, parse_volume_command,
     resolve_existing_volume, validate_volume_name, volume_identity_path, volumes_root,
 };
+use crate::mesh::resource::load_identity_at;
 
 fn args(values: &[&str]) -> Vec<OsString> {
     values.iter().map(OsString::from).collect()

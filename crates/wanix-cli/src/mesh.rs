@@ -11,6 +11,7 @@
 //! connection, never a client-claimed `uname`.
 
 mod grant;
+pub(crate) mod resource;
 mod serve;
 mod ticket;
 

@@ -5124,6 +5124,7 @@ dependencies = [
  "wanix-sites",
  "wanix-task",
  "wanix-term",
+ "wanix-tool",
  "wanix-vfs",
  "wanix-wasi",
  "wanix-wasm",

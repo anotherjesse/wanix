@@ -5,27 +5,28 @@
 //! identity and prints one ticket. There is **no aggregate `/vol/*` root** — the
 //! client composes the per-volume tickets it was handed with repeated
 //! `--mount-mesh`. Per-resource selectors / `aname` / catalog / auth are out of
-//! scope here (later slices).
+//! scope here (later slices). The binding loop and announce-line format are the
+//! shared [`crate::mesh::resource`] machinery (also behind `tool serve`).
 
 use std::ffi::OsString;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use wanix_fs::{FileSystem, LocalFs};
 use wanix_id::NodeIdentity;
-use wanix_mesh::{MeshNode, NativeServeConfig};
+use wanix_mesh::NativeServeConfig;
 
 use super::{
     defined_volume_names, load_volume_identity, resolve_existing_volume, validate_volume_name,
     volumes_root,
 };
+use crate::mesh::resource::{
+    ServedEndpoint, bind_endpoints, reject_fixed_port_multi, serve_record_example_line,
+    serve_record_line,
+};
 use crate::{CliError, write_process_output};
-
-/// How long to wait for public-network connectivity before printing a ticket.
-const ONLINE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Which volumes a `volume serve` invocation should export.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,7 +114,7 @@ pub(crate) fn parse_volume_serve_command(
         }
     };
     if let VolumeSelection::Explicit(list) = &selection {
-        reject_fixed_port_multi(local_addr, list.len())?;
+        reject_fixed_port_multi("volume serve", "volume", local_addr, list.len())?;
     }
     // Default-deny on the public endpoint (matches mesh-serve): serving with no
     // --addr exports each volume read-write to anyone with its ticket, so require
@@ -142,18 +143,6 @@ fn value(args: &[OsString], index: usize, flag: &str) -> Result<String, CliError
         .ok_or_else(|| CliError::usage(format!("volume serve {flag} value must be valid UTF-8")))
 }
 
-/// Multiple volumes cannot share one fixed port; require port 0 (a unique
-/// ephemeral port per endpoint) when serving more than one.
-fn reject_fixed_port_multi(local_addr: Option<SocketAddr>, count: usize) -> Result<(), CliError> {
-    if count > 1 && local_addr.is_some_and(|addr| addr.port() != 0) {
-        return Err(CliError::usage(format!(
-            "volume serve: serving {count} volumes needs a unique port per endpoint; pass --addr \
-             with port 0 (e.g. 127.0.0.1:0) instead of a fixed port"
-        )));
-    }
-    Ok(())
-}
-
 /// Binds one native mesh endpoint per selected volume, prints one ticket per
 /// volume to stderr, and parks the process so the endpoints stay alive.
 ///
@@ -170,7 +159,7 @@ pub(crate) fn run_volume_serve_streaming(
     // The public-endpoint posture is enforced at parse time. The fixed-port rule
     // is re-checked here because `--all`'s volume count is only known now (parse
     // already covered an explicit `--volume` list).
-    reject_fixed_port_multi(command.local_addr, names.len())?;
+    reject_fixed_port_multi("volume serve", "volume", command.local_addr, names.len())?;
 
     let mut volumes = Vec::with_capacity(names.len());
     for name in names {
@@ -183,12 +172,12 @@ pub(crate) fn run_volume_serve_streaming(
         write_process_output(
             process_stderr,
             "stderr",
-            volume_serve_line(&volume.name, &volume.ticket_url).as_bytes(),
+            serve_record_line(&volume.name, &volume.ticket_url).as_bytes(),
         )?;
         write_process_output(
             process_stderr,
             "stderr",
-            volume_serve_example_line(&volume.ticket_url).as_bytes(),
+            serve_record_example_line(&volume.ticket_url).as_bytes(),
         )?;
     }
     // Serving runs on each node's owned runtime; park so they stay alive until the
@@ -196,18 +185,6 @@ pub(crate) fn run_volume_serve_streaming(
     loop {
         std::thread::park();
     }
-}
-
-/// One announce line for a served volume: `NAME\tTICKET_URL\n`. Tab-separated and
-/// newline-terminated so a later catalog-register step can parse it stably.
-fn volume_serve_line(name: &str, ticket_url: &str) -> String {
-    format!("{name}\t{ticket_url}\n")
-}
-
-/// A copy-pasteable client command for a served volume, printed beside the
-/// stable tab record. Starts with `# ` so record parsers skip it as a comment.
-fn volume_serve_example_line(ticket_url: &str) -> String {
-    format!("# mount with: wanix-rust mount-ls '{ticket_url}'\n")
 }
 
 fn resolve_selection(command: &VolumeServeCommand) -> Result<Vec<String>, CliError> {
@@ -225,39 +202,17 @@ fn resolve_selection(command: &VolumeServeCommand) -> Result<Vec<String>, CliErr
     Ok(names)
 }
 
-/// A live served volume endpoint: its name, the held [`MeshNode`] (dropping it
-/// shuts the endpoint down), and the dialable ticket.
-pub(crate) struct ServedVolume {
-    pub(crate) name: String,
-    /// Held purely as a liveness keepalive: the endpoint serves as long as the
-    /// node lives, so it is never read in production (only in tests, via
-    /// `peer_id()`), but dropping it shuts the endpoint down.
-    #[allow(dead_code)]
-    pub(crate) node: MeshNode,
-    pub(crate) ticket_url: String,
-}
-
 /// Binds one native mesh endpoint per `(name, root_dir, identity)`, each serving
 /// exactly that volume's `LocalFs` root over [`NativeServeConfig::open`] — one
 /// resource per endpoint, never an aggregate root. The caller must hold the
-/// returned [`ServedVolume`]s (their nodes) for as long as the endpoints serve.
+/// returned [`ServedEndpoint`]s (their nodes) for as long as the endpoints
+/// serve.
 pub(crate) fn bind_volume_endpoints(
     volumes: Vec<(String, PathBuf, NodeIdentity)>,
     local_addr: Option<SocketAddr>,
-) -> Result<Vec<ServedVolume>, CliError> {
-    let public = local_addr.is_none();
-    let mut served = Vec::with_capacity(volumes.len());
+) -> Result<Vec<ServedEndpoint>, CliError> {
+    let mut resources = Vec::with_capacity(volumes.len());
     for (name, root_dir, identity) in volumes {
-        let mut node = match local_addr {
-            Some(addr) => MeshNode::bind_local(&identity, addr),
-            None => MeshNode::bind(&identity),
-        }
-        .map_err(|error| {
-            CliError::new(
-                format!("failed to bind mesh endpoint for volume {name:?}: {error}"),
-                1,
-            )
-        })?;
         let root = LocalFs::new(&root_dir).map_err(|error| {
             CliError::new(
                 format!(
@@ -268,33 +223,9 @@ pub(crate) fn bind_volume_endpoints(
             )
         })?;
         let root: Arc<dyn FileSystem> = Arc::new(root);
-        node.serve_native(NativeServeConfig::open(root));
-        if public {
-            node.wait_online(ONLINE_TIMEOUT);
-        }
-        let ticket_url = ticket_url(&node);
-        served.push(ServedVolume {
-            name,
-            node,
-            ticket_url,
-        });
+        resources.push((name, identity, NativeServeConfig::open(root)));
     }
-    Ok(served)
-}
-
-/// Builds the dialable `iroh://<peer>?addr=...` ticket for a bound node.
-fn ticket_url(node: &MeshNode) -> String {
-    let peer = node.peer_id();
-    let addrs: Vec<String> = node
-        .ticket()
-        .ip_addrs()
-        .map(|addr| format!("addr={addr}"))
-        .collect();
-    if addrs.is_empty() {
-        format!("{}{peer}", crate::mesh::IROH_SCHEME)
-    } else {
-        format!("{}{peer}?{}", crate::mesh::IROH_SCHEME, addrs.join("&"))
-    }
+    bind_endpoints("volume", resources, local_addr)
 }
 
 #[cfg(test)]

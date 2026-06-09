@@ -171,8 +171,9 @@ pub(crate) fn volumes_root() -> Result<PathBuf, CliError> {
     Ok(wanix_dir()?.join("volumes"))
 }
 
-/// The `~/.wanix` base directory (parent of the node identity key).
-fn wanix_dir() -> Result<PathBuf, CliError> {
+/// The `~/.wanix` base directory (parent of the node identity key). Shared
+/// with the other per-resource registries (e.g. `tool` identities).
+pub(crate) fn wanix_dir() -> Result<PathBuf, CliError> {
     let key = NodeIdentity::default_key_path()
         .map_err(|error| CliError::new(format!("cannot resolve ~/.wanix: {error}"), 1))?;
     key.parent()
@@ -196,29 +197,7 @@ fn volume_identity_path(name: &str) -> Result<PathBuf, CliError> {
 /// volume gets a distinct key, hence a distinct peer id, so its mesh endpoint is
 /// an independent resource.
 fn load_volume_identity(name: &str) -> Result<NodeIdentity, CliError> {
-    load_identity_at(&volume_identity_path(name)?)
-}
-
-/// Loads or creates an owner-private identity at `path`, creating the parent
-/// directory first (`load_or_create` does not).
-fn load_identity_at(path: &Path) -> Result<NodeIdentity, CliError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            CliError::new(
-                format!(
-                    "failed to create identity dir {}: {error}",
-                    parent.display()
-                ),
-                1,
-            )
-        })?;
-    }
-    NodeIdentity::load_or_create(path).map_err(|error| {
-        CliError::new(
-            format!("failed to load volume identity {}: {error}", path.display()),
-            1,
-        )
-    })
+    crate::mesh::resource::load_identity_at(&volume_identity_path(name)?)
 }
 
 /// Validates a volume name: non-empty, ASCII alphanumeric plus `.` `_` `-`, with

@@ -24,6 +24,7 @@ mod qjs_term;
 mod rootfs;
 mod serve;
 mod terminal_mode;
+mod tool;
 #[cfg(unix)]
 mod unix_fd;
 mod volume;

@@ -6,10 +6,7 @@ use wanix_fs::{FileSystem, NormalizedPath, OpenOptions};
 use wanix_id::NodeIdentity;
 use wanix_vfs::{BindOptions, Namespace};
 
-use super::{
-    VolumeSelection, bind_volume_endpoints, parse_volume_serve_command, reject_fixed_port_multi,
-    volume_serve_example_line, volume_serve_line,
-};
+use super::{VolumeSelection, bind_volume_endpoints, parse_volume_serve_command};
 
 fn args(values: &[&str]) -> Vec<OsString> {
     values.iter().map(OsString::from).collect()
@@ -82,39 +79,8 @@ fn parse_enforces_public_endpoint_posture() {
     parse_volume_serve_command(&args(&["--volume", "notes", "--addr", "127.0.0.1:0"])).unwrap();
 }
 
-#[test]
-fn fixed_port_rule_rejects_multiple_volumes() {
-    let fixed: SocketAddr = "127.0.0.1:8080".parse().unwrap();
-    // The rule that backs `--all` at runtime (count known only after resolving):
-    // a fixed nonzero port cannot serve more than one volume.
-    assert!(reject_fixed_port_multi(Some(fixed), 2).is_err());
-    // One volume on a fixed port, port 0 for many, or a public endpoint are fine.
-    assert!(reject_fixed_port_multi(Some(fixed), 1).is_ok());
-    assert!(reject_fixed_port_multi("127.0.0.1:0".parse().ok(), 2).is_ok());
-    assert!(reject_fixed_port_multi(None, 2).is_ok());
-}
-
-#[test]
-fn volume_serve_line_is_a_stable_tab_record() {
-    // Pinned so a later catalog-register step can parse it: NAME\tTICKET\n.
-    assert_eq!(
-        volume_serve_line("notes", "iroh://abc?addr=127.0.0.1:5610"),
-        "notes\tiroh://abc?addr=127.0.0.1:5610\n"
-    );
-}
-
-#[test]
-fn volume_serve_example_line_is_a_copy_pasteable_comment() {
-    // The human-facing example is a `# ` comment (record parsers skip it) and
-    // pastes directly into the matching client command.
-    let line = volume_serve_example_line("iroh://abc?addr=127.0.0.1:5610");
-    assert!(line.starts_with("# "), "{line}");
-    assert!(!line.contains('\t'), "{line}");
-    assert!(
-        line.contains("wanix-rust mount-ls 'iroh://abc?addr=127.0.0.1:5610'"),
-        "{line}"
-    );
-}
+// The announce-line format and the fixed-port-multi rule are shared machinery
+// now, pinned in `crate::mesh::resource::tests`.
 
 #[test]
 fn parse_rejects_bad_combinations() {
