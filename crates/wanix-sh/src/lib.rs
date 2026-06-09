@@ -15,9 +15,11 @@
 //!
 //! Simple commands and arguments with quote removal, `;` / newline sequences,
 //! `|` pipelines (sequential, `#pipe`-backed), the `echo`, `cat`, `pwd`, `env`,
-//! `true`, `false`, `:`, `exit`, `cd`, `export`, and `unset` builtins, and
-//! external command launch (child tasks via the `#task` device, resolved from a
-//! `bin` directory, inheriting the shell's exported env). Redirections, `&&`/`||`,
+//! `true`, `false`, `:`, `exit`, `cd`, `export`, and `unset` builtins, the
+//! pipeable `tool PATH [PARAMS_JSON]` one-shot job-protocol client (sugar over
+//! a mounted ToolFS's visible files, `docs/toolfs.md`), and external command
+//! launch (child tasks via the `#task` device, resolved from a `bin`
+//! directory, inheriting the shell's exported env). Redirections, `&&`/`||`,
 //! control flow, and expansion are recognized by the parser but reported as
 //! [`ShellError::Unsupported`] until their executor support lands.
 //!
@@ -38,6 +40,7 @@ mod repl;
 mod resolve;
 mod state;
 mod syntax;
+mod tool;
 
 pub use error::{ShellError, ShellResult};
 pub use ns::{InputSource, NamespaceOps, OutputSink, SpawnHandle, SpawnSpec};

@@ -1,17 +1,25 @@
 //! Builtin commands.
 //!
-//! Two kinds:
+//! Three kinds:
 //! - **Pipeable** builtins are pure of effects on the shell: `(argv, stdin,
 //!   &ShellState) -> (stdout, status)`. They may *read* state (`pwd`, `env`) but
 //!   not mutate it, so they compose inside pipelines.
+//! - **Namespace** builtins (`tool`) are pipeable too, but additionally talk to
+//!   the [`NamespaceOps`] surface — they read/write namespace files and report
+//!   their own errors on stderr, while still never mutating shell state.
 //! - **Special** builtins (`cd`, `export`, `unset`) mutate `&mut ShellState` and
 //!   are valid only as a single, unpiped command — using one in a pipeline is an
 //!   honest [`ShellError::Unsupported`](crate::ShellError::Unsupported).
 
+use crate::ns::NamespaceOps;
 use crate::state::{ShellState, join_cwd};
 
 /// A pipeable builtin: argv + stdin bytes + read-only state -> stdout + status.
 pub type Builtin = fn(&[String], &[u8], &ShellState) -> (Vec<u8>, i32);
+
+/// A pipeable namespace builtin: a [`Builtin`] that also drives namespace
+/// files through [`NamespaceOps`] (and writes its own stderr).
+pub type NsBuiltin = fn(&[String], &[u8], &ShellState, &mut dyn NamespaceOps) -> (Vec<u8>, i32);
 
 /// A special builtin: argv + mutable state -> status. Single-stage only.
 pub type SpecialBuiltin = fn(&[String], &mut ShellState) -> i32;
@@ -27,6 +35,21 @@ pub fn builtin(name: &str) -> Option<Builtin> {
         "false" => Some(|_, _, _| (Vec::new(), 1)),
         _ => None,
     }
+}
+
+/// Looks up a pipeable namespace builtin by name.
+pub fn ns_builtin(name: &str) -> Option<NsBuiltin> {
+    match name {
+        "tool" => Some(crate::tool::tool),
+        _ => None,
+    }
+}
+
+/// Whether a name is a pipeable builtin of either kind (runs in-shell as a
+/// pipeline stage rather than as an external child task).
+#[must_use]
+pub fn is_pipeable_builtin(name: &str) -> bool {
+    builtin(name).is_some() || ns_builtin(name).is_some()
 }
 
 /// Looks up a special (state-mutating) builtin by name.

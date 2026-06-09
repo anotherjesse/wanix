@@ -18,7 +18,7 @@
 //! producer's write end is held open *before* consumers launch, so a
 //! concurrent consumer cannot read a premature EOF.
 
-use crate::builtins::builtin;
+use crate::builtins::{builtin, is_pipeable_builtin, ns_builtin};
 use crate::error::ShellResult;
 use crate::exec::{COMMAND_NOT_FOUND_STATUS, expand_argv};
 use crate::lower::{RedirectOp, Stage};
@@ -137,7 +137,7 @@ fn wire(
     for stage in stages {
         let argv = expand_argv(&stage.argv, state)?;
         plans.push(StagePlan {
-            is_builtin: builtin(&argv[0]).is_some(),
+            is_builtin: is_pipeable_builtin(&argv[0]),
             argv,
             stdin: StageIn::Inherit,
             stdout: StageOut::Inherit,
@@ -299,8 +299,12 @@ fn run_builtins(
             StageIn::File(path) => ns.read_file(path)?,
             StageIn::Memory(gap) => std::mem::take(&mut memory[*gap]),
         };
-        let run = builtin(&plan.argv[0]).expect("plan marked builtin");
-        let (output, code) = run(&plan.argv, &input, state);
+        let (output, code) = if let Some(run) = builtin(&plan.argv[0]) {
+            run(&plan.argv, &input, state)
+        } else {
+            let run = ns_builtin(&plan.argv[0]).expect("plan marked builtin");
+            run(&plan.argv, &input, state, ns)
+        };
         statuses[i] = code;
         match &plan.stdout {
             StageOut::Inherit => ns.write_stdout(&output)?,

@@ -219,7 +219,9 @@ tests.
   via `task-exit-closes-fds`),
   `&&`/`||` short-circuit, `< > >>` redirects, `$VAR`/`${VAR}`/`$?` expansion at
   execution time, the `echo`/`cat`/`pwd`/`env`/`true`/`false`/`:`/`exit` pipeable
-  builtins and the `cd`/`export`/`unset` special builtins (single-stage), and
+  builtins plus the pipeable `tool PATH [PARAMS_JSON]` one-shot job-protocol
+  client (drives a mounted ToolFS through its visible files, `docs/toolfs.md`)
+  and the `cd`/`export`/`unset` special builtins (single-stage), and
   external command launch resolved from a `bin` dir (so `jaq` is just a command —
   `echo '[1,2,3]' | jaq 'map(.+1)'` works) with exported env propagated to
   children. cwd is shell-local (children run at root). Without `-c` the shell

@@ -641,6 +641,54 @@ mod tests {
         assert_eq!(out.trim(), "6", "echo array | jaq add: {out:?}");
     }
 
+    #[test]
+    fn shell_tool_builtin_drives_a_mounted_toolfs_end_to_end() {
+        // The real shell.wasm guest runs `cat | tool | cat` against a REAL
+        // ToolFS bound into the task namespace at /n/upper: the builtin's
+        // job-protocol dance (new → in → ctl run → out → result.json → close)
+        // crosses the WASI boundary like any other namespace file access.
+        use wanix_tool::runners::UpperRunner;
+        use wanix_tool::{ToolPrincipal, ToolService, ToolSpec};
+
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell");
+        fs.write_file("notes.txt", b"hello mesh")
+            .expect("seed input");
+
+        let service = ToolService::new(
+            ToolSpec::v0("upper", "Uppercase UTF-8 text."),
+            Box::new(UpperRunner),
+            Box::new(|| 0),
+        );
+        let mut ns = namespace_with_pipe(&fs);
+        ns.bind(
+            Arc::new(service.open_view(ToolPrincipal::local("shell"))),
+            ".",
+            "n/upper",
+            BindOptions::default(),
+        )
+        .expect("bind ToolFS at /n/upper");
+
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let shell = table
+            .allocate_root_with_namespace("auto", ns)
+            .expect("allocate shell");
+        shell
+            .set_cmd("shell.wasm -c \"cat < notes.txt | tool /n/upper | cat\"")
+            .expect("set cmd");
+        let cap = wire_shell_stdio(&shell);
+
+        table.start(shell.id()).expect("run shell");
+        let err = String::from_utf8_lossy(&cap.read_file("err").expect("read err")).into_owned();
+        assert_eq!(shell.exit(), "0", "shell should exit 0; stderr={err:?}");
+        let out = String::from_utf8(cap.read_file("out").expect("read out")).expect("utf8");
+        assert_eq!(out, "HELLO MESH", "tool output flows through the pipeline");
+    }
+
     // ---- interactive REPL over #term ------------------------------------
 
     use wanix_term::TermDevice;

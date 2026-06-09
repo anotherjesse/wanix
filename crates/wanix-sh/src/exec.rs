@@ -6,7 +6,7 @@
 //! stages run concurrently (see [`crate::pipeline`] and ADR 0010 tier 2). A
 //! command that cannot be launched reports an honest error and a 127 status.
 
-use crate::builtins::{builtin, is_special, special_builtin};
+use crate::builtins::{builtin, is_special, ns_builtin, special_builtin};
 use crate::error::{ShellError, ShellResult};
 use crate::lower::{AndOrList, Connector, Pipeline, Plan, Redirect, RedirectOp, Stage};
 use crate::ns::{InputSource, NamespaceOps, OutputSink, SpawnSpec};
@@ -176,6 +176,11 @@ fn dispatch(
     if let Some(builtin) = builtin(&argv[0]) {
         let input = gather_input(&stdin, ns)?;
         let (output, status) = builtin(argv, &input, state);
+        emit_output(&stdout, &output, ns)?;
+        Ok(status)
+    } else if let Some(builtin) = ns_builtin(&argv[0]) {
+        let input = gather_input(&stdin, ns)?;
+        let (output, status) = builtin(argv, &input, state, ns);
         emit_output(&stdout, &output, ns)?;
         Ok(status)
     } else {

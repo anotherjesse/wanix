@@ -60,7 +60,7 @@ The shell's *only* contact with the outside world is the `NamespaceOps` trait (`
 
 ## What runs today
 
-Simple commands and arguments; quote removal and `$VAR` / `${VAR}` / `$?` expansion; `;` sequences; `|` pipelines; `&&`/`||` short-circuit; `<` / `>` / `>>` file redirects; the `echo`, `cat`, `pwd`, `env`, `true`, `false`, `:`, `exit`, `cd`, `export`, `unset` builtins; and external command launch (resolved from `bin`, inheriting the shell's exported env). Builtins split into *pipeable* (compose in pipelines) and *special* (`cd`/`export`/`unset`, single-stage only — piping one is an honest error).
+Simple commands and arguments; quote removal and `$VAR` / `${VAR}` / `$?` expansion; `;` sequences; `|` pipelines; `&&`/`||` short-circuit; `<` / `>` / `>>` file redirects; the `echo`, `cat`, `pwd`, `env`, `true`, `false`, `:`, `exit`, `cd`, `export`, `unset` builtins; the pipeable `tool PATH [PARAMS_JSON]` one-shot job-protocol client (`tool /n/upper < input.txt > output.txt` drives a mounted ToolFS through its visible files — `new`, `in`, `ctl run`, `out`, `result.json`, best-effort `close` — and on a failed job prints one `tool: <kind>: <message>` line to stderr and exits non-zero; see `docs/toolfs.md`); and external command launch (resolved from `bin`, inheriting the shell's exported env). Builtins split into *pipeable* (compose in pipelines) and *special* (`cd`/`export`/`unset`, single-stage only — piping one is an honest error).
 
 Everything else listed under honest limits above is parsed but reported as unsupported.
 

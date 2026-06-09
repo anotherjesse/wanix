@@ -5270,6 +5270,9 @@ name = "wanix-sh"
 version = "0.1.0"
 dependencies = [
  "brush-parser",
+ "serde_json",
+ "wanix-fs",
+ "wanix-tool",
 ]
 
 [[package]]
@@ -5375,6 +5378,7 @@ dependencies = [
  "wanix-pipe",
  "wanix-task",
  "wanix-term",
+ "wanix-tool",
  "wanix-vfs",
  "wanix-wasi",
  "wanix-wasi-host",
