@@ -20,6 +20,7 @@
 //! fully synchronous [`wanix_fs::FileSystem`]s whose method calls drive the QUIC
 //! streams through the held [`Handle`], on non-runtime threads only.
 
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -149,21 +150,24 @@ impl MeshDialer {
     /// per-op stream factory opens fresh bidi streams over.
     fn connect_native(&self, addr: EndpointAddr) -> MeshResult<Connection> {
         let endpoint = self.endpoint.clone();
-        self.handle
-            .block_on(async move { endpoint.connect(addr, crate::WANIX_FS_ALPN).await })
-            .map_err(|err| MeshError::Dial(err.to_string()))
+        block_on_deadline(&self.handle, self.deadline, "native connect", async move {
+            endpoint.connect(addr, crate::WANIX_FS_ALPN).await
+        })
+        .map_err(MeshError::Dial)
     }
 
     /// Connects and opens one bidi stream, returning the bridged duplex.
     fn open_stream(&self, addr: EndpointAddr) -> MeshResult<BlockingDuplex> {
         let endpoint = self.endpoint.clone();
-        let (send, recv) = self
-            .handle
-            .block_on(async move {
-                let connection = endpoint.connect(addr, crate::WANIX_9P_ALPN).await?;
-                connection.open_bi().await.map_err(Into::into)
+        let connection = block_on_deadline(&self.handle, self.deadline, "9P connect", async move {
+            endpoint.connect(addr, crate::WANIX_9P_ALPN).await
+        })
+        .map_err(MeshError::Dial)?;
+        let (send, recv) =
+            block_on_deadline(&self.handle, self.deadline, "9P open_bi", async move {
+                connection.open_bi().await
             })
-            .map_err(|err: DialError| MeshError::Dial(err.to_string()))?;
+            .map_err(MeshError::Dial)?;
         Ok(BlockingDuplex::new(
             send,
             recv,
@@ -240,10 +244,13 @@ impl IrohStreamFactory {
         }
         let endpoint = self.endpoint.clone();
         let addr = self.addr.clone();
-        let connection = self
-            .handle
-            .block_on(async move { endpoint.connect(addr, crate::WANIX_FS_ALPN).await })
-            .map_err(|err| std::io::Error::other(format!("native reconnect failed: {err}")))?;
+        let connection = block_on_deadline(
+            &self.handle,
+            self.deadline,
+            "native reconnect",
+            async move { endpoint.connect(addr, crate::WANIX_FS_ALPN).await },
+        )
+        .map_err(|err| std::io::Error::other(format!("native reconnect failed: {err}")))?;
         shared.connection = connection.clone();
         shared.generation = shared.generation.wrapping_add(1);
         Ok(connection)
@@ -255,9 +262,10 @@ impl IrohStreamFactory {
         // Open the bidi stream on the held runtime. The first byte the wire crate
         // writes (its request frame) is what makes the peer's `accept_bi`
         // resolve, exactly as the 9P `Tversion` write does today.
-        let (send, recv) = self
-            .handle
-            .block_on(async move { connection.open_bi().await })
+        let (send, recv) =
+            block_on_deadline(&self.handle, self.deadline, "native open_bi", async move {
+                connection.open_bi().await
+            })
             .map_err(|err| std::io::Error::other(format!("native dial open_bi failed: {err}")))?;
         // The client keeps the deadline on both halves: its read always follows a
         // request write, so the per-op deadline is a sane response timeout.
@@ -286,32 +294,23 @@ impl StreamFactory for IrohStreamFactory {
     }
 }
 
-/// The connect/open failure surface, unifying iroh's connect and stream errors.
-#[derive(Debug)]
-enum DialError {
-    /// The QUIC connection could not be established.
-    Connect(iroh::endpoint::ConnectError),
-    /// The bidirectional stream could not be opened on the connection.
-    OpenStream(iroh::endpoint::ConnectionError),
-}
-
-impl std::fmt::Display for DialError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Connect(err) => write!(f, "{err}"),
-            Self::OpenStream(err) => write!(f, "{err}"),
-        }
-    }
-}
-
-impl From<iroh::endpoint::ConnectError> for DialError {
-    fn from(err: iroh::endpoint::ConnectError) -> Self {
-        Self::Connect(err)
-    }
-}
-
-impl From<iroh::endpoint::ConnectionError> for DialError {
-    fn from(err: iroh::endpoint::ConnectionError) -> Self {
-        Self::OpenStream(err)
-    }
+fn block_on_deadline<F, T, E>(
+    handle: &Handle,
+    deadline: Option<Duration>,
+    operation: &str,
+    future: F,
+) -> Result<T, String>
+where
+    F: Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    handle.block_on(async move {
+        let result = match deadline {
+            Some(deadline) => tokio::time::timeout(deadline, future)
+                .await
+                .map_err(|_| format!("{operation} timed out after {}ms", deadline.as_millis()))?,
+            None => future.await,
+        };
+        result.map_err(|err| err.to_string())
+    })
 }

@@ -365,11 +365,11 @@ fn native_mount_reconnects_after_the_server_restarts() {
     // The held mount must recover by re-dialing — without being rebuilt.
     let mut recovered = None;
     for _ in 0..60 {
-        if let Some(bytes) = try_read_through(&namespace, &mounted("marker.txt")) {
-            if bytes == b"v2" {
-                recovered = Some(bytes);
-                break;
-            }
+        if let Some(bytes) = try_read_through(&namespace, &mounted("marker.txt"))
+            && bytes == b"v2"
+        {
+            recovered = Some(bytes);
+            break;
         }
         std::thread::sleep(Duration::from_millis(250));
     }

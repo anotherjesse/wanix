@@ -15,6 +15,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use wanix_id::NodeIdentity;
 use wanix_mesh::{EndpointAddr, EndpointId, IrohStreamFactory, MeshNode, NativeFs};
@@ -32,6 +33,11 @@ pub(crate) type MeshFs = NativeFs<IrohStreamFactory>;
 
 /// URL scheme that selects a QUIC mesh dial instead of a raw TCP 9P dial.
 pub(crate) const IROH_SCHEME: &str = "iroh://";
+
+/// Foreground CLI mesh mounts should feel like local interactive tools: bounded
+/// enough for an agent or shell to recover, without making transient Wi-Fi or
+/// mDNS hiccups look instant-fatal.
+const CLI_MESH_MOUNT_DEADLINE: Duration = Duration::from_secs(5);
 
 /// A parsed `iroh://` dial target: a verified peer id (the resource identity)
 /// plus optional direct-route hints for first contact.
@@ -155,6 +161,7 @@ pub(crate) fn dial_iroh_remote(addr: &str, aname: &str) -> Result<IrohMount, Cli
     let identity = NodeIdentity::generate().map_err(|error| CliError::new(error.to_string(), 1))?;
     let node = MeshNode::bind(&identity)
         .map_err(|error| CliError::new(format!("failed to bind mesh endpoint: {error}"), 1))?;
+    let node = node.with_deadline(CLI_MESH_MOUNT_DEADLINE);
     let remote = node
         .dialer()
         .dial_native_attach(ticket.endpoint_addr(), aname)

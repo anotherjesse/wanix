@@ -378,15 +378,21 @@ current-state docs, and commit messages instead of active ADRs.
   and compose namespaces from a catalog — plus the layered trust model (Layer 0
   iroh identity → Layer 1 naming → Layer 2/3 authorization). A discussion draft,
   to be split into accepted ADRs once its contracts stabilize.
+- [ADR 0008](docs/adrs/0008-live-mesh-resource-liveness.md): live `iroh://`
+  resource liveness and retry semantics for agent/shell mounts — hard vs. soft
+  mounts, operation deadlines, stale handle behavior, no replay of in-flight
+  mutations, stale route hints, and the backoff/status state machine target.
 
 The mesh/agent layer (the native FileSystem-over-iroh wire, ed25519 identity +
 capability binds, the `#agent` device, and the `#kv`/`#pipe`/`#plumb`/`#cas`/
-`#cpu` service contracts) does not yet have its own ADRs; the native wire's
-contract is owned by [ADR 0004](docs/adrs/0004-rust-9p-protocol-and-server-contract.md)
-(FileSystem contract, native mesh wire, and the 9P edge gateway) with the
-op-by-op design in
-[docs/design/native-mesh-wire.md](docs/design/native-mesh-wire.md). The rest of
-the layer is captured in [docs/mesh-blueprint.md](docs/mesh-blueprint.md) and
+`#cpu` service contracts) is now split across ADRs only where contracts have
+stabilized: the native wire's contract is owned by
+[ADR 0004](docs/adrs/0004-rust-9p-protocol-and-server-contract.md) (FileSystem
+contract, native mesh wire, and the 9P edge gateway) with the op-by-op design in
+[docs/design/native-mesh-wire.md](docs/design/native-mesh-wire.md), and live
+resource liveness is owned by
+[ADR 0008](docs/adrs/0008-live-mesh-resource-liveness.md). The rest of the layer
+is captured in [docs/mesh-blueprint.md](docs/mesh-blueprint.md) and
 [docs/mesh-the-missing-half-of-9p.md](docs/mesh-the-missing-half-of-9p.md) (both
 written against the earlier 9P-over-iroh build; see their update notes), and the
 cockpit↔mesh integration in [docs/integration/](docs/integration/). Promote the
