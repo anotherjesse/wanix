@@ -8,6 +8,7 @@ members = [
     "crates/wanix-9p-client",
     "crates/wanix-fs",
     "crates/wanix-id",
+    "crates/wanix-job",
     "crates/wanix-kv",
     "crates/wanix-mesh",
     "crates/wanix-mesh-wire",
