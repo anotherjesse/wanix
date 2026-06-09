@@ -1,4 +1,20 @@
+use std::ffi::OsString;
+
 use super::CliOutput;
+
+/// Copy-pasteable first commands, shown above the full usage list so a new user
+/// has something to run before reading the wall.
+const QUICK_START: &str = concat!(
+    "quick start:\n",
+    "  wanix-rust qjs main.js                                       ",
+    "# run JavaScript as a Wanix task\n",
+    "  wanix-rust mesh-serve --root /tmp/share --addr 127.0.0.1:0   ",
+    "# prints a dialable iroh:// ticket\n",
+    "  wanix-rust mount-ls 'iroh://PEER?addr=IP:PORT'               ",
+    "# paste the ticket the server printed\n",
+    "  wanix-rust SUBCOMMAND --help                                 ",
+    "# usage for one subcommand\n",
+);
 
 pub(super) const USAGE: &str = concat!(
     "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
@@ -46,7 +62,8 @@ pub(super) const USAGE: &str = concat!(
     "       wanix-rust mount-cat (tcp://HOST:PORT | iroh://PEER) PATH\n",
     "       wanix-rust mount-write (tcp://HOST:PORT | iroh://PEER) PATH TEXT\n",
     "         (iroh://PEER is the resource identity, found by always-on mDNS on the LAN/same machine; ",
-    "?addr=IP:PORT is only a direct-route hint — a wrong hint fails the dial, it never mounts another peer)\n",
+    "?addr=IP:PORT is only a direct-route hint — a stale hint falls back to mDNS/relay discovery, ",
+    "and no route can ever mount a peer that fails the identity check)\n",
     "       wanix-rust rootfs --archive FILE.tgz --out DIR [--json]\n",
     "       wanix-rust new (--js NAME | --rust NAME) [--dir DIR]\n",
     "       wanix-rust volume (create NAME | ls)   (persistent volumes under ~/.wanix/volumes)\n",
@@ -66,8 +83,125 @@ pub(super) const USAGE: &str = concat!(
 
 pub(super) fn help_output() -> CliOutput {
     CliOutput::new(
-        format!("wanix-rust: {}\n{USAGE}\n", wanix_qjs::FIRST_DEMO_TARGET).into_bytes(),
+        format!(
+            "wanix-rust: {}\n\n{QUICK_START}\n{USAGE}\n",
+            wanix_qjs::FIRST_DEMO_TARGET
+        )
+        .into_bytes(),
         Vec::new(),
         0,
     )
+}
+
+/// True when `args` ask for help: `--help` or `-h` among the leading flags.
+///
+/// The scan stops at `--` and at the first operand (any argument that does not
+/// start with `-`), so a guest program's own arguments are never stolen:
+/// `wasm app.wasm -h` hands `-h` to the guest, while `qjs --help` and
+/// `serve --help` answer with usage.
+pub(super) fn wants_help(args: &[OsString]) -> bool {
+    args.iter()
+        .map(OsString::as_os_str)
+        .take_while(|arg| *arg != "--" && arg.as_encoded_bytes().starts_with(b"-"))
+        .any(|arg| arg == "--help" || arg == "-h")
+}
+
+/// Builds `--help` output for one subcommand: its usage lines extracted from
+/// [`USAGE`]. Returns `None` when the command has no usage entry, so the caller
+/// falls through to normal dispatch (and its unknown-command error).
+pub(super) fn subcommand_help_output(command: &str) -> Option<CliOutput> {
+    let lines = usage_lines_for(command)?;
+    let mut text = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        text.push_str(if index == 0 { "usage: " } else { "       " });
+        text.push_str(line);
+        text.push('\n');
+    }
+    text.push_str("(see 'wanix-rust --help' for all commands)\n");
+    Some(CliOutput::new(text.into_bytes(), Vec::new(), 0))
+}
+
+/// Extracts the [`USAGE`] lines belonging to `command`: every `wanix-rust
+/// <command> ...` form plus the indented parenthetical notes that follow one.
+fn usage_lines_for(command: &str) -> Option<Vec<&'static str>> {
+    if command.starts_with('-') {
+        // A flag is never a subcommand (the `wanix-rust --help` usage line
+        // would otherwise match itself).
+        return None;
+    }
+    let mut matched = Vec::new();
+    let mut last_matched = false;
+    for raw in USAGE.lines() {
+        let line = raw.trim_start_matches("usage: ").trim_start();
+        if let Some(rest) = line.strip_prefix("wanix-rust ") {
+            last_matched = rest.split_whitespace().next() == Some(command);
+            if last_matched {
+                matched.push(line);
+            }
+        } else if last_matched {
+            // An indented continuation note for the matched command line.
+            matched.push(line);
+        }
+    }
+    if matched.is_empty() {
+        None
+    } else {
+        Some(matched)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wants_help_sees_only_the_leading_flag_cluster() {
+        let args = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
+        assert!(wants_help(&args(&["--help"])));
+        assert!(wants_help(&args(&["-h"])));
+        assert!(wants_help(&args(&["--raw", "--help"])));
+        // The scan stops at the first operand and at `--`: a guest program's
+        // own `-h`/`--help` is never stolen.
+        assert!(!wants_help(&args(&["app.wasm", "-h"])));
+        assert!(!wants_help(&args(&["script.js", "--", "--help"])));
+        assert!(!wants_help(&args(&["script.js"])));
+        assert!(!wants_help(&args(&[])));
+    }
+
+    #[test]
+    fn subcommand_help_extracts_only_the_named_command() {
+        let output = subcommand_help_output("qjs").unwrap();
+        let text = String::from_utf8(output.stdout().to_vec()).unwrap();
+        assert!(text.starts_with("usage: wanix-rust qjs "), "{text}");
+        assert!(!text.contains("wanix-rust qjs-term"), "{text}");
+        assert!(text.contains("wanix-rust --help"), "{text}");
+    }
+
+    #[test]
+    fn subcommand_help_keeps_continuation_notes_with_their_command() {
+        let text = String::from_utf8(
+            subcommand_help_output("mesh-serve")
+                .unwrap()
+                .stdout()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("wanix-rust mesh-serve"), "{text}");
+        assert!(text.contains("--insecure-open"), "{text}");
+    }
+
+    #[test]
+    fn subcommand_help_collects_every_form_of_a_command() {
+        let text =
+            String::from_utf8(subcommand_help_output("volume").unwrap().stdout().to_vec()).unwrap();
+        assert!(text.contains("volume (create NAME | ls)"), "{text}");
+        assert!(text.contains("volume serve"), "{text}");
+    }
+
+    #[test]
+    fn subcommand_help_is_none_for_unknown_commands() {
+        assert!(subcommand_help_output("bogus").is_none());
+        // `--help` is a flag line in USAGE, never a command match.
+        assert!(subcommand_help_output("--help").is_none());
+    }
 }

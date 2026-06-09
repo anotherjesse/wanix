@@ -185,6 +185,11 @@ pub(crate) fn run_volume_serve_streaming(
             "stderr",
             volume_serve_line(&volume.name, &volume.ticket_url).as_bytes(),
         )?;
+        write_process_output(
+            process_stderr,
+            "stderr",
+            volume_serve_example_line(&volume.ticket_url).as_bytes(),
+        )?;
     }
     // Serving runs on each node's owned runtime; park so they stay alive until the
     // process is terminated.
@@ -197,6 +202,12 @@ pub(crate) fn run_volume_serve_streaming(
 /// newline-terminated so a later catalog-register step can parse it stably.
 fn volume_serve_line(name: &str, ticket_url: &str) -> String {
     format!("{name}\t{ticket_url}\n")
+}
+
+/// A copy-pasteable client command for a served volume, printed beside the
+/// stable tab record. Starts with `# ` so record parsers skip it as a comment.
+fn volume_serve_example_line(ticket_url: &str) -> String {
+    format!("# mount with: wanix-rust mount-ls '{ticket_url}'\n")
 }
 
 fn resolve_selection(command: &VolumeServeCommand) -> Result<Vec<String>, CliError> {

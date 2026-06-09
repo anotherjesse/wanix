@@ -133,20 +133,7 @@ pub(crate) fn parse_mesh_serve_command(
             "mesh-serve --grant requires --peer HEX to name the authorized peer",
         ));
     }
-    // Default-deny on the global transport: serving the public endpoint with no
-    // grant gate exports the whole root read-write to anyone holding the ticket.
-    // Refuse it unless the operator explicitly opts in, or pins to a local
-    // direct-address-only endpoint (--addr) where peers exchange tickets out of
-    // band rather than discovering it via relays/DNS.
     let public = local_addr.is_none();
-    if public && peer_hex.is_none() && !insecure_open {
-        return Err(CliError::usage(
-            "mesh-serve on the public endpoint with no --peer/--grant exports the entire \
-             root read-write to anyone with the ticket; pass --peer HEX with --grant to \
-             gate access, --addr IP:PORT to serve a local direct-address-only endpoint, or \
-             --insecure-open to deliberately export it to the open internet",
-        ));
-    }
     // `--wanix-services` binds the exec devices `#task`/`#agent` (remote code
     // execution) into the served namespace, backed by the real QuickJs/Wasm task
     // drivers. The blueprint pins exec-device export to local-trust only: we do
@@ -156,7 +143,9 @@ pub(crate) fn parse_mesh_serve_command(
     // relays/DNS discovery). A public endpoint is reachable by any NodeID with
     // the ticket, so refuse services there regardless of --peer/--grant or
     // --insecure-open: a grant's backing is the same services namespace, so even
-    // a grant-gated public serve would expose #task to the granted peer.
+    // a grant-gated public serve would expose #task to the granted peer. This
+    // sharper refusal is checked before the generic public-serve one so the
+    // operator hears about the exec-device hazard, not just the file export.
     if wanix_services && public {
         return Err(CliError::usage(
             "mesh-serve --wanix-services binds the #task/#agent exec devices (remote code \
@@ -165,6 +154,19 @@ pub(crate) fn parse_mesh_serve_command(
              NodeID with the ticket) even with --peer/--grant or --insecure-open. Pass \
              --addr IP:PORT to serve a local direct-address-only endpoint, or drop \
              --wanix-services to export only the host directory",
+        ));
+    }
+    // Default-deny on the global transport: serving the public endpoint with no
+    // grant gate exports the whole root read-write to anyone holding the ticket.
+    // Refuse it unless the operator explicitly opts in, or pins to a local
+    // direct-address-only endpoint (--addr) where peers exchange tickets out of
+    // band rather than discovering it via relays/DNS.
+    if public && peer_hex.is_none() && !insecure_open {
+        return Err(CliError::usage(
+            "mesh-serve on the public endpoint with no --peer/--grant exports the entire \
+             root read-write to anyone with the ticket; pass --peer HEX with --grant to \
+             gate access, --addr IP:PORT to serve a local direct-address-only endpoint, or \
+             --insecure-open to deliberately export it to the open internet",
         ));
     }
     Ok(MeshServeCommand {
@@ -306,10 +308,22 @@ fn announce(
     } else {
         format!("?{}", direct.join("&"))
     };
+    let insecure_public = command.insecure_open && command.local_addr.is_none();
+    let message = announce_message(&peer.to_hex(), &query, insecure_public);
+    write_process_output(process_stderr, "stderr", message.as_bytes())
+}
+
+/// Builds the announce text: the node id, the dialable ticket, and a directly
+/// copy-pasteable client command (whatever a server prints should paste into
+/// the matching mount command, not just be a bare ticket).
+fn announce_message(peer_hex: &str, query: &str, insecure_public: bool) -> String {
+    let ticket_url = format!("iroh://{peer_hex}{query}");
     let mut message = format!(
-        "wanix-rust mesh-serve: node {peer}\nwanix-rust mesh-serve: mount iroh://{peer}{query}\n"
+        "wanix-rust mesh-serve: node {peer_hex}\n\
+         wanix-rust mesh-serve: ticket {ticket_url}\n\
+         wanix-rust mesh-serve: mount with: wanix-rust mount-ls '{ticket_url}'\n"
     );
-    if command.insecure_open && command.local_addr.is_none() {
+    if insecure_public {
         // Loud about the default-deny inversion the operator opted into. The
         // parser refuses --wanix-services on this public endpoint, so this
         // exports the host directory read-write only — it does NOT bind the
@@ -321,7 +335,7 @@ fn announce(
              with the ticket\n",
         );
     }
-    write_process_output(process_stderr, "stderr", message.as_bytes())
+    message
 }
 
 #[cfg(test)]
@@ -500,6 +514,28 @@ mod tests {
 
         drop(mount);
         drop(server_b);
+    }
+
+    #[test]
+    fn announce_prints_a_copy_pasteable_mount_command() {
+        let message = announce_message("ab12", "?addr=127.0.0.1:5610", false);
+        assert!(message.contains("node ab12\n"), "{message}");
+        assert!(
+            message.contains("ticket iroh://ab12?addr=127.0.0.1:5610\n"),
+            "{message}"
+        );
+        // Whatever the server prints must paste into the matching client command.
+        assert!(
+            message.contains("wanix-rust mount-ls 'iroh://ab12?addr=127.0.0.1:5610'"),
+            "{message}"
+        );
+        assert!(!message.contains("WARNING"), "{message}");
+    }
+
+    #[test]
+    fn announce_warns_about_insecure_public_export() {
+        let message = announce_message("ab12", "", true);
+        assert!(message.contains("WARNING --insecure-open"), "{message}");
     }
 
     #[test]

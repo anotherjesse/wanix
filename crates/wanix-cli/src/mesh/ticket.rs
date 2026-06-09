@@ -9,16 +9,19 @@
 //! via relay/DNS. `?addr=IP:PORT` query parameters are an optional direct-route
 //! shortcut/fallback.
 //!
-//! Crucially, a stale or wrong `addr=` cannot mount the wrong resource: every
-//! route still authenticates as the requested peer id, so a bad hint fails the
-//! dial rather than connecting to whoever happens to answer at that socket.
+//! Crucially, a stale or wrong `addr=` can never mount the WRONG resource:
+//! every route must authenticate as the requested peer id, so a socket that
+//! answers with a different identity is rejected. A wrong hint is therefore a
+//! dead route, not a wrong mount — the dial falls back to discovery (mDNS on
+//! the LAN, relay/DNS publicly) and still finds the real peer; the dial fails
+//! only when no route authenticates within the deadline.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use wanix_id::NodeIdentity;
-use wanix_mesh::{EndpointAddr, EndpointId, IrohStreamFactory, MeshNode, NativeFs};
+use wanix_mesh::{EndpointAddr, EndpointId, IrohStreamFactory, MeshError, MeshNode, NativeFs};
 
 use crate::CliError;
 
@@ -83,16 +86,30 @@ impl MeshTicket {
 }
 
 /// Parses a 64-character lowercase-hex ed25519 public key into an [`EndpointId`].
+///
+/// The error cases are split so the user learns which part of the id is wrong:
+/// length, then the first non-hex character, then the curve check (a well-formed
+/// hex string that is not an ed25519 public key — usually a typo'd ticket).
 fn parse_peer_id(value: &str) -> Result<EndpointId, CliError> {
     if value.len() != 64 {
         return Err(CliError::usage(format!(
-            "iroh ticket peer id must be 64 hex digits, got {} characters",
+            "iroh peer id must be 64 hex digits, got {} characters; copy the full iroh:// \
+             ticket the serving node printed",
             value.len()
         )));
     }
-    value
-        .parse::<EndpointId>()
-        .map_err(|error| CliError::usage(format!("invalid iroh peer id: {error}")))
+    if let Some((index, found)) = value.char_indices().find(|(_, c)| !c.is_ascii_hexdigit()) {
+        return Err(CliError::usage(format!(
+            "iroh peer id must be 64 hex digits: character {} ({found:?}) is not a hex digit",
+            index + 1
+        )));
+    }
+    value.parse::<EndpointId>().map_err(|_| {
+        CliError::usage(
+            "iroh peer id is 64 hex digits but not a valid ed25519 public key; copy the exact \
+             iroh:// ticket the serving node printed",
+        )
+    })
 }
 
 /// Parses `addr=IP:PORT[&addr=IP:PORT...]` query parameters into socket addrs.
@@ -156,20 +173,60 @@ pub(crate) struct IrohMount {
 /// Returns a CLI error when the node cannot bind, the ticket cannot be parsed,
 /// or the QUIC dial fails.
 pub(crate) fn dial_iroh_remote(addr: &str, aname: &str) -> Result<IrohMount, CliError> {
+    dial_iroh_remote_with_deadline(addr, aname, CLI_MESH_MOUNT_DEADLINE)
+}
+
+/// [`dial_iroh_remote`] with an explicit dial deadline, so tests can prove the
+/// unreachable-peer behavior (bounded failure, humane message) without waiting
+/// out the interactive default.
+fn dial_iroh_remote_with_deadline(
+    addr: &str,
+    aname: &str,
+    deadline: Duration,
+) -> Result<IrohMount, CliError> {
     let ticket = MeshTicket::parse(addr)?;
     // Dialing out only needs an endpoint; a fresh identity is fine.
     let identity = NodeIdentity::generate().map_err(|error| CliError::new(error.to_string(), 1))?;
     let node = MeshNode::bind(&identity)
         .map_err(|error| CliError::new(format!("failed to bind mesh endpoint: {error}"), 1))?;
-    let node = node.with_deadline(CLI_MESH_MOUNT_DEADLINE);
+    let node = node.with_deadline(deadline);
     let remote = node
         .dialer()
         .dial_native_attach(ticket.endpoint_addr(), aname)
-        .map_err(|error| CliError::new(format!("failed to dial iroh peer: {error}"), 1))?;
+        .map_err(|error| dial_error(&ticket, deadline, &error))?;
     Ok(IrohMount {
         remote,
         _node: node,
     })
+}
+
+/// Renders a failed dial for a human (ADR 0008's text-surface rule): a peer
+/// that never answered is an OUTAGE, distinct from not-found — name the bound
+/// the dial waited on and say it will work again when the provider returns.
+fn dial_error(ticket: &MeshTicket, deadline: Duration, error: &MeshError) -> CliError {
+    let peer = wanix_mesh::peer_id_for(ticket.peer).to_hex();
+    if matches!(error, MeshError::Dial(detail) if detail.contains("timed out")) {
+        return CliError::new(
+            format!(
+                "resource unreachable: peer {peer} did not answer within {} — the provider \
+                 is offline or not discoverable from here, and the mount will work again \
+                 when it returns (a bare iroh://PEER is found by mDNS on the LAN; pass \
+                 ?addr=IP:PORT as a direct route hint)",
+                format_deadline(deadline)
+            ),
+            1,
+        );
+    }
+    CliError::new(format!("failed to dial iroh peer {peer}: {error}"), 1)
+}
+
+/// Formats a deadline humanely: whole seconds when it is one, else millis.
+fn format_deadline(deadline: Duration) -> String {
+    if deadline.subsec_millis() == 0 && deadline.as_secs() > 0 {
+        format!("{}s", deadline.as_secs())
+    } else {
+        format!("{}ms", deadline.as_millis())
+    }
 }
 
 #[cfg(test)]
@@ -208,15 +265,77 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_short_peer_id() {
-        assert!(MeshTicket::parse(&format!("{IROH_SCHEME}deadbeef")).is_err());
+    fn rejects_a_short_peer_id_naming_the_length() {
+        let error = MeshTicket::parse(&format!("{IROH_SCHEME}deadbeef")).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("64 hex digits"), "{message}");
+        assert!(message.contains("got 8 characters"), "{message}");
     }
 
     #[test]
-    fn rejects_an_off_curve_peer_id() {
+    fn rejects_a_non_hex_peer_id_naming_the_character() {
+        // 64 characters, but position 3 is not hex.
+        let bad = format!("ab{}", "z".repeat(62));
+        let error = MeshTicket::parse(&format!("{IROH_SCHEME}{bad}")).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("character 3"), "{message}");
+        assert!(message.contains("'z'"), "{message}");
+    }
+
+    #[test]
+    fn rejects_an_off_curve_peer_id_with_ticket_guidance() {
         // 64 valid hex digits that are not a valid ed25519 public key.
         let hex = "ab".repeat(32);
-        assert!(MeshTicket::parse(&format!("{IROH_SCHEME}{hex}")).is_err());
+        let error = MeshTicket::parse(&format!("{IROH_SCHEME}{hex}")).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("not a valid ed25519 public key"),
+            "{message}"
+        );
+        assert!(
+            message.contains("ticket the serving node printed"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn unreachable_peer_fails_within_the_deadline_as_resource_unreachable() {
+        use std::time::Instant;
+
+        // A real on-curve peer id that nobody serves, with a dead direct route
+        // hint so the dial does not depend on outside-network behavior.
+        let hex = valid_peer_hex();
+        let url = format!("{IROH_SCHEME}{hex}?addr=127.0.0.1:1");
+        let started = Instant::now();
+        let error = match dial_iroh_remote_with_deadline(&url, "", Duration::from_millis(300)) {
+            Ok(_) => panic!("dialing an unserved peer id must fail"),
+            Err(error) => error,
+        };
+        // Bounded: the deadline plus generous slack, never an indefinite hang.
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "dial took {:?}",
+            started.elapsed()
+        );
+        let message = error.to_string();
+        assert!(message.contains("resource unreachable"), "{message}");
+        assert!(message.contains(&hex), "{message}");
+        assert!(message.contains("within 300ms"), "{message}");
+        assert_eq!(error.exit_code(), 1);
+    }
+
+    #[test]
+    fn non_timeout_dial_errors_keep_the_transport_detail() {
+        let ticket = MeshTicket::parse(&format!("{IROH_SCHEME}{}", valid_peer_hex())).unwrap();
+        let error = dial_error(
+            &ticket,
+            Duration::from_secs(5),
+            &MeshError::Dial("connection refused".to_owned()),
+        );
+        let message = error.to_string();
+        assert!(message.contains("failed to dial iroh peer"), "{message}");
+        assert!(message.contains("connection refused"), "{message}");
+        assert!(!message.contains("resource unreachable"), "{message}");
     }
 
     #[test]

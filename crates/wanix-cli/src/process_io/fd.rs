@@ -72,7 +72,8 @@ fn run_with_qjs_shell_input(
     let Some((command, rest)) = args.split_first() else {
         return super::run_with_process_io_inner(args, io);
     };
-    if command != "qjs-shell" {
+    // `qjs-shell --help` belongs to the help path, not the live shell.
+    if command != "qjs-shell" || crate::help::wants_help(rest) {
         return super::run_with_process_io_inner(args, io);
     }
 

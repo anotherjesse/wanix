@@ -8,7 +8,7 @@ use wanix_vfs::{BindOptions, Namespace};
 
 use super::{
     VolumeSelection, bind_volume_endpoints, parse_volume_serve_command, reject_fixed_port_multi,
-    volume_serve_line,
+    volume_serve_example_line, volume_serve_line,
 };
 
 fn args(values: &[&str]) -> Vec<OsString> {
@@ -100,6 +100,19 @@ fn volume_serve_line_is_a_stable_tab_record() {
     assert_eq!(
         volume_serve_line("notes", "iroh://abc?addr=127.0.0.1:5610"),
         "notes\tiroh://abc?addr=127.0.0.1:5610\n"
+    );
+}
+
+#[test]
+fn volume_serve_example_line_is_a_copy_pasteable_comment() {
+    // The human-facing example is a `# ` comment (record parsers skip it) and
+    // pastes directly into the matching client command.
+    let line = volume_serve_example_line("iroh://abc?addr=127.0.0.1:5610");
+    assert!(line.starts_with("# "), "{line}");
+    assert!(!line.contains('\t'), "{line}");
+    assert!(
+        line.contains("wanix-rust mount-ls 'iroh://abc?addr=127.0.0.1:5610'"),
+        "{line}"
     );
 }
 

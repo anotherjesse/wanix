@@ -102,8 +102,13 @@ impl CliError {
         }
     }
 
+    /// A usage error: the message stands alone with a pointer to `--help`,
+    /// never the full usage wall (that is reserved for users who ask for it).
     fn usage(message: impl AsRef<str>) -> Self {
-        Self::new(format!("{}\n\n{}", message.as_ref(), help::USAGE), 2)
+        Self::new(
+            format!("{}\n(run 'wanix-rust --help' for usage)", message.as_ref()),
+            2,
+        )
     }
 
     /// Returns the native process exit code for this error.
@@ -262,6 +267,14 @@ fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<Cl
     };
     if command == "--help" || command == "-h" {
         return Ok(help::help_output());
+    }
+    // `wanix-rust SUBCOMMAND --help` answers with that subcommand's usage
+    // instead of treating `--help` as an operand (e.g. a script path).
+    if help::wants_help(rest)
+        && let Some(command) = command.to_str()
+        && let Some(output) = help::subcommand_help_output(command)
+    {
+        return Ok(output);
     }
     collected::run_collected_command(command, rest, process_stdin)
 }
@@ -591,6 +604,55 @@ mod tests {
             self.offset += len;
             Ok(len)
         }
+    }
+
+    #[test]
+    fn help_includes_quick_start_examples() {
+        let output = run(["--help"]).unwrap();
+        let stdout = String::from_utf8_lossy(output.stdout()).into_owned();
+        assert!(stdout.contains("quick start:"), "{stdout}");
+        assert!(stdout.contains("mesh-serve --root"), "{stdout}");
+        assert!(stdout.contains("mount-ls 'iroh://"), "{stdout}");
+    }
+
+    #[test]
+    fn subcommand_help_flag_prints_targeted_usage() {
+        let output = run(["qjs", "--help"]).unwrap();
+        assert_eq!(output.exit_code(), 0);
+        let stdout = String::from_utf8_lossy(output.stdout()).into_owned();
+        assert!(stdout.starts_with("usage: wanix-rust qjs "), "{stdout}");
+        assert!(!stdout.contains("wanix-rust serve"), "{stdout}");
+
+        // Streaming commands answer --help too instead of parsing it as an
+        // operand (the old behavior tried to read a script named `--help`).
+        let mut stdout_bytes = Vec::new();
+        let mut stderr_bytes = Vec::new();
+        let exit_code = run_with_process_io(
+            ["serve", "--help"],
+            io::empty(),
+            &mut stdout_bytes,
+            &mut stderr_bytes,
+        )
+        .unwrap();
+        assert_eq!(exit_code, 0);
+        let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+        assert!(stdout.contains("usage: wanix-rust serve"), "{stdout}");
+    }
+
+    #[test]
+    fn usage_errors_point_at_help_instead_of_dumping_it() {
+        let error = run(["mount-cat"]).unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        let message = error.to_string();
+        assert!(message.contains("mount-cat requires"), "{message}");
+        assert!(
+            message.contains("run 'wanix-rust --help' for usage"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("wanix-rust qjs-term"),
+            "usage errors must not dump the whole usage wall: {message}"
+        );
     }
 
     #[test]

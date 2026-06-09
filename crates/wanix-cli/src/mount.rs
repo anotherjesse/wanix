@@ -77,7 +77,9 @@ fn parse_write(rest: &[OsString]) -> Result<MountCommand, CliError> {
     let path = required_path_arg(rest.get(1), "mount-write")?;
     let text = rest
         .get(2)
-        .ok_or_else(|| CliError::usage("mount-write requires tcp://HOST:PORT PATH TEXT"))?
+        .ok_or_else(|| {
+            CliError::usage("mount-write requires (tcp://HOST:PORT | iroh://PEER) PATH TEXT")
+        })?
         .to_str()
         .ok_or_else(|| CliError::usage("mount-write TEXT must be valid UTF-8"))?
         .to_owned();
@@ -85,15 +87,18 @@ fn parse_write(rest: &[OsString]) -> Result<MountCommand, CliError> {
 }
 
 fn mount_addr(arg: Option<&OsString>, verb: &str) -> Result<String, CliError> {
-    arg.ok_or_else(|| CliError::usage(format!("{verb} requires tcp://HOST:PORT")))?
+    arg.ok_or_else(|| CliError::usage(format!("{verb} requires (tcp://HOST:PORT | iroh://PEER)")))?
         .to_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| CliError::usage(format!("{verb} address must be valid UTF-8")))
 }
 
 fn required_path_arg(arg: Option<&OsString>, verb: &str) -> Result<String, CliError> {
-    optional_path_arg(arg, verb)?
-        .ok_or_else(|| CliError::usage(format!("{verb} requires tcp://HOST:PORT PATH")))
+    optional_path_arg(arg, verb)?.ok_or_else(|| {
+        CliError::usage(format!(
+            "{verb} requires (tcp://HOST:PORT | iroh://PEER) PATH"
+        ))
+    })
 }
 
 fn optional_path_arg(arg: Option<&OsString>, verb: &str) -> Result<Option<String>, CliError> {

@@ -110,6 +110,11 @@ fn run_streaming_command(
     let Some((command, rest)) = args.split_first() else {
         return Ok(None);
     };
+    // `SUBCOMMAND --help` falls through to the collected path, which answers
+    // with that subcommand's usage instead of parsing `--help` as an operand.
+    if crate::help::wants_help(rest) {
+        return Ok(None);
+    }
     match command.to_str() {
         Some("qjs-term" | "qjs-shell") => run_qjs_streaming_command(command, rest, io),
         Some("p9-stdio") => run_9p_streaming_command(command, rest, io),
