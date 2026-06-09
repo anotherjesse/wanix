@@ -271,6 +271,7 @@ mod tests {
         pipes: HashMap<String, Vec<u8>>,
         files: HashMap<String, Vec<u8>>,
         spawns: Vec<SpawnSpec>,
+        broken_pipes: std::collections::HashSet<String>,
         next_pipe: u32,
         next_handle: u32,
         deferred: HashMap<String, SpawnSpec>,
@@ -382,7 +383,18 @@ mod tests {
         fn pipe_open_writer(&mut self, _id: &str) -> ShellResult<()> {
             Ok(())
         }
+        fn pipe_break_reader(&mut self, id: &str) -> ShellResult<()> {
+            self.broken_pipes.insert(id.to_owned());
+            Ok(())
+        }
         fn pipe_write_all_and_close(&mut self, id: &str, bytes: &[u8]) -> ShellResult<()> {
+            // Model the real bounded channel: a write after the reader is
+            // gone is a broken pipe, never a silent buffer.
+            if self.broken_pipes.contains(id) {
+                return Err(crate::ShellError::Io(format!(
+                    "#pipe/{id}/data: broken pipe"
+                )));
+            }
             self.pipes
                 .entry(id.to_owned())
                 .or_default()
@@ -581,6 +593,44 @@ mod tests {
         ns.register("boom", |_in, _args| (b"data".to_vec(), 9));
         ns.register("ok", |input, _args| (input.to_vec(), 0));
         assert_eq!(run_on("boom | ok", &mut ns), 0, "bash $? is the last stage");
+    }
+
+    #[test]
+    fn failed_consumer_launch_breaks_its_input_pipe() {
+        // The consumer never launches (spawn_start fails), so nothing will
+        // ever drain its input pipe. The shell must break the read end: the
+        // builtin producer's write then reports a broken pipe (bash's EPIPE)
+        // instead of parking forever against the real bounded buffer.
+        let mut ns = FakeNs::default();
+        let code = run_on("echo hi | nosuchcmd", &mut ns);
+        assert_eq!(
+            ns.broken_pipes.len(),
+            1,
+            "the dead consumer's input pipe must be broken"
+        );
+        assert_eq!(code, 1, "the producer's broken-pipe write aborts loudly");
+        let err = String::from_utf8(ns.err).unwrap();
+        assert!(err.contains("nosuchcmd"), "launch failure reported: {err}");
+        assert!(err.contains("broken pipe"), "EPIPE surfaced: {err}");
+    }
+
+    #[test]
+    fn builtin_abort_breaks_input_pipes_of_skipped_consumers() {
+        // `cat < missing.txt` aborts the builtin pass before the trailing
+        // builtin runs, so that builtin never drains the external's output
+        // pipe. The shell must break it so `gen` cannot block forever.
+        let mut ns = FakeNs::default();
+        ns.register("gen", |_in, _args| (b"data".to_vec(), 0));
+        let code = run_on("cat < missing.txt | gen | cat", &mut ns);
+        assert_eq!(code, 1, "the aborted builtin reports its error");
+        assert!(
+            !ns.broken_pipes.is_empty(),
+            "the skipped consumer's input pipe must be broken"
+        );
+        assert!(
+            String::from_utf8(ns.err).unwrap().contains("missing.txt"),
+            "the original failure is reported"
+        );
     }
 
     #[test]

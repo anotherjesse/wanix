@@ -7,6 +7,10 @@
 //! `#pipe` back-pressures fast producers, so this ordering is deadlock-free:
 //! every blocking pipe operation the shell performs has a live counterparty —
 //! a running external on its own thread, or bytes a builtin already produced.
+//! When a consumer stage never materializes (its launch failed, or a builtin
+//! abort skipped it), its input pipe is broken on the consumer's behalf so the
+//! producer observes a broken-pipe error (the `EPIPE` analog) instead of
+//! blocking forever against a buffer nothing will ever drain.
 //!
 //! Two wiring rules keep the single-threaded shell honest with itself:
 //! adjacent builtins exchange bytes through shell memory, never a real pipe
@@ -78,7 +82,13 @@ pub(crate) fn run_stages(
         handles.push(if plan.is_builtin {
             None
         } else {
-            launch(plan, state, ns, &mut statuses[i])
+            let handle = launch(plan, state, ns, &mut statuses[i]);
+            if handle.is_none() {
+                // The consumer never launched, so nothing will ever drain
+                // its input pipe: break it before its producer can park.
+                break_unconsumed_input(plan, ns);
+            }
+            handle
         });
     }
 
@@ -87,6 +97,14 @@ pub(crate) fn run_stages(
         // An aborted builtin leaves held write ends open; close them so
         // downstream externals observe EOF before we wait on them.
         close_unwritten_pipes(&plans, ns);
+        // Builtins the abort skipped will never drain their input pipes;
+        // break them so upstream externals fail their writes instead of
+        // blocking. Breaking an already-drained pipe is harmless.
+        for plan in &plans {
+            if plan.is_builtin {
+                break_unconsumed_input(plan, ns);
+            }
+        }
     }
     // Drain pipes no stage consumes so their producers can finish.
     for id in &orphans {
@@ -305,5 +323,15 @@ fn close_unwritten_pipes(plans: &[StagePlan], ns: &mut dyn NamespaceOps) {
         {
             let _ = ns.pipe_write_all_and_close(id, &[]);
         }
+    }
+}
+
+/// Gives a pipe whose consumer will never read it a counterparty: breaking
+/// the read end makes the producer's blocked or future writes fail with a
+/// broken-pipe error (bash's `EPIPE`/`SIGPIPE`) rather than park forever
+/// against the bounded buffer — the module-level deadlock-freedom invariant.
+fn break_unconsumed_input(plan: &StagePlan, ns: &mut dyn NamespaceOps) {
+    if let StageIn::Pipe(id) = &plan.stdin {
+        let _ = ns.pipe_break_reader(id);
     }
 }

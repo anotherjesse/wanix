@@ -119,26 +119,37 @@ impl TaskTable {
     }
 
     /// Starts a task through its registered driver.
+    ///
+    /// A task starts at most once: a second `start` (or `start &`) is an
+    /// honest error, never a re-run — two driver runs would share one fd
+    /// table (interleaved stdio, double-consumed `#pipe` input) and race
+    /// `close_all_fds`/`set_exit` against the live run.
     pub fn start(&self, id: TaskId) -> FsResult<()> {
-        let (task, kind, drivers) = {
+        let task = self.get(id).ok_or(FsError::NotFound)?;
+        claim_start(&task)?;
+        self.run_driver(&task)
+    }
+
+    /// Resolves the task's driver and runs it. The caller must have claimed
+    /// the task's one allowed start via [`claim_start`].
+    fn run_driver(&self, task: &Task) -> FsResult<()> {
+        let kind = task.kind();
+        let drivers = {
             let inner = self
                 .inner
                 .read()
                 .map_err(|_| FsError::Other("task table lock poisoned".to_owned()))?;
-            let task = inner.tasks.get(&id).cloned().ok_or(FsError::NotFound)?;
-            let kind = task.kind();
-            let drivers = inner
+            inner
                 .drivers
                 .iter()
                 .map(|(kind, driver)| (kind.clone(), Arc::clone(driver)))
-                .collect::<Vec<_>>();
-            (task, kind, drivers)
+                .collect::<Vec<_>>()
         };
 
         if kind == "auto" {
             let Some((kind, driver)) = drivers
                 .into_iter()
-                .find(|(_kind, driver)| driver.check(&task))
+                .find(|(_kind, driver)| driver.check(task))
             else {
                 // No driver claims the program: starting is an honest error,
                 // not a silent no-op (a silent Ok left waiters hanging and the
@@ -146,14 +157,14 @@ impl TaskTable {
                 return Err(FsError::NotSupported);
             };
             task.set_kind(kind)?;
-            return driver.start(&task);
+            return driver.start(task);
         }
 
         let driver = drivers
             .into_iter()
             .find_map(|(driver_kind, driver)| (driver_kind == kind).then_some(driver))
             .ok_or(FsError::NotFound)?;
-        driver.start(&task)
+        driver.start(task)
     }
 
     /// Starts a task on its own host OS thread and returns immediately.
@@ -168,25 +179,37 @@ impl TaskTable {
     /// drivers' own `task-exit-closes-fds`, and the only release for a task no
     /// driver ran), and if no exit was recorded (`NoopDriver`, or a launch
     /// failure before the driver's own exit path) one is synthesized — `0` for
-    /// a clean run, `127` for a task that could not start.
+    /// a clean run, `127` for a task that could not start. The cleanup also
+    /// survives a panicking driver (caught on the detached thread), and like
+    /// [`Self::start`] a duplicate `start &` is rejected before any thread
+    /// spawns.
     ///
     /// # Errors
     ///
-    /// Returns a filesystem error when the task does not exist or the host
-    /// thread cannot be spawned.
+    /// Returns a filesystem error when the task does not exist, the task was
+    /// already started, or the host thread cannot be spawned.
     pub fn start_detached(&self, id: TaskId) -> FsResult<()> {
         let task = self.get(id).ok_or(FsError::NotFound)?;
+        claim_start(&task)?;
         let table = self.clone();
-        std::thread::Builder::new()
+        let run_task = task.clone();
+        let spawned = std::thread::Builder::new()
             .name(format!("wanix-task-{}", id.get()))
             .spawn(move || {
-                let result = table.start(id);
-                task.close_all_fds();
-                if task.exit().is_empty() {
-                    let _ = task.set_exit(if result.is_ok() { "0" } else { "127" });
-                }
-            })
-            .map_err(|err| FsError::Other(format!("failed to spawn task thread: {err}")))?;
+                // Catch a panicking driver: an unwind that skipped the cleanup
+                // below would hang waiters and pipe peers forever.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    table.run_driver(&run_task)
+                }));
+                finish_detached_run(&run_task, matches!(result, Ok(Ok(()))));
+            });
+        if let Err(err) = spawned {
+            // The claimed start will never run: keep the no-hang guarantee.
+            finish_detached_run(&task, false);
+            return Err(FsError::Other(format!(
+                "failed to spawn task thread: {err}"
+            )));
+        }
         Ok(())
     }
 
@@ -230,5 +253,25 @@ impl TaskTable {
         let task = Task::allocated(id, parent, kind, namespace);
         inner.tasks.insert(id, task.clone());
         Ok(task)
+    }
+}
+
+/// Claims the task's one allowed start; a duplicate start is an honest error.
+fn claim_start(task: &Task) -> FsResult<()> {
+    if task.try_mark_started()? {
+        Ok(())
+    } else {
+        Err(FsError::Other("task already started".to_owned()))
+    }
+}
+
+/// Finishes a detached run: releases the task's fds (so pipe peers observe
+/// EOF/broken-pipe) and guarantees a recorded exit (`0` clean, `127`
+/// otherwise) so waiters wake. Tolerates a state lock poisoned by a driver
+/// panic — `wait_exit` then reports the poison error instead of hanging.
+fn finish_detached_run(task: &Task, clean: bool) {
+    task.close_all_fds();
+    if matches!(task.try_exit(), Ok(exit) if exit.is_empty()) {
+        let _ = task.set_exit(if clean { "0" } else { "127" });
     }
 }

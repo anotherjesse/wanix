@@ -555,6 +555,88 @@ fn detached_start_records_synthetic_exit_when_driver_records_none() {
 }
 
 #[test]
+fn second_start_of_one_task_is_rejected_and_does_not_rerun_the_driver() {
+    // Two starts of one task would run the driver twice against a shared fd
+    // table and overwrite the recorded exit; the duplicate must be an error.
+    let table = TaskTable::new();
+    let driver = Arc::new(CountingDriver::new());
+    table.register_driver("qjs", driver.clone()).unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+
+    table.start(task.id()).unwrap();
+    let err = table.start(task.id()).unwrap_err();
+
+    assert!(
+        err.to_string().contains("already started"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(driver.starts(), 1, "the driver must run exactly once");
+    assert_eq!(task.exit(), "0");
+}
+
+#[test]
+fn duplicate_detached_start_is_rejected_without_touching_the_live_run() {
+    // `start &` returns immediately, so a duplicate is easy to race in. The
+    // second one must fail synchronously — before any thread spawns — so it
+    // can never close the live run's fds or overwrite its exit.
+    let table = TaskTable::new();
+    table
+        .register_driver("slow", Arc::new(SlowExitDriver))
+        .unwrap();
+    let task = table.allocate_root("slow").unwrap();
+
+    table.start_detached(task.id()).unwrap();
+    let err = table.start_detached(task.id()).unwrap_err();
+
+    assert!(
+        err.to_string().contains("already started"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(task.wait_exit().unwrap(), "7", "first run's exit survives");
+}
+
+#[derive(Debug)]
+struct PanickingDriver;
+
+impl TaskDriver for PanickingDriver {
+    fn start(&self, _task: &Task) -> wanix_fs::FsResult<()> {
+        panic!("driver blew up");
+    }
+}
+
+#[test]
+fn detached_start_survives_a_panicking_driver() {
+    // The no-hang contract: even when the driver panics, the detached thread
+    // must release the task's fds (pipe peers see EOF/broken-pipe) and record
+    // a synthesized 127 (waiters wake) instead of silently unwinding past both.
+    let table = TaskTable::new();
+    table
+        .register_driver("boom", Arc::new(PanickingDriver))
+        .unwrap();
+    let task = table.allocate_root("boom").unwrap();
+    let fs = Arc::new(MemFs::new());
+    fs.write_file("out", b"").unwrap();
+    task.insert_fd(
+        Fd::STDOUT,
+        fs.open(
+            &NormalizedPath::new("out").unwrap(),
+            OpenOptions::read_write(),
+        )
+        .unwrap(),
+        NormalizedPath::new("out").unwrap(),
+    )
+    .unwrap();
+
+    table.start_detached(task.id()).unwrap();
+
+    assert_eq!(task.wait_exit().unwrap(), "127", "waiters must wake");
+    assert!(
+        task.fd_path(Fd::STDOUT).is_err(),
+        "fds must be released after the panic"
+    );
+}
+
+#[test]
 fn ctl_bind_installs_fd_from_task_namespace() {
     let table = TaskTable::new();
     table.register_noop_driver("qjs").unwrap();

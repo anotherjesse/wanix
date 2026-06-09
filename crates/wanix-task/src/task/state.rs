@@ -17,6 +17,8 @@ pub(super) struct TaskState {
     pub(super) env: Vec<String>,
     pub(super) dir: NormalizedPath,
     pub(super) exit: String,
+    /// Whether a start has been accepted: a task runs at most once.
+    pub(super) started: bool,
     pub(super) namespace: Namespace,
     pub(super) fds: FdTable,
 }
@@ -32,6 +34,7 @@ impl TaskState {
             env: Vec::new(),
             dir: spec.cwd.clone(),
             exit: String::new(),
+            started: false,
             spec,
             namespace,
             fds: FdTable::new(),
@@ -54,6 +57,7 @@ impl TaskState {
             env: Vec::new(),
             dir: NormalizedPath::new(".").expect("root path is valid"),
             exit: String::new(),
+            started: false,
             namespace,
             fds: FdTable::new(),
         }

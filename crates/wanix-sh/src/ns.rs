@@ -164,6 +164,19 @@ pub trait NamespaceOps {
     /// Returns an error if the write end cannot be opened.
     fn pipe_open_writer(&mut self, id: &str) -> ShellResult<()>;
 
+    /// Marks a `#pipe` channel as having lost its reader by opening and
+    /// immediately dropping a read end (the `EPIPE`/`SIGPIPE` analog).
+    ///
+    /// Used when the stage that was meant to drain a pipe never launched or
+    /// was skipped by an abort: a producer blocked on (or later writing to)
+    /// the bounded channel then observes a broken-pipe error instead of
+    /// parking forever against a buffer nothing will ever drain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pipe's read end cannot be opened.
+    fn pipe_break_reader(&mut self, id: &str) -> ShellResult<()>;
+
     /// Writes all bytes to a `#pipe` channel and closes the write end
     /// (including one held by [`Self::pipe_open_writer`]).
     ///

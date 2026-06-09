@@ -201,6 +201,23 @@ impl Task {
             .expect("task state lock should be readable")
     }
 
+    /// [`Self::exit`] without the lock-health expectation. Detached-run
+    /// cleanup uses it after a caught driver panic: the panic may have
+    /// poisoned the state lock, and panicking again would skip the cleanup
+    /// entirely (waiters then observe `wait_exit`'s poison error, not a hang).
+    pub(crate) fn try_exit(&self) -> FsResult<String> {
+        self.read_state(|state| state.exit.clone())
+    }
+
+    /// Atomically claims the task's one allowed start.
+    ///
+    /// Returns `Ok(true)` only for the first caller; a task must never run
+    /// twice — two driver runs would share one fd table and race
+    /// `close_all_fds`/`set_exit` against the live run.
+    pub(crate) fn try_mark_started(&self) -> FsResult<bool> {
+        self.write_state(|state| Ok(!std::mem::replace(&mut state.started, true)))
+    }
+
     /// Sets the exit status text and wakes any [`Self::wait_exit`] callers.
     pub fn set_exit(&self, exit: impl Into<String>) -> FsResult<()> {
         self.write_state(|state| {

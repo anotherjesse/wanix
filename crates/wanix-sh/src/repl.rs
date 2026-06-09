@@ -235,6 +235,9 @@ mod tests {
         fn pipe_open_writer(&mut self, _id: &str) -> ShellResult<()> {
             Ok(())
         }
+        fn pipe_break_reader(&mut self, _id: &str) -> ShellResult<()> {
+            Ok(())
+        }
         fn pipe_write_all_and_close(&mut self, _id: &str, _bytes: &[u8]) -> ShellResult<()> {
             Ok(())
         }

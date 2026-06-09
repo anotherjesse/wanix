@@ -400,6 +400,73 @@ mod tests {
         );
     }
 
+    /// Runs `cmd` as a detached shell task and returns (stdout, stderr, exit),
+    /// panicking if the shell does not finish within a generous deadline —
+    /// the regression mode here is an eternal hang, which must fail the test
+    /// rather than wedge the suite.
+    fn run_shell_to_completion(cmd: &str) -> (String, String, String) {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell");
+        fs.write_file("guest.wasm", RUST_GUEST).expect("seed guest");
+
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let shell = table
+            .allocate_root_with_namespace("auto", namespace_with_pipe(&fs))
+            .expect("allocate shell");
+        shell.set_cmd(cmd).expect("set cmd");
+        let cap = wire_shell_stdio(&shell);
+
+        table.start_detached(shell.id()).expect("start shell");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while shell.exit().is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "shell hung running {cmd:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let out = String::from_utf8(cap.read_file("out").expect("read out")).expect("utf8");
+        let err = String::from_utf8_lossy(&cap.read_file("err").expect("read err")).into_owned();
+        (out, err, shell.exit())
+    }
+
+    #[test]
+    fn pipeline_with_failed_consumer_launch_does_not_hang_the_shell() {
+        // Regression: the consumer's spawn fails at the `>` pre-truncate (a
+        // missing parent dir) BEFORE its pipe-reader fd is bound, so nothing
+        // ever drains the pipe. The producer streams 4x the bounded #pipe
+        // capacity: unless the shell breaks the dead consumer's pipe, the
+        // producer parks forever mid-write and the shell hangs in spawn_wait.
+        let (out, err, exit) = run_shell_to_completion(
+            "shell.wasm -c \"guest.wasm --gen 262144 | guest.wasm --cat > missing/out; echo status=$?\"",
+        );
+        assert_eq!(exit, "0", "shell finishes; stderr={err:?}");
+        assert!(
+            out.contains("status=127"),
+            "failed launch reports 127: {out:?} stderr={err:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_abort_mid_pipeline_does_not_hang_the_shell() {
+        // Regression: `cat < missing.txt` aborts the builtin pass, so the
+        // trailing builtin never drains the external's output pipe. The
+        // external streams 4x the pipe capacity: unless the shell breaks the
+        // skipped consumer's pipe, it parks forever and spawn_wait hangs.
+        let (_out, err, exit) = run_shell_to_completion(
+            "shell.wasm -c \"cat < missing.txt | guest.wasm --gen 262144 | cat\"",
+        );
+        assert_eq!(exit, "1", "the aborted builtin's error decides the status");
+        assert!(
+            err.contains("missing.txt"),
+            "original failure reported: {err:?}"
+        );
+    }
+
     #[test]
     fn shell_pipeline_reports_last_stage_exit_status() {
         // bash semantics end to end: a failing producer does not decide the

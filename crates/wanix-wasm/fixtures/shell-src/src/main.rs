@@ -77,6 +77,15 @@ impl NamespaceOps for WasiNamespace {
         Ok(())
     }
 
+    fn pipe_break_reader(&mut self, id: &str) -> ShellResult<()> {
+        // Opening the read end marks the channel as having seen a reader;
+        // dropping it immediately leaves zero readers, so producer writes
+        // fail with a broken-pipe error instead of blocking forever.
+        std::fs::File::open(format!("#pipe/{id}/data"))
+            .map(drop)
+            .map_err(|err| ShellError::Io(format!("#pipe/{id}/data: {err}")))
+    }
+
     fn pipe_write_all_and_close(&mut self, id: &str, bytes: &[u8]) -> ShellResult<()> {
         // Use the held write end when one exists, else open one; dropping it
         // closes the writer so the reader observes EOF.
