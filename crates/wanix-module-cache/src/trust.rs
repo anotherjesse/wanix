@@ -91,7 +91,10 @@ pub(crate) fn read_trusted_artifact(cache_dir: &Path, artifact: &str) -> Option<
 /// group/other-write bits (`0o022`).
 #[cfg(unix)]
 fn stat_is_owner_private(stat: &rustix::fs::Stat, euid: u32) -> bool {
-    stat.st_uid == euid && (stat.st_mode as u32 & 0o022) == 0
+    // `st_mode` is `u32` on Linux but `u16` on macOS; the cast normalizes both.
+    #[allow(clippy::unnecessary_cast)]
+    let mode = stat.st_mode as u32;
+    stat.st_uid == euid && (mode & 0o022) == 0
 }
 
 /// Creates `dir` (and parents) with owner-only permissions and verifies it is a
