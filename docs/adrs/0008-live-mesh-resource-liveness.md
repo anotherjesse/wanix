@@ -91,18 +91,24 @@ surfaces status; it does not decide that a timed-out mutation is safe to repeat.
 Agents get a simple rule: a live mesh path that returns `EIO` is temporarily
 unusable, not missing. They can retry by opening the path again, inspect liveness
 state once it exists, or choose another resource. Shells stay responsive because
-foreground CLI mounts use a 5s deadline.
+foreground CLI mounts use a 5s deadline. Shell helpers should preserve the
+same distinction in their text surface: `ENOENT` may be rendered as "not found",
+but a provider outage should remain an I/O errno so agents do not mistake a
+missing resource for a missing file.
 
 The native wire remains transport-authenticated. A wrong or stale route hint may
 fail or rediscover the real peer, but it never authorizes a different process as
 the requested resource because the QUIC endpoint id must match.
 
-The first regression suite is
-`crates/wanix-cli/tests/mesh_iroh_resilience.rs`: missing-provider dial failure,
+The first regression suites are
+`crates/wanix-cli/tests/mesh_iroh_resilience.rs` (missing-provider dial failure,
 provider outage with later recovery, stale direct hint recovery, and stale
-open-file handle failure. The suite currently inherits iroh's slow endpoint
-teardown behavior (~30s for these integration cases); that cost is a test and
-lifecycle hardening target, not part of the desired user-facing contract.
+open-file handle failure) and the qjs mount tests in
+`crates/wanix-cli/src/qjs_support/mod.rs` (QJS `os.open` sees mesh outage as
+`EIO` and recovers on a later fresh open). The iroh suites currently inherit
+iroh's slow endpoint teardown behavior (~30s for these integration cases); that
+cost is a test and lifecycle hardening target, not part of the desired
+user-facing contract.
 
 ## Open questions
 

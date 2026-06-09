@@ -249,16 +249,23 @@ pub(crate) fn parse_exit(exit: &str) -> i32 {
 mod mesh_mount_tests {
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
 
     use wanix_fs::{FileSystem, MemFs, NormalizedPath, OpenOptions};
     use wanix_id::NodeIdentity;
-    use wanix_mesh::{MeshNode, NativeServeConfig};
+    use wanix_mesh::{EndpointAddr, MeshNode, NativeServeConfig};
     use wanix_task::TaskTable;
     use wanix_vfs::Namespace;
 
-    use super::bind_mesh_mounts;
-    use crate::mesh::IROH_SCHEME;
+    use super::{
+        attach_task_stdio, bind_mesh_mounts, configure_qjs_task, eval_qjs_source, quickjs_runner,
+        read_file,
+    };
+    use crate::mesh::{IROH_SCHEME, MeshTicket};
     use crate::qjs_args::MeshMountSpec;
+
+    const SHORT_DEADLINE: Duration = Duration::from_millis(250);
 
     fn loopback() -> SocketAddr {
         SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)
@@ -277,6 +284,17 @@ mod mesh_mount_tests {
             .map(|addr| format!("addr={addr}"))
             .collect();
         (server, format!("{IROH_SCHEME}{peer}?{}", addrs.join("&")))
+    }
+
+    fn client_node() -> MeshNode {
+        let identity = NodeIdentity::generate().unwrap();
+        MeshNode::bind(&identity)
+            .unwrap()
+            .with_deadline(SHORT_DEADLINE)
+    }
+
+    fn endpoint_addr(url: &str) -> EndpointAddr {
+        MeshTicket::parse(url).unwrap().endpoint_addr()
     }
 
     /// A fresh single-task `noop` table, mirroring `allocate_qjs_term_task`'s
@@ -316,6 +334,37 @@ mod mesh_mount_tests {
             )
             .unwrap();
         assert_eq!(file.write(bytes).unwrap(), bytes.len());
+    }
+
+    fn qjs_mesh_open_probe_source(label: &str) -> String {
+        format!(
+            r#"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+const fd = os.open("vol/seed.txt", os.O_RDONLY);
+if (fd < 0) {{
+  std.out.puts("{label}:err:" + fd + "\n");
+}} else {{
+  const bytes = new Uint8Array(64);
+  const count = os.read(fd, bytes.buffer, 0, bytes.length);
+  os.close(fd);
+  if (count < 0) {{
+    std.out.puts("{label}:err:" + count + "\n");
+  }} else {{
+    const text = Array.from(bytes.slice(0, count))
+      .map((byte) => String.fromCharCode(byte))
+      .join("");
+    std.out.puts("{label}:ok:" + text + "\n");
+  }}
+}}
+std.out.flush();
+"#
+        )
+    }
+
+    fn stdout_text(stdout: &Arc<MemFs>) -> String {
+        String::from_utf8(read_file(stdout.as_ref(), "stdout").unwrap()).unwrap()
     }
 
     /// Slice 1 runtime proof: a `--mount-mesh` spec dialed by `bind_mesh_mounts`
@@ -463,5 +512,84 @@ mod mesh_mount_tests {
         drop(keepalives);
         drop(notes_server);
         drop(photos_server);
+    }
+
+    #[test]
+    fn qjs_os_open_reports_mesh_outage_as_io_and_recovers_on_fresh_open() {
+        let first_host = Arc::new(MemFs::new());
+        first_host.write_file("seed.txt", b"before").unwrap();
+        let (server, url) = serve_native(first_host as Arc<dyn FileSystem>, 7);
+
+        let client = client_node();
+        let remote = client.dialer().dial_native(endpoint_addr(&url)).unwrap();
+        let task = noop_task();
+        task.bind(remote, ".", "vol", Default::default()).unwrap();
+        let (stdout, stderr) = attach_task_stdio(&task, None).unwrap();
+        configure_qjs_task(
+            &task,
+            "mesh-open-probe.mjs",
+            &[],
+            &[],
+            &NormalizedPath::new(".").unwrap(),
+        )
+        .unwrap();
+        let runner = quickjs_runner().unwrap();
+        let mut runtime = runner.create_task_runtime(&task).unwrap();
+
+        eval_qjs_source(
+            &mut runtime,
+            &qjs_mesh_open_probe_source("before"),
+            "mesh-open-before.mjs",
+            SHORT_DEADLINE,
+            2,
+        )
+        .unwrap();
+        assert!(stdout_text(&stdout).contains("before:ok:before\n"));
+
+        drop(server);
+        eval_qjs_source(
+            &mut runtime,
+            &qjs_mesh_open_probe_source("down"),
+            "mesh-open-down.mjs",
+            SHORT_DEADLINE,
+            2,
+        )
+        .unwrap();
+        let output = stdout_text(&stdout);
+        assert!(
+            output.contains("down:err:-29\n"),
+            "mesh outage should surface as WASI EIO (-29), got:\n{output}"
+        );
+
+        let second_host = Arc::new(MemFs::new());
+        second_host.write_file("seed.txt", b"after").unwrap();
+        let (second_server, _) = serve_native(second_host as Arc<dyn FileSystem>, 7);
+        let mut recovered = false;
+        for attempt in 0..20 {
+            eval_qjs_source(
+                &mut runtime,
+                &qjs_mesh_open_probe_source("after"),
+                &format!("mesh-open-after-{attempt}.mjs"),
+                SHORT_DEADLINE,
+                2,
+            )
+            .unwrap();
+            if stdout_text(&stdout).contains("after:ok:after\n") {
+                recovered = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert!(
+            recovered,
+            "fresh QJS open did not recover:\n{}",
+            stdout_text(&stdout)
+        );
+
+        runtime.finish().unwrap();
+        assert!(read_file(stderr.as_ref(), "stderr").unwrap().is_empty());
+        drop(task);
+        drop(client);
+        drop(second_server);
     }
 }

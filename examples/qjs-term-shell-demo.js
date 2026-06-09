@@ -12,6 +12,8 @@ let lastStatus = 0;
 const rawInput = std.getenv("WANIX_QJS_SHELL_RAW") === "1";
 const termId = std.getenv("WANIX_TERM_ID") || "1";
 let cwd = normalizeNamespacePath(std.loadFile("#task/self/dir").trim() || ".");
+// WASI Preview 1 `NOENT`; QuickJS `os.*` returns negative errno values.
+const ERRNO_NOENT = -44;
 
 function prompt() {
   if (running) {
@@ -80,6 +82,43 @@ function readServiceText(path) {
     offset += chunk.length;
   }
   return stringFromBytes(output, output.length);
+}
+
+function readTextFile(path) {
+  const fd = os.open(path, os.O_RDONLY);
+  if (fd < 0) {
+    return { err: fd };
+  }
+  const chunks = [];
+  let total = 0;
+  const bytes = new Uint8Array(4096);
+  while (true) {
+    const count = os.read(fd, bytes.buffer, 0, bytes.length);
+    if (count < 0) {
+      os.close(fd);
+      return { err: count };
+    }
+    if (count === 0) {
+      break;
+    }
+    chunks.push(bytes.slice(0, count));
+    total += count;
+  }
+  os.close(fd);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return { text: stringFromBytes(output, output.length) };
+}
+
+function readErrorLine(command, requested, err) {
+  if (err === ERRNO_NOENT) {
+    return command + ": " + requested + ": not found\n";
+  }
+  return command + ": " + requested + ": errno " + err + "\n";
 }
 
 function writeRequiredServiceText(path, text) {
@@ -424,15 +463,11 @@ function runCat(words) {
   }
   for (const requested of words.slice(1)) {
     const path = resolveShellPath(requested);
-    try {
-      const text = std.loadFile(path);
-      if (text === null || text === undefined) {
-        std.out.puts("cat: " + requested + ": not found\n");
-      } else {
-        std.out.puts(text);
-      }
-    } catch (error) {
-      std.out.puts("cat: " + requested + ": " + error.message + "\n");
+    const result = readTextFile(path);
+    if (result.err !== undefined) {
+      std.out.puts(readErrorLine("cat", requested, result.err));
+    } else {
+      std.out.puts(result.text);
     }
   }
   prompt();
@@ -561,19 +596,15 @@ function runCp(words) {
     prompt();
     return;
   }
-  try {
-    const text = std.loadFile(source);
-    if (text === null || text === undefined) {
-      std.out.puts("cp: " + words[1] + ": not found\n");
-      prompt();
-      return;
-    }
-    const count = writeText(destination, text);
-    if (count < 0) {
-      std.out.puts("cp: " + words[2] + ": errno " + count + "\n");
-    }
-  } catch (error) {
-    std.out.puts("cp: " + words[1] + ": " + error.message + "\n");
+  const result = readTextFile(source);
+  if (result.err !== undefined) {
+    std.out.puts(readErrorLine("cp", words[1], result.err));
+    prompt();
+    return;
+  }
+  const count = writeText(destination, result.text);
+  if (count < 0) {
+    std.out.puts("cp: " + words[2] + ": errno " + count + "\n");
   }
   prompt();
 }
