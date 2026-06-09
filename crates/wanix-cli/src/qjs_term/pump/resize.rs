@@ -11,9 +11,9 @@ use super::super::process::terminal_size_for_fd;
 pub(in crate::qjs_term) type ResizeQueue = Arc<Mutex<VecDeque<(u16, u16)>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::qjs_term) struct TermResize {
-    pub(in crate::qjs_term) columns: u16,
-    pub(in crate::qjs_term) rows: u16,
+pub(crate) struct TermResize {
+    pub(crate) columns: u16,
+    pub(crate) rows: u16,
 }
 
 use std::fmt;
@@ -21,7 +21,7 @@ use std::fmt;
 type ResizePollFn = fn(&mut ResizeSourceState) -> Result<Option<TermResize>, CliError>;
 
 #[derive(Clone)]
-pub(in crate::qjs_term) struct ProcessResizeSource {
+pub(crate) struct ProcessResizeSource {
     kind: &'static str,
     state: ResizeSourceState,
     poll: ResizePollFn,
@@ -37,7 +37,7 @@ enum ResizeSourceState {
 }
 
 impl ProcessResizeSource {
-    pub(in crate::qjs_term) fn none() -> Self {
+    pub(crate) fn none() -> Self {
         Self {
             kind: "none",
             state: ResizeSourceState::None,
@@ -45,7 +45,7 @@ impl ProcessResizeSource {
         }
     }
 
-    pub(in crate::qjs_term) fn next_resize(&mut self) -> Result<Option<TermResize>, CliError> {
+    pub(crate) fn next_resize(&mut self) -> Result<Option<TermResize>, CliError> {
         (self.poll)(&mut self.state)
     }
 
@@ -79,7 +79,7 @@ pub(in crate::qjs_term) struct TerminalSizeSource {
 }
 
 #[cfg(unix)]
-pub(in crate::qjs_term) fn terminal_size_source(fd: libc::c_int) -> ProcessResizeSource {
+pub(crate) fn terminal_size_source(fd: libc::c_int) -> ProcessResizeSource {
     ProcessResizeSource {
         kind: "terminal-size-fd",
         state: ResizeSourceState::TerminalSizeFd(TerminalSizeSource::new(fd)),

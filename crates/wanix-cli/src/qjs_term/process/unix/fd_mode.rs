@@ -3,13 +3,13 @@ use crate::unix_fd::with_borrowed_fd;
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 
 #[derive(Debug)]
-pub(super) struct NonBlockingFd {
+pub(crate) struct NonBlockingFd {
     fd: libc::c_int,
     original_flags: OFlags,
 }
 
 impl NonBlockingFd {
-    pub(super) fn enter(fd: libc::c_int) -> Result<Self, CliError> {
+    pub(crate) fn enter(fd: libc::c_int) -> Result<Self, CliError> {
         let original_flags = process_stdin_flags(fd)?;
         set_process_stdin_flags(
             fd,

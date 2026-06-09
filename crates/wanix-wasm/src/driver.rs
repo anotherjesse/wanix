@@ -220,7 +220,7 @@ mod tests {
         );
     }
 
-    const SHELL_GUEST: &[u8] = include_bytes!("../fixtures/shell.wasm");
+    const SHELL_GUEST: &[u8] = crate::SHELL_WASM;
 
     #[test]
     fn shell_guest_runs_echo_via_dash_c() {

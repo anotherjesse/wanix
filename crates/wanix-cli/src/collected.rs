@@ -5,7 +5,7 @@ use crate::wasm_args::parse_wasm_command;
 use crate::{
     CliError, CliOutput, agent, agent_exec_server, capsule, cpu, mesh, mount, new, p9_stdio,
     parse_qjs_command, parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term, rootfs,
-    serve, tool, volume, wasm,
+    serve, sh, tool, volume, wasm,
 };
 
 pub(super) fn run_collected_command(
@@ -25,6 +25,9 @@ pub(super) fn run_collected_command(
             mount::run_mount_command(mount::parse_mount_command(verb, rest)?)
         }
         Some("wasm") => wasm::run_wasm(parse_wasm_command(rest)?, process_stdin),
+        // `sh -c LINE` runs collected; interactive `sh` needs the fd-aware
+        // terminal path and is refused here with a usage pointer.
+        Some("sh") => sh::run_sh(sh::parse_sh_command(rest)?, process_stdin),
         Some("agent") => agent::run_agent_command(agent::parse_agent_command(rest)?),
         Some("capsule") => capsule::run_capsule_command(capsule::parse_capsule_command(rest)?),
         Some("agent-exec-server") => require_live_process_io(

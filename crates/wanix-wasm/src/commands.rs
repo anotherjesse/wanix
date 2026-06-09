@@ -20,6 +20,14 @@ use wanix_fs::MemFs;
 /// `bin/<name>.wasm` (see [`crate::command_bin`]).
 pub const COMMANDS: &[(&str, &[u8])] = &[("jaq", include_bytes!("../fixtures/commands/jaq.wasm"))];
 
+/// The bundled `wanix-sh` shell (`crates/wanix-wasm/fixtures/shell-src`),
+/// compiled to `wasm32-wasip1`.
+///
+/// The shell is an ordinary command guest — seed it into a task namespace (for
+/// example next to [`command_bin`]'s commands) and run it through
+/// [`crate::WasmTaskDriver`]; `-c LINE` runs one line, no `-c` starts the REPL.
+pub const SHELL_WASM: &[u8] = include_bytes!("../fixtures/shell.wasm");
+
 /// Builds an in-memory `bin` filesystem holding every command as `<name>.wasm`.
 ///
 /// Bind the returned filesystem at `bin` in a task's namespace; children inherit

@@ -17,8 +17,8 @@ pub(super) use events::{
     ProcessEventSources, ProcessInputMode, TerminalPumpPolicy, TerminalPumpState,
 };
 #[cfg(unix)]
-pub(super) use resize::terminal_size_source;
-pub(super) use resize::{ProcessResizeSource, TermResize};
+pub(crate) use resize::terminal_size_source;
+pub(crate) use resize::{ProcessResizeSource, TermResize};
 #[cfg(all(test, unix))]
 pub(super) use resize::{ResizeQueue, resize_queue_source};
 
@@ -124,7 +124,7 @@ pub(super) fn task_exited(runtime: &QuickJsTaskRuntime) -> Result<bool, CliError
     Ok(runtime.exit_code()?.is_some())
 }
 
-pub(super) fn feed_terminal_after_eval(
+pub(crate) fn feed_terminal_after_eval(
     terminal: &TermDevice,
     terminal_id: &str,
     chunk: &[u8],
@@ -143,7 +143,7 @@ pub(super) fn feed_terminal_after_eval(
     Ok(())
 }
 
-pub(super) fn feed_terminal_resize_after_eval(
+pub(crate) fn feed_terminal_resize_after_eval(
     terminal: &TermDevice,
     terminal_id: &str,
     resize: &TermResize,
@@ -175,7 +175,7 @@ pub(super) fn drain_terminal_output(
     )
 }
 
-pub(super) fn drain_terminal_output_bytes(
+pub(crate) fn drain_terminal_output_bytes(
     terminal: &TermDevice,
     terminal_id: &str,
 ) -> Result<Vec<u8>, CliError> {

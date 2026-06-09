@@ -7,6 +7,11 @@ mod unix;
 
 #[cfg(unix)]
 pub(super) use unix::terminal_size_for_fd;
+#[cfg(unix)]
+pub(crate) use unix::{
+    NonBlockingFd, ProcessStdinPoll, ProcessStdinRead, poll_process_stdin,
+    read_process_stdin_after_poll,
+};
 
 use super::CliError;
 #[cfg(unix)]

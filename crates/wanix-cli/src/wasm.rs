@@ -23,9 +23,10 @@ use wanix_vfs::{BindOptions, Namespace};
 use wanix_wasi::WasiConfig;
 use wanix_wasm::{CaptureFile, WasiRunner, module_cache_dir};
 
+use crate::mesh::IrohMount;
 use crate::qjs_args::{QjsStdin, read_qjs_stdin};
 use crate::wasm_args::WasmCommand;
-use crate::{CliError, CliOutput};
+use crate::{CliError, CliOutput, bind_mesh_mounts_into};
 
 pub(super) fn run_wasm(
     command: WasmCommand,
@@ -39,7 +40,10 @@ pub(super) fn run_wasm(
         config,
         stdout,
         stderr,
+        mesh_mounts: _mesh_mounts,
     } = captured;
+    // `_mesh_mounts` stays alive across `run`: each keepalive owns the runtime
+    // the guest's mesh-mounted filesystem ops run on.
     let exit = runner
         .run(config)
         .map_err(|error| CliError::new(format!("wasm: {error:#}"), 1))?;
@@ -60,6 +64,9 @@ struct CapturedWasmConfig {
     config: WasiConfig,
     stdout: CaptureFile,
     stderr: CaptureFile,
+    /// `--mount-mesh` dialer keepalives; must outlive the guest run (each owns
+    /// the runtime its mounted filesystem drives QUIC ops on).
+    mesh_mounts: Vec<IrohMount>,
 }
 
 fn captured_wasm_config(
@@ -72,8 +79,10 @@ fn captured_wasm_config(
         env,
         cwd,
         stdin,
+        mesh_mounts,
     } = command;
-    let namespace = preopen_cwd(&cwd)?;
+    let mut namespace = preopen_cwd(&cwd)?;
+    let mesh_mounts = bind_mesh_mounts_into(&mut namespace, &mesh_mounts)?;
     let stdout = CaptureFile::new();
     let stderr = CaptureFile::new();
     let mut config = WasiConfig::new(namespace)
@@ -86,6 +95,7 @@ fn captured_wasm_config(
         config,
         stdout,
         stderr,
+        mesh_mounts,
     })
 }
 
@@ -136,10 +146,13 @@ fn stdin_file(bytes: &[u8]) -> Result<Box<dyn File>, CliError> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{WasmCommand, run_wasm, stdin_file};
-    use wanix_fs::{FsError, NormalizedPath};
+    use crate::mesh::mounts::test_support::serve_native;
+    use crate::qjs_args::MeshMountSpec;
+    use wanix_fs::{FileSystem, FsError, MemFs, NormalizedPath};
 
     const RUST_GUEST: &[u8] = include_bytes!("../../wanix-wasm/fixtures/rust-guest.wasm");
 
@@ -157,19 +170,24 @@ mod tests {
         dir
     }
 
+    fn wasm_command(root: &std::path::Path, args: &[&str]) -> WasmCommand {
+        WasmCommand {
+            path: root.join("guest.wasm"),
+            args: args.iter().map(|&arg| arg.to_owned()).collect(),
+            env: Vec::new(),
+            cwd: NormalizedPath::new(root.to_str().unwrap()).unwrap(),
+            stdin: None,
+            mesh_mounts: Vec::new(),
+        }
+    }
+
     #[test]
     fn run_wasm_preopens_cwd_and_captures_stdio() {
         let root = temp_dir("run-wasm");
         std::fs::write(root.join("guest.wasm"), RUST_GUEST).unwrap();
         std::fs::write(root.join("in.txt"), b"hello").unwrap();
 
-        let command = WasmCommand {
-            path: root.join("guest.wasm"),
-            args: vec!["/in.txt".to_owned(), "/out.txt".to_owned()],
-            env: Vec::new(),
-            cwd: NormalizedPath::new(root.to_str().unwrap()).unwrap(),
-            stdin: None,
-        };
+        let command = wasm_command(&root, &["/in.txt", "/out.txt"]);
         let output = run_wasm(command, &mut std::io::empty()).unwrap();
 
         assert_eq!(output.exit_code(), 0);
@@ -178,6 +196,42 @@ mod tests {
             std::fs::read_to_string(root.join("out.txt")).unwrap(),
             "rust-wasm saw: hello"
         );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// The wasm-task mirror of `mesh_mount_binds_into_task_namespace_and_stays_alive`:
+    /// a compiled WASI guest reads a seeded file through a `--mount-mesh` import
+    /// and writes its output back through the same mount, with the served root
+    /// observing the write — the keepalive runtime stays alive for the whole run.
+    #[test]
+    fn run_wasm_resolves_mesh_mounted_paths_from_the_guest() {
+        let host = Arc::new(MemFs::new());
+        host.write_file("seed.txt", b"served-bytes").unwrap();
+        let (server, url) = serve_native(host.clone() as Arc<dyn FileSystem>, 8);
+
+        let root = temp_dir("run-wasm-mesh");
+        std::fs::write(root.join("guest.wasm"), RUST_GUEST).unwrap();
+
+        let mut command = wasm_command(&root, &["/vol/seed.txt", "/vol/out.txt"]);
+        command.mesh_mounts = vec![MeshMountSpec {
+            addr: url,
+            guest_path: NormalizedPath::new("vol").unwrap(),
+        }];
+        let output = run_wasm(command, &mut std::io::empty()).unwrap();
+
+        assert_eq!(
+            output.exit_code(),
+            0,
+            "stderr: {}",
+            String::from_utf8_lossy(output.stderr())
+        );
+        assert!(String::from_utf8_lossy(output.stdout()).contains("rust-wasm: read 12 bytes"));
+        // The guest's write crossed the wire into the served root.
+        assert_eq!(
+            host.read_file("out.txt").unwrap(),
+            b"rust-wasm saw: served-bytes"
+        );
+        drop(server);
         std::fs::remove_dir_all(root).ok();
     }
 

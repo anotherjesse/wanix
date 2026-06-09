@@ -6,7 +6,7 @@ use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ProcessStdinPoll {
+pub(crate) enum ProcessStdinPoll {
     Ready,
     Idle,
 }
@@ -14,7 +14,7 @@ pub(super) enum ProcessStdinPoll {
 const MILLIS_PER_SECOND: i64 = 1_000;
 const NANOS_PER_MILLI: i64 = 1_000_000;
 
-pub(super) fn poll_process_stdin(
+pub(crate) fn poll_process_stdin(
     input_fd: libc::c_int,
     timeout: Duration,
 ) -> Result<ProcessStdinPoll, CliError> {

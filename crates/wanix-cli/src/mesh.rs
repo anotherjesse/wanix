@@ -11,9 +11,11 @@
 //! connection, never a client-claimed `uname`.
 
 mod grant;
+pub(crate) mod mounts;
 pub(crate) mod resource;
 mod serve;
 mod ticket;
 
+pub(crate) use mounts::{bind_mesh_mounts, bind_mesh_mounts_into};
 pub(crate) use serve::{parse_mesh_serve_command, run_mesh_serve_streaming};
 pub(crate) use ticket::{IROH_SCHEME, IrohMount, MeshTicket, dial_iroh_remote};

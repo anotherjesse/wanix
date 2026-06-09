@@ -23,6 +23,7 @@ mod qjs_support;
 mod qjs_term;
 mod rootfs;
 mod serve;
+mod sh;
 mod terminal_mode;
 mod tool;
 #[cfg(unix)]
@@ -36,6 +37,7 @@ use std::io::{self, Read, Write};
 
 use wanix_fs::FsError;
 
+pub(crate) use mesh::{bind_mesh_mounts, bind_mesh_mounts_into};
 pub use native::run_native_process;
 #[cfg(unix)]
 pub use process_io::UnixTerminalFds;
@@ -45,10 +47,10 @@ use qjs_args::{
 };
 pub(crate) use qjs_support::{
     QJS_GUEST_SCRIPT, apply_qjs_task_runtime_limits, attach_task_stdio,
-    bind_child_output_to_parent, bind_host_mounts, bind_mesh_mounts, configure_qjs_task,
-    copy_script_directory, copy_script_directory_into, ensure_snapshot_task_fds_closed,
-    eval_qjs_source, finish_cli_task_output, guest_path_in_cwd, parse_exit, quickjs_runner,
-    read_file, read_utf8_script,
+    bind_child_output_to_parent, bind_host_mounts, configure_qjs_task, copy_script_directory,
+    copy_script_directory_into, ensure_snapshot_task_fds_closed, eval_qjs_source,
+    finish_cli_task_output, guest_path_in_cwd, parse_exit, quickjs_runner, read_file,
+    read_utf8_script,
 };
 pub use terminal_mode::{NativeRawTerminalMode, command_requests_raw_tty};
 

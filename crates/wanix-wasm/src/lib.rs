@@ -26,7 +26,7 @@ mod task_stdio;
 
 pub use cache::module_cache_dir;
 pub use capture::{CaptureFile, host_stderr, host_stdout};
-pub use commands::{COMMANDS, command_bin};
+pub use commands::{COMMANDS, SHELL_WASM, command_bin};
 pub use driver::WasmTaskDriver;
 pub use runner::WasiRunner;
 pub use state::WasiState;

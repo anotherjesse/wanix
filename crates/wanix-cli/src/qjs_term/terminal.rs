@@ -9,12 +9,12 @@ use wanix_vfs::BindOptions;
 use super::pump::drain_terminal_output;
 use crate::{CliError, parse_exit, write_process_output};
 
-pub(super) struct AttachedTerminal {
-    pub(super) device: Arc<TermDevice>,
-    pub(super) id: String,
+pub(crate) struct AttachedTerminal {
+    pub(crate) device: Arc<TermDevice>,
+    pub(crate) id: String,
 }
 
-pub(super) fn attach_task_terminal(
+pub(crate) fn attach_task_terminal(
     task: &Task,
     stdin_bytes: Option<Vec<u8>>,
 ) -> Result<AttachedTerminal, CliError> {

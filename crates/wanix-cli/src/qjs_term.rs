@@ -31,6 +31,23 @@ use pump::ProcessEventSources;
 use runtime::{QjsTermProgramIo, QjsTermProgramRequest, run_qjs_term_program_streaming};
 pub(crate) use session::QjsShellSession;
 
+// Shared terminal-host plumbing reused by the `sh` session (the wasm-shell
+// sibling of qjs-shell): device attach, byte feed/drain, resize sources, and
+// the polled-stdin fd helpers. The qjs-specific pump (event-loop turns) stays
+// private to this module.
+#[cfg(unix)]
+pub(crate) use process::{
+    NonBlockingFd, ProcessStdinPoll, ProcessStdinRead, poll_process_stdin,
+    read_process_stdin_after_poll,
+};
+#[cfg(unix)]
+pub(crate) use pump::terminal_size_source;
+pub(crate) use pump::{
+    ProcessResizeSource, drain_terminal_output_bytes, feed_terminal_after_eval,
+    feed_terminal_resize_after_eval,
+};
+pub(crate) use terminal::{AttachedTerminal, attach_task_terminal};
+
 pub(super) struct QjsShellStreamingIo<'a> {
     pub(super) process_stdin: &'a mut dyn Read,
     pub(super) process_stdout: &'a mut dyn Write,

@@ -14,10 +14,12 @@ use std::path::PathBuf;
 use wanix_fs::NormalizedPath;
 
 use crate::CliError;
-use crate::qjs_args::{QjsStdin, os_arg_to_string, set_qjs_stdin, validate_env_line};
+use crate::qjs_args::{
+    MeshMountSpec, QjsStdin, os_arg_to_string, parse_mesh_mount, set_qjs_stdin, validate_env_line,
+};
 
 /// A parsed `wasm` command: the module path, guest args, and the shared
-/// invocation flags (env, cwd, stdin).
+/// invocation flags (env, cwd, stdin, mesh mounts).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WasmCommand {
     pub(crate) path: PathBuf,
@@ -25,14 +27,19 @@ pub(crate) struct WasmCommand {
     pub(crate) env: Vec<String>,
     pub(crate) cwd: NormalizedPath,
     pub(crate) stdin: Option<QjsStdin>,
+    /// Native mesh imports (`--mount-mesh IROH_URL=GUEST`). Dialed at run time
+    /// into the guest namespace; the runner holds the dialer keepalives for the
+    /// whole run (this is parse-time data only).
+    pub(crate) mesh_mounts: Vec<MeshMountSpec>,
 }
 
-/// The wasm-specific invocation options: only the four flags that apply to a
+/// The wasm-specific invocation options: only the flags that apply to a
 /// command-style WASI guest.
 struct WasmRunOptions {
     env: Vec<String>,
     cwd: NormalizedPath,
     stdin: Option<QjsStdin>,
+    mesh_mounts: Vec<MeshMountSpec>,
 }
 
 impl WasmRunOptions {
@@ -41,6 +48,7 @@ impl WasmRunOptions {
             env: Vec::new(),
             cwd: NormalizedPath::new(".")?,
             stdin: None,
+            mesh_mounts: Vec::new(),
         })
     }
 
@@ -51,6 +59,7 @@ impl WasmRunOptions {
             env: self.env,
             cwd: self.cwd,
             stdin: self.stdin,
+            mesh_mounts: self.mesh_mounts,
         }
     }
 
@@ -82,9 +91,16 @@ impl WasmRunOptions {
         };
         set_qjs_stdin(&mut self.stdin, source, "wasm")
     }
+
+    fn add_mesh_mount(&mut self, value: &OsString, label: &str) -> Result<(), CliError> {
+        let value = os_arg_to_string(value, label)?;
+        self.mesh_mounts.push(parse_mesh_mount(&value, label)?);
+        Ok(())
+    }
 }
 
-/// Parses `wasm [--env K=V] [--cwd DIR] [--stdin TEXT | --stdin-file PATH|-] FILE.wasm [args...]`.
+/// Parses `wasm [--env K=V] [--cwd DIR] [--stdin TEXT | --stdin-file PATH|-]
+/// [--mount-mesh IROH_URL=GUEST ...] FILE.wasm [args...]`.
 ///
 /// # Errors
 ///
@@ -121,6 +137,10 @@ const WASM_OPTIONS: &[WasmOptionSpec] = &[
     WasmOptionSpec {
         name: "--stdin-file",
         apply: WasmRunOptions::set_stdin_file,
+    },
+    WasmOptionSpec {
+        name: "--mount-mesh",
+        apply: WasmRunOptions::add_mesh_mount,
     },
 ];
 
@@ -256,6 +276,45 @@ mod tests {
             error
                 .to_string()
                 .contains("wasm accepts only one of --stdin or --stdin-file")
+        );
+    }
+
+    #[test]
+    fn parse_wasm_command_collects_repeated_mesh_mounts() {
+        // The iroh URL's own `?addr=...=` must survive: the spec splits on the
+        // LAST `=`, so the address keeps its query and the guest path follows.
+        let command = parse_wasm_command(&os_args([
+            "--mount-mesh",
+            "iroh://abc?addr=127.0.0.1:5599=/vol/notes",
+            "--mount-mesh",
+            "iroh://def=vol/photos",
+            "guest.wasm",
+        ]))
+        .unwrap();
+
+        assert_eq!(command.mesh_mounts.len(), 2);
+        assert_eq!(
+            command.mesh_mounts[0].addr,
+            "iroh://abc?addr=127.0.0.1:5599"
+        );
+        assert_eq!(command.mesh_mounts[0].guest_path.as_str(), "vol/notes");
+        assert_eq!(command.mesh_mounts[1].addr, "iroh://def");
+        assert_eq!(command.mesh_mounts[1].guest_path.as_str(), "vol/photos");
+    }
+
+    #[test]
+    fn parse_wasm_command_reports_malformed_mesh_mounts() {
+        let error = parse_wasm_command(&os_args([
+            "--mount-mesh",
+            "tcp://host:1=/vol",
+            "guest.wasm",
+        ]))
+        .unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        assert!(
+            error
+                .to_string()
+                .contains("wasm --mount-mesh address must be an iroh://")
         );
     }
 

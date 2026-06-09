@@ -5,8 +5,8 @@ mod fd_mode;
 mod stdin_poll;
 mod terminal_size;
 
-use fd_mode::NonBlockingFd;
-use stdin_poll::{ProcessStdinPoll, poll_process_stdin};
+pub(crate) use fd_mode::NonBlockingFd;
+pub(crate) use stdin_poll::{ProcessStdinPoll, poll_process_stdin};
 
 use super::super::pump::{
     TerminalPumpContext, TerminalPumpState, feed_terminal_chunk_and_pump, pump_terminal_idle,
@@ -95,14 +95,14 @@ impl PolledFeedSession<'_> {
     }
 }
 
-enum ProcessStdinRead {
+pub(crate) enum ProcessStdinRead {
     Bytes(usize),
     Eof,
     Interrupted,
     Idle,
 }
 
-fn read_process_stdin_after_poll(
+pub(crate) fn read_process_stdin_after_poll(
     process_stdin: &mut dyn Read,
     bytes: &mut [u8],
 ) -> Result<ProcessStdinRead, CliError> {
