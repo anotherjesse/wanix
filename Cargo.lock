@@ -5354,6 +5354,7 @@ dependencies = [
  "wanix-module-cache",
  "wanix-pipe",
  "wanix-task",
+ "wanix-term",
  "wanix-vfs",
  "wanix-wasi",
  "wanix-wasi-host",

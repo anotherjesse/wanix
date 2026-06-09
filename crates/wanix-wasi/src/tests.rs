@@ -1774,15 +1774,18 @@ fn preview1_path_open_flags_convert_to_wanix_open_options() {
         ),
         Err(Errno::Notcapable)
     );
-    assert_eq!(
-        WasiPathOpen::from_preview1(
-            0,
-            WasiRights::FD_READ,
-            WasiRights::from_preview1_bits(1 << 63),
-            0
-        ),
-        Err(Errno::Notcapable)
-    );
+    // Rights outside the modeled subset (here 1 << 63) are clamped away, not
+    // refused: libc and Rust std request rights wholesale on every open, so
+    // the open succeeds and the granted rights are the modeled intersection.
+    let clamped = WasiPathOpen::from_preview1(
+        0,
+        WasiRights::from_preview1_bits(WasiRights::FD_READ.bits() | (1 << 63)),
+        WasiRights::from_preview1_bits(1 << 63),
+        0,
+    )
+    .unwrap();
+    assert_eq!(clamped.rights_base(), WasiRights::FD_READ);
+    assert_eq!(clamped.rights_inheriting(), WasiRights::NONE);
 }
 
 #[test]

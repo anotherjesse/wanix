@@ -24,7 +24,7 @@ prerequisites:
   - concepts/the-fd-table
 usedInFlows: []
 honestLimits:
-  - "Interactive use (line editing, tab completion, a live prompt) is NOT built yet; only `shell.wasm -c \"<line>\"` runs. The prompt renderer (render_prompt) exists and is tested but has no REPL caller."
+  - "Interactive editing is byte-wise ASCII: echo, backspace, Ctrl-C line cancel, Ctrl-D exit. NO tab completion, NO history, NO cursor movement or arrow keys yet (escape sequences are ignored, not interpreted)."
   - "Pipeline stages run SEQUENTIALLY (each buffers its whole output before the next drains it), a deliberate divergence from Plan 9 concurrent stages — see concepts/task-exit-closes-fds."
   - "cwd is shell-LOCAL: cd/pwd/$PWD track it, but spawned children do not inherit a moved cwd (they run at root). Exported env DOES propagate to children."
   - "Honest-scope: control flow (if/for/while/case), functions, command/arithmetic substitution, ${VAR:-default}, globbing, tilde, fd-dup and here-doc redirects, and external `>>` append are recognized but return a clear `... not supported yet` error — never a silent no-op."
@@ -62,4 +62,10 @@ The shell's *only* contact with the outside world is the `NamespaceOps` trait (`
 
 Simple commands and arguments; quote removal and `$VAR` / `${VAR}` / `$?` expansion; `;` sequences; `|` pipelines; `&&`/`||` short-circuit; `<` / `>` / `>>` file redirects; the `echo`, `cat`, `pwd`, `env`, `true`, `false`, `:`, `exit`, `cd`, `export`, `unset` builtins; and external command launch (resolved from `bin`, inheriting the shell's exported env). Builtins split into *pipeable* (compose in pipelines) and *special* (`cd`/`export`/`unset`, single-stage only — piping one is an honest error).
 
-Everything else listed under honest limits above is parsed but reported as unsupported. The next step is interactive input (a blocking `#term` read + `poll_oneoff` in the wasm host, on a dedicated thread), which unlocks line editing, tab completion, and the live prompt.
+Everything else listed under honest limits above is parsed but reported as unsupported.
+
+## Interactive mode
+
+Run without `-c` and the shell is a REPL (`run_repl`): it renders the prompt (`$PS1`, default `\w $ `, with a `[code]` prefix when `$?` is non-zero), reads stdin byte-wise, and owns the cooked-line behavior per ADR 0003 — echo, backspace (`0x7f`/`0x08`), Ctrl-C cancels the line and reprompts, Ctrl-D on an empty line (or end-of-stream) exits, Enter dispatches the line through the same parse → lower → execute path as `-c`. The host side makes this real: `fd_read` in `wanix-wasi-host` now *blocks* on a not-ready device fd (bounded-backoff readiness parking, ADR 0010 tier 2), so a shell whose fd 0 is `#term/<id>/program` parks until the terminal client types. The end-to-end proof is `shell_repl_serves_a_terminal_session_over_blocking_reads` in `crates/wanix-wasm/src/driver.rs`.
+
+Deliberately not built yet: tab completion, history, and cursor movement/arrow keys (escape sequences are ignored). The next steps are those, plus a CLI entry that binds a native terminal to a wasm shell task the way `qjs-shell` does for qjs.

@@ -11,8 +11,8 @@
 //! compiles and runs a `.wasm` file directly. Task-driver integration (auto-start
 //! as a `#task/new/wasm` Wanix task) lives separately in
 //! [`wanix_wasm::WasmTaskDriver`]; this file does not go through the task model.
-//! The underlying linker speaks a command-style WASI subset (no `poll_oneoff`
-//! readiness).
+//! The underlying linker speaks a command-style WASI subset (blocking `fd_read`
+//! and an `fd_read`-only `poll_oneoff`; see `wanix-wasi-host`).
 
 use std::io::Read;
 use std::path::Path;

@@ -77,6 +77,19 @@ pub trait NamespaceOps {
     /// Returns [`ShellError::Io`](crate::ShellError::Io) if the write fails.
     fn write_stderr(&mut self, bytes: &[u8]) -> ShellResult<()>;
 
+    /// Reads bytes from the shell's standard input (fd 0), blocking until at
+    /// least one byte is available.
+    ///
+    /// Returns `Ok(0)` only at end-of-stream. The interactive REPL is the
+    /// consumer: when fd 0 is a `#term/<id>/program` stream the read parks
+    /// until the terminal client sends bytes (the host's blocking-read
+    /// contract), and a closed stream ends the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellError::Io`](crate::ShellError::Io) if the read fails.
+    fn read_stdin(&mut self, buf: &mut [u8]) -> ShellResult<usize>;
+
     /// Reports whether a path exists in the namespace (file or directory).
     ///
     /// Returns `Ok(false)` when the path is simply absent — that is not an error.

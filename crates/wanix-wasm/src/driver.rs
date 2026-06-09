@@ -522,4 +522,101 @@ mod tests {
         let (out, _err) = run_shell_with_bin("shell.wasm -c \"echo '[1,2,3]' | jaq add\"");
         assert_eq!(out.trim(), "6", "echo array | jaq add: {out:?}");
     }
+
+    // ---- interactive REPL over #term ------------------------------------
+
+    use wanix_term::TermDevice;
+
+    fn term_path(id: &str, name: &str) -> NormalizedPath {
+        NormalizedPath::new(format!("{id}/{name}")).expect("term path")
+    }
+
+    /// Writes terminal input on the data side (what a terminal client types).
+    fn type_into_terminal(term: &TermDevice, id: &str, bytes: &[u8]) {
+        let mut data = term
+            .open(
+                &term_path(id, "data"),
+                OpenOptions {
+                    write: true,
+                    ..OpenOptions::default()
+                },
+            )
+            .expect("open data side for write");
+        data.write(bytes).expect("feed terminal input");
+    }
+
+    /// Drains whatever the program has written to the terminal so far into
+    /// `seen`, returning once `seen` contains `until` (or panicking after a
+    /// generous deadline — the guest is compiling on first use).
+    fn read_terminal_until(term: &TermDevice, id: &str, seen: &mut Vec<u8>, until: &str) {
+        let mut data = term
+            .open(&term_path(id, "data"), OpenOptions::read())
+            .expect("open data side for read");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut buf = [0u8; 1024];
+        loop {
+            let n = data.read(&mut buf).expect("read terminal output");
+            seen.extend_from_slice(&buf[..n]);
+            if String::from_utf8_lossy(seen).contains(until) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "terminal output never contained {until:?}: {:?}",
+                String::from_utf8_lossy(seen)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn shell_repl_serves_a_terminal_session_over_blocking_reads() {
+        // The river: an interactive wanix-sh session through #term. The shell
+        // (a wasm task) blocks reading fd 0 = #term/<id>/program; this test
+        // plays the terminal client on the data side — typing only after the
+        // prompt appears, so every read genuinely parks and wakes.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell.wasm");
+
+        let term = TermDevice::new();
+        let id = term.alloc().expect("alloc terminal");
+
+        // No -c: the shell starts its REPL.
+        let task = wasm_task(namespace_on(&fs), "shell.wasm");
+        for fd in [Fd::STDIN, Fd::STDOUT, Fd::STDERR] {
+            let file = term
+                .open(&term_path(&id, "program"), OpenOptions::read_write())
+                .expect("open program side");
+            task.insert_fd(fd, file, term_path(&id, "program"))
+                .expect("install fd");
+        }
+
+        let shell = task.clone();
+        let session = std::thread::spawn(move || WasmTaskDriver::new().start(&shell));
+
+        // Prompt appears before any input exists: the first stdin read parks.
+        let mut seen = Vec::new();
+        read_terminal_until(&term, &id, &mut seen, "$ ");
+
+        // Type a command; the parked read wakes, the shell echoes (program
+        // writes map \n to \r\n) and runs the line, then prompts again.
+        type_into_terminal(&term, &id, b"echo hi\r");
+        read_terminal_until(&term, &id, &mut seen, "hi\r\nhi\r\n");
+        read_terminal_until(&term, &id, &mut seen, "hi\r\n/ $ ");
+
+        // Ctrl-D on the empty line ends the session.
+        type_into_terminal(&term, &id, b"\x04");
+        session
+            .join()
+            .expect("session thread")
+            .expect("shell task ran");
+        assert_eq!(task.exit(), "0", "Ctrl-D exits the REPL cleanly");
+
+        let transcript = String::from_utf8_lossy(&seen).into_owned();
+        assert!(
+            transcript.contains("echo hi\r\nhi\r\n"),
+            "echoed line then output: {transcript:?}"
+        );
+    }
 }

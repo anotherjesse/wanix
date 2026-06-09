@@ -20,6 +20,11 @@
 //! `bin` directory, inheriting the shell's exported env). Redirections, `&&`/`||`,
 //! control flow, and expansion are recognized by the parser but reported as
 //! [`ShellError::Unsupported`] until their executor support lands.
+//!
+//! Without `-c` the shell is an interactive REPL ([`run_repl`]): a prompt over
+//! blocking stdin reads with guest-owned cooked-line editing per ADR 0003
+//! (echo, backspace, Ctrl-C line cancel, Ctrl-D exit). Tab completion and
+//! history are deliberately not implemented yet.
 
 mod builtins;
 mod error;
@@ -28,6 +33,7 @@ mod expand;
 mod lower;
 mod ns;
 mod prompt;
+mod repl;
 mod resolve;
 mod state;
 mod syntax;
@@ -35,6 +41,7 @@ mod syntax;
 pub use error::{ShellError, ShellResult};
 pub use ns::{InputSource, NamespaceOps, OutputSink, SpawnSpec};
 pub use prompt::{DEFAULT_PS1, render as render_prompt};
+pub use repl::run_repl;
 pub use state::ShellState;
 
 use exec::execute;
@@ -43,22 +50,15 @@ use syntax::parse_program;
 
 /// Runs the shell for one invocation and returns its process exit code.
 ///
-/// `args` is the full argument vector (`args[0]` is the program name). The only
-/// supported invocation today is `-c <command-line>`; anything else prints a
-/// usage note to standard error.
+/// `args` is the full argument vector (`args[0]` is the program name).
+/// `-c <command-line>` runs one line non-interactively; without `-c` the shell
+/// is an interactive REPL over stdin/stdout (see [`run_repl`]).
 #[must_use]
 pub fn run_shell(args: &[String], ns: &mut dyn NamespaceOps) -> i32 {
+    let mut state = ShellState::new();
     match command_string(args) {
-        Some(line) => {
-            let mut state = ShellState::new();
-            run_line(&line, &mut state, ns)
-        }
-        None => {
-            let _ = ns.write_stderr(
-                b"wsh: interactive mode is not supported yet; use -c \"<command>\"\n",
-            );
-            2
-        }
+        Some(line) => run_line(&line, &mut state, ns),
+        None => run_repl(&mut state, ns),
     }
 }
 

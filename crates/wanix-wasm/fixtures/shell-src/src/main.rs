@@ -13,14 +13,26 @@ struct WasiNamespace;
 
 impl NamespaceOps for WasiNamespace {
     fn write_stdout(&mut self, bytes: &[u8]) -> ShellResult<()> {
-        std::io::stdout()
+        // Flush explicitly: std's stdout is line-buffered, and interactive
+        // prompts and byte-wise echo carry no trailing newline.
+        let mut stdout = std::io::stdout();
+        stdout
             .write_all(bytes)
+            .and_then(|()| stdout.flush())
             .map_err(|err| ShellError::Io(err.to_string()))
     }
 
     fn write_stderr(&mut self, bytes: &[u8]) -> ShellResult<()> {
         std::io::stderr()
             .write_all(bytes)
+            .map_err(|err| ShellError::Io(err.to_string()))
+    }
+
+    fn read_stdin(&mut self, buf: &mut [u8]) -> ShellResult<usize> {
+        // WASI fd_read on fd 0; the host parks until the backing device
+        // (e.g. #term/<id>/program) has bytes, so this is a true blocking read.
+        std::io::stdin()
+            .read(buf)
             .map_err(|err| ShellError::Io(err.to_string()))
     }
 

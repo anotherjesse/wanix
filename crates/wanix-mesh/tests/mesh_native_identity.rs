@@ -219,8 +219,9 @@ fn ungranted_peer_is_default_denied_over_the_native_wire() {
     );
     // It is a transport fault (no stream served), not a typed application error: a
     // denied peer never reaches the server's FileSystem to receive a typed reply.
+    // Transport faults are typed `FsError::Unreachable` on the native wire.
     match direct {
-        Err(wanix_fs::FsError::Other(_)) => {}
+        Err(wanix_fs::FsError::Unreachable(_)) => {}
         other => panic!("expected a transport fault for a denied native peer, got {other:?}"),
     }
 

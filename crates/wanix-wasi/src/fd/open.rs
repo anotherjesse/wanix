@@ -146,11 +146,14 @@ impl WasiPathOpen {
         if oflags & !(WasiOpenOptions::SUPPORTED_OFLAGS | WasiOpenOptions::OFLAGS_DIRECTORY) != 0 {
             return Err(Errno::Notcapable);
         }
-        if !WasiRights::DIRECTORY_INHERITING.contains(rights_base)
-            || !WasiRights::DIRECTORY_INHERITING.contains(rights_inheriting)
-        {
-            return Err(Errno::Notcapable);
-        }
+        // libc/std guests request rights wholesale (Rust std 1.93 asks for
+        // fd_sync/fd_advise/fd_fdstat_set_flags/path_link/poll_fd_readwrite on
+        // every open). Preview 1 rights are advisory and deprecated, so clamp
+        // the request to the modeled subset instead of refusing the open; the
+        // granted fd rights are always the modeled intersection, and the
+        // unimplemented syscalls behind the dropped bits still refuse honestly.
+        let rights_base = rights_base.intersection(WasiRights::DIRECTORY_INHERITING);
+        let rights_inheriting = rights_inheriting.intersection(WasiRights::DIRECTORY_INHERITING);
         let create = oflags & WasiOpenOptions::OFLAGS_CREATE != 0;
         let directory = oflags & WasiOpenOptions::OFLAGS_DIRECTORY != 0;
         let truncate = oflags & WasiOpenOptions::OFLAGS_TRUNCATE != 0;

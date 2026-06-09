@@ -6,6 +6,7 @@ use wasmtime::{Caller, Linker, Result};
 use super::super::ERRNO_SUCCESS;
 use super::super::WasiHost;
 use super::super::mem::{errno, memory, read_bytes, read_iovs, write_bytes, write_u32};
+use super::super::wait::wait_read_ready;
 
 pub(super) fn register<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<()> {
     let m = super::super::MODULE;
@@ -41,6 +42,12 @@ pub(super) fn register<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<
         m,
         "fd_read",
         |mut caller: Caller<'_, S>, fd: i32, iovs: i32, iovs_len: i32, nout: i32| -> Result<i32> {
+            // Blocking tier-2 read (ADR 0010): park this host thread until the
+            // fd would produce data. Regular files are always ready (incl. at
+            // EOF, where the read honestly returns 0); a queue-backed device fd
+            // (#term/#pipe stdin) waits here for bytes. A readiness error falls
+            // through so the read below reports its errno.
+            wait_read_ready(caller.data_mut().wasi(), WasiFd::new(fd as u32));
             let mem = memory(&mut caller)?;
             let mut total = 0usize;
             for (ptr, len) in read_iovs(&mem, &mut caller, iovs, iovs_len)? {

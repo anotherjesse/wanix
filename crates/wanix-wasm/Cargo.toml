@@ -21,6 +21,7 @@ wasmtime = { version = "45.0.0", default-features = false, features = [
 
 [dev-dependencies]
 wanix-pipe = { path = "../wanix-pipe" }
+wanix-term = { path = "../wanix-term" }
 
 [lib]
 name = "wanix_wasm"

@@ -2,9 +2,9 @@
 
 use wasmtime::{Caller, Linker, Result};
 
+use super::ERRNO_SUCCESS;
 use super::WasiHost;
 use super::mem::{memory, write_bytes, write_u64};
-use super::{ERRNO_NOSYS, ERRNO_SUCCESS};
 
 pub(super) fn register<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<()> {
     let m = super::MODULE;
@@ -30,11 +30,6 @@ pub(super) fn register<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<
             write_u64(&mem, &mut caller, out, now)?;
             Ok(ERRNO_SUCCESS)
         },
-    )?;
-    linker.func_wrap(
-        m,
-        "poll_oneoff",
-        |_: Caller<'_, S>, _i: i32, _o: i32, _n: i32, _ne: i32| ERRNO_NOSYS,
     )?;
     Ok(())
 }

@@ -11,10 +11,10 @@
 //!
 //! [`WasmTaskDriver`] promotes the runner into a first-class Wanix task driver:
 //! a `.wasm` task runs against the task's namespace, cwd, env, argv, and stdio
-//! fds, with an observable task exit. The shared linker registers `poll_oneoff`
-//! as `ERRNO_NOSYS`, so the runner supports command-style guests (`_start`,
-//! fd/path I/O, args/env, clock, exit) with no poll readiness — it is not a
-//! general-purpose WASI host.
+//! fds, with an observable task exit. The shared linker gives command-style
+//! guests (`_start`, fd/path I/O, args/env, clock, exit) blocking reads on
+//! device fds and an `fd_read`-only `poll_oneoff` (everything else stays
+//! deliberately unsupported) — it is not a general-purpose WASI host.
 
 mod cache;
 mod capture;

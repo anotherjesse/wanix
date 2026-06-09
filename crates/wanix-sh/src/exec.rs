@@ -22,18 +22,37 @@ enum Outcome {
     Exit(i32),
 }
 
+/// The result of executing a whole plan: the final status plus whether the
+/// `exit` builtin ended the run (the REPL stops on it; `-c` just returns).
+pub(crate) struct PlanOutcome {
+    pub(crate) status: i32,
+    pub(crate) exited: bool,
+}
+
 /// Runs every pipeline in `plan` in sequence and returns the final exit status.
 ///
 /// `state` is threaded through so state-mutating builtins (`cd`/`export`/…) and
 /// `$?` see each pipeline's effect.
 pub fn execute(plan: &Plan, state: &mut ShellState, ns: &mut dyn NamespaceOps) -> i32 {
+    execute_plan(plan, state, ns).status
+}
+
+/// [`execute`] with the `exit` request made observable for the REPL.
+pub(crate) fn execute_plan(
+    plan: &Plan,
+    state: &mut ShellState,
+    ns: &mut dyn NamespaceOps,
+) -> PlanOutcome {
     let mut status = 0;
     for list in &plan.lists {
         match run_and_or_list(list, state, ns) {
             Ok(Outcome::Status(code)) => status = code,
             Ok(Outcome::Exit(code)) => {
                 state.set_last_status(code);
-                return code;
+                return PlanOutcome {
+                    status: code,
+                    exited: true,
+                };
             }
             Err(err) => {
                 let _ = ns.write_stderr(format!("wsh: {err}\n").as_bytes());
@@ -42,7 +61,10 @@ pub fn execute(plan: &Plan, state: &mut ShellState, ns: &mut dyn NamespaceOps) -
         }
         state.set_last_status(status);
     }
-    status
+    PlanOutcome {
+        status,
+        exited: false,
+    }
 }
 
 /// Runs an and-or list, short-circuiting `&&`/`||` on the running exit status.
@@ -326,6 +348,9 @@ mod tests {
         fn write_stderr(&mut self, bytes: &[u8]) -> ShellResult<()> {
             self.err.extend_from_slice(bytes);
             Ok(())
+        }
+        fn read_stdin(&mut self, _buf: &mut [u8]) -> ShellResult<usize> {
+            Ok(0)
         }
         fn exists(&self, path: &str) -> ShellResult<bool> {
             Ok(self.files.contains_key(path))

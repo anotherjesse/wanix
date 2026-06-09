@@ -53,7 +53,10 @@ keep growing the cockpit's coverage of the mesh devices.
   task semantics.
 - `wanix-wasi-host`: standalone Wasmtime WASI Preview 1 linker for the compiled
   wasm runner, generic over a `WasiHost` backing and carrying no engine or task
-  coupling (command-style subset; `poll_oneoff` is `NOSYS`).
+  coupling (command-style subset; `fd_read` blocks on a not-ready device fd
+  via bounded-backoff readiness parking per ADR 0010 tier 2, and `poll_oneoff`
+  supports exactly `fd_read` readiness subscriptions — everything else stays
+  deliberately unsupported).
 - `wanix-module-cache`: shared, audited compiled-artifact cache (fd-based
   trust-boundary verification, atomic write, owner-private dir resolver) used by
   both `wanix-qjs-engine` and `wanix-wasm`.
@@ -189,21 +192,26 @@ tests.
   `shared_vfs_differential` test plus the `compute_bench`/`shared_vfs` examples
   run a Rust wasm task and a qjs task against one `MemFs` and observe identical
   filesystem state, proving the compiled-vs-interpreted tier on one substrate.
-  It is a command-style WASI subset (no `poll_oneoff` readiness).
+  It is a command-style WASI subset (blocking `fd_read` and `fd_read`-only
+  `poll_oneoff` readiness; the rest stays deliberately unsupported).
 - `wanix-sh` (`shell.wasm -c "<line>"`): the Wanix-native shell, run as an
   ordinary `.wasm` task. `brush-parser` syntax → a flat `Plan` (and-or lists →
   pipelines → stages, honest `Unsupported` for anything outside the subset) →
-  an executor over one `NamespaceOps` seam. Non-interactive today: `;` sequences,
+  an executor over one `NamespaceOps` seam. Supported: `;` sequences,
   `|` pipelines (sequential, `#pipe`-backed, EOF via `task-exit-closes-fds`),
   `&&`/`||` short-circuit, `< > >>` redirects, `$VAR`/`${VAR}`/`$?` expansion at
   execution time, the `echo`/`cat`/`pwd`/`env`/`true`/`false`/`:`/`exit` pipeable
   builtins and the `cd`/`export`/`unset` special builtins (single-stage), and
   external command launch resolved from a `bin` dir (so `jaq` is just a command —
   `echo '[1,2,3]' | jaq 'map(.+1)'` works) with exported env propagated to
-  children. cwd is shell-local (children run at root). A pure `render_prompt`
-  exists for the future REPL. Interactive input (line editing, tab completion,
-  live prompt) is the named next step — it needs a blocking `#term` read +
-  `poll_oneoff` in `wanix-wasi-host` on a dedicated thread. See
+  children. cwd is shell-local (children run at root). Without `-c` the shell
+  is an interactive REPL: a `render_prompt` prompt (`$PS1`, `[code]` prefix on
+  non-zero `$?`) over blocking byte-wise stdin reads, with guest-owned cooked-
+  line editing per ADR 0003 (echo, backspace, Ctrl-C line cancel, Ctrl-D exit) —
+  proven end-to-end through `#term` by
+  `shell_repl_serves_a_terminal_session_over_blocking_reads`. Tab completion,
+  history, and arrow keys are deliberately not built yet, and a native-terminal
+  CLI entry for wasm shell tasks (the `qjs-shell` analog) is still missing. See
   [docs/site/content/concepts/wanix-sh.md](docs/site/content/concepts/wanix-sh.md)
   and `shell-command-resolution.md`.
 - `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
