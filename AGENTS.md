@@ -344,6 +344,14 @@ workflow contracts. The active set is intentionally small and consecutive.
 Milestone proofs and progress-journal records belong in tests, examples,
 current-state docs, and commit messages instead of active ADRs.
 
+- [ADR 0000](docs/adrs/0000-agent-native-environment.md) **(MANIFESTO /
+  PROPOSED)**: the agent-native philosophy record, written first-person by the
+  resident agent — durable state outside model context, authority-as-namespace,
+  one fabric and one calling convention, audit by construction, an operable
+  task lifecycle, transport identity, old-world-as-mounts; the native agent
+  loop built from Wanix substrates instead of ported harnesses; and the four
+  agent-first questions (discover/invoke/audit/grant) every new device
+  contract must answer.
 - [ADR 0001](docs/adrs/0001-rust-native-wasmtime-runtime.md): Rust Wanix is the
   host/microkernel runtime, Wasmtime is the execution substrate, Go is a
   migration oracle, and workspace crates stay layered around Wanix-owned
@@ -382,6 +390,19 @@ current-state docs, and commit messages instead of active ADRs.
   resource liveness and retry semantics for agent/shell mounts — hard vs. soft
   mounts, operation deadlines, stale handle behavior, no replay of in-flight
   mutations, stale route hints, and the backoff/status state machine target.
+- [ADR 0009](docs/adrs/0009-job-protocol.md) **(PROPOSED)**: the job protocol —
+  reified calls as the workspace calling convention. Slow/effectful/abortable
+  work is invoked as a job directory (`new`, `jobs/<id>/{in,params.json,ctl,
+  out,err,status,result.json}`); the job id is the idempotency key (preserving
+  ADR 0008's no-replay rule while giving callers a resolution path); one shared
+  error taxonomy; ToolFS is the first implementation.
+- [ADR 0010](docs/adrs/0010-task-tiers-turns-and-snapshots.md) **(PROPOSED)**:
+  the task concurrency and operability model — tier 1 turn-based resident
+  tasks (single-actor, host-owned handles/pumping, snapshot/kill/fork/migrate
+  at empty-stack turn boundaries), tier 2 POSIX-ish command tasks (per-task
+  host threads, bounded blocking pipes, killable via epoch interruption, not
+  migratable), tier 3 whole-OS guests (v86/QEMU) as the escape hatch; no async
+  or threads in guests; `#task/<id>/ctl kill`.
 
 The mesh/agent layer (the native FileSystem-over-iroh wire, ed25519 identity +
 capability binds, the `#agent` device, and the `#kv`/`#pipe`/`#plumb`/`#cas`/
@@ -463,7 +484,9 @@ more feature work.
   in-memory `#pipe` (stage a fully buffers its output, then b drains), a
   deliberate divergence from Plan 9's concurrent stages + bounded blocking pipe.
   Restore concurrency (and a bounded pipe) once tasks can run on their own
-  threads — the same per-task thread work the interactive shell needs. Context in
+  threads — the same per-task thread work the interactive shell needs; the
+  decided model is ADR 0010's tier-2 (thread-per-command, bounded blocking
+  pipes). Context in
   `docs/site/content/concepts/task-exit-closes-fds.md`; the fd-on-exit primitive
   (`Task::close_all_fds`) is shipped for the wasm driver only — the qjs driver
   should adopt it too before qjs commands are piped.
