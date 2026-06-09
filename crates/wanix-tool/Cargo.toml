@@ -1,0 +1,21 @@
+[package]
+name = "wanix-tool"
+description = "ToolFS: the first job-protocol device (ADR 0009) — one host-approved operation family exposed as files."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1"
+wanix-fs = { path = "../wanix-fs" }
+wanix-job = { path = "../wanix-job" }
+
+[lib]
+name = "wanix_tool"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

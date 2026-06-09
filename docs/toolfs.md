@@ -9,6 +9,13 @@ and the validation path needed before the contract is promoted.
 > (the job protocol) now owns the grammar, the shared error taxonomy, and the
 > job-id-as-idempotency-key rule. ToolFS is its first implementation. `ctl
 > abort` bottoms out in `#task/<id>/ctl kill` (ADR 0010).
+>
+> Update: the v0 core crate exists at `crates/wanix-tool` — `ToolService` +
+> principal-scoped `ToolFs` views over the `wanix-job` vocabulary, with the
+> contract, privacy, lifecycle/TTL, quota, and abort rows of the validation
+> matrix pinned by filesystem-surface tests against the fake/manual/model
+> runners. The process runner, mesh serving, catalog entries, and the client
+> helper remain build slices ahead.
 
 ## What
 

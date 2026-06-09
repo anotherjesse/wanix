@@ -25,6 +25,7 @@ members = [
     "crates/wanix-sites",
     "crates/wanix-task",
     "crates/wanix-term",
+    "crates/wanix-tool",
     "crates/wanix-vfs",
     "crates/wanix-wasi",
     "crates/wanix-wasi-host",
