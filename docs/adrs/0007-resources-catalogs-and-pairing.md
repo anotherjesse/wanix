@@ -245,6 +245,14 @@ recipient resolves names against their own catalog (or you ship addresses
 inline). This is the artifact that turns "a protocol" into "a thing you hand
 someone."
 
+**Convergence to watch:** an AppResource ([docs/appfs.md](../appfs.md)) is a
+recipe (the manifest's mounts = wiring) plus CAS-pinned code plus a state
+volume; a capsule freezes state; a tier-1 task snapshot (ADR 0010) freezes a
+running task. These should become one CAS-rooted artifact *family* with one
+loader, not three freeze formats — restructure this section around that once
+the AppResource manifest stabilizes (discussion in
+[docs/design/agent-native-next-layer.md](../design/agent-native-next-layer.md)).
+
 ---
 
 ## Trust: two separate problems, not one
@@ -292,6 +300,18 @@ and changes what "open" even means:
   access be delegated, can it be revoked. This is the genuinely unbuilt deep
   end: the current grant model has no owner-principal-who-edits-grants and no
   delegation.
+
+  **Layer-3-lite already works locally.** Within one node, delegating an
+  attenuated capability to a sub-agent needs no certificates at all: bind the
+  sub-agent's task a *subset namespace* (fewer mounts, narrower roots) — the
+  namespace is the attenuation (ADR 0000). Certificates become necessary only
+  when the delegate crosses the mesh and must prove its attenuated authority
+  to a third party. The decided direction there is delegation certs
+  (UCAN/biscuit-shaped: ephemeral agent key + cert chain to the node key,
+  scoped and expiring; expiry-as-revocation), designed together with the
+  native-wire attach scope — see the convergence note in ADR 0004 §Open
+  questions. ACLs stay keyed on stable node identities; attenuation rides the
+  cert, so peers never manage ephemeral agent keys.
 
 ### Why you can build open but cannot stay open
 
@@ -516,7 +536,11 @@ These are the seams we should talk through before committing contracts.
 11. **Where does this become ADRs?** Likely five durable boundaries: the catalog
     format, the resource address model, the host-wrapper service contract, the
     Layer-2/3 authorization model, and the principal-aware resource seam.
-    Confirm that split before promoting any of them out of this draft.
+    Confirm that split before promoting any of them out of this draft. Already
+    promoted since this draft was written: the invocation convention the
+    host-wrapper implies is ADR 0009 (the job protocol), and the agent-side
+    consumer story this document serves is ADR 0000 (the agent-native
+    manifesto) — both should constrain the remaining five.
 
 ---
 

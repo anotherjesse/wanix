@@ -124,11 +124,12 @@ Possible manifest sketch:
 
 ```json
 {
-  "appResource": "v0",
+  "wanix.resource": "v0",
+  "kind": "app",
   "name": "chatroom",
   "runtime": {
     "kind": "qjs",
-    "main": "main.js"
+    "main": "cas:sha256:9f2c..."
   },
   "surfaces": {
     "http": true,
@@ -151,6 +152,28 @@ Possible manifest sketch:
   }
 }
 ```
+
+### Provenance: CAS-pinned code, mount-gated authority
+
+Two deployment rules are part of the v0 contract, not later hardening, because
+the most prolific author of AppResources will be agents and retrofitting
+immutability under stable tickets is much harder than starting with it:
+
+1. **Code is CAS-pinned.** The manifest references guest code by `cas:` hash;
+   the app's running identity is the hash of (manifest + code), exposed in its
+   `spec.json`/`status`. "What exactly is running on node X" has a
+   cryptographic answer across a fleet — no snowflakes. An upgrade is a new
+   hash; the deployment record (hash history per ticket) is the audit log and
+   the rollback mechanism. A client can verify "this is the build I audited"
+   from the spec.
+
+2. **The deploy gate is mount approval — review capabilities, not code.**
+   Nobody audits 200 lines of generated JS per deploy; nobody has to. The
+   manifest's `mounts` are the app's *entire* authority, so deploying an app
+   creates a pending approval listing its requested mounts and limits — the
+   same approvals-as-files pattern the `#agent` device already uses. The owner
+   (or a policy agent) approves three mount lines, never the code. Code can be
+   anything precisely because authority is explicit (ADR 0000).
 
 The guest sees a small runtime-neutral API. Qjs can expose it in a friendly
 Workers-like form:
@@ -337,6 +360,13 @@ single actor guest, concurrent host edge
 ```
 
 The guest actor is serialized. The host edge is concurrent.
+
+> This is now the decided platform shape, not an AppFS-local choice: an
+> AppResource is a **tier-1 turn-based resident task**
+> ([ADR 0010](adrs/0010-task-tiers-turns-and-snapshots.md)). The empty stack
+> between turns is what makes the app snapshottable, killable, forkable, and
+> migratable — the host-pump rule below is load-bearing for operability, not
+> just a concurrency dodge.
 
 For HTTP:
 
@@ -661,7 +691,9 @@ should return a host stream capability registered for this subscriber.
 - How much of the qjs API should mimic Fetch/Web Streams, and how much should
   be Wanix-specific from day one?
 - How should AppResource catalog entries describe surfaces and health?
-- Should AppResource and ToolFS share `spec.json` conventions?
+- ~~Should AppResource and ToolFS share `spec.json` conventions?~~ Decided:
+  yes — the shared `"wanix.resource"` envelope (see docs/toolfs.md §Spec
+  Shape); AppResource is `"kind": "app"`.
 - When a resource exposes both HTTP and FS, should they be one ticket with
   several advertised surfaces, or separate resource tickets?
 

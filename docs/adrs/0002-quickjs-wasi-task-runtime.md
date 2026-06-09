@@ -78,7 +78,11 @@ fd state.
 QuickJS timers, promise jobs, ready-IO handlers, interrupt callbacks, and heap
 limits are bounded host execution policy. CLI and serve surfaces may expose
 those knobs for deterministic demos and tests, but they are not a general
-scheduler, signal system, cancellation model, or task checkpoint format.
+scheduler, signal system, cancellation model, or task checkpoint format. The
+task concurrency, kill, and snapshot/migration model that *does* exist is
+ADR 0010 (task tiers and turns); Wasmtime epoch interruption — already shipped
+here as bounded-execution policy — is the mechanism `#task/<id>/ctl kill`
+builds on.
 
 ### Compiled-artifact cache (qjs and wasm runtimes)
 

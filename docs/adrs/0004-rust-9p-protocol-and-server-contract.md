@@ -239,6 +239,17 @@ and the longer discussion live in
    not reflexively copy 9P's attach ceremony before knowing the native wire wants
    exactly that shape.
 
+   **Convergence note (do these as ONE wire change):** three deferred questions
+   land on the same attach message — (a) this per-attach scope selection, (b)
+   ADR 0007's principal-aware resources (Q10), and (c) Layer-3 delegation
+   (agent acts with an ephemeral key plus a cert chain to its node key, scoped
+   and expiring — UCAN/biscuit-shaped). When any one of them is built, design
+   the typed attach payload `{scope?, cert_chain?}` for all three, or the wire
+   gets three rounds of surgery. Hedge taken now: any code or contract that
+   models "the principal" must use a structured/opaque principal type — never a
+   bare 32-byte pubkey — so attenuated principals (key + caveats) slot in
+   without rototilling device-side privacy filters and quotas.
+
 2. **In-band device EOF (`FileReply::Eof`): keep reserved, or drop as YAGNI?**
    The wire defines (and the client decodes) `FileReply::Eof` — an explicit
    in-band device close, distinct from regular-file `Chunk(empty)` and from the

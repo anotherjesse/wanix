@@ -4,6 +4,12 @@ Status: **draft design note**. This is not an ADR yet. It sketches the
 host-wrapper filesystem from [ADR 0007](adrs/0007-resources-catalogs-and-pairing.md)
 and the validation path needed before the contract is promoted.
 
+> Update: the job-directory invocation shape this document introduced has been
+> promoted to a workspace convention — [ADR 0009](adrs/0009-job-protocol.md)
+> (the job protocol) now owns the grammar, the shared error taxonomy, and the
+> job-id-as-idempotency-key rule. ToolFS is its first implementation. `ctl
+> abort` bottoms out in `#task/<id>/ctl kill` (ADR 0010).
+
 ## What
 
 ToolFS is a Wanix filesystem resource that exposes one host-approved operation
@@ -201,7 +207,8 @@ Sketch:
 
 ```json
 {
-  "toolfs": "v0",
+  "wanix.resource": "v0",
+  "kind": "tool",
   "name": "upper",
   "description": "Uppercase UTF-8 text.",
   "input": {
@@ -242,6 +249,14 @@ Sketch:
 Keep this intentionally smaller than a full agent tool protocol. It only needs
 to describe the filesystem operation well enough for clients and agents to use
 it correctly.
+
+`"wanix.resource"` is the **shared spec envelope**: one versioned outer shape
+(`wanix.resource`, `kind`, `name`, `description`, limits/lifecycle/effects)
+used by every self-describing resource — ToolFS (`"kind": "tool"`), AppResource
+(`"kind": "app"`), and catalog entries that embed a summary of it. Wanix
+already has three description surfaces growing independently; the envelope is
+decided *now*, before a third dialect ships, so agents parse one outer shape
+everywhere (ADR 0000 §agent-first).
 
 ## Status And Result
 
@@ -298,7 +313,8 @@ Failure result sketch:
 }
 ```
 
-The stable part is the error taxonomy, not the prose:
+The stable part is the error taxonomy, not the prose — and it is no longer
+ToolFS-private: [ADR 0009](adrs/0009-job-protocol.md) owns it workspace-wide:
 
 ```text
 invalid_params
@@ -311,6 +327,11 @@ runner_failed
 unavailable
 internal
 ```
+
+Because the job id is the idempotency key (ADR 0009), a caller that times out
+or loses the connection resolves the outcome by re-reading this job's
+`status`/`result.json` — never by allocating a new job and re-running blind.
+A repeated `run` on the same job is deduplicated.
 
 ## Privacy And Principal Views
 
@@ -608,7 +629,11 @@ agent projection
   future control files.
 - What minimum JSON schema subset is worth supporting for params in v0?
 - How should a principal be represented in `wanix-tool` without depending on
-  `wanix-id`?
+  `wanix-id`? Partial answer, decided: as a structured opaque type, **never a
+  bare 32-byte pubkey** — delegation certificates (attenuated principals: key
+  + caveats) must slot into job privacy filtering and quotas without
+  rototilling them (ADR 0004 §Open questions, convergence note). The remaining
+  open part is only the concrete type shape.
 - Should a failed validation create a retained job with `result.json`, or should
   `ctl run` return an immediate filesystem error? Retained failures are more
   inspectable; immediate errors are simpler for shell use.

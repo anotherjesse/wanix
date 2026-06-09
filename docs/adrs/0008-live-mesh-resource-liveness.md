@@ -53,6 +53,13 @@ opening the stream. If the provider is still down, the operation returns a mesh
 transport error (`FsError::Other("mesh: ...")`), which WASI/QJS maps to `EIO`
 instead of `ENOENT`.
 
+The stringly `Other("mesh: ...")` encoding is debt, not contract: callers
+should never string-match a prefix to detect an outage. The decided direction
+is a typed `FsError` variant for transport unreachability (carried losslessly
+by `WireFsError`), with the WASI `EIO` mapping and shell text keyed off the
+type; richer detail (attempt counts, retry-after) belongs in the liveness
+status files below, speaking the shared error taxonomy of ADR 0009.
+
 When the same peer identity returns, later fresh operations should work without
 the caller rebuilding the namespace binding. A stale `addr=` hint must not pin
 the mount to the old port; it remains only a route hint, and the authenticated
@@ -99,6 +106,13 @@ missing resource for a missing file.
 The native wire remains transport-authenticated. A wrong or stale route hint may
 fail or rediscover the real peer, but it never authorizes a different process as
 the requested resource because the QUIC endpoint id must match.
+
+This identity model carries more weight than outage recovery: because the peer
+id is the authority and route hints are disposable, a mounted namespace is
+*location-independent by construction* — which is exactly what lets a tier-1
+task snapshot (ADR 0010) be restored on a different node and re-establish its
+mounts by peer identity. This ADR's liveness contract is, quietly, the task
+migration contract.
 
 The first regression suites are
 `crates/wanix-cli/tests/mesh_iroh_resilience.rs` (missing-provider dial failure,
