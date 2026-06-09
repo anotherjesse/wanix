@@ -104,6 +104,17 @@ Service-device and mesh crates (the distributed layer; each device is a plain
   (`new`, `prompt`, `events`, `pending`, `ctl`, `reply`, `status`). Backed by a
   codex app-server engine on the local-trust CLI path and a deterministic
   `FakeEngine` on the served path; approvals are files.
+- `wanix-job`: the pure job-protocol vocabulary (ADR 0009) — `JobState` with
+  the legal-transition relation, the nine-kind `ErrorKind` taxonomy,
+  `JobStatus`/`JobResult` report shapes, and the shared `wanix.resource` v0
+  spec envelope. serde only; no I/O, no wanix-fs.
+- `wanix-tool`: ToolFS v0, the first job-protocol device — one host-approved
+  operation family as files (`spec.json`, `new`, `jobs/<id>/{in, params.json,
+  ctl, out, err, status, result.json}`). `ToolService` owns spec, clock,
+  runner, and job table; `open_view(principal)` binds a principal-scoped
+  `ToolFs`, so identity comes from the attach seam, never a payload field.
+  Runners are in-process v0 (deterministic fakes plus `ModelRunner` over a
+  `ModelEngine` seam); the process runner is a later crate.
 - `wanix-mesh`: the network edge and the only async crate. Binds one
   `iroh::Endpoint` per node from the `wanix-id` secret key and exports/imports a
   namespace over QUIC on two ALPNs: the native wire `WANIX_FS_ALPN`
@@ -150,6 +161,10 @@ wanix-wasm -> wanix-fs + wanix-vfs + wanix-task + wanix-wasi + wanix-wasi-host +
 wanix-kv | wanix-pipe | wanix-plumb | wanix-agent -> wanix-fs (+ wanix-vfs)
 wanix-cas -> wanix-fs + wanix-module-cache
 wanix-id  -> wanix-fs + wanix-vfs
+
+# job protocol: vocabulary + first device
+wanix-job  -> serde   (vocabulary only; NO I/O, NO wanix-fs)
+wanix-tool -> wanix-fs + wanix-job
 
 # native mesh wire (transport-agnostic, async-free) + 9P import half + mesh
 wanix-mesh-wire -> wanix-fs + wanix-vfs + serde + postcard   (NO iroh/tokio/irpc)
@@ -314,6 +329,16 @@ tests.
   `#agent` uses a deterministic `FakeEngine` (real codex is local-trust only).
   Agents delegate to agents via `#agent/<id>/reply`, and `POST /agent` exposes
   the agent as a network service.
+- Job protocol + ToolFS (ADR 0009): `wanix-job` is the shared
+  calling-convention vocabulary and `wanix-tool` is ToolFS v0, the first
+  device that speaks it — a call is a retained job directory (`new` allocates an opaque id,
+  `ctl run` seals input and invokes the runner, validation failures become
+  retained failed jobs with taxonomy `result.json`, foreign job ids read as
+  `NotFound`, lifecycle is lazy TTL expiry through an injected clock).
+  Principal scoping rides `open_view(principal)`, runners are in-process v0
+  (fakes plus the `ModelEngine` seam — a model device is just ToolService with
+  a model runner). Not yet mounted by serve or the mesh. Proofs:
+  `crates/wanix-tool/src/tests.rs` pins the docs/toolfs.md validation matrix.
 - `wanix-rust capsule`: freezes a Wanix world into a portable, CAS-backed
   `.wcap` (via `wanix-cas`) that can be loaded elsewhere; live mesh peers and
   ephemeral handles are not portable.
@@ -490,16 +515,13 @@ more feature work.
   9P-style `ANAME`-keyed sub-scoping is unreachable; settle it *with* the
   ADR 0006/0007 authorization layer (thread `aname` 1:1 vs a native
   scope-selection shape), not before. (a) and (b) are small cleanup-cycle items.
-- Shell pipeline concurrency: RESOLVED (ADR 0010 tier 2). `#pipe` is bounded
-  (64 KiB default, `PipeCapacity` constructor knob, broken-pipe error once the
-  last reader closes) and pipeline stages run concurrently — the shell launches
-  every external stage via `ctl` `start &` (a detached per-task host thread),
-  runs builtins in-shell (adjacent builtins exchange bytes through shell
-  memory, never a pipe), then collects exits in stage order through the
-  blocking `#task/<id>/wait` file; both the wasm and qjs drivers release fds on
-  exit. Stages still launch one at a time from the single-threaded shell guest;
-  proofs in `crates/wanix-wasm/src/driver.rs` (a 4x-capacity stream) and
-  `crates/wanix-sh/src/pipeline.rs`.
+- CLI UX remainder: the hands-on new-user audit behind commit bc05331 landed
+  only its top S/M findings (lean usage errors, per-subcommand `--help`,
+  ADR 0008 unreachable text, split peer-id parse diagnostics, copy-pasteable
+  serve announcements); its larger findings — anything needing a CLI
+  behavior-contract change — were deliberately deferred and are not recorded
+  as tickets, so re-derive them by running the binaries as a new user before
+  the next UX pass.
 - Module-line health: `just module-lines` is green against the 350-line hard
   limit, but three modules sit above the 250-line warn limit and should be split
   before they grow — `wanix-agent/src/codex.rs` (~307), `wanix-agent/src/

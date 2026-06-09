@@ -6,7 +6,13 @@
 not make ("bounded execution policy is not a general scheduler") — made now
 because three roadmap items are blocked on the same missing model, and because
 the operability goals in ADR 0000 (snapshot, migrate, inspect, fork) are
-decided *here* or nowhere.
+decided *here* or nowhere. Tier-2 foundations have shipped: bounded blocking
+`#pipe` with broken-pipe honesty (`crates/wanix-pipe`), detached per-task host
+threads via `ctl` `start &` plus the blocking `#task/<id>/wait` file
+(`crates/wanix-task`), blocking `fd_read` and the minimal `poll_oneoff` subset
+(`crates/wanix-wasi-host`), and concurrent shell pipelines plus the
+interactive REPL (`crates/wanix-sh`), proven end to end in
+`crates/wanix-wasm/src/driver.rs` tests.
 
 ## Context
 

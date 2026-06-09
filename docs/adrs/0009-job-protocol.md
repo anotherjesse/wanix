@@ -6,7 +6,11 @@
 ([docs/toolfs.md](../toolfs.md)), which originated the shape. This ADR promotes
 the shape from a ToolFS detail to the workspace calling convention, because
 agents should learn one way to invoke slow or effectful work everywhere
-(ADR 0000 §"agent-first").
+(ADR 0000 §"agent-first"). First implementation landed: the vocabulary crate
+(`crates/wanix-job` — states/transitions, error taxonomy, report shapes, spec
+envelope) and ToolFS v0 (`crates/wanix-tool`, with the docs/toolfs.md
+validation matrix pinned in `crates/wanix-tool/src/tests.rs`); runners are
+in-process v0 and no serve/mesh mount exists yet.
 
 ## Context
 
