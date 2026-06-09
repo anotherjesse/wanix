@@ -89,7 +89,9 @@ impl ClientError {
     #[must_use]
     pub fn into_fs_error(self) -> FsError {
         match self {
-            Self::Io(error) => FsError::Other(format!("9P client I/O error: {error}")),
+            // A transport fault is the typed liveness error (ADR 0008): the
+            // remote is unusable right now, not returning an application error.
+            Self::Io(error) => FsError::Unreachable(format!("9P client I/O error: {error}")),
             Self::Protocol(error) => FsError::Other(format!("9P client protocol error: {error}")),
             Self::Remote { errno } => fs_error_for_errno(errno),
             Self::Poisoned(reason) => FsError::Other(format!("9P connection poisoned: {reason}")),
@@ -180,5 +182,11 @@ mod tests {
     fn poisoned_error_lowers_to_other() {
         let error = ClientError::Poisoned("desync".to_owned());
         assert!(matches!(error.into_fs_error(), FsError::Other(_)));
+    }
+
+    #[test]
+    fn transport_io_error_lowers_to_typed_unreachable() {
+        let error = ClientError::Io(std::io::Error::other("connection reset"));
+        assert!(matches!(error.into_fs_error(), FsError::Unreachable(_)));
     }
 }

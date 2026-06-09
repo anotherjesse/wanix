@@ -60,10 +60,11 @@ impl<F: StreamFactory> NativeFs<F> {
     }
 }
 
-/// Lowers a genuine transport fault to `FsError::Other` (never a typed
-/// application error — those cross the wire as `WireFsError`).
+/// Lowers a genuine transport fault to the typed `FsError::Unreachable` (never
+/// a typed application error — those cross the wire as `WireFsError`). Callers
+/// key retry/liveness behavior off the variant, not the message (ADR 0008).
 pub(crate) fn transport(error: std::io::Error) -> FsError {
-    FsError::Other(format!("mesh: {error}"))
+    FsError::Unreachable(format!("mesh: {error}"))
 }
 
 /// A reply whose variant did not match the request: a protocol fault.

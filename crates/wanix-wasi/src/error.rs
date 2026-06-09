@@ -70,6 +70,9 @@ impl From<&FsError> for Errno {
             FsError::InvalidOffset => Self::Inval,
             FsError::InvalidTime => Self::Inval,
             FsError::NotEmpty => Self::Notempty,
+            // ADR 0008: a live resource outage is EIO-class, never ENOENT —
+            // agents must not mistake a missing provider for a missing file.
+            FsError::Unreachable(_) => Self::Io,
             FsError::Other(_) => Self::Io,
         }
     }

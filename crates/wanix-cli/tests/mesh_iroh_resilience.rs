@@ -84,11 +84,10 @@ fn bind_remote(client: &MeshNode, ticket: wanix_mesh::EndpointAddr) -> Namespace
 
 fn assert_transport_error(error: FsError) {
     match error {
-        FsError::Other(message) => assert!(
-            message.contains("mesh:"),
-            "transport errors should stay visibly mesh-scoped: {message}"
-        ),
-        other => panic!("expected mesh transport error, got {other:?}"),
+        // The typed variant is the contract (ADR 0008): callers key liveness
+        // behavior off `Unreachable`, never off a message prefix.
+        FsError::Unreachable(_) => {}
+        other => panic!("expected FsError::Unreachable transport error, got {other:?}"),
     }
 }
 

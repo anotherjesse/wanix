@@ -29,6 +29,11 @@ pub enum FsError {
     InvalidTime,
     /// A directory removal failed because the directory has entries.
     NotEmpty,
+    /// A live resource (e.g. a mesh-mounted peer) is temporarily unreachable
+    /// at the transport level: the resource is unusable right now, not
+    /// missing. Maps to `EIO`-class errors, never `ENOENT` (ADR 0008). The
+    /// payload is diagnostic detail, never something callers should match on.
+    Unreachable(String),
     /// A descriptive fallback for errors that do not yet have a stable variant.
     Other(String),
 }
@@ -47,6 +52,7 @@ impl fmt::Display for FsError {
             Self::InvalidOffset => f.write_str("invalid file offset"),
             Self::InvalidTime => f.write_str("invalid file timestamp"),
             Self::NotEmpty => f.write_str("directory not empty"),
+            Self::Unreachable(detail) => write!(f, "resource unreachable: {detail}"),
             Self::Other(message) => f.write_str(message),
         }
     }
@@ -75,6 +81,10 @@ mod tests {
             (FsError::InvalidOffset, "invalid file offset"),
             (FsError::InvalidTime, "invalid file timestamp"),
             (FsError::NotEmpty, "directory not empty"),
+            (
+                FsError::Unreachable("peer is offline".to_owned()),
+                "resource unreachable: peer is offline",
+            ),
             (FsError::Other("host detail".to_owned()), "host detail"),
         ];
 

@@ -6,6 +6,7 @@ use std::fmt;
 use wanix_fs::FsError;
 use wanix_protocol::P9Error;
 
+pub(crate) const EIO: u32 = 5;
 pub(crate) const EBADF: u32 = 9;
 pub(crate) const EACCES: u32 = 13;
 pub(crate) const EEXIST: u32 = 17;
@@ -59,6 +60,9 @@ pub(crate) fn errno_for_fs(error: &FsError) -> u32 {
         FsError::IsDirectory => EISDIR,
         FsError::InvalidFd => EBADF,
         FsError::NotEmpty => ENOTEMPTY,
+        // ADR 0008: a live-resource outage crossing the 9P edge is EIO-class,
+        // never ENOENT/EINVAL — clients must not mistake it for bad input.
+        FsError::Unreachable(_) => EIO,
         FsError::Other(_) => EINVAL,
     }
 }

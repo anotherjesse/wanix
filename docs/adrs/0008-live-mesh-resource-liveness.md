@@ -49,16 +49,18 @@ Current numbers:
 A mounted `NativeFs` stays bound across outages. A fresh filesystem operation
 opens a new QUIC bidi stream. If the cached connection is dead before a request
 is sent, the stream factory may reconnect once by the stable peer id and retry
-opening the stream. If the provider is still down, the operation returns a mesh
-transport error (`FsError::Other("mesh: ...")`), which WASI/QJS maps to `EIO`
-instead of `ENOENT`.
+opening the stream. If the provider is still down, the operation returns the
+typed mesh transport error (`FsError::Unreachable`), which WASI/QJS maps to
+`EIO` instead of `ENOENT`.
 
-The stringly `Other("mesh: ...")` encoding is debt, not contract: callers
-should never string-match a prefix to detect an outage. The decided direction
-is a typed `FsError` variant for transport unreachability (carried losslessly
-by `WireFsError`), with the WASI `EIO` mapping and shell text keyed off the
-type; richer detail (attempt counts, retry-after) belongs in the liveness
-status files below, speaking the shared error taxonomy of ADR 0009.
+The stringly `Other("mesh: ...")` encoding was debt, now paid: transport
+unreachability is the typed `FsError::Unreachable(detail)` (mirrored
+losslessly by `WireFsError::Unreachable`), constructed at the native-wire and
+9P-client transport edges, mapped to `EIO` by WASI and to errno 5 by the 9P
+server edge. Callers key liveness behavior off the variant; the detail string
+is diagnostics only. Richer detail (attempt counts, retry-after) belongs in
+the liveness status files below, speaking the shared error taxonomy of
+ADR 0009.
 
 When the same peer identity returns, later fresh operations should work without
 the caller rebuilding the namespace binding. A stale `addr=` hint must not pin

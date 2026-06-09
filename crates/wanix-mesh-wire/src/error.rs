@@ -15,8 +15,10 @@
 //!
 //! A [`WireFsError`] is an *application* error the server chose to return. A
 //! genuine transport fault (dead connection, stream reset, decode failure) is a
-//! separate surface and lowers to `FsError::Other` at the mesh edge, never to a
-//! `WireFsError`.
+//! separate surface and lowers to `FsError::Unreachable` at the mesh edge,
+//! never to a `WireFsError` — except that a server whose *own* onward mount is
+//! unreachable forwards that as `WireFsError::Unreachable`, keeping the typed
+//! distinction across hops (ADR 0008: `EIO`-class, never `ENOENT`).
 
 use serde::{Deserialize, Serialize};
 use wanix_fs::FsError;
@@ -53,6 +55,11 @@ pub enum WireFsError {
     NotEmpty,
     /// A descriptive fallback for errors that do not yet have a stable variant.
     Other(String),
+    /// A live resource behind the server is temporarily unreachable at the
+    /// transport level (e.g. the server's own onward mesh mount is down).
+    /// Appended after `Other` so existing postcard variant indices stay
+    /// stable.
+    Unreachable(String),
 }
 
 impl From<FsError> for WireFsError {
@@ -69,6 +76,7 @@ impl From<FsError> for WireFsError {
             FsError::InvalidOffset => Self::InvalidOffset,
             FsError::InvalidTime => Self::InvalidTime,
             FsError::NotEmpty => Self::NotEmpty,
+            FsError::Unreachable(detail) => Self::Unreachable(detail),
             FsError::Other(message) => Self::Other(message),
         }
     }
@@ -88,6 +96,7 @@ impl From<WireFsError> for FsError {
             WireFsError::InvalidOffset => Self::InvalidOffset,
             WireFsError::InvalidTime => Self::InvalidTime,
             WireFsError::NotEmpty => Self::NotEmpty,
+            WireFsError::Unreachable(detail) => Self::Unreachable(detail),
             WireFsError::Other(message) => Self::Other(message),
         }
     }
@@ -113,6 +122,7 @@ mod tests {
             FsError::InvalidOffset,
             FsError::InvalidTime,
             FsError::NotEmpty,
+            FsError::Unreachable("peer is offline".to_owned()),
             FsError::Other("host detail".to_owned()),
         ]
     }
