@@ -17,6 +17,7 @@ wanix-task = { path = "../wanix-task" }
 wanix-wasi = { path = "../wanix-wasi" }
 
 [dev-dependencies]
+wanix-pipe = { path = "../wanix-pipe" }
 wanix-vfs = { path = "../wanix-vfs" }
 
 [lib]

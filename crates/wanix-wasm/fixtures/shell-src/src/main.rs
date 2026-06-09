@@ -5,11 +5,22 @@
 //! `#pipe` for byte channels between pipeline stages. The Wanix `wanix-wasm`
 //! driver wires this guest's fd 0/1/2 to the task's stdio.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 
-use wanix_sh::{InputSource, NamespaceOps, OutputSink, ShellError, ShellResult, SpawnSpec, run_shell};
+use wanix_sh::{
+    InputSource, NamespaceOps, OutputSink, ShellError, ShellResult, SpawnHandle, SpawnSpec,
+    run_shell,
+};
 
-struct WasiNamespace;
+#[derive(Default)]
+struct WasiNamespace {
+    /// Pipe write ends held open (keyed by pipe id) so a concurrent consumer
+    /// cannot observe EOF before the shell's builtin producer writes — the
+    /// Unix "create the pipe before forking" move. Released by
+    /// `pipe_write_all_and_close`.
+    held_writers: HashMap<String, std::fs::File>,
+}
 
 impl NamespaceOps for WasiNamespace {
     fn write_stdout(&mut self, bytes: &[u8]) -> ShellResult<()> {
@@ -57,13 +68,25 @@ impl NamespaceOps for WasiNamespace {
         Ok(bytes)
     }
 
-    fn pipe_write_all_and_close(&mut self, id: &str, bytes: &[u8]) -> ShellResult<()> {
-        // Open the write end only; dropping it closes the writer so the reader
-        // observes EOF.
-        let mut writer = std::fs::OpenOptions::new()
+    fn pipe_open_writer(&mut self, id: &str) -> ShellResult<()> {
+        let writer = std::fs::OpenOptions::new()
             .write(true)
             .open(format!("#pipe/{id}/data"))
             .map_err(|err| ShellError::Io(format!("#pipe/{id}/data: {err}")))?;
+        self.held_writers.insert(id.to_owned(), writer);
+        Ok(())
+    }
+
+    fn pipe_write_all_and_close(&mut self, id: &str, bytes: &[u8]) -> ShellResult<()> {
+        // Use the held write end when one exists, else open one; dropping it
+        // closes the writer so the reader observes EOF.
+        let mut writer = match self.held_writers.remove(id) {
+            Some(writer) => writer,
+            None => std::fs::OpenOptions::new()
+                .write(true)
+                .open(format!("#pipe/{id}/data"))
+                .map_err(|err| ShellError::Io(format!("#pipe/{id}/data: {err}")))?,
+        };
         writer
             .write_all(bytes)
             .map_err(|err| ShellError::Io(format!("#pipe/{id}/data: {err}")))
@@ -86,7 +109,7 @@ impl NamespaceOps for WasiNamespace {
         result.map_err(|err| ShellError::Io(format!("{path}: {err}")))
     }
 
-    fn spawn(&mut self, spec: &SpawnSpec) -> ShellResult<i32> {
+    fn spawn_start(&mut self, spec: &SpawnSpec) -> ShellResult<SpawnHandle> {
         // Allocate a child task whose kind is auto-selected by the program's
         // extension (`.wasm` -> wasm driver, `.js` -> qjs driver, …).
         let self_id = read_service("#task/self/id")?;
@@ -113,9 +136,17 @@ impl NamespaceOps for WasiNamespace {
         bind_fd(&base, 1, &output_bind(&spec.stdout, &self_id))?;
         // stderr is always inherited.
         bind_fd(&base, 2, &(format!("#task/{self_id}/fd/2"), None))?;
-        write_service(&format!("{base}/ctl"), "start")?;
+        // Detached start: the child runs on its own host thread (ADR 0010
+        // tier 2), so pipeline stages launched back to back run concurrently.
+        // Must be a single write — a write of exactly `start` starts inline.
+        write_service(&format!("{base}/ctl"), "start &")?;
+        Ok(SpawnHandle::new(child))
+    }
 
-        let exit = read_service(&format!("{base}/exit"))?;
+    fn spawn_wait(&mut self, handle: &SpawnHandle) -> ShellResult<i32> {
+        // The wait file's read parks until the child records its exit.
+        let path = format!("#task/{}/wait", handle.id());
+        let exit = read_service(&path)?;
         exit.parse::<i32>()
             .map_err(|_| ShellError::Io(format!("invalid exit status {exit:?}")))
     }
@@ -192,7 +223,7 @@ fn write_service(path: &str, value: &str) -> ShellResult<()> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let mut ns = WasiNamespace;
+    let mut ns = WasiNamespace::default();
     let code = run_shell(&args, &mut ns);
     std::process::exit(code);
 }

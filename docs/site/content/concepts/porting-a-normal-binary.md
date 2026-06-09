@@ -26,7 +26,7 @@ usedInFlows: []
 honestLimits:
   - poll_oneoff is ERRNO_NOSYS, so event-loop, epoll/select, and non-blocking-readiness software does not port cleanly — this is a command-style WASI subset, not a server-style host.
   - There are no host sockets and no ambient global namespace; a port that keeps its socket/IPC client libraries has nothing to bind to inside the sandbox.
-  - Pipeline stages currently run sequentially (stage a fully buffers, then b drains), not concurrently as Plan 9 does — concurrent stages wait on per-task threads.
+  - Pipeline stages run concurrently on per-task host threads against the bounded `#pipe` (ADR 0010 tier 2); the shell guest itself stays single-threaded.
   - The toolchain story (cargo -> wasm32-wasip1 -> checked-in .wasm) is fixture-specific today; wanix-sh and a jaq guest are the only worked ports, so there is no general "port your CLI" workflow yet.
 ---
 
@@ -79,7 +79,7 @@ linker.func_wrap(m, "poll_oneoff",
     |_, _i, _o, _n, _ne| ERRNO_NOSYS)?;
 ```
 
-Tasks run `_start` to completion on one thread. Synchronous, batch-shaped tools port trivially. Anything built on an event loop, `epoll`/`select`, non-blocking sockets, or "wait on N fds at once" does **not** map cleanly and needs rework. This is also why the interactive shell is gated on adding a Condvar plus blocking reads plus per-task threads, and why `a | b` pipelines currently run *sequentially* — stage a fully buffers its output, then b drains it — instead of concurrently (`crates/wanix-sh/src/exec.rs:1-9`). A normal OS gives concurrent pipe stages for free; here that is pending work. See [the command-style wasm linker](/concepts/command-style-wasm-linker).
+Tasks run `_start` to completion on one thread. Synchronous, batch-shaped tools port trivially. Anything built on an event loop, `epoll`/`select`, non-blocking sockets, or "wait on N fds at once" does **not** map cleanly and needs rework. Per-task threads exist for commands (ADR 0010 tier 2): `a | b` pipelines run their stages concurrently on detached task threads against the bounded `#pipe` (`crates/wanix-sh/src/pipeline.rs`), but a single guest still gets exactly one thread and no readiness multiplexing beyond `fd_read` `poll_oneoff`. See [the command-style wasm linker](/concepts/command-style-wasm-linker).
 
 ### 4. fds are explicit capabilities, not ambient inheritance
 
@@ -92,7 +92,7 @@ Sort the program you want to port into one of two buckets:
 - **Synchronous, file-and-stdio shaped** (compilers, linters, formatters, filters, `jq`, most CLI tools): *easier than a normal port.* Often just a `wasm32-wasip1` recompile. It calls `open`/`read`/`write`, and those resolve through the namespace transparently.
 - **Async / event-loop / socket-server shaped** (anything on `epoll`/`select`, non-blocking I/O, a network listener, a long-lived reactor): *harder.* You are fighting the missing async model (`poll_oneoff` = NOSYS) and the absence of host sockets — not the Plan 9 model. Expect to restructure to a synchronous, run-to-completion command, and to replace network/IPC with file I/O against service devices.
 
-One caveat on that second bucket: the no-async and sequential-pipeline limits are *current implementation state*, not inherent to Plan 9 — real Plan 9 has concurrent pipe stages. They are tracked as next work (per-task threads, blocking reads), so "async software is harder to port" is true **today** and expected to soften.
+One caveat on that second bucket: the no-async limit is *current implementation state*, not inherent to Plan 9. Pipelines already run concurrently on per-task threads (ADR 0010 tier 2), so "async software is harder to port" keeps softening as the host grows readiness primitives.
 
 ## See also
 
@@ -107,5 +107,5 @@ One caveat on that second bucket: the no-async and sequential-pipeline limits ar
 
 - **`poll_oneoff` is `ERRNO_NOSYS`.** Event-loop, `epoll`/`select`, and non-blocking-readiness software does not port cleanly; it must be restructured into a run-to-completion command. This is a command-style WASI subset, not a server-style host (`crates/wanix-wasi-host/src/core.rs:34-39`).
 - **No host sockets, no ambient namespace.** A port that keeps its socket or IPC client libraries has nothing to bind to inside the sandbox; the idiomatic move is to replace them with file I/O against service devices. Names are per-task and parent-supplied — there is no global `/etc` every task shares.
-- **Pipelines are sequential today.** Stage a fully buffers its whole output before stage b drains it, a deliberate divergence from Plan 9's concurrent + bounded pipe; concurrent stages wait on per-task threads (`crates/wanix-sh/src/exec.rs:1-9`).
+- **Pipelines are concurrent and bounded.** Stages run on their own host threads against the 64 KiB `#pipe` (Plan 9's concurrent + bounded model, ADR 0010 tier 2); a producer is back-pressured by its consumer instead of buffering everything (`crates/wanix-sh/src/pipeline.rs`).
 - **No general porting workflow yet.** The cargo → `wasm32-wasip1` → checked-in `.wasm` toolchain is fixture-specific; `wanix-sh` and a `jaq` guest are the only worked ports. This page is the conceptual map, not a copy-paste recipe — that waits on a second real port to generalize from.

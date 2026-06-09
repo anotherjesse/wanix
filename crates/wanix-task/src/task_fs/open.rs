@@ -1,11 +1,14 @@
 use wanix_fs::{File, FsError, FsResult, NormalizedPath, OpenOptions};
 
 use crate::TaskFs;
-use crate::task_files::{ControlFile, FdProxyFile, Field, FieldFile, FileAccess, NewTaskFile};
+use crate::task_files::{
+    ControlFile, FdProxyFile, Field, FieldFile, FileAccess, NewTaskFile, WaitFile,
+};
 
 #[derive(Debug, Clone, Copy)]
 enum OpenTaskField {
     Control,
+    Wait,
     Field(Field),
     FdDirectory,
 }
@@ -14,6 +17,7 @@ impl OpenTaskField {
     fn from_name(field: &str) -> FsResult<Self> {
         match field {
             "ctl" => Ok(Self::Control),
+            "wait" => Ok(Self::Wait),
             "fd" => Ok(Self::FdDirectory),
             name => Field::from_name(name).map(Self::Field),
         }
@@ -75,6 +79,10 @@ impl TaskFs {
                 task,
                 access(options)?,
             ))),
+            OpenTaskField::Wait => {
+                require_read_only(options)?;
+                Ok(Box::new(WaitFile::new(task)))
+            }
             OpenTaskField::Field(field) if field.is_read_only() => {
                 require_read_only(options)?;
                 Ok(Box::new(FieldFile::new(

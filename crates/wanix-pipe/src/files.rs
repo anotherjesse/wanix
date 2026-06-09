@@ -88,13 +88,21 @@ impl File for BytesFile {
 }
 
 /// The read end of a pipe: drains buffered bytes, blocking until data or EOF.
+/// Dropping the last read end breaks the pipe for writers (Unix `EPIPE`).
 pub(crate) struct PipeReader {
     channel: Arc<PipeChannel>,
 }
 
 impl PipeReader {
-    pub(crate) fn new(channel: Arc<PipeChannel>) -> Self {
-        Self { channel }
+    pub(crate) fn new(channel: Arc<PipeChannel>) -> FsResult<Self> {
+        channel.add_reader()?;
+        Ok(Self { channel })
+    }
+}
+
+impl Drop for PipeReader {
+    fn drop(&mut self) {
+        self.channel.close_reader();
     }
 }
 
@@ -131,6 +139,10 @@ impl File for PipeWriter {
 
     fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
         self.channel.write(buf)
+    }
+
+    fn write_ready(&self) -> FsResult<bool> {
+        self.channel.write_ready()
     }
 
     fn metadata(&self) -> FsResult<Metadata> {

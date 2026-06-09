@@ -5238,6 +5238,7 @@ dependencies = [
  "serde_json",
  "wanix-fs",
  "wanix-module-cache",
+ "wanix-pipe",
  "wanix-qjs-engine",
  "wanix-task",
  "wanix-vfs",

@@ -136,6 +136,9 @@ pub(crate) fn field_metadata(task: &Task, field: &str) -> FsResult<Metadata> {
     if field == "ctl" {
         return Ok(file_metadata(0, TASK_FILE_READ_WRITE_MODE));
     }
+    if field == "wait" {
+        return Ok(file_metadata(0, TASK_FILE_READ_ONLY_MODE));
+    }
     let field = Field::from_name(field)?;
     Ok(file_metadata(field.text(task).len() as u64, field.mode()))
 }

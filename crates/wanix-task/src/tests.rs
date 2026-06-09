@@ -507,6 +507,53 @@ fn ctl_start_invokes_registered_driver() {
     assert_eq!(read_file(&taskfs, "self/exit"), "0\n");
 }
 
+#[derive(Debug)]
+struct SlowExitDriver;
+
+impl TaskDriver for SlowExitDriver {
+    fn start(&self, task: &Task) -> wanix_fs::FsResult<()> {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        task.set_exit("7")
+    }
+}
+
+#[test]
+fn ctl_start_detached_returns_before_exit_and_wait_blocks_until_done() {
+    let table = TaskTable::new();
+    table
+        .register_driver("slow", Arc::new(SlowExitDriver))
+        .unwrap();
+    let task = table.allocate_root("slow").unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    write_file(&taskfs, "self/ctl", b"start &");
+    // The detached start returned while the driver is still sleeping on its
+    // own thread: no exit yet, and the wait file reports not-ready.
+    assert_eq!(task.exit(), "", "start & must not run the task inline");
+    let wait = taskfs
+        .open(
+            &NormalizedPath::new("self/wait").unwrap(),
+            OpenOptions::read(),
+        )
+        .unwrap();
+    assert!(!wait.read_ready().unwrap(), "no exit recorded yet");
+    drop(wait);
+
+    // A wait read parks until the driver records the exit, then serves it.
+    assert_eq!(read_file(&taskfs, "self/wait"), "7\n");
+    assert_eq!(read_file(&taskfs, "self/exit"), "7\n");
+}
+
+#[test]
+fn detached_start_records_synthetic_exit_when_driver_records_none() {
+    // NoopDriver::start records no exit; waiters must still wake.
+    let table = TaskTable::new();
+    table.register_noop_driver("noop").unwrap();
+    let task = table.allocate_root("noop").unwrap();
+    table.start_detached(task.id()).unwrap();
+    assert_eq!(task.wait_exit().unwrap(), "0");
+}
+
 #[test]
 fn ctl_bind_installs_fd_from_task_namespace() {
     let table = TaskTable::new();

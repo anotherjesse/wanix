@@ -36,6 +36,27 @@ pub enum OutputSink {
     },
 }
 
+/// An opaque handle to an external command launched with
+/// [`NamespaceOps::spawn_start`], redeemed for an exit status by
+/// [`NamespaceOps::spawn_wait`]. The WASI backing carries the child task id;
+/// fakes carry whatever they need.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnHandle(String);
+
+impl SpawnHandle {
+    /// Wraps a backend-specific identifier.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Returns the backend-specific identifier.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A request to launch an external command as a child task.
 ///
 /// The launcher (the WASI backing) resolves [`program`](Self::program) to a task
@@ -130,7 +151,21 @@ pub trait NamespaceOps {
     /// Returns an error if the channel cannot be read.
     fn pipe_read_all(&mut self, id: &str) -> ShellResult<Vec<u8>>;
 
-    /// Writes all bytes to a `#pipe` channel and closes the write end.
+    /// Holds a `#pipe` channel's write end open until the matching
+    /// [`Self::pipe_write_all_and_close`].
+    ///
+    /// A pipeline's builtin producer holds its write end *before* the
+    /// consumers start (the Unix "create the pipe before forking" move) —
+    /// otherwise a concurrent consumer could observe writers == 0 and read a
+    /// premature EOF before the builtin gets around to writing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write end cannot be opened.
+    fn pipe_open_writer(&mut self, id: &str) -> ShellResult<()>;
+
+    /// Writes all bytes to a `#pipe` channel and closes the write end
+    /// (including one held by [`Self::pipe_open_writer`]).
     ///
     /// Closing the writer is what lets the reader observe EOF — a builtin
     /// producer must release its end (the Plan 9 "shell closes its ends" move).
@@ -140,15 +175,37 @@ pub trait NamespaceOps {
     /// Returns an error if the channel cannot be written.
     fn pipe_write_all_and_close(&mut self, id: &str, bytes: &[u8]) -> ShellResult<()>;
 
-    /// Launches an external command, waits for it, and returns its exit code.
+    /// Launches an external command WITHOUT waiting for it.
     ///
-    /// Standard error is inherited from the shell; standard input/output are
-    /// wired per the spec.
+    /// The child runs concurrently with the shell (on the host, each running
+    /// command task gets its own thread per ADR 0010 — an executor detail the
+    /// shell never sees). Standard error is inherited; standard input/output
+    /// are wired per the spec. Redeem the handle with [`Self::spawn_wait`].
     ///
     /// # Errors
     ///
     /// Returns an error if the command cannot be launched (e.g. the program is
-    /// not found or a `#task` operation fails). A command that runs but exits
-    /// non-zero returns `Ok(code)`.
-    fn spawn(&mut self, spec: &SpawnSpec) -> ShellResult<i32>;
+    /// not found or a `#task` operation fails).
+    fn spawn_start(&mut self, spec: &SpawnSpec) -> ShellResult<SpawnHandle>;
+
+    /// Blocks until a launched command exits and returns its exit code.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the exit status cannot be observed.
+    fn spawn_wait(&mut self, handle: &SpawnHandle) -> ShellResult<i32>;
+
+    /// Launches an external command, waits for it, and returns its exit code.
+    ///
+    /// The synchronous composition of [`Self::spawn_start`] and
+    /// [`Self::spawn_wait`], used for single (non-pipeline) commands.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command cannot be launched. A command that runs
+    /// but exits non-zero returns `Ok(code)`.
+    fn spawn(&mut self, spec: &SpawnSpec) -> ShellResult<i32> {
+        let handle = self.spawn_start(spec)?;
+        self.spawn_wait(&handle)
+    }
 }

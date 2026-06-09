@@ -62,7 +62,7 @@ impl TaskState {
 
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.state.lock() {
+        match self.shared.state.lock() {
             Ok(state) => f
                 .debug_struct("Task")
                 .field("id", &state.id)

@@ -5,10 +5,12 @@ use crate::OpenFile;
 mod control;
 mod field;
 mod new_task;
+mod wait;
 
 pub(crate) use control::ControlFile;
 pub(crate) use field::{Field, FieldFile, field_metadata};
 pub(crate) use new_task::NewTaskFile;
+pub(crate) use wait::WaitFile;
 
 pub(crate) const TASK_FILE_READ_ONLY_MODE: u32 = 0o555;
 pub(crate) const TASK_FILE_READ_WRITE_MODE: u32 = 0o755;
@@ -107,6 +109,7 @@ pub(crate) fn task_entries() -> Vec<DirEntry> {
         ("fd", directory_metadata()),
         ("id", file_metadata(2, TASK_FILE_READ_ONLY_MODE)),
         ("kind", file_metadata(0, TASK_FILE_READ_ONLY_MODE)),
+        ("wait", file_metadata(0, TASK_FILE_READ_ONLY_MODE)),
     ]
     .into_iter()
     .map(|(name, metadata)| DirEntry::new(name, metadata))

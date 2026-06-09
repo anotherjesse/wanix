@@ -140,7 +140,10 @@ impl TaskTable {
                 .into_iter()
                 .find(|(_kind, driver)| driver.check(&task))
             else {
-                return Ok(());
+                // No driver claims the program: starting is an honest error,
+                // not a silent no-op (a silent Ok left waiters hanging and the
+                // task's bound fds — e.g. a pipeline pipe writer — held forever).
+                return Err(FsError::NotSupported);
             };
             task.set_kind(kind)?;
             return driver.start(&task);
@@ -151,6 +154,40 @@ impl TaskTable {
             .find_map(|(driver_kind, driver)| (driver_kind == kind).then_some(driver))
             .ok_or(FsError::NotFound)?;
         driver.start(&task)
+    }
+
+    /// Starts a task on its own host OS thread and returns immediately.
+    ///
+    /// This is the ADR 0010 tier-2 executor shape: each running command task
+    /// gets its own thread, so pipeline stages run concurrently and block only
+    /// on their own I/O. The thread is detached — exit is observed through the
+    /// task (`Task::wait_exit`, the `#task/<id>/wait` file), not a join handle.
+    ///
+    /// Waiters and pipe peers must never hang on a detached task: when the
+    /// run finishes, the task's fds are released (idempotent next to the
+    /// drivers' own `task-exit-closes-fds`, and the only release for a task no
+    /// driver ran), and if no exit was recorded (`NoopDriver`, or a launch
+    /// failure before the driver's own exit path) one is synthesized — `0` for
+    /// a clean run, `127` for a task that could not start.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the task does not exist or the host
+    /// thread cannot be spawned.
+    pub fn start_detached(&self, id: TaskId) -> FsResult<()> {
+        let task = self.get(id).ok_or(FsError::NotFound)?;
+        let table = self.clone();
+        std::thread::Builder::new()
+            .name(format!("wanix-task-{}", id.get()))
+            .spawn(move || {
+                let result = table.start(id);
+                task.close_all_fds();
+                if task.exit().is_empty() {
+                    let _ = task.set_exit(if result.is_ok() { "0" } else { "127" });
+                }
+            })
+            .map_err(|err| FsError::Other(format!("failed to spawn task thread: {err}")))?;
+        Ok(())
     }
 
     /// Returns a `#task` filesystem view for `current`.

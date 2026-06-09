@@ -85,13 +85,18 @@ impl TaskDriver for QuickJsTaskDriver {
     }
 
     fn start(&self, task: &Task) -> FsResult<()> {
-        match self.runner.run_task_with_runtime_limits(
+        let result = self.runner.run_task_with_runtime_limits(
             task,
             self.event_loop_wait_budget,
             self.ready_io_turns,
             self.interrupt_poll_budget,
             self.memory_limit_bytes,
-        ) {
+        );
+        // A finished task releases its fds (`task-exit-closes-fds`, same as the
+        // wasm driver): a qjs pipeline producer's `#pipe` writer drops here so
+        // the consumer observes EOF instead of hanging.
+        task.close_all_fds();
+        match result {
             Ok(_) => Ok(()),
             Err(err) => {
                 let _ = task.set_exit("1");

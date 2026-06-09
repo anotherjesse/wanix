@@ -383,6 +383,57 @@ mod tests {
     }
 
     #[test]
+    fn shell_pipeline_streams_four_pipe_capacities_through_concurrent_stages() {
+        // The ADR 0010 tier-2 proof: the producer streams 256 KiB — four times
+        // the bounded #pipe's 64 KiB capacity — so it MUST block mid-stream
+        // and can only finish because the consumer drains concurrently on its
+        // own thread. Under the old sequential model (producer runs to
+        // completion before the consumer starts) this pipeline deadlocks.
+        const TOTAL: usize = 4 * 64 * 1024;
+        let (out, _err) = run_shell_pipeline(&format!(
+            "shell.wasm -c \"guest.wasm --gen {TOTAL} | guest.wasm --cat\""
+        ));
+        assert_eq!(out.len(), TOTAL, "every byte crossed the bounded pipe");
+        assert!(
+            out.as_bytes().iter().all(|b| b.is_ascii_lowercase()),
+            "payload pattern survived the pipe"
+        );
+    }
+
+    #[test]
+    fn shell_pipeline_reports_last_stage_exit_status() {
+        // bash semantics end to end: a failing producer does not decide the
+        // pipeline status; the last stage does — and stage exits are collected
+        // from real concurrent tasks via #task/<id>/wait.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell");
+        fs.write_file("guest.wasm", RUST_GUEST).expect("seed guest");
+
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let shell = table
+            .allocate_root_with_namespace("auto", namespace_with_pipe(&fs))
+            .expect("allocate shell");
+        // `false` (builtin producer) fails; the trailing external `--cat`
+        // exits 0 through #task/<id>/wait.
+        shell
+            .set_cmd("shell.wasm -c \"false | guest.wasm --cat; echo status=$?\"")
+            .expect("set cmd");
+        let cap = wire_shell_stdio(&shell);
+
+        table.start(shell.id()).expect("run shell");
+        assert_eq!(shell.exit(), "0", "shell itself exits 0");
+        let out = String::from_utf8(cap.read_file("out").expect("read out")).expect("utf8");
+        assert!(
+            out.contains("status=0"),
+            "pipeline status should be the last stage's: {out:?}"
+        );
+    }
+
+    #[test]
     fn shell_resolves_external_command_from_bin() {
         // `lister` (no slash, not a builtin) resolves to bin/lister.wasm and runs.
         let fs = Arc::new(MemFs::new());

@@ -39,6 +39,10 @@ impl File for ControlFile {
                 self.table.start(self.task.id())?;
                 self.data.clear();
             }
+            ControlCommand::StartDetached => {
+                self.table.start_detached(self.task.id())?;
+                self.data.clear();
+            }
             ControlCommand::Bind {
                 source,
                 fd,
@@ -62,6 +66,11 @@ impl File for ControlFile {
 enum ControlCommand {
     Pending,
     Start,
+    /// `start &`: start the task on its own host thread without waiting.
+    ///
+    /// Must arrive in one write — a write of exactly `start` fires the
+    /// synchronous start immediately (the incremental-write contract).
+    StartDetached,
     Bind {
         source: String,
         fd: Fd,
@@ -111,6 +120,12 @@ fn parse_control_parts(command: &str) -> FsResult<Option<Vec<String>>> {
 fn parse_complete_control_command(task: &Task, parts: &[String]) -> FsResult<ControlCommand> {
     if control_parts_are_pending(parts) {
         return Ok(ControlCommand::Pending);
+    }
+    if let [command, ampersand] = parts
+        && command == "start"
+        && ampersand == "&"
+    {
+        return Ok(ControlCommand::StartDetached);
     }
     if let Some((source, destination, mode)) = bind_command_parts(parts) {
         let options = mode.map(parse_bind_options).transpose()?;

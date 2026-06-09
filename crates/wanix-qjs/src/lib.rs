@@ -844,6 +844,65 @@ std.err.flush();
     }
 
     #[test]
+    fn task_driver_releases_fds_on_exit_so_a_piped_consumer_sees_eof() {
+        // task-exit-closes-fds for the qjs driver: a qjs producer whose fd 1 is
+        // a #pipe write end must drop that writer when it exits, or a pipeline
+        // consumer blocks forever waiting for EOF.
+        let table = TaskTable::new();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner())))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br##"
+import * as std from "qjs:std";
+std.out.puts("piped bytes");
+std.out.flush();
+"##,
+        )
+        .unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+
+        let pipe = wanix_pipe::PipeDevice::new();
+        let id = pipe.alloc().unwrap();
+        let data = NormalizedPath::new(format!("{id}/data")).unwrap();
+        let writer = pipe
+            .open(
+                &data,
+                wanix_fs::OpenOptions {
+                    write: true,
+                    ..wanix_fs::OpenOptions::default()
+                },
+            )
+            .unwrap();
+        task.insert_fd(Fd::STDOUT, writer, data.clone()).unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start(task.id()).unwrap();
+        assert_eq!(task.exit(), "0");
+        assert!(
+            task.fd_numbers().is_empty(),
+            "an exited qjs task holds no descriptors"
+        );
+
+        // The reader drains the bytes and then observes EOF — which only
+        // happens because the producer's writer fd was released on exit.
+        let mut reader = pipe.open(&data, OpenOptions::read()).unwrap();
+        let mut collected = Vec::new();
+        let mut buf = [0u8; 16];
+        loop {
+            let n = reader.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            collected.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(collected, b"piped bytes");
+    }
+
+    #[test]
     fn task_driver_loads_es_modules_from_namespace() {
         let table = TaskTable::new();
         let runner = runner();
@@ -1068,7 +1127,9 @@ std.out.flush();
             root.read_file("app/created.txt").unwrap(),
             b"created via fd"
         );
-        assert_eq!(task.fd_numbers(), [Fd::STDOUT]);
+        // task-exit-closes-fds: an exited task holds no descriptors, stdio
+        // included (its output lives in the fd's backing, read above).
+        assert_eq!(task.fd_numbers(), []);
         assert_eq!(task.exit(), "0");
     }
 
@@ -1692,7 +1753,9 @@ print("opened", fd);
         table.start(task.id()).unwrap();
 
         assert_eq!(read_file(&*stdout, "out"), b"opened 4\n");
-        assert_eq!(task.fd_numbers(), [Fd::STDOUT]);
+        // task-exit-closes-fds: an exited task holds no descriptors, stdio
+        // included (its output lives in the fd's backing, read above).
+        assert_eq!(task.fd_numbers(), []);
         assert_eq!(task.exit(), "0");
     }
 
@@ -2834,7 +2897,9 @@ print("c");
         table.start(task.id()).unwrap();
 
         assert_eq!(read_file(&*stdout, "out"), b"a\nb\nc\n");
-        assert_eq!(task.fd_numbers(), [Fd::STDOUT]);
+        // task-exit-closes-fds: an exited task holds no descriptors, stdio
+        // included (its output lives in the fd's backing, read above).
+        assert_eq!(task.fd_numbers(), []);
         assert_eq!(task.exit(), "0");
     }
 

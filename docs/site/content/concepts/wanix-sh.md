@@ -25,7 +25,7 @@ prerequisites:
 usedInFlows: []
 honestLimits:
   - "Interactive editing is byte-wise ASCII: echo, backspace, Ctrl-C line cancel, Ctrl-D exit. NO tab completion, NO history, NO cursor movement or arrow keys yet (escape sequences are ignored, not interpreted)."
-  - "Pipeline stages run SEQUENTIALLY (each buffers its whole output before the next drains it), a deliberate divergence from Plan 9 concurrent stages — see concepts/task-exit-closes-fds."
+  - "Pipeline stages launch one at a time from the single-threaded shell guest; once launched, external stages run CONCURRENTLY on their own host threads against the bounded #pipe (ADR 0010 tier 2), and adjacent builtins exchange bytes through shell memory — see concepts/task-exit-closes-fds."
   - "cwd is shell-LOCAL: cd/pwd/$PWD track it, but spawned children do not inherit a moved cwd (they run at root). Exported env DOES propagate to children."
   - "Honest-scope: control flow (if/for/while/case), functions, command/arithmetic substitution, ${VAR:-default}, globbing, tilde, fd-dup and here-doc redirects, and external `>>` append are recognized but return a clear `... not supported yet` error — never a silent no-op."
 ---

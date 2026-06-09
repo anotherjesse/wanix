@@ -174,7 +174,7 @@ mod tests {
 
     use super::run_repl;
     use crate::error::ShellResult;
-    use crate::ns::{NamespaceOps, SpawnSpec};
+    use crate::ns::{NamespaceOps, SpawnHandle, SpawnSpec};
     use crate::state::ShellState;
 
     /// A scripted terminal: `read_stdin` drains a typed byte script (then
@@ -232,10 +232,16 @@ mod tests {
         fn pipe_read_all(&mut self, _id: &str) -> ShellResult<Vec<u8>> {
             Ok(Vec::new())
         }
+        fn pipe_open_writer(&mut self, _id: &str) -> ShellResult<()> {
+            Ok(())
+        }
         fn pipe_write_all_and_close(&mut self, _id: &str, _bytes: &[u8]) -> ShellResult<()> {
             Ok(())
         }
-        fn spawn(&mut self, _spec: &SpawnSpec) -> ShellResult<i32> {
+        fn spawn_start(&mut self, _spec: &SpawnSpec) -> ShellResult<SpawnHandle> {
+            Err(crate::ShellError::Io("no externals in this fake".into()))
+        }
+        fn spawn_wait(&mut self, _handle: &SpawnHandle) -> ShellResult<i32> {
             Err(crate::ShellError::Io("no externals in this fake".into()))
         }
     }

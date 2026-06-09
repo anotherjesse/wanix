@@ -24,8 +24,8 @@ prerequisites:
   - concepts/blocking-stream-eof-contract
 usedInFlows: []
 honestLimits:
-  - "Only the compiled-wasm task driver releases fds on exit today (crates/wanix-wasm/src/driver.rs); other drivers (e.g. qjs) should adopt the same close on completion as piped commands need it."
-  - "Pipeline stages run SEQUENTIALLY, not concurrently: stage a fully completes and buffers its whole output into the unbounded in-memory #pipe before stage b drains it. This is a deliberate divergence from Plan 9 (concurrent stages + a bounded blocking pipe) and must be revisited once tasks can run on their own threads."
+  - "The wasm and qjs task drivers release fds on exit (crates/wanix-wasm/src/driver.rs, crates/wanix-qjs/src/driver.rs), and a detached start releases them even when no driver ran; any new driver must adopt the same close on completion, as piped commands need it."
+  - "Pipeline stages now run CONCURRENTLY against the bounded blocking #pipe (ADR 0010 tier 2): each external stage runs on its own host thread (detached `start &`), so a producer blocks once 64 KiB is buffered until the consumer drains. A write after the last reader closes is a broken-pipe error, not a hang."
   - "set_exit only records the status string and is callable mid-operation; it deliberately does NOT touch fds. Fd release is a separate step the driver performs when the run truly finishes."
 ---
 
@@ -65,13 +65,13 @@ Anything that needs a task's *output* after it exits reads the fd's **backing** 
 
 ## How the shell uses it
 
-The Wanix-native shell (`wanix-sh`) runs as an ordinary wasm task and launches non-builtin commands as child tasks through the `#task` device (`crates/wanix-sh/src/exec.rs:48-58`, `crates/wanix-sh/src/ns.rs`). Because child launch is synchronous and a finished child releases its fds, a producer that writes into a `#pipe` and exits leaves a closed write end behind it — so the next stage drains the buffer and sees a clean EOF. That is the whole mechanism behind an honest pipeline, and it is the literal Plan 9 model: the kernel reclaims a process's descriptors on exit, and the shell closes its own copies of the pipe ends.
+The Wanix-native shell (`wanix-sh`) runs as an ordinary wasm task and launches non-builtin commands as child tasks through the `#task` device (`crates/wanix-sh/src/exec.rs:48-58`, `crates/wanix-sh/src/ns.rs`). Because a finished child releases its fds, a producer that writes into a `#pipe` and exits leaves a closed write end behind it — so the consumer stage drains the buffer and sees a clean EOF. That is the whole mechanism behind an honest pipeline, and it is the literal Plan 9 model: the kernel reclaims a process's descriptors on exit, and the shell closes its own copies of the pipe ends.
 
 - **External producer:** the shell binds the pipe *directly into the child* via `#task/<child>/ctl`, so the shell never holds a writer of its own — there is nothing for it to close. The child's exit drops the only writer.
 - **Builtin producer:** the shell opens the pipe writer itself, writes the builtin's output, and drops its own handle — the Plan 9 "shell closes its ends" move.
 
-## Where we diverge from Plan 9 (on purpose, for now)
+## Concurrency: the Plan 9 model, restored
 
-Plan 9 runs the stages of a pipeline **concurrently** against a **bounded** blocking pipe; `b` reads while `a` is still producing. Wanix does not have per-task threads yet (that arrives with the interactive-shell work), so today pipeline stages run **sequentially** against the **unbounded** in-memory `#pipe`: stage `a` runs to completion and buffers its entire output, then stage `b` drains it. For finite output the result is identical; the difference is memory (a huge intermediate buffers in full) and the loss of producer/consumer overlap.
+Plan 9 runs the stages of a pipeline **concurrently** against a **bounded** blocking pipe; `b` reads while `a` is still producing. Wanix now does the same (ADR 0010 tier 2): the shell launches every external stage with a detached `#task` start (`ctl` `start &`, one host OS thread per running command), the `#pipe` buffers 64 KiB and then blocks the producer until the consumer drains, and the shell collects exit statuses in stage order through the blocking `#task/<id>/wait` file. A producer whose consumer dies mid-stream gets a broken-pipe error instead of blocking forever.
 
-This is a known, deliberate divergence — the kind you take to ship the correct *result* before the correct *concurrency*. It should be revisited as soon as tasks can run on their own threads, restoring concurrent stages and a bounded pipe. Until then, treat large-output pipelines as buffering, not streaming.
+The shell guest itself stays single-threaded: builtins run in-shell between launch and wait, and two adjacent builtins exchange bytes through shell memory rather than a pipe the shell could deadlock itself on.

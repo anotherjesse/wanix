@@ -1,12 +1,10 @@
 //! Executes a lowered [`Plan`] against the [`NamespaceOps`] surface.
 //!
 //! Builtins run in-process as pure functions (`argv` + stdin bytes → stdout
-//! bytes + status); anything else is launched as an external child task. Stages
-//! of a pipeline are wired through `#pipe` channels and — for now — run
-//! sequentially: each stage completes and buffers its whole output before the
-//! next drains it (see `concepts/task-exit-closes-fds` for why, and the planned
-//! move to concurrent stages). A command that cannot be launched reports an
-//! honest error and a 127 status.
+//! bytes + status); anything else is launched as an external child task.
+//! Multi-stage pipelines are wired through bounded `#pipe` channels and their
+//! stages run concurrently (see [`crate::pipeline`] and ADR 0010 tier 2). A
+//! command that cannot be launched reports an honest error and a 127 status.
 
 use crate::builtins::{builtin, is_special, special_builtin};
 use crate::error::{ShellError, ShellResult};
@@ -15,7 +13,7 @@ use crate::ns::{InputSource, NamespaceOps, OutputSink, SpawnSpec};
 use crate::state::ShellState;
 
 /// The status code returned when an external command cannot be launched.
-const COMMAND_NOT_FOUND_STATUS: i32 = 127;
+pub(crate) const COMMAND_NOT_FOUND_STATUS: i32 = 127;
 
 enum Outcome {
     Status(i32),
@@ -112,27 +110,7 @@ fn run_pipeline(
         )));
     }
 
-    // One #pipe between each adjacent pair; stages run left to right.
-    let mut pipes = Vec::with_capacity(stages.len() - 1);
-    for _ in 1..stages.len() {
-        pipes.push(ns.pipe_new()?);
-    }
-    let last = stages.len() - 1;
-    let mut status = 0;
-    for (i, stage) in stages.iter().enumerate() {
-        let stdin = if i == 0 {
-            InputSource::Inherit
-        } else {
-            InputSource::Pipe(pipes[i - 1].clone())
-        };
-        let stdout = if i == last {
-            OutputSink::Inherit
-        } else {
-            OutputSink::Pipe(pipes[i].clone())
-        };
-        status = run_stage(stage, stdin, stdout, state, ns)?;
-    }
-    Ok(Outcome::Status(status))
+    crate::pipeline::run_stages(stages, state, ns).map(Outcome::Status)
 }
 
 fn run_single_stage(
@@ -159,20 +137,7 @@ fn run_single_stage(
     dispatch(&argv, stdin, stdout, state, ns).map(Outcome::Status)
 }
 
-fn run_stage(
-    stage: &Stage,
-    stdin: InputSource,
-    stdout: OutputSink,
-    state: &ShellState,
-    ns: &mut dyn NamespaceOps,
-) -> ShellResult<i32> {
-    let argv = expand_argv(&stage.argv, state)?;
-    // A stage's own redirects override the pipe-derived wiring (bash precedence).
-    let (stdin, stdout) = apply_redirects(&stage.redirects, stdin, stdout, state)?;
-    dispatch(&argv, stdin, stdout, state, ns)
-}
-
-/// Applies a stage's redirects over its pipe-derived stdin/stdout wiring.
+/// Applies a stage's redirects over its default stdin/stdout wiring.
 fn apply_redirects(
     redirects: &[Redirect],
     mut stdin: InputSource,
@@ -219,7 +184,7 @@ fn dispatch(
 }
 
 /// Expands each raw word with the current state (quote removal + `$VAR`/`$?`).
-fn expand_argv(raw: &[String], state: &ShellState) -> ShellResult<Vec<String>> {
+pub(crate) fn expand_argv(raw: &[String], state: &ShellState) -> ShellResult<Vec<String>> {
     raw.iter()
         .map(|word| crate::expand::expand_word(word, state))
         .collect()
@@ -283,6 +248,7 @@ fn parse_exit_code(argv: &[String]) -> i32 {
 mod tests {
     use super::*;
     use crate::lower::lower;
+    use crate::ns::SpawnHandle;
     use crate::syntax::parse_program;
     use std::collections::HashMap;
 
@@ -291,6 +257,12 @@ mod tests {
 
     /// An in-memory NamespaceOps that fully simulates pipes and external command
     /// launch, so whole pipelines run on the host with no real I/O.
+    ///
+    /// `spawn_start` is honest about the concurrent contract on one thread by
+    /// being event-driven: a command whose stdin pipe has no bytes yet is
+    /// deferred and runs as soon as its pipe is written (or at `spawn_wait`,
+    /// with whatever arrived) — so producers feed consumers regardless of the
+    /// launch-all-then-wait-all order the executor uses.
     #[derive(Default)]
     struct FakeNs {
         out: Vec<u8>,
@@ -300,6 +272,11 @@ mod tests {
         files: HashMap<String, Vec<u8>>,
         spawns: Vec<SpawnSpec>,
         next_pipe: u32,
+        next_handle: u32,
+        deferred: HashMap<String, SpawnSpec>,
+        deferred_on_pipe: HashMap<String, String>,
+        statuses: HashMap<String, i32>,
+        wait_order: Vec<String>,
     }
 
     impl FakeNs {
@@ -328,6 +305,7 @@ mod tests {
                         .entry(id.clone())
                         .or_default()
                         .extend_from_slice(bytes);
+                    self.cascade(&id.clone());
                 }
                 OutputSink::File { path, append } => {
                     let entry = self.files.entry(path.clone()).or_default();
@@ -336,6 +314,29 @@ mod tests {
                     }
                     entry.extend_from_slice(bytes);
                 }
+            }
+        }
+
+        /// Runs one launched command to completion, feeding any deferred
+        /// consumer of its output pipe.
+        fn run_fake(&mut self, handle: &str, spec: &SpawnSpec) {
+            let input = self.read_source(&spec.stdin);
+            let cmd = self
+                .commands
+                .get(&spec.program)
+                .copied()
+                .expect("spawn_start verified the command exists");
+            let (output, status) = cmd(&input, &spec.args);
+            self.statuses.insert(handle.to_owned(), status);
+            self.write_sink(&spec.stdout.clone(), &output);
+        }
+
+        /// Wakes a command deferred on `pipe` now that bytes arrived.
+        fn cascade(&mut self, pipe: &str) {
+            if let Some(handle) = self.deferred_on_pipe.remove(pipe)
+                && let Some(spec) = self.deferred.remove(&handle)
+            {
+                self.run_fake(&handle, &spec);
             }
         }
     }
@@ -378,22 +379,45 @@ mod tests {
         fn pipe_read_all(&mut self, id: &str) -> ShellResult<Vec<u8>> {
             Ok(self.pipes.remove(id).unwrap_or_default())
         }
+        fn pipe_open_writer(&mut self, _id: &str) -> ShellResult<()> {
+            Ok(())
+        }
         fn pipe_write_all_and_close(&mut self, id: &str, bytes: &[u8]) -> ShellResult<()> {
             self.pipes
                 .entry(id.to_owned())
                 .or_default()
                 .extend_from_slice(bytes);
+            self.cascade(id);
             Ok(())
         }
-        fn spawn(&mut self, spec: &SpawnSpec) -> ShellResult<i32> {
+        fn spawn_start(&mut self, spec: &SpawnSpec) -> ShellResult<SpawnHandle> {
             self.spawns.push(spec.clone());
-            let input = self.read_source(&spec.stdin);
-            let Some(cmd) = self.commands.get(&spec.program).copied() else {
+            if !self.commands.contains_key(&spec.program) {
                 return Err(crate::ShellError::Io("command not found".into()));
-            };
-            let (output, status) = cmd(&input, &spec.args);
-            self.write_sink(&spec.stdout, &output);
-            Ok(status)
+            }
+            self.next_handle += 1;
+            let handle = self.next_handle.to_string();
+            match &spec.stdin {
+                InputSource::Pipe(id) if self.pipes.get(id).is_none_or(|p| p.is_empty()) => {
+                    // Input not produced yet: run when the pipe is written.
+                    self.deferred.insert(handle.clone(), spec.clone());
+                    self.deferred_on_pipe.insert(id.clone(), handle.clone());
+                }
+                _ => self.run_fake(&handle, spec),
+            }
+            Ok(SpawnHandle::new(handle))
+        }
+        fn spawn_wait(&mut self, handle: &SpawnHandle) -> ShellResult<i32> {
+            self.wait_order.push(handle.id().to_owned());
+            if let Some(spec) = self.deferred.remove(handle.id()) {
+                // Its input pipe was never written: run with what's there.
+                self.deferred_on_pipe.retain(|_, h| h != handle.id());
+                self.run_fake(handle.id(), &spec);
+            }
+            self.statuses
+                .get(handle.id())
+                .copied()
+                .ok_or_else(|| crate::ShellError::Io("unknown spawn handle".into()))
         }
     }
 
@@ -516,6 +540,59 @@ mod tests {
         let (code, ns) = run("echo hello | cat");
         assert_eq!(code, 0);
         assert_eq!(String::from_utf8(ns.out).unwrap(), "hello\n");
+    }
+
+    #[test]
+    fn adjacent_builtins_use_shell_memory_not_a_pipe() {
+        // A single-threaded shell cannot drain a pipe it is blocked writing, so
+        // builtin->builtin gaps must never touch a real (bounded) pipe.
+        let (code, ns) = run("echo hello | cat | cat");
+        assert_eq!(code, 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "hello\n");
+        assert!(ns.pipes.is_empty(), "no #pipe should have been allocated");
+        assert_eq!(ns.next_pipe, 0, "no #pipe should have been allocated");
+    }
+
+    #[test]
+    fn all_externals_launch_before_any_wait_and_waits_run_in_stage_order() {
+        let mut ns = FakeNs::default();
+        ns.register("gen", |_in, _args| (b"x".to_vec(), 0));
+        ns.register("mid", |input, _args| (input.to_vec(), 3));
+        ns.register("last", |input, _args| (input.to_vec(), 5));
+        assert_eq!(run_on("gen | mid | last", &mut ns), 5, "last stage wins");
+        assert_eq!(
+            ns.spawns
+                .iter()
+                .map(|s| s.program.clone())
+                .collect::<Vec<_>>(),
+            ["gen", "mid", "last"],
+            "stages launch left to right before any wait"
+        );
+        assert_eq!(
+            ns.wait_order,
+            ["1", "2", "3"],
+            "exit statuses are collected in stage order"
+        );
+    }
+
+    #[test]
+    fn pipeline_status_is_last_stage_even_when_earlier_stages_fail() {
+        let mut ns = FakeNs::default();
+        ns.register("boom", |_in, _args| (b"data".to_vec(), 9));
+        ns.register("ok", |input, _args| (input.to_vec(), 0));
+        assert_eq!(run_on("boom | ok", &mut ns), 0, "bash $? is the last stage");
+    }
+
+    #[test]
+    fn builtin_between_externals_threads_data_through() {
+        let mut ns = FakeNs::default();
+        ns.register("gen", |_in, _args| (b"abc".to_vec(), 0));
+        ns.register("wc", |input, _args| {
+            (format!("{}\n", input.len()).into_bytes(), 0)
+        });
+        // gen (external) -> cat (builtin, runs in-shell) -> wc (external)
+        assert_eq!(run_on("gen | cat | wc", &mut ns), 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "3\n");
     }
 
     // ---- command resolution ---------------------------------------------

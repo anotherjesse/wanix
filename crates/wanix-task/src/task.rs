@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath};
 use wanix_vfs::{BindOptions, Namespace};
@@ -12,10 +13,22 @@ mod types;
 use state::TaskState;
 pub use types::{TaskId, TaskSpec};
 
+/// Worst-case wakeup interval for [`Task::wait_exit`]. `set_exit` notifies, so
+/// this only bounds a missed notification; a timeout re-checks, it never
+/// reports a phantom exit.
+const EXIT_RECHECK_INTERVAL: Duration = Duration::from_millis(50);
+
+/// One task's shared state: the mutable record plus the exit signal that wakes
+/// blocked [`Task::wait_exit`] callers when an exit status is recorded.
+struct TaskShared {
+    state: Mutex<TaskState>,
+    exit_signal: Condvar,
+}
+
 /// A task handle. Clones point at the same task state.
 #[derive(Clone)]
 pub struct Task {
-    state: Arc<Mutex<TaskState>>,
+    shared: Arc<TaskShared>,
 }
 
 impl Task {
@@ -36,7 +49,10 @@ impl Task {
 
     fn with_state(state: TaskState) -> Self {
         Self {
-            state: Arc::new(Mutex::new(state)),
+            shared: Arc::new(TaskShared {
+                state: Mutex::new(state),
+                exit_signal: Condvar::new(),
+            }),
         }
     }
 
@@ -185,12 +201,43 @@ impl Task {
             .expect("task state lock should be readable")
     }
 
-    /// Sets the exit status text.
+    /// Sets the exit status text and wakes any [`Self::wait_exit`] callers.
     pub fn set_exit(&self, exit: impl Into<String>) -> FsResult<()> {
         self.write_state(|state| {
             state.exit = exit.into();
             Ok(())
-        })
+        })?;
+        self.shared.exit_signal.notify_all();
+        Ok(())
+    }
+
+    /// Blocks until an exit status has been recorded and returns it.
+    ///
+    /// Parks on a condvar (no busy spin) until [`Self::set_exit`] records a
+    /// non-empty status — a task that never starts, or whose driver never
+    /// records an exit, blocks its waiters indefinitely, so detached starts
+    /// must guarantee an exit is recorded (see `TaskTable::start_detached`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem error when the task state lock is poisoned.
+    pub fn wait_exit(&self) -> FsResult<String> {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| FsError::Other("task state lock poisoned".to_owned()))?;
+        loop {
+            if !state.exit.is_empty() {
+                return Ok(state.exit.clone());
+            }
+            let (next, _timed_out) = self
+                .shared
+                .exit_signal
+                .wait_timeout(state, EXIT_RECHECK_INTERVAL)
+                .map_err(|_| FsError::Other("task exit wait poisoned".to_owned()))?;
+            state = next;
+        }
     }
 
     /// Releases every open fd, emptying the task's fd table.
@@ -213,6 +260,7 @@ impl Task {
 
     fn read_state<T>(&self, f: impl FnOnce(&TaskState) -> T) -> FsResult<T> {
         let state = self
+            .shared
             .state
             .lock()
             .map_err(|_| FsError::Other("task state lock poisoned".to_owned()))?;
@@ -221,6 +269,7 @@ impl Task {
 
     fn write_state<T>(&self, f: impl FnOnce(&mut TaskState) -> FsResult<T>) -> FsResult<T> {
         let mut state = self
+            .shared
             .state
             .lock()
             .map_err(|_| FsError::Other("task state lock poisoned".to_owned()))?;

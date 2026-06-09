@@ -18,6 +18,7 @@ const COMMANDS: &[(&str, CommandHandler)] = &[
     ("--utime", utime_command),
     ("--echo", echo_command),
     ("--cat", cat_command),
+    ("--gen", gen_command),
     ("--env", env_command),
 ];
 
@@ -94,6 +95,24 @@ fn cat_command(_args: &[String]) {
     let mut input = Vec::new();
     if std::io::stdin().read_to_end(&mut input).is_ok() {
         let _ = std::io::stdout().write_all(&input);
+    }
+}
+
+/// Streams `<bytes>` of a repeating pattern to stdout in small chunks, so the
+/// shell's pipeline tests have a producer that writes more than a bounded
+/// `#pipe` holds — it can only finish if a consumer drains concurrently.
+fn gen_command(args: &[String]) {
+    use std::io::Write;
+    let total: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let chunk: Vec<u8> = (0..1024u32).map(|i| b'a' + (i % 26) as u8).collect();
+    let mut stdout = std::io::stdout();
+    let mut written = 0;
+    while written < total {
+        let len = chunk.len().min(total - written);
+        if stdout.write_all(&chunk[..len]).is_err() {
+            std::process::exit(1);
+        }
+        written += len;
     }
 }
 

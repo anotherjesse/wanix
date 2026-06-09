@@ -198,7 +198,10 @@ tests.
   ordinary `.wasm` task. `brush-parser` syntax → a flat `Plan` (and-or lists →
   pipelines → stages, honest `Unsupported` for anything outside the subset) →
   an executor over one `NamespaceOps` seam. Supported: `;` sequences,
-  `|` pipelines (sequential, `#pipe`-backed, EOF via `task-exit-closes-fds`),
+  `|` pipelines (concurrent stages per ADR 0010 tier 2: every external stage
+  runs on its own host thread via a detached `#task` start and is waited
+  through `#task/<id>/wait`, wired through the bounded blocking `#pipe`, EOF
+  via `task-exit-closes-fds`),
   `&&`/`||` short-circuit, `< > >>` redirects, `$VAR`/`${VAR}`/`$?` expansion at
   execution time, the `echo`/`cat`/`pwd`/`env`/`true`/`false`/`:`/`exit` pipeable
   builtins and the `cd`/`export`/`unset` special builtins (single-stage), and
@@ -487,17 +490,16 @@ more feature work.
   9P-style `ANAME`-keyed sub-scoping is unreachable; settle it *with* the
   ADR 0006/0007 authorization layer (thread `aname` 1:1 vs a native
   scope-selection shape), not before. (a) and (b) are small cleanup-cycle items.
-- Shell pipeline concurrency (HIGH — address ASAP once the `wanix-sh` foundation
-  works): pipeline stages currently run SEQUENTIALLY against the unbounded
-  in-memory `#pipe` (stage a fully buffers its output, then b drains), a
-  deliberate divergence from Plan 9's concurrent stages + bounded blocking pipe.
-  Restore concurrency (and a bounded pipe) once tasks can run on their own
-  threads — the same per-task thread work the interactive shell needs; the
-  decided model is ADR 0010's tier-2 (thread-per-command, bounded blocking
-  pipes). Context in
-  `docs/site/content/concepts/task-exit-closes-fds.md`; the fd-on-exit primitive
-  (`Task::close_all_fds`) is shipped for the wasm driver only — the qjs driver
-  should adopt it too before qjs commands are piped.
+- Shell pipeline concurrency: RESOLVED (ADR 0010 tier 2). `#pipe` is bounded
+  (64 KiB default, `PipeCapacity` constructor knob, broken-pipe error once the
+  last reader closes) and pipeline stages run concurrently — the shell launches
+  every external stage via `ctl` `start &` (a detached per-task host thread),
+  runs builtins in-shell (adjacent builtins exchange bytes through shell
+  memory, never a pipe), then collects exits in stage order through the
+  blocking `#task/<id>/wait` file; both the wasm and qjs drivers release fds on
+  exit. Stages still launch one at a time from the single-threaded shell guest;
+  proofs in `crates/wanix-wasm/src/driver.rs` (a 4x-capacity stream) and
+  `crates/wanix-sh/src/pipeline.rs`.
 - Module-line health: `just module-lines` is green against the 350-line hard
   limit, but three modules sit above the 250-line warn limit and should be split
   before they grow — `wanix-agent/src/codex.rs` (~307), `wanix-agent/src/

@@ -35,7 +35,7 @@ fn open_data(device: &PipeDevice, id: &str, options: OpenOptions) -> FsResult<Bo
     }
     let channel = device.channel(id)?;
     if options.read {
-        Ok(Box::new(PipeReader::new(channel)))
+        Ok(Box::new(PipeReader::new(channel)?))
     } else if options.write {
         Ok(Box::new(PipeWriter::new(channel)?))
     } else {
