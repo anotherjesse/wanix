@@ -940,7 +940,7 @@ listed all five current report rows plus the repair artifacts.
 
 The current loop is:
 
-1. Start `wanix-rust serve`.
+1. Start `wanix serve`.
 2. Open the printed URL.
 3. Click `Run OS Cockpit Tour` when you want the whole story at once: v86
    shared files, JS/WASM duet, qjs HTTP route, WASM HTTP route, agent repair,

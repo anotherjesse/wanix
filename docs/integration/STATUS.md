@@ -210,7 +210,7 @@ limit of what is reviewable in isolation.
   15 errors and exited; esbuild never ran. No `workbench/dist/web/` output.
 - **Browser (headless):** Playwright 1.60
   (chromium\_headless\_shell-1223) drove a Node script against a freshly
-  started `target/debug/wanix-rust serve --root /tmp/wanix-test-root
+  started `target/debug/wanix serve --root /tmp/wanix-test-root
   --bundle workbench-fs9p --wanix-services --addr 127.0.0.1:17999`.
   Probed `/.well-known/wanix.json`, `/.well-known/rootfs.json`, and the
   bundle HTML with curl. Captured screenshot, console messages, request
@@ -255,7 +255,7 @@ No sandbox override was needed — `curl`/`unzip` ran under default permissions.
 
 ### Browser validation: **FAIL**
 
-Headless Chromium against `wanix-rust serve --bundle workbench-fs9p` on
+Headless Chromium against `wanix serve --bundle workbench-fs9p` on
 `127.0.0.1:17999` still shows the same banner as pass 1, even though the
 vscode-web files are now on disk:
 
@@ -263,7 +263,7 @@ vscode-web files are now on disk:
 > `at script.onerror (http://127.0.0.1:17999/?bundle=workbench-fs9p&term:62:39)`
 
 The bundle bootstrap HTML loads (document title is `"Wanix Rust workbench"`),
-but vscode-web never initializes because the `wanix-rust serve` binary does
+but vscode-web never initializes because the `wanix serve` binary does
 not route `/workbench/code/...` to the vendored `workbench/code/` tree. The
 file exists on disk; serve just does not have a static route for it. The
 banner is identical to pass 1; the screen behind it stays black because the
@@ -316,7 +316,7 @@ untracked build output and so do not appear above.
 
 ### Updated recommended next moves
 
-The single root cause of the FAIL is now clear: **`wanix-rust serve` does not
+The single root cause of the FAIL is now clear: **`wanix serve` does not
 serve the `workbench/code/` tree.** The TS toolchain and the vendored assets
 are both ready; the gap is a static route in the Rust binary. The next move
 must be:
@@ -389,7 +389,7 @@ After the asset route landed, the workbench shell rendered but showed
 ### Browser validation: **PASS**
 
 Headless Chromium (Playwright 1.53, cached chromium 1223) against
-`wanix-rust serve --root /tmp/wanix-test-root3 --bundle workbench-fs9p
+`wanix serve --root /tmp/wanix-test-root3 --bundle workbench-fs9p
 --wanix-services --addr 127.0.0.1:18021`:
 
 - Code OSS workbench renders — no banner, no failed requests, no page errors.

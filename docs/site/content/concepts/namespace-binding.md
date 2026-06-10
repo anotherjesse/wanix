@@ -77,7 +77,7 @@ The walkthrough mounts a real host directory into a task (`rust-walkthrough.md:1
 mkdir -p /tmp/wanix-host
 printf 'native mount' > /tmp/wanix-host/input.txt
 
-wanix-rust qjs --mount /tmp/wanix-host=host examples/qjs-host-mount.js
+wanix qjs --mount /tmp/wanix-host=host examples/qjs-host-mount.js
 # host input: native mount
 # host output: mounted output for native mount
 ```

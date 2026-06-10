@@ -9,8 +9,10 @@ module-lines:
 clippy:
     @cargo clippy --workspace --all-targets -- -D warnings
 
+# Parallel mesh/process tests need more descriptors than macOS login shells
+# often expose by default.
 test:
-    @cargo test --workspace --locked
+    @for limit in 1048575 65536 4096; do ulimit -n "$limit" 2>/dev/null && break; done; cargo test --workspace --locked
 
 check: fmt module-lines clippy test
 

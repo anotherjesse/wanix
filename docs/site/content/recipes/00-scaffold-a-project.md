@@ -37,11 +37,11 @@ Generate a JS or Rust Wanix project with the guest SDK wired in.
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust new --js counter
+wanix new --js counter
 # created js project ./counter
-# next: wanix-rust qjs ./counter/main.js
+# next: wanix qjs ./counter/main.js
 ```
 
 The CLI prints the next step itself (`crates/wanix-cli/src/new.rs:169`). The kind flag is required and exclusive — pass exactly one of `--js NAME` or `--rust NAME`, or you get a usage error (`new.rs:143-148`). Add `--dir DIR` to choose the parent directory; the default is `.` (`new.rs:113-118`). The target `<parent>/<name>` must be empty or non-existent, or the command refuses (`new.rs:206-222`).
@@ -53,7 +53,7 @@ For `--js`, `wanix new` writes ten files (`new.rs:178-191`):
 ```text
 counter/
   main.js              # hello-world: print args, write then read hello.txt
-  README.md            # names `wanix-rust qjs main.js`
+  README.md            # names `wanix qjs main.js`
   tsconfig.json        # checkJs over lib/wanix/*.d.ts
   lib/wanix/index.js   # SDK barrel
   lib/wanix/bytes.js
@@ -69,7 +69,7 @@ The starter `main.js` imports the SDK rather than poking `qjs:std` inline — `i
 ## Generate a Rust project
 
 ```sh
-wanix-rust new --rust upper
+wanix new --rust upper
 # created rust project ./upper
 # next: cd ./upper && cargo build --release --target wasm32-wasip1
 ```
@@ -79,7 +79,7 @@ The Rust starter is a standalone Cargo project (`new.rs:193-200`): `Cargo.toml` 
 ## Run it
 
 ```sh
-wanix-rust qjs ./counter/main.js
+wanix qjs ./counter/main.js
 # hello from a Wanix qjs task
 # args: ["main.js"]
 # hello.txt = hello world
@@ -87,7 +87,7 @@ wanix-rust qjs ./counter/main.js
 # Rust: build to wasm first, then run the module as a task
 cd ./upper && cargo build --release --target wasm32-wasip1
 echo "make me loud" > in.txt
-wanix-rust wasm target/wasm32-wasip1/release/upper.wasm /in.txt /out.txt
+wanix wasm target/wasm32-wasip1/release/upper.wasm /in.txt /out.txt
 # wrote /in.txt -> /out.txt
 cat out.txt
 # MAKE ME LOUD
@@ -97,7 +97,7 @@ Two things worth knowing about that run. The wasm task's namespace root maps to 
 
 ## Next: serve it via /.wanix/app/&lt;name&gt;
 
-A standalone program is the floor, not the ceiling. The same `main.js`, dropped under `apps/<name>.js` in a served root, becomes an HTTP handler: `wanix-rust serve --wanix-services` binds the device set, and a loopback `GET /.wanix/app/<name>` spawns a fresh qjs task per request and returns its stdout. Back the handler's state with `#kv` and you have a tiny web app whose state is just a file. [Recipe 04](/recipes/04-tiny-http-app-with-kv) walks the counter end to end.
+A standalone program is the floor, not the ceiling. The same `main.js`, dropped under `apps/<name>.js` in a served root, becomes an HTTP handler: `wanix serve --wanix-services` binds the device set, and a loopback `GET /.wanix/app/<name>` spawns a fresh qjs task per request and returns its stdout. Back the handler's state with `#kv` and you have a tiny web app whose state is just a file. [Recipe 04](/recipes/04-tiny-http-app-with-kv) walks the counter end to end.
 
 ## See also
 

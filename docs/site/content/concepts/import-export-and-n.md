@@ -43,15 +43,15 @@ Show it first. Start a server that exports its namespace:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust serve --listen tcp://127.0.0.1:5640 --root ./serverdir
+wanix serve --listen tcp://127.0.0.1:5640 --root ./serverdir
 ```
 
 Then, from another process, read a file that only exists on the server:
 
 ```sh
-wanix-rust mount-cat tcp://127.0.0.1:5640 docs/note.txt
+wanix mount-cat tcp://127.0.0.1:5640 docs/note.txt
 # -> the bytes of ./serverdir/docs/note.txt, fetched over the wire
 ```
 
@@ -74,7 +74,7 @@ That is the exact call the CLI makes (`crates/wanix-cli/src/mount.rs:149-160`). 
 
 Here is where one client becomes load-bearing. Because every Wanix capability is already a plain `FileSystem`, importing a peer imports *all* of them at once — its files *and* its `#`-named devices. A peer's key/value store is `/n/A/#kv/<key>`; its agent is `/n/A/#agent/...`; its task table, terminal, and plumber ride the same import (`AGENTS.md:220-226`). Nobody taught `#kv` how to be remote. You wrote a 9P client once, and every file-shaped service any node exports became reachable (`docs/mesh-the-missing-half-of-9p.md:81-89`). The mesh design names this directly: services as files plus a single bind primitive is what makes "everything is a file" load-bearing rather than cute. See [devices import for free](/concepts/devices-import-for-free).
 
-Pair this with the exec plane and you can also send the computation across: `wanix-rust cpu --node "$NODE_B" -- qjs build.js` runs a task *on B* against the caller's reverse-exported working directory, returning the bytes on the cpu control stream (B serves the plane with `mesh-serve --cpu`). That is Plan 9 cpu(1) over the mesh — see [send the agent to the data](/concepts/send-agent-to-the-data).
+Pair this with the exec plane and you can also send the computation across: `wanix cpu --node "$NODE_B" -- qjs build.js` runs a task *on B* against the caller's reverse-exported working directory, returning the bytes on the cpu control stream (B serves the plane with `mesh-serve --cpu`). That is Plan 9 cpu(1) over the mesh — see [send the agent to the data](/concepts/send-agent-to-the-data).
 
 ## Honest caveat: the shipped mount binds one slot
 

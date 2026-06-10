@@ -48,7 +48,7 @@ A name is spelled `lowercase [a-z0-9-]`, first and last character alphanumeric �
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 ## 1. Serve three resources, registering each by name
@@ -58,23 +58,23 @@ Each serve below takes `--register NAME`: alongside the usual ticket record it w
 A volume named `notes`:
 
 ```sh
-wanix-rust volume create notes
+wanix volume create notes
 # created volume notes at ~/.wanix/volumes/notes
 printf 'welcome to the writing desk\n' > ~/.wanix/volumes/notes/welcome.txt
 printf 'meet the mesh at noon\n'       > ~/.wanix/volumes/notes/draft.txt
-wanix-rust volume serve --volume notes --listen 127.0.0.1:0 --register notes
+wanix volume serve --volume notes --listen 127.0.0.1:0 --register notes
 ```
 
 ```text
 notes	iroh://b070895d...?addr=127.0.0.1:51277
-# mount with: wanix-rust mount-ls 'iroh://b070895d...?addr=127.0.0.1:51277'
+# mount with: wanix mount-ls 'iroh://b070895d...?addr=127.0.0.1:51277'
 # registered catalog entry notes -> iroh://b070895d...?addr=127.0.0.1:51277 (/root/.wanix/catalog/notes.json)
 ```
 
 The built-in `upper` tool, named `upper`:
 
 ```sh
-wanix-rust tool serve --tool upper --listen 127.0.0.1:0 --register upper
+wanix tool serve --tool upper --listen 127.0.0.1:0 --register upper
 # upper	iroh://8c7a7009...?addr=127.0.0.1:49531
 # ...
 # registered catalog entry upper -> iroh://8c7a7009...?addr=127.0.0.1:49531 (...)
@@ -83,7 +83,7 @@ wanix-rust tool serve --tool upper --listen 127.0.0.1:0 --register upper
 And the bundled chatroom ([Recipe 07](/recipes/07-chatroom-over-the-mesh)), named `room`:
 
 ```sh
-wanix-rust app serve --app examples/chatroom --state /tmp/room \
+wanix app serve --app examples/chatroom --state /tmp/room \
     --listen 127.0.0.1:0 --register room
 # chatroom	iroh://e1de10e6...?addr=127.0.0.1:51637
 # ...
@@ -114,7 +114,7 @@ cat ~/.wanix/catalog/notes.json
 `catalog ls` probes every entry concurrently with one bounded dial each (the shared 5 s mount deadline) and renders `NAME  STATUS  ADDRESS`:
 
 ```sh
-wanix-rust catalog ls
+wanix catalog ls
 ```
 
 ```text
@@ -144,28 +144,28 @@ upper	online	iroh://8c7a7009...?addr=127.0.0.1:54872
 Anywhere a mount target is taken, a bare name now resolves through the catalog *at launch*, and each resolution is logged once on stderr — the audit trail that names are for humans while the dialed capability is the address:
 
 ```sh
-wanix-rust sh --mount-mesh notes --mount-mesh room -c 'cat < /n/notes/welcome.txt'
+wanix sh --mount-mesh notes --mount-mesh room -c 'cat < /n/notes/welcome.txt'
 ```
 
 ```text
-wanix-rust: name 'notes' -> iroh://b070895d...?addr=127.0.0.1:51277 (resolved through the catalog at launch)
-wanix-rust: name 'room' -> iroh://e1de10e6...?addr=127.0.0.1:51637 (resolved through the catalog at launch)
+wanix: name 'notes' -> iroh://b070895d...?addr=127.0.0.1:51277 (resolved through the catalog at launch)
+wanix: name 'room' -> iroh://e1de10e6...?addr=127.0.0.1:51637 (resolved through the catalog at launch)
 welcome to the writing desk
 ```
 
 A bare `NAME` mounts at the conventional `/n/NAME`; `--mount-mesh notes=/vol/notes` picks the guest path explicitly. The same spelling works on `wasm` and `qjs-shell`, and on the one-shot verbs:
 
 ```sh
-wanix-rust mount-ls notes            # -> draft.txt  welcome.txt
-wanix-rust mount-cat notes welcome.txt
-wanix-rust mount-write notes todo.txt 'rotate the keys'
+wanix mount-ls notes            # -> draft.txt  welcome.txt
+wanix mount-cat notes welcome.txt
+wanix mount-write notes todo.txt 'rotate the keys'
 ```
 
 An unknown name fails with the fix spelled out (executed verbatim):
 
 ```text
-$ wanix-rust mount-ls whiteboard
-no catalog entry "whiteboard" (catalog /root/.wanix/catalog); add one with `wanix-rust catalog add whiteboard IROH_URL` or serve the resource with `--register whiteboard`
+$ wanix mount-ls whiteboard
+no catalog entry "whiteboard" (catalog /root/.wanix/catalog); add one with `wanix catalog add whiteboard IROH_URL` or serve the resource with `--register whiteboard`
 ```
 
 ## 4. The room's verbs, by name
@@ -173,9 +173,9 @@ no catalog entry "whiteboard" (catalog /root/.wanix/catalog); add one with `wani
 Mounting the room brings [its vocabulary](/concepts/bin-verbs) along — the chatroom ships `bin/post.js`, `bin/watch.js`, `bin/roster.js`, runnable as `room:CMD` and confined to exactly the room:
 
 ```sh
-wanix-rust sh --mount-mesh room -c 'room:post hello from a verb'
-wanix-rust sh --mount-mesh room -c 'echo piped through stdin | room:post'
-wanix-rust mount-cat room latest
+wanix sh --mount-mesh room -c 'room:post hello from a verb'
+wanix sh --mount-mesh room -c 'echo piped through stdin | room:post'
+wanix mount-cat room latest
 ```
 
 ```text
@@ -188,7 +188,7 @@ wanix-rust mount-cat room latest
 `room:watch` tails the room's never-EOF `stream` file. On an interactive terminal it renders live; in a *captured* `sh -c` run the shell collects output and prints it when the command exits — which happens at stream EOF, i.e. when the room goes away. Executed: a watcher was started, two posts landed from other invocations, then the room serve was killed —
 
 ```sh
-wanix-rust sh --mount-mesh room -c 'room:watch'    # parks, collecting
+wanix sh --mount-mesh room -c 'room:watch'    # parks, collecting
 # ... meanwhile: room:post line one for the watcher
 # ...            room:post line two for the watcher
 # ... then the room serve is killed; the watcher exits 0 and prints:
@@ -199,7 +199,7 @@ wanix-rust sh --mount-mesh room -c 'room:watch'    # parks, collecting
 {"at":1781105714383,"from":"iroh:0f285641...","body":"line two for the watcher"}
 ```
 
-Both lines were delivered to the verb live (their timestamps are the post times); the *rendering* waited for the collected run to finish. `stream` carries the raw `iroh:<hex>` principal; `latest` renders the nick form. For a live-rendering tail from the host CLI, `wanix-rust mount-cat room stream --follow` is the streaming consumer.
+Both lines were delivered to the verb live (their timestamps are the post times); the *rendering* waited for the collected run to finish. `stream` carries the raw `iroh:<hex>` principal; `latest` renders the nick form. For a live-rendering tail from the host CLI, `wanix mount-cat room stream --follow` is the streaming consumer.
 
 ## 5. Save the desk as a recipe
 
@@ -208,7 +208,7 @@ Both lines were delivered to the verb live (their timestamps are the post times)
 A recipe is a saved mount+run composition — authored explicitly, never captured. `NAME` targets must resolve at save time; the resolved address is recorded as a drift-check `hint`:
 
 ```sh
-wanix-rust recipe save writing-desk \
+wanix recipe save writing-desk \
   --description 'notes + upper + room on one desk' \
   --mount notes --mount upper --mount room \
   --run 'tool /n/upper < /n/notes/draft.txt | room:post'
@@ -238,18 +238,18 @@ hint = "iroh://b070895d...?addr=127.0.0.1:51277"
 `recipe run` resolves every bind through the catalog *now*, mounts them, and runs the line through `sh -c` — remote file through remote tool into the room, one line:
 
 ```sh
-wanix-rust recipe run writing-desk
+wanix recipe run writing-desk
 ```
 
 ```text
-wanix-rust: name 'notes' -> iroh://b070895d...?addr=127.0.0.1:51277 (resolved through the catalog at launch)
-wanix-rust: name 'upper' -> iroh://8c7a7009...?addr=127.0.0.1:54872 (resolved through the catalog at launch)
-wanix-rust: name 'room' -> iroh://e1de10e6...?addr=127.0.0.1:34876 (resolved through the catalog at launch)
+wanix: name 'notes' -> iroh://b070895d...?addr=127.0.0.1:51277 (resolved through the catalog at launch)
+wanix: name 'upper' -> iroh://8c7a7009...?addr=127.0.0.1:54872 (resolved through the catalog at launch)
+wanix: name 'room' -> iroh://e1de10e6...?addr=127.0.0.1:34876 (resolved through the catalog at launch)
 job: /n/upper/jobs/j573273e80834a2ac
 ```
 
 ```sh
-wanix-rust mount-cat room latest | tail -1
+wanix mount-cat room latest | tail -1
 # {"at":1781105905105,"from":"desk (0f285641)","body":"MEET THE MESH AT NOON\n"}
 ```
 
@@ -260,7 +260,7 @@ A recipe with no `--run` line opens an interactive shell over its mounts, mirror
 Restart the `upper` serve (new port, entry overwritten) and rerun — resolution is launch-time, so the recipe follows the catalog and says so:
 
 ```text
-wanix-rust: recipe "writing-desk" bind 'upper' DRIFTED since save: saved hint iroh://8c7a7009...?addr=127.0.0.1:54872, catalog now iroh://8c7a7009...?addr=127.0.0.1:40066 — using the catalog address
+wanix: recipe "writing-desk" bind 'upper' DRIFTED since save: saved hint iroh://8c7a7009...?addr=127.0.0.1:54872, catalog now iroh://8c7a7009...?addr=127.0.0.1:40066 — using the catalog address
 job: /n/upper/jobs/j2dfdaad6a69e467b
 ```
 
@@ -271,8 +271,8 @@ job: /n/upper/jobs/j2dfdaad6a69e467b
 Simulated with an alternate `$HOME` — an empty home with no Wanix state at all. First, the honest failure:
 
 ```text
-$ HOME=/tmp/fresh wanix-rust recipe run writing-desk
-no recipe "writing-desk" (recipes /tmp/fresh/.wanix/recipes); save one with `wanix-rust recipe save writing-desk --mount NAME[=PATH] ... [--run LINE]`
+$ HOME=/tmp/fresh wanix recipe run writing-desk
+no recipe "writing-desk" (recipes /tmp/fresh/.wanix/recipes); save one with `wanix recipe save writing-desk --mount NAME[=PATH] ... [--run LINE]`
 ```
 
 Names and compositions are plain files, so moving them is `cp`:
@@ -281,14 +281,14 @@ Names and compositions are plain files, so moving them is `cp`:
 mkdir -p /tmp/fresh/.wanix
 cp -r ~/.wanix/catalog  /tmp/fresh/.wanix/catalog
 cp -r ~/.wanix/recipes  /tmp/fresh/.wanix/recipes
-HOME=/tmp/fresh wanix-rust recipe run writing-desk
+HOME=/tmp/fresh wanix recipe run writing-desk
 ```
 
 ```text
-wanix-rust: name 'notes' -> iroh://b070895d...?addr=127.0.0.1:51277 (resolved through the catalog at launch)
-wanix-rust: name 'upper' -> iroh://8c7a7009...?addr=127.0.0.1:40066 (resolved through the catalog at launch)
-wanix-rust: recipe "writing-desk" bind 'upper' DRIFTED since save: ... — using the catalog address
-wanix-rust: name 'room' -> iroh://e1de10e6...?addr=127.0.0.1:34876 (resolved through the catalog at launch)
+wanix: name 'notes' -> iroh://b070895d...?addr=127.0.0.1:51277 (resolved through the catalog at launch)
+wanix: name 'upper' -> iroh://8c7a7009...?addr=127.0.0.1:40066 (resolved through the catalog at launch)
+wanix: recipe "writing-desk" bind 'upper' DRIFTED since save: ... — using the catalog address
+wanix: name 'room' -> iroh://e1de10e6...?addr=127.0.0.1:34876 (resolved through the catalog at launch)
 job: /n/upper/jobs/j83c1f9270c576f27
 ```
 

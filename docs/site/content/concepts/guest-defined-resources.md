@@ -47,7 +47,7 @@ The mechanism is Inferno's `file2chan` idea rebuilt on the Wanix substrate (`wan
 
 The slogan from the design note holds as shipped: *guest decides; host moves; namespace grants; transport identifies.* And because the result is a plain `FileSystem`, it [imports across the mesh for free](/concepts/devices-import-for-free) — one `iroh://` ticket names one running app.
 
-The worked proof is the chatroom: a ~120-line qjs program (`examples/chatroom/main.js`) plus a 8-line manifest (`app.wanix.json`) served by `wanix-rust app serve`. See the [build-a-chatroom flow](/learn/build-a-chatroom) and [Recipe 07](/recipes/07-chatroom-over-the-mesh).
+The worked proof is the chatroom: a ~120-line qjs program (`examples/chatroom/main.js`) plus a 8-line manifest (`app.wanix.json`) served by `wanix app serve`. See the [build-a-chatroom flow](/learn/build-a-chatroom) and [Recipe 07](/recipes/07-chatroom-over-the-mesh).
 
 ## Status / honest limits
 

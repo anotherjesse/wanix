@@ -45,32 +45,32 @@ canonicalCaveatFor: []
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ls examples/chatroom/main.js examples/chatroom/app.wanix.json   # the room ships in-tree
 ```
 
 ## 1. Serve the room (terminal 1)
 
 ```sh
-wanix-rust app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0
+wanix app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0
 ```
 
 The process parks forever (Ctrl-C to stop) and prints the standard resource record on stderr:
 
 ```text
 chatroom	iroh://71b44428...?addr=127.0.0.1:48171
-# mount with: wanix-rust mount-ls 'iroh://71b44428...?addr=127.0.0.1:48171'
+# mount with: wanix mount-ls 'iroh://71b44428...?addr=127.0.0.1:48171'
 ```
 
 `iroh://71b44428...` is the room's persisted identity (`~/.wanix/app-identities/chatroom.key`, created on first serve); `?addr=` is a route hint. The very first start in a fresh environment takes ~25 s (debug build, cold module cache compiling the QuickJS wasm) before the ticket appears; subsequent starts take about a second. `--state /tmp/room` is the room's whole durable memory — the guest sees it at `/state`.
 
-Optional: add `--register room` and the serve also writes a catalog entry, so every `"$T"` below can be spelled `room` instead (`wanix-rust mount-cat room latest`, `--mount-mesh room`) — executed end to end in [Recipe 10](/recipes/10-name-your-world), along with the room's shipped `bin/` verbs (`room:post`, `room:watch`, `room:roster` — [bin verbs](/concepts/bin-verbs)). The ticket flow below is the no-catalog fallback and what a name resolves to.
+Optional: add `--register room` and the serve also writes a catalog entry, so every `"$T"` below can be spelled `room` instead (`wanix mount-cat room latest`, `--mount-mesh room`) — executed end to end in [Recipe 10](/recipes/10-name-your-world), along with the room's shipped `bin/` verbs (`room:post`, `room:watch`, `room:roster` — [bin verbs](/concepts/bin-verbs)). The ticket flow below is the no-catalog fallback and what a name resolves to.
 
 ## 2. Person A: mount, post, read
 
 ```sh
 T='iroh://71b44428...?addr=127.0.0.1:48171'   # <- replace with the full iroh:// ticket YOUR terminal 1 printed
-wanix-rust mount-ls "$T"
+wanix mount-ls "$T"
 ```
 
 ```text
@@ -84,9 +84,9 @@ who
 ```
 
 ```sh
-wanix-rust mount-write "$T" post 'morning! mounted the room over the mesh'
+wanix mount-write "$T" post 'morning! mounted the room over the mesh'
 # wrote 39 bytes to n/remote/post
-wanix-rust mount-cat "$T" latest
+wanix mount-cat "$T" latest
 ```
 
 ```text
@@ -98,9 +98,9 @@ No username was supplied anywhere. `from` is the derived display of A's persiste
 ## 3. Claim a nick — display sugar, never authority
 
 ```sh
-wanix-rust mount-write "$T" nick 'ada'
+wanix mount-write "$T" nick 'ada'
 # wrote 3 bytes to n/remote/nick
-wanix-rust mount-cat "$T" roster
+wanix mount-cat "$T" roster
 ```
 
 ```text
@@ -110,7 +110,7 @@ wanix-rust mount-cat "$T" roster
 `roster` is the raw principal→nick map. `latest` now renders A's messages — including the one already posted — as `nick (shorthex)`:
 
 ```sh
-wanix-rust mount-cat "$T" latest
+wanix mount-cat "$T" latest
 # {"at":1781080495768,"from":"ada (36469a42)","body":"morning! mounted the room over the mesh"}
 ```
 
@@ -121,8 +121,8 @@ The stored log keeps the raw principal; display is derived at read time, truth i
 A friend is just a different key. Simulate one with an alternate `HOME` (all per-user Wanix state lives under `$HOME/.wanix/`; first contact mints `/tmp/bob/.wanix/dialer.key`):
 
 ```sh
-HOME=/tmp/bob wanix-rust mount-write "$T" post 'hey A — same room, different key'
-HOME=/tmp/bob wanix-rust mount-cat "$T" latest
+HOME=/tmp/bob wanix mount-write "$T" post 'hey A — same room, different key'
+HOME=/tmp/bob wanix mount-cat "$T" latest
 ```
 
 ```text
@@ -131,7 +131,7 @@ HOME=/tmp/bob wanix-rust mount-cat "$T" latest
 ```
 
 ```sh
-wanix-rust mount-cat "$T" status
+wanix mount-cat "$T" status
 # {"app":"chatroom","messages":2}
 ```
 
@@ -141,20 +141,20 @@ wanix-rust mount-cat "$T" status
 
 ```sh
 # Terminal 2 — blocks, printing lines as they arrive (Ctrl-C to stop):
-HOME=/tmp/bob wanix-rust mount-cat "$T" stream --follow
+HOME=/tmp/bob wanix mount-cat "$T" stream --follow
 ```
 
 While that subscription is open, A asks who is around:
 
 ```sh
-wanix-rust mount-cat "$T" who
+wanix mount-cat "$T" who
 # iroh:ed2f9c560c4e8152...
 ```
 
 Presence is host session state — the principals currently holding open `stream` subscriptions, one per line, sorted. The guest is never asked. Now A posts:
 
 ```sh
-wanix-rust mount-write "$T" post 'this line should show up live'
+wanix mount-write "$T" post 'this line should show up live'
 ```
 
 ...and terminal 2 prints the line within a beat of the write returning:
@@ -170,9 +170,9 @@ wanix-rust mount-write "$T" post 'this line should show up live'
 B posts a JSON body claiming to be A:
 
 ```sh
-HOME=/tmp/bob wanix-rust mount-write "$T" post \
+HOME=/tmp/bob wanix mount-write "$T" post \
   '{"from":"36469a42...","body":"hi, this is definitely A"}'
-wanix-rust mount-cat "$T" latest | tail -1
+wanix mount-cat "$T" latest | tail -1
 ```
 
 ```text
@@ -182,10 +182,10 @@ wanix-rust mount-cat "$T" latest | tail -1
 Still attributed to B. The guest keeps only the `body` of a JSON payload and discards any claimed author; the principal it stamps came from the host, which took it from the transport. Identity rides the transport; `post` carries body only. And a nick changes nothing — let B claim one now:
 
 ```sh
-HOME=/tmp/bob wanix-rust mount-write "$T" nick 'bob'
-wanix-rust mount-cat "$T" roster
+HOME=/tmp/bob wanix mount-write "$T" nick 'bob'
+wanix mount-cat "$T" roster
 # {"iroh:36469a4270682126...":"ada","iroh:ed2f9c560c4e8152...":"bob"}
-wanix-rust mount-cat "$T" latest | tail -1
+wanix mount-cat "$T" latest | tail -1
 # {"at":1781080547257,"from":"bob (ed2f9c56)","body":"hi, this is definitely A"}
 ```
 
@@ -196,7 +196,7 @@ The impersonation attempt is now signed with B's *own chosen name* — the rende
 Ctrl-C the serve in terminal 1 — abrupt process death, taking the resident guest with it (the serve has no signal handler; no teardown runs). A *fresh* mounted read now gets liveness, not a hang:
 
 ```sh
-wanix-rust mount-cat "$T" latest
+wanix mount-cat "$T" latest
 ```
 
 ```text
@@ -206,12 +206,12 @@ resource unreachable: peer 71b44428... did not answer within 5s — the provider
 The history is sitting in plain host files — `ls /tmp/room` shows `log` and `nicks`, and `cat /tmp/room/log` shows all four messages with raw principals. Restart against the same state, this time with the guest supervisor on:
 
 ```sh
-wanix-rust app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0 --restart on-failure
+wanix app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0 --restart on-failure
 # chatroom	iroh://71b44428...?addr=127.0.0.1:53497     <- same peer, new port
 ```
 
 ```sh
-wanix-rust mount-cat 'iroh://71b44428...?addr=127.0.0.1:53497' latest
+wanix mount-cat 'iroh://71b44428...?addr=127.0.0.1:53497' latest
 ```
 
 ```text
@@ -222,7 +222,7 @@ wanix-rust mount-cat 'iroh://71b44428...?addr=127.0.0.1:53497' latest
 ```
 
 ```sh
-wanix-rust mount-cat "$T" status      # the OLD ticket — stale port hint — still works
+wanix mount-cat "$T" status      # the OLD ticket — stale port hint — still works
 # {"app":"chatroom","messages":4}
 ```
 

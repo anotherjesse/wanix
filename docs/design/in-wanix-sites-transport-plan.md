@@ -213,7 +213,7 @@ Move/define here (ported verbatim from `p9_listen/runtime.rs`):
 - `fn serve_raw9p_listener(once: bool, listener: &TcpListener, root: Arc<dyn
   FileSystem>, policy: Option<&ServePolicy>, process_stderr: &mut dyn Write) ->
   Result<i32, CliError>` — the accept/serve/error loop (`runtime.rs:96-173`),
-  renamed and generalized (message prefixes become `wanix-rust serve --p9:`).
+  renamed and generalized (message prefixes become `wanix serve --p9:`).
 - `fn serve_raw9p_connection(root, policy, stream: TcpStream) ->
   Result<P9TransportStats, P9TransportError>` (= old `serve_stream_connection`,
   `runtime.rs:160-173`) — uses `P9Server::with_policy` when policy is `Some`,
@@ -355,7 +355,7 @@ Result<Option<thread::JoinHandle<()>>, CliError>`.
 **File:** `crates/wanix-cli/src/serve.rs`
 - `serve_url_status` / `write_serve_startup_status` (`:88-108`, `:134-142`): when
   the raw-9P door is bound, emit a second status line:
-  `wanix-rust serve: raw 9P listening on tcp://<addr>/`.
+  `wanix serve: raw 9P listening on tcp://<addr>/`.
 
 **Cockpit TS (NOT covered by `just check` — update for correctness):**
 - `workbench/src/wanix/p9.ts:24-29` — add optional `tcp?: string;` to
@@ -405,7 +405,7 @@ Delete the standalone commands; preserve all reusable logic (already moved in
 - Delete lines `:36-38` (`p9-listen ... --addr HOST:PORT [--once] [--peer ...]`
   and `p9-ws ... --addr HOST:PORT [--once]`).
 - Update the `serve` usage line (`:59-60`) to:
-  `wanix-rust serve [--root DIR | DIR] [--listen HOST:PORT] [--p9 HOST:PORT
+  `wanix serve [--root DIR | DIR] [--listen HOST:PORT] [--p9 HOST:PORT
   [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]] [--bundle NAME] [--wanix-services]
   [--once]`. Drop `--addr` from help (kept as hidden synonym).
 
@@ -450,7 +450,7 @@ Do NOT weaken/delete coverage; retarget it at the new surface.
   runtime-error case if `run_streaming_command` is the right seam, otherwise the
   serve bind-error path is covered in `serve/tests.rs`.
 - `crates/wanix-cli/src/lib.rs:618-619` — the help-output test asserts
-  `"wanix-rust p9-listen"` and `"wanix-rust p9-ws"` are present. **Flip** these:
+  `"wanix p9-listen"` and `"wanix p9-ws"` are present. **Flip** these:
   assert they are ABSENT and assert the new `serve ... [--p9 HOST:PORT ...]`
   string is present. Keep the `p9-stdio` assertion (`:617`).
 - `crates/wanix-cli/src/serve/tests.rs:2810-2828`

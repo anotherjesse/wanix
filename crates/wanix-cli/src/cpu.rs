@@ -1,4 +1,4 @@
-//! `wanix-rust cpu`: Plan 9 cpu over the mesh — send the job to the data node.
+//! `wanix cpu`: Plan 9 cpu over the mesh — send the job to the data node.
 //!
 //! The caller dials a remote node's cpu exec plane (ALPN `wanix/cpu/1`),
 //! reverse-exports a **scoped, read-only-by-default** sub-namespace built from
@@ -7,7 +7,7 @@
 //! files over the reverse 9P session; its captured stdout/stderr and exit status
 //! return on the control stream and are written to the process here.
 //!
-//! Demo: `wanix-rust cpu --node iroh://<PEER>[?addr=IP:PORT] -- qjs build.js`.
+//! Demo: `wanix cpu --node iroh://<PEER>[?addr=IP:PORT] -- qjs build.js`.
 //!
 //! The export root is the caller's `--cwd` (default `.`), scoped read-only with
 //! [`wanix_cpu::ExportScope`]; `--write` opts the job subtree into read-write so

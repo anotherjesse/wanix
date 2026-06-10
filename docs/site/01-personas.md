@@ -6,7 +6,7 @@
 
 | Persona | Bucket | One-liner | Entry point | Success looks like |
 |---|---|---|---|---|
-| **Maya, the curious app developer (never heard of Plan 9)** | user | A working JS/Node developer who saw 'run JavaScript outside Chrome' and 'an LLM you can cat' and wants visible results in ten minutes without a CS-history lecture. | Lands on the README or wanix.run scanning for 'what can I run right now.' Wants one copy-paste command that produces visible output in 30s — ideally 'wanix-rust qjs examples/qjs-demo.js' printing 'outside Chrome: true' / 'task id: 1'. Does not want to read AGENTS.md or the mesh blueprint first. | In her first session she has run JS outside the browser (saw task id: 1), booted serve --bundle workbench-fs9p --wanix-services and clicked the agent-repair demo to green, and understood 'everything is a file' via a #kv counter she can cat and watch increment. She can tell a coworker: 'it's like Node, but every capability — storage, the LLM, the terminal — is just a file you read and write, in a tiny sandbox.' |
+| **Maya, the curious app developer (never heard of Plan 9)** | user | A working JS/Node developer who saw 'run JavaScript outside Chrome' and 'an LLM you can cat' and wants visible results in ten minutes without a CS-history lecture. | Lands on the README or wanix.run scanning for 'what can I run right now.' Wants one copy-paste command that produces visible output in 30s — ideally 'wanix qjs examples/qjs-demo.js' printing 'outside Chrome: true' / 'task id: 1'. Does not want to read AGENTS.md or the mesh blueprint first. | In her first session she has run JS outside the browser (saw task id: 1), booted serve --bundle workbench-fs9p --wanix-services and clicked the agent-repair demo to green, and understood 'everything is a file' via a #kv counter she can cat and watch increment. She can tell a coworker: 'it's like Node, but every capability — storage, the LLM, the terminal — is just a file you read and write, in a tiny sandbox.' |
 | **Devraj, the power user wiring a personal compute mesh** | user | A self-hosting infra tinkerer running a laptop + home server + cloud box who wants them to act like one machine — mount any peer's files and devices as local, send compute to the data, and let an agent operate across all of it. | Goes straight to the mesh docs and recipe 02. Wants the two-terminal transcript: node B mesh-serve prints an iroh://...?addr=... ticket, node A mount-ls/mount-cat reads bytes that never touched A's disk, then cpu --node <B> -- qjs /work/build.js runs on B. In 30s he wants to know 'is this real two-process QUIC or a loopback demo?' — and the recipe answers honestly. | Two machines mount each other over QUIC; he reads a peer's #kv value as a file with zero device-specific code; he runs cpu --node <peer> -- qjs build.js executing on the data node; he installs a default-deny grant and confirms an ungranted attach gets EACCES (errno 13) while an authorized peer lands inside a SubtreeFs scoped to exactly the granted prefix; he freezes a world to a capsule id and restores it byte-identical on a third box. He can state the boundary: 'the key is the address, a capability is a bind, exec is local-trust until public auth lands.' |
 | **Priya, the Rust core contributor** | developer | A systems-Rust engineer extending and fixing the Wanix core crates themselves, who needs the dependency rules, ADRs, and quality gates so her PR lands cleanly on the first try. | Arrives from the mesh essay or HN/Discord via README 'Rust-Native Port Status', wanting AGENTS.md-level depth but better organized — 'the contributor's map of the core'. In 30s she wants the crate map and the quality gate. | She opens a PR that splits an over-limit module or adds a method to a core trait, it passes `just check` on the first try, and she correctly judged whether it needed an ADR touch. |
 | **Theo, the integrator / extension author** | developer | An engineer extending Wanix from the edges — a new service device, task driver, or protocol transport — who wants the 'everything is a file' extension points and the mesh-for-free payoff without forking the core. | Searches 'embed Plan 9 namespace Rust' / '9P server library Rust' / 'file-shaped service for AI agents', or arrives from the mesh essay's 'the namespace is the integration layer' claim. In 30s he wants 'the extension API and what I get for free.' | He adds a new FileSystem-backed device in its own synchronous, iroh-free crate, binds it via serve --wanix-services, mounts it from a second node at /n/<peer>/#hisdevice, and sees it round-trip over the mesh and render in the cockpit inspector — without modifying a core crate. |
@@ -30,7 +30,7 @@ Two personas for people who want to *use* Wanix to get something done. They span
 **Entry point.** Lands on the README or wanix.run, scans for "what can I run right now." She wants, in 30 seconds, a single copy-paste command that produces visible output — ideally the `qjs examples/qjs-demo.js` line that prints `outside Chrome: true` / `task id: 1`. She does *not* want to read AGENTS.md or the mesh blueprint first.
 
 **Goals.**
-- Run a `.js` file as a Wanix `qjs` task and see real output (`wanix-rust qjs examples/qjs-demo.js`).
+- Run a `.js` file as a Wanix `qjs` task and see real output (`wanix qjs examples/qjs-demo.js`).
 - Pass her own env/cwd/stdin/argv into a script and watch it flow through (walkthrough §2).
 - Open the browser cockpit and *click* a demo — especially "Run Agent Repair Demo" — and watch a broken `broken.js` become `FIXED BY WANIX AGENT` (recipe 01).
 - Build a tiny stateful thing: the `#kv`-backed counter handler, so "everything is a file" finally clicks (recipe 04).
@@ -49,10 +49,10 @@ Two personas for people who want to *use* Wanix to get something done. They span
 
 **Concepts she needs (in order):** Everything is a file → qjs task (JavaScript outside Chrome) → Service devices (`#name`) → `#kv` key/value device → `#agent` (an LLM as files) + approvals as files → Two tiers on one substrate (qjs + wasm) → (gentle) per-process namespaces.
 
-**Demos she wants:** `wanix-rust qjs examples/qjs-demo.js`; pass env/cwd/stdin/argv (walkthrough §2); `serve --bundle workbench-fs9p --wanix-services` (the cockpit); Run Agent Repair Demo; `#kv`-backed counter (recipe 04); qjs→wasm→qjs duet; Run Cockpit Self Check.
+**Demos she wants:** `wanix qjs examples/qjs-demo.js`; pass env/cwd/stdin/argv (walkthrough §2); `serve --bundle workbench-fs9p --wanix-services` (the cockpit); Run Agent Repair Demo; `#kv`-backed counter (recipe 04); qjs→wasm→qjs duet; Run Cockpit Self Check.
 
 **Ideal journey through the site:**
-1. 30-second hero: copy `wanix-rust qjs examples/qjs-demo.js`, see `outside Chrome: true`.
+1. 30-second hero: copy `wanix qjs examples/qjs-demo.js`, see `outside Chrome: true`.
 2. "What just happened" sidebar: one paragraph on tasks + namespaces, no jargon dump.
 3. Quickstart track: feed env/cwd/stdin into a script (walkthrough §2), then explicit host mount (§3) so "no ambient host authority" lands gently.
 4. Boot the cockpit (`serve … --bundle workbench-fs9p --wanix-services`), with an upfront note that `--wanix-services` is what turns the demos on.
@@ -115,7 +115,10 @@ Two personas for people who want to *use* Wanix to get something done. They span
 
 These two personas are people who **build on or contribute to** Wanix. They do not just read about the vision; they open `cargo`, implement a trait, run `just check`, and submit a PR. Both need the crate map, the dependency rules, the active ADRs, the `FileSystem`/`TaskDriver`/9P contracts, the code-quality guardrails, and copy-pasteable "how to add a device/driver/transport" guides grounded in real files.
 
-A shared hazard the IA must defuse for both: the repo root still carries **Go-era artifacts that mislead an arriving developer**. `CONTRIBUTING.md` documents a Docker + `make build` + Go/TinyGo flow for the *old browser Wanix*, and `README.md`'s "File Services" list (`#vm`, `#ramfs`, `#signal`, `#web`, `#wanix`) is the Go device set — none of those are Rust crates. The Rust truth is `AGENTS.md` + `docs/adrs/` + `just check`. A developer-track landing page must say, in the first screen, "for the Rust port, ignore CONTRIBUTING.md / the Go device list; start here."
+A shared hazard the IA must defuse for both: the original Go/browser Wanix is
+important history, but this workspace is now Rust-native. A developer-track
+landing page must say, in the first screen, "build with cargo, gate with
+`just check`, and use the crate map/ADRs for ownership boundaries."
 
 ---
 
@@ -135,12 +138,12 @@ A shared hazard the IA must defuse for both: the repo root still carries **Go-er
 - "Which crate owns this invariant?" — she will move code, and a wrong move violates the dependency direction or a trust boundary. She needs the layering rule reachable in two clicks.
 - Style/lint bounce: a PR that fails `module-lines` or `clippy -D warnings` after she's already written it. She wants the guardrails *before* she writes, not in review.
 - ADR ambiguity: she needs to know when a change requires an ADR edit vs a commit message. The "if an ADR draft reads like a good commit message, keep it as the commit message" rule is exactly what she's looking for.
-- Stale/Go-era docs sending her down the Docker/`make` path that doesn't apply to the Rust crates.
+- Stale external assumptions from the original Go/browser implementation that do not apply to the Rust crate boundaries.
 
 **How she arrives.** From the mesh essay or HN/Discord → README "Rust-Native Port Status" → wants `AGENTS.md`-level depth but better organized. Lands wanting "the contributor's map of the core."
 
 **Ideal journey.**
-1. Developer-track landing: "Rust port, not the Go tree — ignore CONTRIBUTING.md/`make`; use `just check`."
+1. Developer-track landing: "Rust-native workspace; build with cargo and use `just check`."
 2. Crate map + dependency-direction diagram, with the async/iroh-confinement and no-upward-deps rules called out.
 3. Active ADR index (0001–0005) each linked to its source `.md`, with the ADR workflow.
 4. `FileSystem`/`File` trait reference annotated with the device-aware semantics and which methods default to `NotSupported`.

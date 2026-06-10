@@ -52,9 +52,9 @@ The cockpit is one serve bundle. Build the CLI, alias it, then serve the workben
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust serve --root /tmp/wanix-root \
+wanix serve --root /tmp/wanix-root \
     --bundle workbench-fs9p --wanix-services
 ```
 

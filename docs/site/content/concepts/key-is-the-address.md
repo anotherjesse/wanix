@@ -40,9 +40,9 @@ Start by looking at what a node *is*. Run the mesh server once and it prints a t
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust mesh-serve --root /tmp/world
+wanix mesh-serve --root /tmp/world
 # -> iroh://<64-hex-char peer-id>?addr=...
 ```
 

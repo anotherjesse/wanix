@@ -38,13 +38,13 @@ canonicalCaveatFor: []
 
 Stand up two nodes, have A dial B over iroh QUIC, mount B's directory as a Plan 9 namespace, and run a `#cpu` job on B against A's reverse-exported files.
 
-**What & why.** Two machines, two terminals. One holds the data; the other holds nothing and reaches across. You will watch node A read a file that only exists on node B — no SSH, no rsync, no shared filesystem mount — just a filesystem walk over a QUIC connection that authenticated B by its ed25519 key before a single byte of namespace crossed. Section 4 runs a job on B's CPU against A's reverse-exported working directory — both halves of `#cpu` ship (`mesh-serve --cpu` serves, `wanix-rust cpu` dials). This is the `/n/remote` import recipe end to end, and the spine of [Wire a mesh](/learn/wire-a-mesh). Everything is grounded in the shipped CLI verbs; the caveats are stated flatly at the bottom.
+**What & why.** Two machines, two terminals. One holds the data; the other holds nothing and reaches across. You will watch node A read a file that only exists on node B — no SSH, no rsync, no shared filesystem mount — just a filesystem walk over a QUIC connection that authenticated B by its ed25519 key before a single byte of namespace crossed. Section 4 runs a job on B's CPU against A's reverse-exported working directory — both halves of `#cpu` ship (`mesh-serve --cpu` serves, `wanix cpu` dials). This is the `/n/remote` import recipe end to end, and the spine of [Wire a mesh](/learn/wire-a-mesh). Everything is grounded in the shipped CLI verbs; the caveats are stated flatly at the bottom.
 
 ## 0. Build the binary
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 ## 1. Each node gets a persistent ed25519 identity
@@ -69,7 +69,7 @@ JS
 
 Node B holds `dataset.txt`. Node A holds `build.js` — the program A will run *on B's processor*, against A's own reverse-exported namespace (Plan 9 cpu's split: caller's namespace, server's CPU).
 
-## 2. Start node B with `wanix-rust mesh-serve` (the data node)
+## 2. Start node B with `wanix mesh-serve` (the data node)
 
 Node B binds an iroh endpoint from its persistent key, exports `$ROOT_B` over QUIC (the native wire, with 9P alongside for foreign clients), and prints its node id plus a dialable ticket on stderr (`announce_message`, `crates/wanix-cli/src/mesh/serve.rs:319-335`).
 
@@ -80,7 +80,7 @@ We also pass `--wanix-services`, which exports the full services namespace (`#te
 Terminal 1 (node B):
 
 ```sh
-wanix-rust mesh-serve \
+wanix mesh-serve \
     --root "$ROOT_B" \
     --key  "$NODE_B_KEY" \
     --addr 127.0.0.1:5680 \
@@ -91,10 +91,10 @@ wanix-rust mesh-serve \
 Executed stderr — the node id, the dialable ticket, a copy-pasteable mount command, and the loud exec-plane notice (the long hex is B's verifying key; yours will differ):
 
 ```
-wanix-rust mesh-serve: node 11fd26…638a5
-wanix-rust mesh-serve: ticket iroh://11fd26…638a5?addr=127.0.0.1:5680
-wanix-rust mesh-serve: mount with: wanix-rust mount-ls 'iroh://11fd26…638a5?addr=127.0.0.1:5680'
-wanix-rust mesh-serve: serving the #cpu exec plane (remote code execution for admitted peers); run a job with: wanix-rust cpu --node 'iroh://11fd26…638a5?addr=127.0.0.1:5680' -- qjs PROGRAM
+wanix mesh-serve: node 11fd26…638a5
+wanix mesh-serve: ticket iroh://11fd26…638a5?addr=127.0.0.1:5680
+wanix mesh-serve: mount with: wanix mount-ls 'iroh://11fd26…638a5?addr=127.0.0.1:5680'
+wanix mesh-serve: serving the #cpu exec plane (remote code execution for admitted peers); run a job with: wanix cpu --node 'iroh://11fd26…638a5?addr=127.0.0.1:5680' -- qjs PROGRAM
 ```
 
 The `ticket` line is B's **verified address**. Copy yours (the full ticket your terminal printed, not this shortened one):
@@ -112,9 +112,9 @@ Node A does not even need to run `mesh-serve` to *import* — the `mount-*` verb
 Terminal 2 (node A):
 
 ```sh
-wanix-rust mount-ls "$NODE_B"          # -> work
-wanix-rust mount-ls "$NODE_B" work     # -> dataset.txt
-wanix-rust mount-cat "$NODE_B" work/dataset.txt
+wanix mount-ls "$NODE_B"          # -> work
+wanix mount-ls "$NODE_B" work     # -> dataset.txt
+wanix mount-cat "$NODE_B" work/dataset.txt
 # -> data that only lives on node B
 ```
 
@@ -123,18 +123,18 @@ Those bytes never existed on A's disk. They crossed a dedicated QUIC stream as a
 You can write back, too — `mount-write` truncates-or-creates a file at the path, and the bytes land on B's host disk:
 
 ```sh
-wanix-rust mount-write "$NODE_B" work/note.txt 'written from A'
+wanix mount-write "$NODE_B" work/note.txt 'written from A'
 ```
 
 Tired of `$NODE_B`? Give the peer a name in your local catalog and every `mount-*` verb takes the name instead — executed:
 
 ```sh
-wanix-rust catalog add nodeb "$NODE_B" --description 'mesh node B'
-wanix-rust mount-cat nodeb work/dataset.txt
+wanix catalog add nodeb "$NODE_B" --description 'mesh node B'
+wanix mount-cat nodeb work/dataset.txt
 ```
 
 ```text
-wanix-rust: name 'nodeb' -> iroh://11fd26…638a5?addr=127.0.0.1:5680 (resolved through the catalog at launch)
+wanix: name 'nodeb' -> iroh://11fd26…638a5?addr=127.0.0.1:5680 (resolved through the catalog at launch)
 data that only lives on node B
 ```
 
@@ -142,11 +142,11 @@ The ticket stays the truth (the name resolves through `~/.wanix/catalog` at laun
 
 ## 4. Run the `#cpu` job on B
 
-Mounting moves bytes toward you. `#cpu` does the opposite: it moves the *computation* ([Send the agent to the data](/concepts/send-agent-to-the-data)). `wanix-rust cpu` dials B's exec plane (ALPN `wanix/cpu/1`, served because step 2 passed `--cpu`), **reverse-exports** A's working directory as a scoped namespace, and asks B to run a task whose world *is* that reverse export (`crates/wanix-cli/src/cpu/run.rs:30-91`). Executed transcript, from A's `$ROOT_A`:
+Mounting moves bytes toward you. `#cpu` does the opposite: it moves the *computation* ([Send the agent to the data](/concepts/send-agent-to-the-data)). `wanix cpu` dials B's exec plane (ALPN `wanix/cpu/1`, served because step 2 passed `--cpu`), **reverse-exports** A's working directory as a scoped namespace, and asks B to run a task whose world *is* that reverse export (`crates/wanix-cli/src/cpu/run.rs:30-91`). Executed transcript, from A's `$ROOT_A`:
 
 ```sh
 cd "$ROOT_A"
-wanix-rust cpu --node "$NODE_B" -- qjs build.js
+wanix cpu --node "$NODE_B" -- qjs build.js
 # -> ran on node B against A's reverse-exported namespace
 ```
 

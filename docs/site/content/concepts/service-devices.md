@@ -40,8 +40,8 @@ Start from the keyboard. Bring up a services-enabled server, then talk to it as 
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust serve --wanix-services
+alias wanix='./target/debug/wanix'
+wanix serve --wanix-services
 
 # storage is a file
 echo 'on' > '#kv/feature.flag'

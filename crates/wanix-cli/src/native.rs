@@ -9,7 +9,7 @@ use super::{UnixTerminalFds, run_with_process_io_and_terminal_fds};
 
 /// Runs the native CLI against the current process stdio handles.
 ///
-/// This is the entrypoint used by the `wanix-rust` binary. It keeps raw terminal
+/// This is the entrypoint used by the `wanix` binary. It keeps raw terminal
 /// mode scoped to command execution so terminal state is restored before the
 /// process exits.
 ///

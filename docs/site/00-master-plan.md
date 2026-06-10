@@ -69,7 +69,7 @@ The Home page routes to three audience tracks, each with persona on-ramps beneat
 
 | Persona | Track | Wants | First win |
 |---|---|---|---|
-| **Maya** — curious app dev, never heard of Plan 9 | Users | Visible results in 10 minutes, no CS-history lecture | `wanix-rust qjs examples/qjs-demo.js` → "outside Chrome: true" |
+| **Maya** — curious app dev, never heard of Plan 9 | Users | Visible results in 10 minutes, no CS-history lecture | `wanix qjs examples/qjs-demo.js` → "outside Chrome: true" |
 | **Devraj** — self-hosting infra tinkerer | Users | Make laptop + server + cloud act like one machine; send compute to the data | Two-node mount over iroh QUIC (recipe 02) |
 | **Priya** — systems-Rust engineer | Developers | Land a clean core PR first try: crate map, ADRs, `just check` | Crate-map + dependency-direction page; `just check` green |
 | **Theo** — integrator / extension author | Developers | Add a device/driver/transport without forking core | "Add a service device" using `#kv` as template |
@@ -175,13 +175,13 @@ The four content types form a closed cycle: **Flow step → Concept** ("Read the
 
 ## 5. Learning flows
 
-Eight flows. Each renders at `/learn/<flow-slug>` with a **flow-progress rail** ("Flow: X — step N of M — Prev/Next") that persists even when a step is a Concept, Device, or Recipe page in another section, so the reader always knows where they are. Each flow opens with a one-time **"Build once" preamble** (resolves newcomer review: `wanix-rust` is not on PATH) and, where relevant, a **prerequisite badge**.
+Eight flows. Each renders at `/learn/<flow-slug>` with a **flow-progress rail** ("Flow: X — step N of M — Prev/Next") that persists even when a step is a Concept, Device, or Recipe page in another section, so the reader always knows where they are. Each flow opens with a one-time **"Build once" preamble** (resolves newcomer review: `wanix` is not on PATH) and, where relevant, a **prerequisite badge**.
 
 **Build-once preamble (verbatim, top of every flow and the Learn index):**
 ```
 # Build the CLI once, then use it everywhere in this flow:
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'   # or: export WANIX=./target/debug/wanix-rust
+alias wanix='./target/debug/wanix'   # or: export WANIX=./target/debug/wanix
 # First build compiles 22 crates and is not instant — start the clock after this.
 ```
 
@@ -199,7 +199,7 @@ alias wanix-rust='./target/debug/wanix-rust'   # or: export WANIX=./target/debug
 
 7. **The Plan 9 ideas tour (Aria).** The thesis as a proof: the missing half of 9P → browser-as-host vs Wanix-as-host (honest "Go Wanix is still broader" admission) → the mechanism in code (RemoteFs as the photographic negative of `serve_stream`, **the five hostile-peer corrections as a real linked pageSlug**) → the trust boundary as one pure function (`AttachPolicy::evaluate(peer, aname)`, default-deny, capability-as-bind, `confine_to_prefix`, key-is-address, Tauth ENOSYS, **the v1 single-attach simplification cited at `crates/wanix-9p/src/lib.rs:128-133`**) → the full Plan 9 cast slice by slice → the honest gaps page.
 
-8. **Contribute to the core (Priya).** Contributor landing ("Rust port, not the Go tree; use `just check`, ignore the Go Makefile/CONTRIBUTING") → crate map + dependency direction (async/iroh confined to `wanix-mesh`, no upward deps) → active ADRs 0001–0005 + ADR-vs-commit-message workflow → `FileSystem`/`File` trait reference → worked example `#kv` → code-quality guardrails + `just` recipes → queued follow-ups as "good first cleanups" (split `codex.rs`/`exec_server.rs`/`app.rs`, port the `v86-shared-demo` stub).
+8. **Contribute to the core (Priya).** Contributor landing ("Rust-native workspace; use `just check`") → crate map + dependency direction (async/iroh confined to `wanix-mesh`, no upward deps) → active ADRs 0001–0005 + ADR-vs-commit-message workflow → `FileSystem`/`File` trait reference → worked example `#kv` → code-quality guardrails + `just` recipes → queued follow-ups as "good first cleanups" (split `codex.rs`/`exec_server.rs`/`app.rs`, port the `v86-shared-demo` stub).
 
 ---
 
@@ -258,7 +258,7 @@ canonicalCaveatFor: [string]  # if this page is the single home of a caveat
 - **Honesty is content, not apology.** Caveats are stated flatly and once, in their canonical home, and linked elsewhere. Frame them as engineering boundaries ("local-trust only until public auth lands"), never as excuses.
 - **Never overclaim the five landmines:** FakeEngine is not a live LLM; `#kv` is in-memory; `serve` is one-frame-at-a-time; exec is local-trust-only; mount lands at `/n/remote` (use `/n/<peer>` only as a labeled *convention*); "cheap, scalable isolation" not "safe for arbitrary untrusted code."
 - **Active voice, terse, no emoji.** Match the repo's own commit/ADR tone.
-- **One invocation convention:** `wanix-rust` (via the alias) everywhere a flow shows commands; the Home hero may use `cargo run` but bridges to the alias visibly.
+- **One invocation convention:** `wanix` (via the alias) everywhere a flow shows commands; the Home hero may use `cargo run` but bridges to the alias visibly.
 
 ---
 
@@ -405,7 +405,7 @@ How each top issue from the four adversarial reviews is resolved in this plan.
 
 **Newcomer onboarding**
 - *Broken `#kv` examples (HIGH).* Every beginner `#kv` example runs **inside the served namespace** (the `/.wanix/app/<name>` route under `serve --wanix-services`), never a bare `wanix qjs` where `#kv` is unbound. Recipe 04 §3b is rewritten to exercise the counter through the running serve process; the key is **`#kv/http-counter`** (the shipped key in `data/apps/counter.js:7`).
-- *`wanix-rust` not on PATH (HIGH).* One **Build-once preamble** at the top of the Learn index and every flow; `wanix-rust` (aliased) used consistently thereafter.
+- *`wanix` not on PATH (HIGH).* One **Build-once preamble** at the top of the Learn index and every flow; `wanix` (aliased) used consistently thereafter.
 - *Undocumented cockpit prereq (HIGH).* A prerequisite badge before the cockpit step (`cd workbench && make build`, needs Go) plus a CLI-only `wanix agent --fake` fallback so the agent payoff is reachable without the vscode-web build.
 - *Recipe slug mismatches (MEDIUM).* Normalized on numbered recipe slugs under `/recipes/`; flows under `/learn/`; link-checker enforces.
 - *Host-mount missing setup (MEDIUM).* The `mkdir -p /tmp/wanix-host && echo …` line is in the step with expected output.

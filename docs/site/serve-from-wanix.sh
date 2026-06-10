@@ -16,13 +16,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BIN="$ROOT/target/release/wanix-rust"
+BIN="$ROOT/target/release/wanix"
 WORK="${1:-/tmp/wanix-site-demo}"
 PORT="${PORT:-8282}"
 P9_PORT="${P9_PORT:-9999}"
 
-echo "==> building wanix-rust"
-cargo build --release --manifest-path "$ROOT/Cargo.toml" -p wanix-cli --bin wanix-rust
+echo "==> building wanix"
+cargo build --release --manifest-path "$ROOT/Cargo.toml" -p wanix-cli --bin wanix
 
 echo "==> staging corpus + SSG wasm guest into $WORK"
 rm -rf "$WORK"

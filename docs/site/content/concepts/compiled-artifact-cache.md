@@ -38,13 +38,13 @@ Run a JavaScript task and the engine has to build the QuickJS module before your
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 # Cold: compiles the ~1.7 MiB QuickJS fixture (~550 ms, ~100% of cold start).
-time wanix-rust qjs examples/qjs-demo.js
+time wanix qjs examples/qjs-demo.js
 
 # Warm: deserializes the cached artifact (~0.5 ms, ~1000x faster, ~5x lower peak RSS).
-time wanix-rust qjs examples/qjs-demo.js
+time wanix qjs examples/qjs-demo.js
 ```
 
 The second run does no Cranelift work. `QuickJsModule::from_bytes_cached` looks for a cached artifact first and only compiles on a miss (`crates/wanix-qjs-engine/src/module/load.rs:88`). The compiled-`.wasm` runtime takes the identical path — `WasiRunner::from_bytes_cached` caches arbitrary `wasm32-wasi` command modules through the same primitive (`crates/wanix-wasm/src/runner.rs:51`), so re-running a non-trivial wasm guest stops re-paying its compile too. This is an accepted runtime decision, not a test-fixture trick (`docs/adrs/0002-quickjs-wasi-task-runtime.md:88-91`).

@@ -1,4 +1,4 @@
-//! Argument parsing for the `wanix-rust sh` subcommand.
+//! Argument parsing for the `wanix sh` subcommand.
 //!
 //! `sh` is deliberately small: `-c LINE` runs one line, no `-c` is the
 //! interactive REPL, and `--env`/`--cwd`/`--mount-mesh` shape the session's

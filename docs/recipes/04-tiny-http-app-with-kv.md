@@ -102,7 +102,7 @@ Three things to notice:
 The exact CLI pattern from `crates/wanix-cli/src/serve/command.rs`:
 
 ```sh
-wanix-rust serve --wanix-services --listen 127.0.0.1:7654 ./project-root
+wanix serve --wanix-services --listen 127.0.0.1:7654 ./project-root
 ```
 
 - `--wanix-services` is the parser flag at line 82; without it,
@@ -118,7 +118,7 @@ wanix-rust serve --wanix-services --listen 127.0.0.1:7654 ./project-root
 On startup `serve` prints something like:
 
 ```text
-wanix-rust serve listening on 127.0.0.1:7654 (root=./project-root, wanix-services)
+wanix serve listening on 127.0.0.1:7654 (root=./project-root, wanix-services)
 ```
 
 That single served namespace is what every transport — direct 9P, WebSocket
@@ -157,18 +157,18 @@ direct route on is a small Rust file plus a route entry in
 
 ### 3b. Drive it directly with the qjs CLI against the same `#kv`
 
-The honest, working "curl-like" loop today is `wanix-rust qjs` invocations
+The honest, working "curl-like" loop today is `wanix qjs` invocations
 that share the running serve's KV state by mounting through the served
 namespace. Each invocation is one request:
 
 ```sh
-wanix-rust qjs ./project-root/apps/counter.js
+wanix qjs ./project-root/apps/counter.js
 # counter 1
 
-wanix-rust qjs ./project-root/apps/counter.js
+wanix qjs ./project-root/apps/counter.js
 # counter 2
 
-wanix-rust qjs ./project-root/apps/counter.js
+wanix qjs ./project-root/apps/counter.js
 # counter 3
 ```
 
@@ -177,7 +177,7 @@ handler. The state survives between calls because the bind in
 `roots.rs` line 129 keeps `KvDevice` alive for the lifetime of the serve
 process — exactly the in-process durability story (3).
 
-In a single `wanix-rust qjs` standalone (no serve), `#kv` is *not* bound
+In a single `wanix qjs` standalone (no serve), `#kv` is *not* bound
 (only the services namespace built by `serve --wanix-services` and the agent
 exec-server (`agent_exec_server.rs` lines 73–77) call `services_namespace_for_root`),
 so a fresh `KvDevice` is allocated per process and the counter resets to 1

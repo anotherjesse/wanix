@@ -124,7 +124,7 @@ fn require_live_process_io<T>(
 ) -> Result<CliOutput, CliError> {
     let _ = parsed?;
     Err(CliError::usage(format!(
-        "{command_name} requires live process IO; use the wanix-rust binary"
+        "{command_name} requires live process IO; use the wanix binary"
     )))
 }
 
@@ -133,9 +133,7 @@ fn unknown_collected_command(command: &OsString) -> Result<CliOutput, CliError> 
 }
 
 fn unknown_collected_command_name(command: &str) -> Result<CliOutput, CliError> {
-    Err(CliError::usage(format!(
-        "unknown wanix-rust command: {command}"
-    )))
+    Err(CliError::usage(format!("unknown wanix command: {command}")))
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
-//! `wanix-rust wasm <file.wasm> [args...]` — turnkey runner for a compiled
-//! `wasm32-wasi` task, with the same one-command ergonomics as `wanix-rust qjs`.
+//! `wanix wasm <file.wasm> [args...]` — turnkey runner for a compiled
+//! `wasm32-wasi` task, with the same one-command ergonomics as `wanix qjs`.
 //!
 //! Sane defaults so the common case needs no host glue: the working directory
 //! (`--cwd`, default `.`) is preopened as the namespace root (the guest
@@ -122,7 +122,7 @@ fn attach_wasm_stdin(
 }
 
 /// Preopens the working directory (`--cwd`, default `.`) as the namespace root,
-/// so paths resolve where the user ran the command — matching `wanix-rust qjs`.
+/// so paths resolve where the user ran the command — matching `wanix qjs`.
 fn preopen_cwd(cwd: &NormalizedPath) -> Result<Namespace, CliError> {
     let dir = cwd.as_str();
     let mut namespace = Namespace::new();

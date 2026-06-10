@@ -33,7 +33,7 @@ pub(super) fn serve_one_connection(
             write_process_output(
                 process_stderr,
                 "stderr",
-                format!("wanix-rust serve: connection {peer_addr} failed: {error}\n").as_bytes(),
+                format!("wanix serve: connection {peer_addr} failed: {error}\n").as_bytes(),
             )?;
             Ok(1)
         }

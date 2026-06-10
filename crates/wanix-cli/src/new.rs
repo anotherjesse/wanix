@@ -25,7 +25,7 @@ std.out.flush();\n";
 
 const JS_README: &str = "# {{name}} (Wanix qjs task)\n\n\
 Run with the Wanix CLI:\n\n\
-    wanix-rust qjs main.js\n\n\
+    wanix qjs main.js\n\n\
 `main.js` uses the `qjs:std`/`qjs:os` runtime and the Wanix guest SDK in\n\
 `lib/wanix/`. Type definitions live in `lib/wanix/*.d.ts`; `tsconfig.json`\n\
 points an editor's TypeScript service at them.\n";
@@ -65,7 +65,7 @@ target = \"wasm32-wasip1\"\n";
 const RUST_README: &str = "# {{name}} (Wanix wasm task)\n\n\
 Build, then run with the Wanix CLI:\n\n\
     cargo build --release --target wasm32-wasip1\n\
-    wanix-rust wasm target/wasm32-wasip1/release/{{name}}.wasm /in.txt /out.txt\n\n\
+    wanix wasm target/wasm32-wasip1/release/{{name}}.wasm /in.txt /out.txt\n\n\
 The default target is `wasm32-wasip1` (see `.cargo/config.toml`). If the target\n\
 is missing: `rustup target add wasm32-wasip1`.\n";
 
@@ -166,7 +166,7 @@ pub(super) fn run_new_command(command: NewCommand) -> Result<CliOutput, CliError
     let shown = root.display();
     let stdout = match command.kind {
         NewKind::Js => {
-            format!("created js project {shown}\nnext: wanix-rust qjs {shown}/main.js\n")
+            format!("created js project {shown}\nnext: wanix qjs {shown}/main.js\n")
         }
         NewKind::Rust => format!(
             "created rust project {shown}\nnext: cd {shown} && cargo build --release --target wasm32-wasip1\n"

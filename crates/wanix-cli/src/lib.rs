@@ -113,7 +113,7 @@ impl CliError {
     /// never the full usage wall (that is reserved for users who ask for it).
     fn usage(message: impl AsRef<str>) -> Self {
         Self::new(
-            format!("{}\n(run 'wanix-rust --help' for usage)", message.as_ref()),
+            format!("{}\n(run 'wanix --help' for usage)", message.as_ref()),
             2,
         )
     }
@@ -275,7 +275,7 @@ fn run_collected(args: Vec<OsString>, process_stdin: &mut dyn Read) -> Result<Cl
     if command == "--help" || command == "-h" {
         return Ok(help::help_output());
     }
-    // `wanix-rust SUBCOMMAND --help` answers with that subcommand's usage
+    // `wanix SUBCOMMAND --help` answers with that subcommand's usage
     // instead of treating `--help` as an operand (e.g. a script path).
     if help::wants_help(rest)
         && let Some(command) = command.to_str()
@@ -627,8 +627,8 @@ mod tests {
         let output = run(["qjs", "--help"]).unwrap();
         assert_eq!(output.exit_code(), 0);
         let stdout = String::from_utf8_lossy(output.stdout()).into_owned();
-        assert!(stdout.starts_with("usage: wanix-rust qjs "), "{stdout}");
-        assert!(!stdout.contains("wanix-rust serve"), "{stdout}");
+        assert!(stdout.starts_with("usage: wanix qjs "), "{stdout}");
+        assert!(!stdout.contains("wanix serve"), "{stdout}");
 
         // Streaming commands answer --help too instead of parsing it as an
         // operand (the old behavior tried to read a script named `--help`).
@@ -643,7 +643,7 @@ mod tests {
         .unwrap();
         assert_eq!(exit_code, 0);
         let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
-        assert!(stdout.contains("usage: wanix-rust serve"), "{stdout}");
+        assert!(stdout.contains("usage: wanix serve"), "{stdout}");
     }
 
     #[test]
@@ -653,11 +653,11 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("mount-cat requires"), "{message}");
         assert!(
-            message.contains("run 'wanix-rust --help' for usage"),
+            message.contains("run 'wanix --help' for usage"),
             "{message}"
         );
         assert!(
-            !message.contains("wanix-rust qjs-term"),
+            !message.contains("wanix qjs-term"),
             "usage errors must not dump the whole usage wall: {message}"
         );
     }
@@ -667,9 +667,9 @@ mod tests {
         let output = run(["--help"]).unwrap();
 
         assert_eq!(output.exit_code(), 0);
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs"));
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-term"));
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-shell"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix qjs"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix qjs-term"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix qjs-shell"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("qjs-shell [--raw]"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--feed-after-eval-file PATH|-"));
@@ -679,29 +679,29 @@ mod tests {
         assert!(String::from_utf8_lossy(output.stdout()).contains("--resize-after-eval COLSxROWS"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--mount HOST=GUEST"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--stdin-file PATH|-"));
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-snapshot"));
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-resume"));
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qjs-restore"));
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-stdio"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix qjs-snapshot"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix qjs-resume"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix qjs-restore"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix p9-stdio"));
         // p9-listen and p9-ws are retired: raw 9P is now `serve --p9` and the
         // websocket 9P door lives inside serve.
-        assert!(!String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-listen"));
-        assert!(!String::from_utf8_lossy(output.stdout()).contains("wanix-rust p9-ws"));
+        assert!(!String::from_utf8_lossy(output.stdout()).contains("wanix p9-listen"));
+        assert!(!String::from_utf8_lossy(output.stdout()).contains("wanix p9-ws"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("serve [--root DIR | DIR]"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("[--p9 HOST:PORT"));
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust rootfs"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix rootfs"));
         assert!(
             String::from_utf8_lossy(output.stdout())
                 .contains("rootfs --archive FILE.tgz --out DIR [--json]")
         );
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust qemu"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix qemu"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--cmdline TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--append TEXT"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--mount-tag TAG"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--security-model MODEL"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--p9-msize N"));
         assert!(String::from_utf8_lossy(output.stdout()).contains("--exec"));
-        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix-rust serve"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("wanix serve"));
         assert!(output.stderr().is_empty());
     }
 
@@ -740,10 +740,10 @@ mod tests {
         );
         assert!(stdout.contains("kernel /boot/bzImage"), "{stdout}");
         assert!(stdout.contains("init /bin/init"), "{stdout}");
-        assert!(stdout.contains("qemu wanix-rust qemu --root"), "{stdout}");
+        assert!(stdout.contains("qemu wanix qemu --root"), "{stdout}");
         assert!(stdout.contains("--exec"), "{stdout}");
         assert!(
-            stdout.contains("serve wanix-rust serve")
+            stdout.contains("serve wanix serve")
                 && stdout.contains("--bundle direct-v86")
                 && stdout.contains("--wanix-services"),
             "{stdout}"
@@ -819,7 +819,7 @@ mod tests {
             "-nographic".to_owned(),
         ];
         let expected_serve_argv = vec![
-            "wanix-rust".to_owned(),
+            "wanix".to_owned(),
             "serve".to_owned(),
             out.display().to_string(),
             "--bundle".to_owned(),
@@ -1515,7 +1515,7 @@ mod tests {
         assert!(
             String::from_utf8(stderr)
                 .unwrap()
-                .contains("wanix-rust qemu exec:")
+                .contains("wanix qemu exec:")
         );
         assert!(
             error
@@ -1564,7 +1564,7 @@ mod tests {
         assert_eq!(exit_code, 7);
         assert!(stdout.is_empty());
         let stderr = String::from_utf8(stderr).unwrap();
-        assert!(stderr.contains("wanix-rust qemu exec:"), "{stderr}");
+        assert!(stderr.contains("wanix qemu exec:"), "{stderr}");
         assert!(
             stderr.contains(&fake_qemu.display().to_string()),
             "{stderr}"
@@ -1934,7 +1934,7 @@ mod tests {
 
         assert_eq!(output.exit_code(), 1);
         assert!(output.stdout().is_empty());
-        assert!(String::from_utf8_lossy(output.stderr()).contains("wanix-rust p9-stdio"));
+        assert!(String::from_utf8_lossy(output.stderr()).contains("wanix p9-stdio"));
         assert!(String::from_utf8_lossy(output.stderr()).contains("EOF"));
     }
 
@@ -3411,7 +3411,7 @@ std.exit(6);
         assert_eq!(output.exit_code(), 1);
         assert_eq!(output.stdout(), b"before allocation\n");
         let stderr = std::str::from_utf8(output.stderr()).unwrap();
-        assert!(stderr.contains("wanix-rust qjs-snapshot:"), "{stderr}");
+        assert!(stderr.contains("wanix qjs-snapshot:"), "{stderr}");
         assert!(stderr.contains("QuickJS exception"), "{stderr}");
         assert!(
             !snapshot.exists(),
@@ -3458,7 +3458,7 @@ print("snapshotted");
         assert_eq!(after.exit_code(), 1);
         assert_eq!(after.stdout(), b"before allocation\n");
         let stderr = std::str::from_utf8(after.stderr()).unwrap();
-        assert!(stderr.contains("wanix-rust qjs-resume:"), "{stderr}");
+        assert!(stderr.contains("wanix qjs-resume:"), "{stderr}");
         assert!(stderr.contains("QuickJS exception"), "{stderr}");
         fs::remove_dir_all(dir).unwrap();
     }
@@ -3481,7 +3481,7 @@ print("snapshotted");
         assert_eq!(output.exit_code(), 1);
         assert_eq!(output.stdout(), b"starting cpu loop\n");
         let stderr = std::str::from_utf8(output.stderr()).unwrap();
-        assert!(stderr.contains("wanix-rust qjs-snapshot:"), "{stderr}");
+        assert!(stderr.contains("wanix qjs-snapshot:"), "{stderr}");
         assert!(stderr.contains("interrupted"), "{stderr}");
         assert!(
             !snapshot.exists(),
@@ -3528,7 +3528,7 @@ print("snapshotted");
         assert_eq!(after.exit_code(), 1);
         assert_eq!(after.stdout(), b"starting cpu loop\n");
         let stderr = std::str::from_utf8(after.stderr()).unwrap();
-        assert!(stderr.contains("wanix-rust qjs-resume:"), "{stderr}");
+        assert!(stderr.contains("wanix qjs-resume:"), "{stderr}");
         assert!(stderr.contains("interrupted"), "{stderr}");
         fs::remove_dir_all(dir).unwrap();
     }
@@ -4059,7 +4059,7 @@ std.out.flush();
         assert_eq!(output.exit_code(), 1);
         assert_eq!(output.stdout(), b"starting cpu loop\n");
         let stderr = std::str::from_utf8(output.stderr()).unwrap();
-        assert!(stderr.contains("wanix-rust qjs:"), "{stderr}");
+        assert!(stderr.contains("wanix qjs:"), "{stderr}");
         assert!(stderr.contains("interrupted"), "{stderr}");
     }
 
@@ -4076,7 +4076,7 @@ std.out.flush();
         assert_eq!(output.exit_code(), 1);
         assert_eq!(output.stdout(), b"before allocation\n");
         let stderr = std::str::from_utf8(output.stderr()).unwrap();
-        assert!(stderr.contains("wanix-rust qjs:"), "{stderr}");
+        assert!(stderr.contains("wanix qjs:"), "{stderr}");
         assert!(stderr.contains("QuickJS exception"), "{stderr}");
     }
 

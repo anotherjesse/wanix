@@ -47,9 +47,9 @@ The contract is the `FileSystem` trait in `crates/wanix-fs/src/traits.rs:153`. A
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 mkdir -p project-root                          # serve needs an existing root
-wanix-rust serve --wanix-services --listen 127.0.0.1:7654 ./project-root
+wanix serve --wanix-services --listen 127.0.0.1:7654 ./project-root
 # in the cockpit or any 9P client: write #kv/greeting=hello, then read it back
 ```
 

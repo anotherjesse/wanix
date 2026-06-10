@@ -47,7 +47,7 @@ enum QemuOutputFormat {
 pub(super) fn run_qemu_command(command: QemuCommand) -> Result<CliOutput, CliError> {
     if command.exec {
         return Err(CliError::usage(
-            "qemu --exec requires live process IO; use the wanix-rust binary",
+            "qemu --exec requires live process IO; use the wanix binary",
         ));
     }
     let handoff = qemu_virtio9p_handoff(&command)?;
@@ -70,7 +70,7 @@ pub(super) fn run_qemu_streaming(
     let handoff = qemu_virtio9p_handoff(&command)?;
     let argv = handoff.argv;
     let quoted = quote_cmd_argv(argv.iter().map(String::as_str));
-    writeln!(process_stderr, "wanix-rust qemu exec: {quoted}")
+    writeln!(process_stderr, "wanix qemu exec: {quoted}")
         .map_err(|error| CliError::new(format!("failed to write process stderr: {error}"), 1))?;
     process_stderr
         .flush()

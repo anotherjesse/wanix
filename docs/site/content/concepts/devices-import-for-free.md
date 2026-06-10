@@ -43,11 +43,11 @@ Imagine the alternative. If storage shipped a `KvClient`, the task table shipped
 
 ## Show it: drive a peer's store with one 9P client
 
-Bring up two nodes. Node A exports its services; node B mounts A and reads A's key store as files. (First build: `cargo build --package wanix-cli; alias wanix-rust='./target/debug/wanix-rust'`.)
+Bring up two nodes. Node A exports its services; node B mounts A and reads A's key store as files. (First build: `cargo build --package wanix-cli; alias wanix='./target/debug/wanix'`.)
 
 ```sh
 # Node A: export the services namespace on a local-trust direct address.
-wanix-rust serve --wanix-services --addr 127.0.0.1:9100
+wanix serve --wanix-services --addr 127.0.0.1:9100
 
 # Node B: bind A at /n/A, then operate A's #kv as ordinary files.
 cat '/n/A/#kv/config'                 # read A's value

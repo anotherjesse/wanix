@@ -1,3 +1,0 @@
-#!/bin/sh
-ifconfig eth0 up
-udhcpc -i eth0 -s /bin/post-dhcp

@@ -35,7 +35,7 @@ canonicalCaveatFor: []
 
 A guided first-win track: run JS as a Wanix task, feed it env/stdin/argv, mount a host dir, then meet the cockpit.
 
-Wanix was born in the browser, but the Rust-native port runs the same ideas on a bare machine — no Chrome, no `v86`, no WebAssembly host page. This flow takes a newcomer from one command (`wanix-rust qjs file.js`) to a script that reads its environment, mounts a host directory, and finally to the browser cockpit driving the same namespace. Each step shows the visible result first, then names the Plan 9 idea underneath it. Budget about ten minutes.
+Wanix was born in the browser, but the Rust-native port runs the same ideas on a bare machine — no Chrome, no `v86`, no WebAssembly host page. This flow takes a newcomer from one command (`wanix qjs file.js`) to a script that reads its environment, mounts a host directory, and finally to the browser cockpit driving the same namespace. Each step shows the visible result first, then names the Plan 9 idea underneath it. Budget about ten minutes.
 
 ## Build once
 
@@ -43,15 +43,15 @@ Everything below uses the native CLI. Build it from the workspace root, then ali
 
 ```sh
 cargo build --locked --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
-The first build compiles the workspace (around twenty-two crates), so it is slow once and instant after. `wanix-rust --help` lists the subcommands you will use: `qjs`, `qjs-term`, `qjs-shell`, and `serve` (`rust-walkthrough.md:38-51`).
+The first build compiles the workspace (around twenty-two crates), so it is slow once and instant after. `wanix --help` lists the subcommands you will use: `qjs`, `qjs-term`, `qjs-shell`, and `serve` (`rust-walkthrough.md:38-51`).
 
 ## Hero: JavaScript with no browser
 
 ```sh
-wanix-rust qjs examples/qjs-demo.js
+wanix qjs examples/qjs-demo.js
 ```
 
 ```text
@@ -78,7 +78,7 @@ The split is deliberate: QuickJS handles JavaScript; Wanix owns task identity, t
 Real programs read their context. A `qjs` task gets cwd, environment, stdin on fd 0, and script arguments — all from Wanix, all live (`rust-walkthrough.md:90-139`):
 
 ```sh
-wanix-rust qjs \
+wanix qjs \
   --env MODE=walkthrough \
   --cwd app \
   --stdin "hello fd0" \
@@ -93,7 +93,7 @@ One trap to defuse early: `--cwd app` is a **namespace** path (inside the task's
 Pipe a few commands into the bundled QuickJS shell to see the namespace as a place you can poke:
 
 ```sh
-printf 'write note.txt hello\nls\ncat note.txt\nexit\n' | wanix-rust qjs-shell
+printf 'write note.txt hello\nls\ncat note.txt\nexit\n' | wanix qjs-shell
 ```
 
 ```text
@@ -117,7 +117,7 @@ mkdir -p /tmp/wanix-host && echo "from host" > /tmp/wanix-host/input.txt
 Then mount that directory into the task's namespace under the name `host`:
 
 ```sh
-wanix-rust qjs --mount /tmp/wanix-host=host examples/qjs-host-mount.js
+wanix qjs --mount /tmp/wanix-host=host examples/qjs-host-mount.js
 ```
 
 ```text
@@ -129,18 +129,18 @@ The script read `host/input.txt` and wrote `host/output.txt` — and that write 
 
 ## Boot the cockpit (or take the CLI fallback)
 
-The browser cockpit is a VS Code / Code OSS web extension that drives this same namespace over direct 9P. It needs a one-time build that fetches vscode-web and runs a Go build step (`workbench/Makefile:1-25`):
+The browser cockpit is a VS Code / Code OSS web extension that drives this same namespace over direct 9P. It needs a one-time build that fetches vscode-web and bundles the TypeScript extension:
 
 ```sh
-cd workbench && make build   # one-time; requires Go on PATH
-wanix-rust serve --wanix-services --bundle workbench-fs9p --listen 127.0.0.1:7654 .
+make workbench   # one-time; downloads vscode-web and runs npm/esbuild
+wanix serve --wanix-services --bundle workbench-fs9p --listen 127.0.0.1:7654 .
 # open http://127.0.0.1:7654/?bundle=workbench-fs9p
 ```
 
 No Go handy? Skip the cockpit — it is a thin client, not the runtime. The CLI shows the same `#agent` file shape, with one honest caveat: `--fake` is the deterministic demo engine, and it only **echoes the prompt back** — nothing is repaired. The actual repair payoff is cockpit-only (or the real-codex `wanix agent` path):
 
 ```sh
-wanix-rust agent --fake "Repair broken.js so it writes out/result.txt"
+wanix agent --fake "Repair broken.js so it writes out/result.txt"
 ```
 
 ```text
@@ -179,7 +179,7 @@ You have run JavaScript as a real Wanix task with live WASI, context, and an exp
 
 ## Status / honest limits
 
-- The cockpit requires a one-time vscode-web build with Go on PATH (`workbench/Makefile:1-25`). The CLI fallback demonstrates the same `#agent` event contract (the fake engine echoes the prompt; it repairs nothing); the cockpit is a 9P client, not the runtime.
+- The cockpit requires a one-time vscode-web/npm build (`make workbench`). The CLI fallback demonstrates the same `#agent` event contract (the fake engine echoes the prompt; it repairs nothing); the cockpit is a 9P client, not the runtime.
 - The served `#agent` uses a deterministic `FakeEngine`, not a live LLM (`docs/recipes/01-repair-broken-qjs.md:88-91`). The real codex engine is the local-trust `wanix agent` CLI path only.
 - `#kv` is an in-memory tier: the counter survives between calls only while the serve process is alive (`docs/recipes/04-tiny-http-app-with-kv.md:86-99`). Freeze a world to a capsule for durability.
 - The HTTP-app route at `/.wanix/app/<name>` is loopback-only and requires `--wanix-services` (`crates/wanix-cli/src/serve/http/app.rs:34-44`).

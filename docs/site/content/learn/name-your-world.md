@@ -45,12 +45,12 @@ Two mechanisms make a mesh of machines feel like one livable computer, and this 
 
 ```sh
 cargo build --locked --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 ## 1. Names are for humans; resolution is launch-time
 
-The catalog is *your address book*, not a directory service: `wanix-rust catalog add NAME IROH_URL` (or `--register NAME` on any resource serve) binds a humane name to a dialable ticket, locally, under your `~/.wanix`. Nobody else sees your names; two people can call the same room different things — which is exactly the petname-system shape ADR 0007 grows toward (today: Layer 1, your private edge names; later: exchanging and delegating them).
+The catalog is *your address book*, not a directory service: `wanix catalog add NAME IROH_URL` (or `--register NAME` on any resource serve) binds a humane name to a dialable ticket, locally, under your `~/.wanix`. Nobody else sees your names; two people can call the same room different things — which is exactly the petname-system shape ADR 0007 grows toward (today: Layer 1, your private edge names; later: exchanging and delegating them).
 
 Three rules carry the design:
 
@@ -58,7 +58,7 @@ Three rules carry the design:
 - **Resolution is launch-time, audited.** A name resolves through the catalog when the command starts — never silently in the background — and each resolution prints once on stderr:
 
   ```text
-  wanix-rust: name 'notes' -> iroh://b070895d...?addr=127.0.0.1:51277 (resolved through the catalog at launch)
+  wanix: name 'notes' -> iroh://b070895d...?addr=127.0.0.1:51277 (resolved through the catalog at launch)
   ```
 
   Rebind a name and the *next* launch follows it; running namespaces carry the address they resolved. (`recipe run` makes drift loud: "bind 'upper' DRIFTED since save ... — using the catalog address".)
@@ -71,8 +71,8 @@ The full transcript — `--register` from three serves, `catalog ls` liveness, m
 A served resource can ship the commands that know how to use it: executable verbs in a `bin/` directory beside its tree ([bin verbs](/concepts/bin-verbs)). Mount the chatroom and your shell can speak chatroom:
 
 ```sh
-wanix-rust sh --mount-mesh room -c 'room:post hello from a verb'
-wanix-rust sh --mount-mesh room -c 'echo piped through stdin | room:post'
+wanix sh --mount-mesh room -c 'room:post hello from a verb'
+wanix sh --mount-mesh room -c 'echo piped through stdin | room:post'
 ```
 
 `room:post` is `bin/post.js` *served by the room itself* — the platform does not know what "post" means; the room does, and mounting the room teaches your shell. The input convention composes: argv joined is the body, no argv reads stdin.
@@ -92,15 +92,15 @@ if (text === null) {
 }
 std.out.puts(text);
 EOF
-wanix-rust app serve --app /tmp/myroom --state /tmp/room --listen 127.0.0.1:0 --register room
+wanix app serve --app /tmp/myroom --state /tmp/room --listen 127.0.0.1:0 --register room
 ```
 
 Everyone who mounts your room now has `room:peek` — no client update, no plugin install, no version negotiation. The verb travels with the resource because it *is* part of the resource:
 
 ```sh
-wanix-rust mount-ls room bin
+wanix mount-ls room bin
 # peek.js  post.js  roster.js  watch.js
-wanix-rust sh --mount-mesh room -c 'room:peek /res/latest'
+wanix sh --mount-mesh room -c 'room:peek /res/latest'
 # {"at":1781105714138,"from":"desk (0f285641)","body":"line one for the watcher"}
 # ...
 ```
@@ -114,9 +114,9 @@ That convenience would be horrifying if a mounted verb ran with your authority �
 ```sh
 ls
 # secret.txt
-wanix-rust sh --mount-mesh room -c 'cat secret.txt'
+wanix sh --mount-mesh room -c 'cat secret.txt'
 # meeting notes: the demo is at noon
-wanix-rust sh --mount-mesh room -c 'room:peek secret.txt'
+wanix sh --mount-mesh room -c 'room:peek secret.txt'
 # peek: secret.txt: not found in this verb's world      <- stderr, exit status 1
 ```
 
@@ -131,7 +131,7 @@ cat > gen.js <<'EOF'
 import * as std from "qjs:std";
 std.out.puts("[1,2,3]\n");
 EOF
-wanix-rust sh -c "gen.js | jaq 'map(.+1)'"
+wanix sh -c "gen.js | jaq 'map(.+1)'"
 # [2,3,4]
 ```
 

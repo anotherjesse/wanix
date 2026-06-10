@@ -217,7 +217,7 @@ fn spawn_exit_watcher(task: &Task, service: &AppFsService, stderr: Arc<LineBuffe
         closer.close_all();
         let diagnostics = drain_captured(&stderr);
         eprintln!(
-            "wanix-rust app serve: guest exited with status {exit}; discrete ops on this guest \
+            "wanix app serve: guest exited with status {exit}; discrete ops on this guest \
              now fail Unreachable and stream readers see EOF{}{diagnostics}",
             if diagnostics.is_empty() {
                 ""

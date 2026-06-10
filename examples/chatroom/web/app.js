@@ -1,6 +1,6 @@
 // wanix chatroom web client — same-origin files, no build step, no framework.
 //
-// The Wanix gateway (`wanix-rust serve --bind chat=...`) composes this static
+// The Wanix gateway (`wanix serve --bind chat=...`) composes this static
 // directory and the mesh-mounted room into ONE origin, so the room's files are
 // plain same-origin URLs:
 //

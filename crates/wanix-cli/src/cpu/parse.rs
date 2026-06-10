@@ -1,4 +1,4 @@
-//! Parsing `wanix-rust cpu` into a [`CpuCommand`].
+//! Parsing `wanix cpu` into a [`CpuCommand`].
 //!
 //! Grammar: `cpu --node TICKET [--cwd DIR] [--write] [--env KEY=VALUE ...] --
 //! KIND PROGRAM [ARG ...]`. Options precede the `--` separator; everything after
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use crate::CliError;
 
-/// A parsed `wanix-rust cpu` invocation.
+/// A parsed `wanix cpu` invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CpuCommand {
     /// The `iroh://` ticket of the data node serving the cpu exec plane.

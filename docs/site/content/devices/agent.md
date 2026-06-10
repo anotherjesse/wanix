@@ -48,7 +48,7 @@ An agent is usually a process you talk to over a socket with a bespoke JSON-RPC 
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 # served device: read `new`, get an id back
 cat '#agent/new'      # -> 1

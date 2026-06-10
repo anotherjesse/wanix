@@ -41,7 +41,7 @@ Write a `tools.toml` that wraps real host programs (`tr`, `sort`, your own scrip
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 ## 1. The config is the trust decision
@@ -105,12 +105,12 @@ EOF
 ## 2. Serve: one endpoint and one persisted identity per tool
 
 ```sh
-wanix-rust tool serve --config /tmp/tools-demo/tools.toml --listen 127.0.0.1:0
+wanix tool serve --config /tmp/tools-demo/tools.toml --listen 127.0.0.1:0
 ```
 
 ```text
 rot13	iroh://d3fa691d...?addr=127.0.0.1:32850
-# mount with: wanix-rust mount-ls 'iroh://d3fa691d...?addr=127.0.0.1:32850'
+# mount with: wanix mount-ls 'iroh://d3fa691d...?addr=127.0.0.1:32850'
 slow	iroh://e7a64b50...?addr=127.0.0.1:56418
 ...
 sortlines	iroh://c64da489...?addr=127.0.0.1:55574
@@ -123,7 +123,7 @@ Each tool keeps its own ed25519 identity under `~/.wanix/tool-identities/<name>.
 
 ```sh
 ROT='iroh://d3fa691d...?addr=127.0.0.1:32850'
-wanix-rust mount-cat "$ROT" spec.json
+wanix mount-cat "$ROT" spec.json
 ```
 
 ```text
@@ -135,7 +135,7 @@ wanix-rust mount-cat "$ROT" spec.json
 Export each ticket from step 2 (`ROT`, `SORT`, `SUM`, `SLOW` below — quote the whole `TICKET=/path` mount argument, the value splits on the last `=`):
 
 ```sh
-wanix-rust sh -c 'echo the mesh runs my own programs now | tool /n/rot13' --mount-mesh "$ROT=/n/rot13"
+wanix sh -c 'echo the mesh runs my own programs now | tool /n/rot13' --mount-mesh "$ROT=/n/rot13"
 ```
 
 ```text
@@ -146,7 +146,7 @@ job: /n/rot13/jobs/j46fc075103b33b2f
 And the `tempfile` mapping is invisible to the caller — bytes in, bytes out (here piping a mounted volume file from recipe 06 through `sortlines`):
 
 ```sh
-wanix-rust sh -c 'cat /vol/notes/fruit.txt | tool /n/sort' \
+wanix sh -c 'cat /vol/notes/fruit.txt | tool /n/sort' \
   --mount-mesh "$SORT=/n/sort" --mount-mesh "$VOL=/vol/notes"
 ```
 
@@ -163,14 +163,14 @@ A job directory is `{request, params.json, in, ctl, out, err, status, result.jso
 
 ```sh
 SUM='iroh://a1b4a6d8...?addr=127.0.0.1:48416'
-J=$(wanix-rust mount-cat "$SUM" new)
-wanix-rust mount-write "$SUM" "jobs/$J/in" 'the quick brown fox jumps over the lazy dog'
+J=$(wanix mount-cat "$SUM" new)
+wanix mount-write "$SUM" "jobs/$J/in" 'the quick brown fox jumps over the lazy dog'
 
 # Terminal 2 — prints each event as it arrives, then exits on EOF:
-wanix-rust mount-cat "$SUM" "jobs/$J/events" --follow
+wanix mount-cat "$SUM" "jobs/$J/events" --follow
 
 # Terminal 1:
-wanix-rust mount-write "$SUM" "jobs/$J/ctl" run        # blocks ~4 s, terminal on return
+wanix mount-write "$SUM" "jobs/$J/ctl" run        # blocks ~4 s, terminal on return
 ```
 
 Terminal 2 prints the three lines as they happen — in this run (timestamping each arrival on the reader side) they landed at 08:45:18, 08:45:20, and 08:45:22, the 2-second gaps being the script's sleeps observed live:
@@ -184,9 +184,9 @@ summarize: writing summary
 The job finishing closes the events stream, so the `--follow` reader exits cleanly on EOF — the [blocking-stream EOF contract](/concepts/blocking-stream-eof-contract) end to end. Then collect the answer:
 
 ```sh
-wanix-rust mount-cat "$SUM" "jobs/$J/out"
+wanix mount-cat "$SUM" "jobs/$J/out"
 # 9 words
-wanix-rust mount-cat "$SUM" "jobs/$J/result.json"
+wanix mount-cat "$SUM" "jobs/$J/result.json"
 # {"state":"done","exitCode":0,"durationMs":4006,"inputBytes":43,"outputBytes":8,"error":null,"retryable":true}
 ```
 
@@ -195,7 +195,7 @@ wanix-rust mount-cat "$SUM" "jobs/$J/result.json"
 `slow` sleeps for 10 s but its config says `run_timeout_ms = 2000`. Through the builtin the failure taxonomy lands on stderr and the exit status:
 
 ```sh
-wanix-rust sh -c 'echo anything | tool /n/slow' --mount-mesh "$SLOW=/n/slow"
+wanix sh -c 'echo anything | tool /n/slow' --mount-mesh "$SLOW=/n/slow"
 ```
 
 ```text
@@ -206,9 +206,9 @@ tool: timeout: run deadline exceeded; process killed
 (exit status 1; the whole invocation took 2.15 s — the deadline killed the process, not the sleep ending.) The builtin closes only *successful* jobs, so this failed run stays retained behind the `job:` breadcrumb for `retain_failed_ms` — `mount-cat "$SLOW" "jobs/<id>/result.json"` works after the fact. The same retained shape, driven by the raw protocol:
 
 ```sh
-J=$(wanix-rust mount-cat "$SLOW" new)
-wanix-rust mount-write "$SLOW" "jobs/$J/ctl" run      # returns after 2 s, not 10
-wanix-rust mount-cat "$SLOW" "jobs/$J/result.json"
+J=$(wanix mount-cat "$SLOW" new)
+wanix mount-write "$SLOW" "jobs/$J/ctl" run      # returns after 2 s, not 10
+wanix mount-cat "$SLOW" "jobs/$J/result.json"
 ```
 
 ```text
@@ -220,14 +220,14 @@ wanix-rust mount-cat "$SLOW" "jobs/$J/result.json"
 `ctl run` is synchronous for the caller, so abort from a *second* client — same principal, same `jobs/` view. Start a `summarize` run in one terminal and write `abort` from another while it sleeps:
 
 ```sh
-J=$(wanix-rust mount-cat "$SUM" new)
-wanix-rust mount-write "$SUM" "jobs/$J/in" 'abort me'
-wanix-rust mount-write "$SUM" "jobs/$J/ctl" run &     # parks while the script runs
+J=$(wanix mount-cat "$SUM" new)
+wanix mount-write "$SUM" "jobs/$J/in" 'abort me'
+wanix mount-write "$SUM" "jobs/$J/ctl" run &     # parks while the script runs
 sleep 1
-wanix-rust mount-write "$SUM" "jobs/$J/ctl" abort     # kills the child; run returns
+wanix mount-write "$SUM" "jobs/$J/ctl" abort     # kills the child; run returns
 wait
-wanix-rust mount-cat "$SUM" "jobs/$J/result.json"; echo
-wanix-rust mount-cat "$SUM" "jobs/$J/events"
+wanix mount-cat "$SUM" "jobs/$J/result.json"; echo
+wanix mount-cat "$SUM" "jobs/$J/events"
 ```
 
 ```text
@@ -253,8 +253,8 @@ command = "/bin/pwd"
 ```
 
 ```sh
-wanix-rust sh -c 'echo x | tool /n/t' --mount-mesh "$ENV=/n/t"   # prints NOTHING: env is empty
-wanix-rust sh -c 'echo x | tool /n/t' --mount-mesh "$CWD=/n/t"
+wanix sh -c 'echo x | tool /n/t' --mount-mesh "$ENV=/n/t"   # prints NOTHING: env is empty
+wanix sh -c 'echo x | tool /n/t' --mount-mesh "$CWD=/n/t"
 # /tmp/wanix-tool-877669-1-j762d19d4e4fe9af6                     <- private per-job workdir
 ```
 

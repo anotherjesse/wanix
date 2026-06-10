@@ -1,4 +1,4 @@
-//! `wanix-rust sh` — the Wanix-native shell as a first-class CLI entry.
+//! `wanix sh` — the Wanix-native shell as a first-class CLI entry.
 //!
 //! `sh` is sugar over the compiled-wasm task path: it runs the bundled
 //! `wanix-sh` guest ([`wanix_wasm::SHELL_WASM`]) through [`WasmTaskDriver`]
@@ -55,7 +55,7 @@ pub(crate) fn run_sh(
     let Some(line) = command.line.clone() else {
         return Err(CliError::usage(
             "sh without -c is an interactive terminal session and needs a pollable host \
-             terminal; run the wanix-rust binary on a tty or pass -c LINE",
+             terminal; run the wanix binary on a tty or pass -c LINE",
         ));
     };
     // Declared first so the mesh keepalives drop LAST — after the task and its

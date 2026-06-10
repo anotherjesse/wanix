@@ -2,7 +2,7 @@
 title: Portable Worlds via Capsules
 slug: use-cases/portable-worlds
 pageType: use-case
-oneLiner: wanix-rust capsule save freezes a whole world — the directory an agent built — into a CAS-backed, BLAKE3-verified, deduplicated set of blobs, and hand someone one hash and they materialize the entire world, verifying every blob.
+oneLiner: wanix capsule save freezes a whole world — the directory an agent built — into a CAS-backed, BLAKE3-verified, deduplicated set of blobs, and hand someone one hash and they materialize the entire world, verifying every blob.
 audience: [visionary, developer]
 tags: [shipped, cli, mesh, content-addressed, caveat]
 sourceRefs:
@@ -34,7 +34,7 @@ canonicalCaveatFor: []
 
 # Portable Worlds via Capsules
 
-`wanix-rust capsule save` freezes a whole world — the directory an agent built — into a CAS-backed, BLAKE3-verified, deduplicated set of blobs; hand someone one hash and they materialize the entire world, verifying every blob.
+`wanix capsule save` freezes a whole world — the directory an agent built — into a CAS-backed, BLAKE3-verified, deduplicated set of blobs; hand someone one hash and they materialize the entire world, verifying every blob.
 
 **What & why.** An agent just spent an afternoon building a working directory: qjs scripts, a generated dataset, some state. How do you ship that *exact* world to a teammate, a cloud box, or your future self — and prove on the other end that what arrived is byte-for-byte what left? The usual answers are a tarball you have to trust, a Docker image you have to rebuild, or a git remote you have to host. Wanix offers a smaller primitive: freeze the directory onto a content-addressed store and you get back one short hash. That hash *is* the world. Anyone who can reach the blobs reconstructs the tree, and every blob is re-hashed against its content address before a single byte hits disk. This is venti — Plan 9's archival store — applied to a whole world.
 
@@ -44,7 +44,7 @@ Build a small world and freeze it. Recipe 03 walks the full thing; here is the s
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 mkdir -p /tmp/world-A/scripts /tmp/world-A/state
 printf 'hello, capsule\n' > /tmp/world-A/state/greeting.txt
@@ -54,7 +54,7 @@ std.out.puts(std.loadFile("state/greeting.txt"));
 JS
 
 export CAS=/tmp/cas-A
-wanix-rust capsule save /tmp/world-A --store "$CAS"
+wanix capsule save /tmp/world-A --store "$CAS"
 # capsule 7f3a…<64 hex>… saved (2 files) from /tmp/world-A
 # load with: wanix capsule load 7f3a… <DIR>
 ```
@@ -62,7 +62,7 @@ wanix-rust capsule save /tmp/world-A --store "$CAS"
 That `7f3a…` is the only durable thing you need. On any host where the store contains (or can fetch) the referenced blobs:
 
 ```sh
-wanix-rust capsule load 7f3a… /tmp/world-B --store "$CAS"
+wanix capsule load 7f3a… /tmp/world-B --store "$CAS"
 diff -r /tmp/world-A /tmp/world-B   # no output -> byte-identical
 ```
 

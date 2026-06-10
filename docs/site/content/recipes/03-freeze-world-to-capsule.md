@@ -21,7 +21,7 @@ canonicalCaveatFor: []
 
 Freeze a directory the agent (or you) just built onto the content-addressed plane so the same world can be reconstructed deterministically anywhere the same capsule id is reachable.
 
-**What & why.** An agent ran, wrote some scripts, materialized some state, and produced a working directory. Now you want that exact tree to exist somewhere else — another account, another machine, a peer across the mesh — without zipping it, without trusting a mirror, without wondering whether the copy drifted. `wanix-rust capsule save` walks the tree, ingests every file as a content-addressed blob, and ingests a sorted manifest of those blobs as one more blob. The hash of that manifest blob *is* the capsule id: a single 64-hex string. Share the string, share the world. `wanix-rust capsule load <id> DIR` reconstructs the tree byte-for-byte, re-hashing every blob before it touches disk. This is [venti](/devices/cas) applied to a whole world — the durable, verifiable half of the mesh's two planes.
+**What & why.** An agent ran, wrote some scripts, materialized some state, and produced a working directory. Now you want that exact tree to exist somewhere else — another account, another machine, a peer across the mesh — without zipping it, without trusting a mirror, without wondering whether the copy drifted. `wanix capsule save` walks the tree, ingests every file as a content-addressed blob, and ingests a sorted manifest of those blobs as one more blob. The hash of that manifest blob *is* the capsule id: a single 64-hex string. Share the string, share the world. `wanix capsule load <id> DIR` reconstructs the tree byte-for-byte, re-hashing every blob before it touches disk. This is [venti](/devices/cas) applied to a whole world — the durable, verifiable half of the mesh's two planes.
 
 ## 1. Set up a small world
 
@@ -29,7 +29,7 @@ Build a directory we will treat as one frozen world — a qjs program plus the d
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 mkdir -p /tmp/world-A/scripts /tmp/world-A/state
 cat > /tmp/world-A/scripts/hello.js <<'JS'
@@ -39,7 +39,7 @@ JS
 echo "hello, capsule" > /tmp/world-A/state/greeting.txt
 
 # --cwd is a namespace path, so bind the host dir in with --mount first:
-wanix-rust qjs --mount /tmp/world-A=world --cwd world \
+wanix qjs --mount /tmp/world-A=world --cwd world \
   /tmp/world-A/scripts/hello.js                      # -> hello, capsule
 ```
 
@@ -50,14 +50,14 @@ If your state lives in `#kv` rather than on disk, it is *not* in this tree yet. 
 The CLI grammar, parsed in `crates/wanix-cli/src/capsule.rs:51`, is two verbs plus an optional store flag:
 
 ```text
-wanix-rust capsule (save DIR | load CAPSULE_ID DIR) [--store DIR]
+wanix capsule (save DIR | load CAPSULE_ID DIR) [--store DIR]
 ```
 
 `--store DIR` overrides the CAS store directory; the default is `$WANIX_CAS_DIR`, or the per-user owner-private cache when that is unset (`open_store`, `capsule.rs:131`). Pin it to a known path so the next step can look inside:
 
 ```sh
 export CAS=/tmp/cas-A
-wanix-rust capsule save /tmp/world-A --store "$CAS"
+wanix capsule save /tmp/world-A --store "$CAS"
 # capsule 7f3a…<64 hex>… saved (2 files) from /tmp/world-A
 # load with: wanix capsule load 7f3a… <DIR>
 ```
@@ -65,7 +65,7 @@ wanix-rust capsule save /tmp/world-A --store "$CAS"
 That output is built by `save` in `capsule.rs:138`: it calls `Capsule::freeze`, prints `capsule.id().to_hex()` and the file count. Capture the id — it is the only thing you ship:
 
 ```sh
-CAPSULE_ID=$(wanix-rust capsule save /tmp/world-A --store "$CAS" \
+CAPSULE_ID=$(wanix capsule save /tmp/world-A --store "$CAS" \
   | awk '/^capsule/ {print $2}')
 ```
 
@@ -99,7 +99,7 @@ That exact byte form is what gets hashed into the capsule id, which is why sorti
 **Same machine, different directory.** The fastest proof:
 
 ```sh
-wanix-rust capsule load "$CAPSULE_ID" /tmp/world-B --store "$CAS"
+wanix capsule load "$CAPSULE_ID" /tmp/world-B --store "$CAS"
 # capsule 7f3a… restored (2 files, 38 bytes) to /tmp/world-B
 diff -r /tmp/world-A /tmp/world-B   # no output -> byte-identical
 ```
@@ -112,7 +112,7 @@ diff -r /tmp/world-A /tmp/world-B   # no output -> byte-identical
 ( echo "$CAPSULE_ID"; awk '{print $1}' "$CAS/$CAPSULE_ID" ) \
   | xargs -I{} echo "$CAS/{}" > /tmp/capsule-files.txt
 rsync -av --files-from=/tmp/capsule-files.txt / hostB:/tmp/cas-B/
-ssh hostB wanix-rust capsule load "$CAPSULE_ID" /tmp/world-B --store /tmp/cas-B
+ssh hostB wanix capsule load "$CAPSULE_ID" /tmp/world-B --store /tmp/cas-B
 ```
 
 **Over the mesh.** The async, network-fetching `IrohCasStore` implements the same `ContentStore` trait, so the same `capsule load <id>` resolves blobs through a peer's published ticket. The local trust boundary still runs on materialize: every `get` re-hashes bytes against their content address ([end-to-end hash verification](/concepts/end-to-end-hash-verification)), so a tampered or hostile remote blob is rejected, not written.
@@ -135,8 +135,8 @@ A minimal smoke test:
 ```sh
 export CAS=$(mktemp -d); SRC=$(mktemp -d); DST=$(mktemp -d)
 echo "hello, capsule" > "$SRC/greeting.txt"
-ID=$(wanix-rust capsule save "$SRC" --store "$CAS" | awk '/^capsule/ {print $2}')
-wanix-rust capsule load "$ID" "$DST" --store "$CAS"
+ID=$(wanix capsule save "$SRC" --store "$CAS" | awk '/^capsule/ {print $2}')
+wanix capsule load "$ID" "$DST" --store "$CAS"
 diff -r "$SRC" "$DST" && echo "round-trip ok: $ID"
 ```
 

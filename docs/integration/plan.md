@@ -50,7 +50,7 @@ Concretely:
    path as the primary cockpit entry, and any demo that relied on a runtime
    feature `cpu` does not have. Each retirement is called out in the slices.
 
-The success bar for the merge is: `wanix-rust serve --bundle cockpit
+The success bar for the merge is: `wanix serve --bundle cockpit
 $WORKSPACE` brings up VS Code with a sidebar that shows the cpu device map and
 mesh state, lets an operator run qjs/wasm tasks through `#task`, open an
 `#agent` session, post and receive on `#plumb`, ingest into `#cas`, and mount a
@@ -91,7 +91,7 @@ seam that everything else lands on.
   8).
 
 **Success.** `cd workbench && npm run compile-web` produces a clean bundle;
-`wanix-rust serve --bundle workbench-fs9p $WORKSPACE` opens VS Code, the
+`wanix serve --bundle workbench-fs9p $WORKSPACE` opens VS Code, the
 `wanix:` scheme browses cpu's served root, the system-view sidebar lists
 drivers (`qjs`, `wasm` from `crates/wanix-qjs`, `crates/wanix-wasm`) and any
 live `#task`/`#term` entries discovered via 1-second polling of
@@ -135,7 +135,7 @@ allocate).
   queued in the AGENTS Queued Follow-ups; do the minimal subset needed by the
   cockpit here).
 
-**Success.** With `wanix-rust serve --wanix-services --bundle workbench-fs9p`,
+**Success.** With `wanix serve --wanix-services --bundle workbench-fs9p`,
 the sidebar shows seven device categories. Allocating an `#agent` session via
 `cat \#agent/new` from a terminal makes a new session appear in the sidebar
 within one poll cycle; closing it via `\#agent/<id>/ctl close` removes it.
@@ -174,7 +174,7 @@ commands from VS Code.
   flags if not present; the recon shows mesh-on-serve already exists, this
   slice just makes it visible).
 
-**Success.** Two local `wanix-rust serve` processes with mesh enabled show
+**Success.** Two local `wanix serve` processes with mesh enabled show
 each other in the cockpit mesh panel within one poll. Running `wanix.mesh.mount
 peer:<id> /` from the cockpit binds the peer's root at `/n/<id>` in the local
 namespace (visible immediately in the `wanix:` tree). `wanix.mesh.revokeGrant`
@@ -290,7 +290,7 @@ surface to `/.wanix/agent-tools.{json,md}` for downstream agent backends.
   so the cockpit's check does not break silently).
 
 **Success.** `Run cockpit self-check` is green on a default
-`wanix-rust serve --wanix-services` run: each of the seven devices has a
+`wanix serve --wanix-services` run: each of the seven devices has a
 passing probe, plus drivers and `#cpu` local-trust enforcement. The self-check
 report appears in the sidebar's reports category.
 
@@ -364,7 +364,7 @@ routes into the extension).
 - `workbench/build.go` (verify esbuild output layout matches the new asset
   paths).
 
-**Success.** `wanix-rust serve --bundle cockpit $WORKSPACE` is the documented
+**Success.** `wanix serve --bundle cockpit $WORKSPACE` is the documented
 entry point. `?bundle=workbench-fs9p` still works but logs a deprecation
 hint. The HTML loads `workbench/dist/web/extension.js` directly without
 needing the 80 MB VS Code distribution download from origin/rust's
@@ -407,7 +407,7 @@ later cycle; this slice draws the seam.
 - `docs/integration/plan.md` (this file: append a follow-up note that full
   ed25519 + iroh in the browser is the next cycle).
 
-**Success.** Two `wanix-rust serve` processes on the same host: cockpit on
+**Success.** Two `wanix serve` processes on the same host: cockpit on
 process A mounts process B's root over WebSocket from the browser, browses
 files, runs a `#task` on B, observes the result. Without a token, the
 WebSocket attach is refused. Non-loopback browser peers are explicitly
@@ -498,7 +498,7 @@ retirement. `workbench/src/web/` contains no dead files. ADR 0005 (or a new
   primitive but gate it behind a "I understand this is local-trust" prompt.
 - **End-to-end Playwright smoke test**: the recon found no e2e tests but
   Playwright is available. A single smoke test that boots
-  `wanix-rust serve --bundle cockpit`, opens the page, asserts the seven
+  `wanix serve --bundle cockpit`, opens the page, asserts the seven
   device categories render, and runs the duet demo end-to-end would be the
   highest-leverage protection against the cockpit silently breaking. Likely
   one extra slice between 8 and 9, or rolled into 10.

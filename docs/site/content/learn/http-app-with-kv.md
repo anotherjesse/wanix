@@ -40,13 +40,13 @@ If you have not built the CLI yet ([build & install](/reference/build-and-instal
 
 ```sh
 cargo build --locked --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 Scaffold a starter project. `wanix new --js counter` writes a `counter/` directory with `main.js`, the guest SDK under `lib/wanix/`, and a `tsconfig.json` (`crates/wanix-cli/src/new.rs:101`). You will add one file of your own:
 
 ```sh
-wanix-rust new --js counter
+wanix new --js counter
 ```
 
 Now create the `apps/` directory inside the project (`mkdir -p counter/apps`) and write the handler below to `counter/apps/counter.js`. The route looks for the program under `apps/<name>.js` relative to the served root, so the file name is the route name.
@@ -78,7 +78,7 @@ Note the key: `#kv/http-counter`. `#kv` is addressed as `#kv/<key>` from the nam
 ## Step 1 — serve it with the device set bound
 
 ```sh
-wanix-rust serve --wanix-services --listen 127.0.0.1:7654 ./counter
+wanix serve --wanix-services --listen 127.0.0.1:7654 ./counter
 ```
 
 `--wanix-services` is the switch that binds the device set — `#task`, `#term`, `#kv`, `#pipe`, `#plumb`, `#cas`, `#agent`, `#sites` — into the served namespace (`crates/wanix-cli/src/serve/roots.rs:207` binds `KvDevice` at `#kv`). Without it, `#kv` does not exist and the app route refuses the request (`crates/wanix-cli/src/serve/http/app.rs:55`). The positional `./counter` becomes the `.` of the served namespace, so `apps/counter.js` and `#kv/http-counter` sit under the same root.

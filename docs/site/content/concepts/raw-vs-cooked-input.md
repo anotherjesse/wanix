@@ -39,13 +39,13 @@ That single flag (`examples/qjs-term-shell-demo.js:12`) selects between two read
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 # Cooked: the line arrives all at once, on Enter.
-wanix-rust qjs-shell
+wanix qjs-shell
 
 # Raw: the host feeds each keystroke; the guest echoes and edits.
-wanix-rust qjs-shell --raw
+wanix qjs-shell --raw
 ```
 
 ## Cooked mode: lines arrive whole

@@ -38,7 +38,7 @@ canonicalCaveatFor: [mount-at-n-remote]
 
 ## The outcome: one mesh, all yours
 
-Picture three nodes you own. Each runs `wanix-rust mesh-serve`, binds an iroh endpoint from its persistent key, and exports a directory (and optionally its service devices). From any node you can dial any other and *import* its namespace into your own — its files become your files, its `#kv` becomes a key you can read, its CPU becomes a place you can send work.
+Picture three nodes you own. Each runs `wanix mesh-serve`, binds an iroh endpoint from its persistent key, and exports a directory (and optionally its service devices). From any node you can dial any other and *import* its namespace into your own — its files become your files, its `#kv` becomes a key you can read, its CPU becomes a place you can send work.
 
 Because Wanix is "everything is a file" all the way down, importing a peer is importing files. There is no separate "remote API." The dataset on your cloud box, the `#kv` store on your laptop, the `#agent` session on your phone — they all show up through the same 9P contract, mounted into your local tree. That's the whole pitch: **your machines stop being islands and start being one namespace.**
 
@@ -59,7 +59,7 @@ The fastest way to feel it is two nodes on one laptop. Node B holds the data; no
 Node B exports a directory (with a `build.js` and a `dataset.txt` inside `work/`) over a local direct-address endpoint:
 
 ```sh
-wanix-rust mesh-serve \
+wanix mesh-serve \
     --root "$ROOT_B" --key "$NODE_B_KEY" \
     --addr 127.0.0.1:5680 --wanix-services
 ```
@@ -67,9 +67,9 @@ wanix-rust mesh-serve \
 It prints its verified address on stderr — copy the `ticket` line (yours will differ):
 
 ```
-wanix-rust mesh-serve: node 829fbb…f986
-wanix-rust mesh-serve: ticket iroh://829fbb…f986?addr=127.0.0.1:5680
-wanix-rust mesh-serve: mount with: wanix-rust mount-ls 'iroh://829fbb…f986?addr=127.0.0.1:5680'
+wanix mesh-serve: node 829fbb…f986
+wanix mesh-serve: ticket iroh://829fbb…f986?addr=127.0.0.1:5680
+wanix mesh-serve: mount with: wanix mount-ls 'iroh://829fbb…f986?addr=127.0.0.1:5680'
 ```
 
 From node A — which doesn't even need to run `mesh-serve` to *import* — mount and read across the wire:
@@ -77,8 +77,8 @@ From node A — which doesn't even need to run `mesh-serve` to *import* — moun
 ```sh
 export NODE_B='iroh://829fbb…f986?addr=127.0.0.1:5680'
 
-wanix-rust mount-ls  "$NODE_B" work          # -> build.js  dataset.txt
-wanix-rust mount-cat "$NODE_B" work/dataset.txt
+wanix mount-ls  "$NODE_B" work          # -> build.js  dataset.txt
+wanix mount-cat "$NODE_B" work/dataset.txt
 # -> data that only lives on node B
 ```
 
@@ -94,11 +94,11 @@ Mounting moves bytes toward you. Sometimes you want the opposite: move the *comp
 
 ```sh
 cd "$ROOT_A"   # empty — that's fine, the job runs against B's files
-wanix-rust cpu --node "$NODE_B" -- qjs /work/build.js
+wanix cpu --node "$NODE_B" -- qjs /work/build.js
 # -> built on node B with B's local files
 ```
 
-`wanix-rust cpu` dials B's exec plane (ALPN `wanix/cpu/1`), **reverse-exports** A's working directory as a scoped namespace, and asks B to run the task with that reverse export as its world. The task runs *on B's CPU, against B's local files*, with A's files reachable through the reverse 9P session. The reverse export is read-only by default; `--write` opts a subtree into read-write so the remote run can write outputs back to A. Paths outside the subtree are denied — the jail invariant is enforced by `ExportScope` in `wanix-cpu`. The grammar is strict: options before `--`, the job command after it, and a missing `--node` is refused at parse time. See [send the agent to the data](/concepts/send-agent-to-the-data) for the agent-shaped version of the same move.
+`wanix cpu` dials B's exec plane (ALPN `wanix/cpu/1`), **reverse-exports** A's working directory as a scoped namespace, and asks B to run the task with that reverse export as its world. The task runs *on B's CPU, against B's local files*, with A's files reachable through the reverse 9P session. The reverse export is read-only by default; `--write` opts a subtree into read-write so the remote run can write outputs back to A. Paths outside the subtree are denied — the jail invariant is enforced by `ExportScope` in `wanix-cpu`. The grammar is strict: options before `--`, the job command after it, and a missing `--node` is refused at parse time. See [send the agent to the data](/concepts/send-agent-to-the-data) for the agent-shaped version of the same move.
 
 ## Status and honest limits
 
@@ -109,7 +109,7 @@ This is real and runnable today, but it is early. Be precise about the edges:
 - **No public multi-user auth.** `mesh-serve` refuses to serve the public endpoint without a grant gate, and `--wanix-services` (which exports `#task`/`#agent` — remote code execution) is **local-trust only**: the parser rejects it on the public endpoint. The trust model is your own keys and explicit per-peer grants, not accounts. Public multi-user auth, Ethernet/vnet, and grant lifecycle are explicitly unimplemented trust-boundary work.
 - **Live pub/sub needs care.** The serve 9P WebSocket handles one frame at a time per connection, so a blocking `#plumb/<topic>/recv` can't interleave with a write on the same connection — live cross-mesh pub/sub wants a second connection.
 
-None of these undercut the core claim. What ships *today* is: two verified nodes, a NAT-crossing QUIC transport keyed on ed25519 identity, default-deny capability grants, file import that round-trips ls/cat/write (and persists on the server host), devices that import for free, and the `#cpu` exec plane end to end — `mesh-serve --cpu` serves the acceptor behind the exec gate and `wanix-rust cpu` runs a cross-node job against the caller's reverse export.
+None of these undercut the core claim. What ships *today* is: two verified nodes, a NAT-crossing QUIC transport keyed on ed25519 identity, default-deny capability grants, file import that round-trips ls/cat/write (and persists on the server host), devices that import for free, and the `#cpu` exec plane end to end — `mesh-serve --cpu` serves the acceptor behind the exec gate and `wanix cpu` runs a cross-node job against the caller's reverse export.
 
 ## Runnable recipe
 

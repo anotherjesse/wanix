@@ -1,1 +1,0 @@
-export { WanixHandle } from "../api/handle.js";

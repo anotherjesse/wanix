@@ -34,7 +34,7 @@ canonicalCaveatFor: []
 
 A single-file qjs handler at `apps/counter.js` increments a per-request counter held in `#kv` — nothing about the state lives in the handler, only in the device.
 
-**What & why.** Most "hello, counter" tutorials wire a database, a connection pool, and a schema before the number even goes up. Wanix asks a smaller question: what if the counter's state were just a file, and the handler never owned it? You write one qjs file that reads a key, adds one, writes it back, and prints the result. You run `wanix-rust serve --wanix-services`, which binds the `#kv` device into the served namespace. You `curl` the route and watch the number climb across requests — even though the handler holds nothing between calls. The state lives in `#kv`; the handler is pure plumbing. That separation is the whole point: state has one home, the device is a `FileSystem`, and "a tiny web app" turns out to be "a file you read and a file you write."
+**What & why.** Most "hello, counter" tutorials wire a database, a connection pool, and a schema before the number even goes up. Wanix asks a smaller question: what if the counter's state were just a file, and the handler never owned it? You write one qjs file that reads a key, adds one, writes it back, and prints the result. You run `wanix serve --wanix-services`, which binds the `#kv` device into the served namespace. You `curl` the route and watch the number climb across requests — even though the handler holds nothing between calls. The state lives in `#kv`; the handler is pure plumbing. That separation is the whole point: state has one home, the device is a `FileSystem`, and "a tiny web app" turns out to be "a file you read and a file you write."
 
 ## The handler: read, increment, write
 
@@ -71,9 +71,9 @@ Two things to notice. First, the handler is *stateless* between invocations — 
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust serve --wanix-services --listen 127.0.0.1:7654 ./project-root
+wanix serve --wanix-services --listen 127.0.0.1:7654 ./project-root
 ```
 
 `--wanix-services` is the single flag that turns the device set on. Without it, the services namespace path never runs, and `#kv` is not bound. With it, `roots.rs:206-211` runs `namespace.bind(Arc::new(KvDevice::new()), ".", "#kv", ...)`, and the served root advertises the inspectable device set `#task`, `#term`, `#kv`, `#pipe`, `#plumb`, `#cas`, `#agent`, `#sites` (`crates/wanix-cli/src/serve/roots.rs:187`). The positional `./project-root` becomes the `.` of the served namespace, so `./project-root/apps/counter.js` shows up at `apps/counter.js` and `#kv/http-counter` sits next to it under the same root.

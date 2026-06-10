@@ -4,7 +4,7 @@ description = "Wanix-native shell: brush-parser syntax with a Wanix executor, co
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/tractordev/wanix"
+repository = "https://github.com/anotherjesse/wanix"
 rust-version = "1.93"
 
 # Explicit package fields (rather than workspace inheritance) so this crate also

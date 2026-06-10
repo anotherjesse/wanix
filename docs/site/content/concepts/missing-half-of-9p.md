@@ -47,21 +47,21 @@ You can watch it work across two processes today. The server exports a host dire
 ```sh
 # build once
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 # Terminal 1 — the server (export)
 SROOT=$(mktemp -d)
 echo "hello from the server" > "$SROOT/greeting.txt"
-wanix-rust serve --root "$SROOT" --p9 127.0.0.1:5640
+wanix serve --root "$SROOT" --p9 127.0.0.1:5640
 ```
 
 The client imports it and reads, writes, and lists *through the mount* — never a local shortcut. The bytes genuinely traverse `Namespace -> RemoteFs -> 9P -> server` (`docs/mesh-the-missing-half-of-9p.md:440-442`):
 
 ```sh
 # Terminal 2 — the client (import)
-wanix-rust mount-ls    tcp://127.0.0.1:5640
-wanix-rust mount-cat   tcp://127.0.0.1:5640 greeting.txt
-wanix-rust mount-write tcp://127.0.0.1:5640 docs/note.txt "written across the wire"
+wanix mount-ls    tcp://127.0.0.1:5640
+wanix mount-cat   tcp://127.0.0.1:5640 greeting.txt
+wanix mount-write tcp://127.0.0.1:5640 docs/note.txt "written across the wire"
 ```
 
 A file written through the client mount appears in the served directory on the server host. Each verb binds the remote into a fresh namespace and runs one operation through it (`crates/wanix-cli/src/mount.rs:1-9`). That round-trip is the proof: Plan 9 *import*, realized.

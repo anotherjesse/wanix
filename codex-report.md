@@ -44,7 +44,7 @@ programs without hand-wiring service files in each example.
 
 First milestone:
 
-- `wanix-rust new qjs|qjs-ts|rust-wasm`
+- `wanix new qjs|qjs-ts|rust-wasm`
 - `/lib/wanix/{fs,task,process}.js`
 - matching `.d.ts` declarations
 - `/bin/help`, `/bin/tree`, `/bin/grep`, `/bin/taskctl`
@@ -60,7 +60,7 @@ Useful pieces:
 - `wanix-qjs.d.ts` for `qjs:std`, `qjs:os`, `scriptArgs`, `print`, `console`,
   and the Wanix helper modules.
 - `tsconfig.wanix-qjs.json`.
-- `wanix-rust qjs-check` or `wanix-rust qjs --check`.
+- `wanix qjs-check` or `wanix qjs --check`.
 - optional `qjs-ts` command that transpiles outside the runtime, then runs
   plain JavaScript in qjs.
 - workbench diagnostics for `wanix:` qjs files.
@@ -186,7 +186,7 @@ Build a recorder that captures:
 - VFS mutation summaries
 - final filesystem digest
 
-Then add `wanix-rust replay` to rerun and assert output/digest. This would make
+Then add `wanix replay` to rerun and assert output/digest. This would make
 demos, agent audit trails, debugging, and runtime compatibility work much
 sharper.
 

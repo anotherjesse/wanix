@@ -103,7 +103,7 @@ impl ConcurrentConnections {
                 process_stderr,
                 "stderr",
                 format!(
-                    "wanix-rust serve: connection {peer_addr} failed: \
+                    "wanix serve: connection {peer_addr} failed: \
                      could not configure blocking mode: {error}\n"
                 )
                 .as_bytes(),
@@ -117,7 +117,7 @@ impl ConcurrentConnections {
         let handle = thread::spawn(move || {
             if let Err(error) = serve_connection(&connection_roots, stream, peer_addr) {
                 let _ = connection_errors.send(format!(
-                    "wanix-rust serve: connection {peer_addr} failed: {error}\n"
+                    "wanix serve: connection {peer_addr} failed: {error}\n"
                 ));
             }
         });
@@ -134,7 +134,7 @@ impl ConcurrentConnections {
                 write_process_output(
                     process_stderr,
                     "stderr",
-                    b"wanix-rust serve: connection worker panicked\n",
+                    b"wanix serve: connection worker panicked\n",
                 )?;
             }
         }
@@ -171,7 +171,7 @@ fn drain_connection_errors(
         write_process_output(
             process_stderr,
             "stderr",
-            b"wanix-rust serve: continuing after connection error\n",
+            b"wanix serve: continuing after connection error\n",
         )?;
     }
     Ok(had_error)

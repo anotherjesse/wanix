@@ -103,7 +103,7 @@ pub(crate) fn spawn_restart_supervisor(
                 backoff = INITIAL_RESTART_BACKOFF;
             }
             eprintln!(
-                "wanix-rust app serve: guest {ended}; restarting in {backoff:?} \
+                "wanix app serve: guest {ended}; restarting in {backoff:?} \
                  (--restart on-failure; the ticket and endpoint are unchanged)"
             );
             // The wedged case leaves the old task running; this loop holds no
@@ -120,7 +120,7 @@ pub(crate) fn spawn_restart_supervisor(
                     }
                     Err(error) => {
                         eprintln!(
-                            "wanix-rust app serve: guest restart failed ({error}); \
+                            "wanix app serve: guest restart failed ({error}); \
                              next attempt in {backoff:?}"
                         );
                     }

@@ -37,7 +37,7 @@ An agent in Wanix is not a chat box bolted onto an editor. It is an operator tha
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 ## Agents are operators, not chat boxes
@@ -50,7 +50,7 @@ Start a serve with the cockpit bundle, the service devices bound in, and a loopb
 
 ```sh
 mkdir -p /tmp/repair-demo
-wanix-rust serve --root /tmp/repair-demo --listen 127.0.0.1:7654 \
+wanix serve --root /tmp/repair-demo --listen 127.0.0.1:7654 \
   --p9 127.0.0.1:7664 --bundle workbench-fs9p --wanix-services
 ```
 
@@ -58,13 +58,13 @@ Now drive a repair by hand against the `#agent` files, through the 9P door. Allo
 
 ```sh
 B=tcp://127.0.0.1:7664
-A=$(wanix-rust mount-cat $B '#agent/new' | tr -d '\n')
-wanix-rust mount-write $B "#agent/$A/prompt" \
+A=$(wanix mount-cat $B '#agent/new' | tr -d '\n')
+wanix mount-write $B "#agent/$A/prompt" \
   "approve: edit broken.js to declare missingValue"
-wanix-rust mount-cat   $B "#agent/$A/pending"
+wanix mount-cat   $B "#agent/$A/pending"
 # [{"action":"edit broken.js to declare missingValue","id":"req-1"}]
-wanix-rust mount-write $B "#agent/$A/ctl" "approve req-1"
-wanix-rust mount-cat   $B "#agent/$A/status"     # fake idle turns=1
+wanix mount-write $B "#agent/$A/ctl" "approve req-1"
+wanix mount-cat   $B "#agent/$A/status"     # fake idle turns=1
 ```
 
 (`<id>/events` is the live JSONL stream of the same turn — but it is a *stream*, and a collected `mount-cat` of it blocks until the session closes; the `pending` snapshot is the non-blocking way to see the parked request. Inside a Wanix shell, plain `cat`/`echo` on these paths work directly.)

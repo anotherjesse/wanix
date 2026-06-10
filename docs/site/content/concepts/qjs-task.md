@@ -44,8 +44,8 @@ Build the CLI and run a script:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust qjs examples/qjs-demo.js
+alias wanix='./target/debug/wanix'
+wanix qjs examples/qjs-demo.js
 ```
 
 What ran is a Wanix `qjs` task. The driver that claimed it is `QuickJsTaskDriver`: its `check` returns true for any task whose program ends in `.js`, and its `start` reads that script out of the task's namespace and evaluates it (`crates/wanix-qjs/src/driver.rs:82-102`). That is the whole registration contract — a task kind is "a driver that recognizes a command and knows how to run it." Allocate a task whose `cmd` is `main.js`, start it, and the qjs driver is the one that answers. (`.wasm` files are claimed the same way by a sibling driver; see [compiled wasm task driver](/concepts/compiled-wasm-task-driver).)

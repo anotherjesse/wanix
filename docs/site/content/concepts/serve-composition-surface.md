@@ -2,7 +2,7 @@
 title: Serve as One Local Composition Surface
 slug: concepts/serve-composition-surface
 pageType: concept
-oneLiner: wanix-rust serve combines static HTTP, the discovery doc, direct 9P over WebSocket, the qjs-shell WebSocket, and the HTTP-app route on one listener without making the 9P server own HTTP or browser policy.
+oneLiner: wanix serve combines static HTTP, the discovery doc, direct 9P over WebSocket, the qjs-shell WebSocket, and the HTTP-app route on one listener without making the 9P server own HTTP or browser policy.
 audience: [developer]
 tags: [serve, cli, shipped, caveat, single-frame-serve, loopback-only]
 sourceRefs:
@@ -31,18 +31,18 @@ honestLimits:
 
 # Serve as One Local Composition Surface
 
-`wanix-rust serve` combines static HTTP, the discovery doc, direct 9P over WebSocket, the qjs-shell WebSocket, and the HTTP-app route on one listener without making the 9P server own HTTP or browser policy.
+`wanix serve` combines static HTTP, the discovery doc, direct 9P over WebSocket, the qjs-shell WebSocket, and the HTTP-app route on one listener without making the 9P server own HTTP or browser policy.
 
 A browser cockpit, a v86 VM, a QEMU launcher, and a plain `curl` all want different things from the same Wanix world: static assets, a route map, a binary 9P pipe, a terminal socket, an app endpoint. `serve` is the one local listener that multiplexes all of them off a single bound port, dispatching each request to the right adapter. The 9P server underneath never learns what HTTP is, what a bundle is, or which clients are trusted. That separation is the whole point: `serve` owns the composition, the runtime owns the files.
 
 ## Show it: one bind, many routes
 
-Run the binary first. The flow's standard build step is `cargo build --package wanix-cli; alias wanix-rust='./target/debug/wanix-rust'`. Then:
+Run the binary first. The flow's standard build step is `cargo build --package wanix-cli; alias wanix='./target/debug/wanix'`. Then:
 
 ```sh
-wanix-rust serve --wanix-services
-# wanix-rust serve: serving . files with Wanix overlay
-# wanix-rust serve: listening on http://127.0.0.1:7654/
+wanix serve --wanix-services
+# wanix serve: serving . files with Wanix overlay
+# wanix serve: listening on http://127.0.0.1:7654/
 ```
 
 That single process now answers, on `127.0.0.1:7654`, every route below — and the dispatch order is exactly the `or_else` chain in `crates/wanix-cli/src/serve/http/routes.rs:20-25`:

@@ -316,7 +316,7 @@ is no "admin port" or "console mode."
 
 The merged story, end to end:
 
-1. A user runs `wanix-rust serve --bundle cockpit $WORKSPACE` (or, for
+1. A user runs `wanix serve --bundle cockpit $WORKSPACE` (or, for
    backward compatibility, `--bundle workbench-fs9p`). The serve process
    starts the cpu runtime: `#task`, `#term`, `#agent`, `#kv`, `#pipe`,
    `#plumb`, `#cas`, `#cpu` are bound under the local namespace. The

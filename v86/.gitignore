@@ -1,6 +1,0 @@
-/bundle/*
-!/bundle/seabios.bin
-!/bundle/v86.wasm
-!/bundle/vgabios.bin
-/lib.js
-/v86.tgz

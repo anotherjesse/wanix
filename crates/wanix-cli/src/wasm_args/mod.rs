@@ -1,4 +1,4 @@
-//! Argument parsing for the `wanix-rust wasm` subcommand.
+//! Argument parsing for the `wanix wasm` subcommand.
 //!
 //! `wasm` is the compiled `wasm32-wasi` sibling of `qjs`, so it shares the same
 //! invocation surface for the four flags that make sense for a command-style

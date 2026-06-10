@@ -62,7 +62,7 @@ The obvious alternative is to write the count to `apps/counter.count.txt` on the
 
 The honesty in the module doc is the whole shape of the device. The map is created empty (`crates/wanix-kv/src/lib.rs:61-65`) and lives for exactly as long as the serve process that bound it. Stop serve, and the keys are gone. There is no disk file, no WAL, no recovery.
 
-Two consequences follow that surprise newcomers. First, a `wanix-rust qjs script.js` invocation that does *not* mount the served namespace allocates its own fresh `KvDevice`, so a counter in that standalone process resets to its starting value every run — the state-sharing only happens for tasks that resolve into the same served namespace. Second, "make this durable" is never "add a flag to `#kv`." The map stays in-memory on purpose; durability is a separate, explicit act.
+Two consequences follow that surprise newcomers. First, a `wanix qjs script.js` invocation that does *not* mount the served namespace allocates its own fresh `KvDevice`, so a counter in that standalone process resets to its starting value every run — the state-sharing only happens for tasks that resolve into the same served namespace. Second, "make this durable" is never "add a flag to `#kv`." The map stays in-memory on purpose; durability is a separate, explicit act.
 
 That act is freezing the interesting keys into a capsule. A `.wcap` capsule snapshots a Wanix world into a portable, content-addressed artifact you can load elsewhere (see [wanix capsule](/concepts/wanix-capsule)). When you want a counter to outlive a restart, you do not blur the `#kv` line — you capture the key into a capsule and reload it. The boundary between "live, fast, ephemeral" and "frozen, portable, durable" stays a bright line you crossed on purpose.
 
@@ -78,5 +78,5 @@ That act is freezing the interesting keys into a capsule. A `.wcap` capsule snap
 
 - **In-memory only.** The store is a `BTreeMap` in the serve process (`crates/wanix-kv/src/lib.rs:21`, `61-65`). Keys exist only while that process runs; a restart starts empty. To persist, freeze chosen keys into a capsule — durability is not a `#kv` option.
 - **Durable and content-addressed backing is a follow-up, not shipped.** The module doc states this directly (`crates/wanix-kv/src/lib.rs:6-7`); do not read "smallest database" as "persistent database."
-- **Standalone tasks do not share state.** Only tasks resolving into a served namespace see the same map; a bare `wanix-rust qjs` run gets its own fresh device and its own counter, which resets each run.
+- **Standalone tasks do not share state.** Only tasks resolving into a served namespace see the same map; a bare `wanix qjs` run gets its own fresh device and its own counter, which resets each run.
 - **Whole-value writes.** A write replaces the entire value on close (`crates/wanix-kv/src/files.rs:70-76`); there is no append or partial-update mode.

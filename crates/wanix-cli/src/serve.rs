@@ -171,7 +171,7 @@ fn write_serve_startup_status(
         process_stderr,
         "stderr",
         format!(
-            "wanix-rust serve: serving {} files with Wanix overlay\n",
+            "wanix serve: serving {} files with Wanix overlay\n",
             roots.static_root.display()
         )
         .as_bytes(),
@@ -211,9 +211,9 @@ fn serve_url_status(local_addr: SocketAddr, bundle: Option<&str>) -> String {
     let host = display_host(local_addr);
     match bundle {
         Some(bundle) => {
-            format!("wanix-rust serve: bundle available at http://{host}/?bundle={bundle}\n")
+            format!("wanix serve: bundle available at http://{host}/?bundle={bundle}\n")
         }
-        None => format!("wanix-rust serve: listening on http://{host}/\n"),
+        None => format!("wanix serve: listening on http://{host}/\n"),
     }
 }
 

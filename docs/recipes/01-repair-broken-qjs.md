@@ -7,7 +7,7 @@ for approval, and write the fix back — all as plain reads and writes on the
 
 This is the demo path the workbench calls "Run Agent Repair Demo". Under the
 hood it is just a few file operations against the `#agent/<id>/...` service
-files exposed by `wanix-rust serve --wanix-services`.
+files exposed by `wanix serve --wanix-services`.
 
 Source:
 
@@ -47,7 +47,7 @@ JS
 Confirm the program is in fact broken before we hand it to the agent:
 
 ```sh
-wanix-rust qjs --cwd /tmp/repair-demo/agent broken.js
+wanix qjs --cwd /tmp/repair-demo/agent broken.js
 ```
 
 You should see `ReferenceError: missingValue is not defined` on stderr and a
@@ -62,7 +62,7 @@ editor entry point) and `--wanix-services`, which binds the `#agent`,
 the served namespace.
 
 ```sh
-wanix-rust serve \
+wanix serve \
   --root /tmp/repair-demo \
   --addr 127.0.0.1:7654 \
   --bundle workbench-fs9p \
@@ -93,8 +93,8 @@ identical to what a real engine produces.
 On startup `serve` prints:
 
 ```
-wanix-rust serve: serving /tmp/repair-demo files with Wanix overlay
-wanix-rust serve: bundle available at http://127.0.0.1:7654/?bundle=workbench-fs9p
+wanix serve: serving /tmp/repair-demo files with Wanix overlay
+wanix serve: bundle available at http://127.0.0.1:7654/?bundle=workbench-fs9p
 ```
 
 [serve-command]: ../../crates/wanix-cli/src/serve/command.rs
@@ -129,7 +129,7 @@ You can do them by hand from any 9P client; the cockpit just automates them.
 
    ```sh
    # Equivalent to fsys.readFile("/#agent/new") in the workbench.
-   id=$(wanix-rust mount-cat tcp://127.0.0.1:7654 '#agent/new' | tr -d '\n')
+   id=$(wanix mount-cat tcp://127.0.0.1:7654 '#agent/new' | tr -d '\n')
    echo "session: $id"
    ```
 
@@ -148,7 +148,7 @@ You can do them by hand from any 9P client; the cockpit just automates them.
    editing your file:
 
    ```sh
-   wanix-rust mount-write tcp://127.0.0.1:7654 \
+   wanix mount-write tcp://127.0.0.1:7654 \
      "#agent/$id/prompt" \
      "approve: edit /tmp/repair-demo/agent/broken.js to declare missingValue"
    ```
@@ -161,7 +161,7 @@ You can do them by hand from any 9P client; the cockpit just automates them.
    `AgentSession::read_events`, returning one JSONL line per event:
 
    ```sh
-   wanix-rust mount-cat tcp://127.0.0.1:7654 "#agent/$id/events"
+   wanix mount-cat tcp://127.0.0.1:7654 "#agent/$id/events"
    ```
 
    You will see a `turn.started`, then an `approval.needed` with an `id`
@@ -169,7 +169,7 @@ You can do them by hand from any 9P client; the cockpit just automates them.
    inspect what is pending:
 
    ```sh
-   wanix-rust mount-cat tcp://127.0.0.1:7654 "#agent/$id/pending"
+   wanix mount-cat tcp://127.0.0.1:7654 "#agent/$id/pending"
    # -> [{"id":"req-1","action":"edit /tmp/repair-demo/agent/broken.js ..."}]
    ```
 
@@ -177,7 +177,7 @@ You can do them by hand from any 9P client; the cockpit just automates them.
    handler accepts `approve <request-id>`, `deny <request-id>`, and `close`:
 
    ```sh
-   wanix-rust mount-write tcp://127.0.0.1:7654 \
+   wanix mount-write tcp://127.0.0.1:7654 \
      "#agent/$id/ctl" "approve req-1"
    ```
 
@@ -191,7 +191,7 @@ You can do them by hand from any 9P client; the cockpit just automates them.
    turn so the device drops the session and frees the engine handle:
 
    ```sh
-   wanix-rust mount-write tcp://127.0.0.1:7654 "#agent/$id/ctl" "close"
+   wanix mount-write tcp://127.0.0.1:7654 "#agent/$id/ctl" "close"
    ```
 
 [agent-fake]: ../../crates/wanix-agent/src/fake.rs
@@ -216,7 +216,7 @@ rerun exit code, and the final result file.
 A successful repair leaves a normal qjs program that runs cleanly:
 
 ```sh
-wanix-rust qjs --cwd /tmp/repair-demo/agent broken.js
+wanix qjs --cwd /tmp/repair-demo/agent broken.js
 # wrote out/result.txt
 cat /tmp/repair-demo/agent/out/result.txt
 # <the value the agent chose, upper-cased>
@@ -240,7 +240,7 @@ cat /tmp/repair-demo/agent/out/result.txt
 To run the same loop against a real LLM, swap the engine on the CLI path:
 
 ```sh
-wanix-rust agent --cwd /tmp/repair-demo/agent \
+wanix agent --cwd /tmp/repair-demo/agent \
   "Repair broken.js so it writes out/result.txt"
 ```
 

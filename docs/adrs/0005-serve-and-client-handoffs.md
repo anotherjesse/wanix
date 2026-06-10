@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-`wanix-rust serve` is the local composition surface for browser filesystem,
+`wanix serve` is the local composition surface for browser filesystem,
 workbench, VS Code, v86, QEMU-launcher, and local tool clients. It needs to
 serve static assets, discovery documents, and protocol routes from one listener
 without making the 9P server or core runtime own HTTP, WebSocket, browser

@@ -90,7 +90,7 @@ Nuance:
 - `1aa31a3` `path_remove_directory`
 - `5d734eb` `fd_filestat_set_size`
 - `7af33c8` `fd_tell`
-- `df60a54` turnkey `wanix-rust wasm`
+- `df60a54` turnkey `wanix wasm`
 
 Current status:
 
@@ -105,7 +105,7 @@ Current status:
 - Included and better: task fd/env/cwd/argv setup is shared through
   `crates/wanix-wasi/src/task_config.rs`, so qjs and wasm follow the same ADR 0002
   fd-mirroring/task-state contract where possible.
-- Included: `wanix-rust wasm` dispatch is wired through the collected CLI path
+- Included: `wanix wasm` dispatch is wired through the collected CLI path
   (`crates/wanix-cli/src/collected.rs`, `crates/wanix-cli/src/wasm.rs`,
   `crates/wanix-cli/src/wasm_args/mod.rs`) rather than the spike's streaming
   `wasm_run.rs` shape.
@@ -182,7 +182,7 @@ Cleanup from this area:
 
 Current status:
 
-- Included: `wanix-rust wasm [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT |
+- Included: `wanix wasm [--env KEY=VALUE ...] [--cwd DIR] [--stdin TEXT |
   --stdin-file PATH|-] FILE.wasm [args...]` exists.
 - Included and better: the CLI uses the repo's collected-output `CliOutput` model instead of
   the spike's streaming `wasm_run.rs` file.
@@ -199,7 +199,7 @@ Current status:
 
 Cleanup from this area:
 
-- `crates/wanix-cli/src/help.rs` still describes `wanix-rust wasm` as
+- `crates/wanix-cli/src/help.rs` still describes `wanix wasm` as
   "not yet a task driver". Replace that with language matching current reality:
   command-style WASI subset, no `poll_oneoff` readiness, **also** available as a first-class
   Wanix task driver for `.wasm` task programs.
@@ -536,8 +536,8 @@ collected convention (capture output into `CaptureFile`, return `CliOutput`).
   `COLLECTED_COMMANDS` and a `fn run_wasm_collected(rest, stdin)` that calls
   `parse_wasm_command` then `run_wasm`.
 - `crates/wanix-cli/src/help.rs`: add the `wasm` usage line, matching the existing
-  `wanix-rust <cmd>` convention in `USAGE` (NOT `wanix`):
-  `wanix-rust wasm [--env KEY=VALUE ...] [--cwd DIR] [--stdin ...] FILE.wasm [args...]`.
+  `wanix <cmd>` convention in `USAGE` (NOT `wanix`):
+  `wanix wasm [--env KEY=VALUE ...] [--cwd DIR] [--stdin ...] FILE.wasm [args...]`.
   Note the WASI subset (command-style, no poll readiness) so users don't expect full Preview1.
 - `crates/wanix-cli/Cargo.toml`: add `wanix-wasm` dependency (and a dev-dep for the bench
   examples in Step 6).
@@ -592,7 +592,7 @@ group them into committable units.
   remove the resolved AGENTS.md follow-up line. `cargo test -p wanix-qjs-engine -p wanix-qjs`
   green. Commit.
 - **A5 — CLI `wasm` subcommand** (Step 5). Depends on A3. Collected-model handler, wasm-specific
-  parser, `wanix-rust wasm` help line noting Tier-1/not-a-driver. Parser boundary tests. Commit.
+  parser, `wanix wasm` help line noting Tier-1/not-a-driver. Parser boundary tests. Commit.
 - **A6 — benchmarks + docs + differential test + capability map** (Step 6). Depends on A3+A5.
   Add the capability-map line in `AGENTS.md` framing wasm as a Tier-1 demo runner (explicitly
   *not* a task driver). `shared_vfs_differential` green. Commit.
@@ -688,7 +688,7 @@ Revised after Codex review of the first draft:
 - **[P3]** Step 1: narrowed the MemFs symlink promise to create/readlink/lstat (no follow-on-open).
 
 Second review pass:
-- **[P3]** Step 5: help text uses `wanix-rust wasm` (the actual `USAGE` prefix), not `wanix wasm`.
+- **[P3]** Step 5: help text uses `wanix wasm` (the actual `USAGE` prefix), not `wanix wasm`.
 - **[P3]** Step 1: added an lstat-style test (symlink `metadata` reports `FileType::Symlink` +
   target length) so the claimed scope is proven, not just create/readlink.
 

@@ -36,7 +36,7 @@ The [chatroom flow](/learn/build-a-chatroom) ends with a working room that only 
 ## 1. The idea: names are origins, origins are namespaces
 
 ```sh
-wanix-rust serve --root /tmp/empty \
+wanix serve --root /tmp/empty \
   --bind chat=examples/chatroom/web \
   --bind "chat=$T" \
   --bind docs=docs/site/content \

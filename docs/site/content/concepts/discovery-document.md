@@ -39,8 +39,8 @@ Start a services-enabled serve and curl the well-known document:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust serve --wanix-services --bundle workbench-fs9p &
+alias wanix='./target/debug/wanix'
+wanix serve --wanix-services --bundle workbench-fs9p &
 
 curl -s http://localhost:7654/.well-known/wanix.json | jq .routes.p9
 ```

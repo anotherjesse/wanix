@@ -58,11 +58,11 @@ The cpu plane runs the inverse. Dial the node that holds the data and hand it a 
 
 ```sh
 cargo build --locked --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 # Run a qjs job on the data node; reverse-export the local cwd read-only.
 # (The data node serves the exec plane with `mesh-serve --cpu`.)
-wanix-rust cpu --node iroh://A -- qjs build.js
+wanix cpu --node iroh://A -- qjs build.js
 ```
 
 The grammar is `cpu --node TICKET [--cwd DIR] [--write] [--env KEY=VALUE ...] -- KIND PROGRAM [ARG ...]` (`crates/wanix-cli/src/cpu/parse.rs:32-39`): options precede the `--` separator, and everything after it is the job command, so the program's own flags are never confused for cpu options. The captured stdout, stderr, and exit code come back on a separate control stream while the namespace traffic rides its own.
@@ -86,7 +86,7 @@ pub fn grant(mut self, service: GrantedService) -> Self { … }
 
 ```sh
 # Let the remote build write its outputs back into your subtree.
-wanix-rust cpu --node iroh://A --cwd work --write -- wasm build.wasm
+wanix cpu --node iroh://A --cwd work --write -- wasm build.wasm
 ```
 
 This is a [capability as a bind](/concepts/capability-is-a-bind), not an ACL check: the scope materializes as a `SubtreeFs` re-rooted at the prefix and rights-gated, then bound into a fresh `Namespace` (`crates/wanix-cpu/src/scope.rs:111-125`). What you did not name is unreachable because it was never bound, not because a guard said no.

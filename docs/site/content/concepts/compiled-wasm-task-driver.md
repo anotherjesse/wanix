@@ -41,13 +41,13 @@ The first build step in any flow brings the binary up:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 Then run a compiled module the same way you run a script:
 
 ```sh
-wanix-rust wasm ./guest.wasm /in.txt /out.txt
+wanix wasm ./guest.wasm /in.txt /out.txt
 ```
 
 `guest.wasm` reads `/in.txt`, writes `/out.txt`, and exits — no host glue. The CLI preopens the working directory as the guest's namespace root, builds argv as `[program, args...]`, captures stdout/stderr, and returns the guest's exit code (`crates/wanix-cli/src/wasm.rs:30-48`). This is the standalone one-shot runner: it compiles and runs a `.wasm` file directly and does *not* go through the task model (`crates/wanix-cli/src/wasm.rs:9-15`). The task-driver integration is the other half, below.

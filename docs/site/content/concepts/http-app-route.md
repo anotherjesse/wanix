@@ -44,7 +44,7 @@ Bring up a services-enabled serve, drop a JavaScript file under `apps/`, and cur
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 mkdir -p root/apps
 cat > root/apps/hello.js <<'EOF'
@@ -53,7 +53,7 @@ std.out.puts("wanix http app " + std.getenv("WANIX_HTTP_APP") +
              " saw " + std.getenv("WANIX_HTTP_TARGET") + "\n");
 EOF
 
-wanix-rust serve --wanix-services --p9-root root &
+wanix serve --wanix-services --p9-root root &
 curl -i http://127.0.0.1:8080/.wanix/app/hello
 ```
 

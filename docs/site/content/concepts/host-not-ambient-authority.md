@@ -37,7 +37,7 @@ Create a host directory and put a file in it:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 mkdir -p /tmp/wanix-host
 printf 'native mount' > /tmp/wanix-host/input.txt
@@ -46,7 +46,7 @@ printf 'native mount' > /tmp/wanix-host/input.txt
 Run a JavaScript task that reads and writes through the mount (`rust-walkthrough.md:141-178`):
 
 ```sh
-wanix-rust qjs --mount /tmp/wanix-host=host examples/qjs-host-mount.js
+wanix qjs --mount /tmp/wanix-host=host examples/qjs-host-mount.js
 ```
 
 ```text

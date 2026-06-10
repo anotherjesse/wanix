@@ -28,22 +28,22 @@ honestLimits:
 
 fs9p (plain browser filesystem), workbench-fs9p (the cockpit / Code OSS shell), and direct-v86 (browser emulator handoff), each a generated HTML page that reads discovery.
 
-`wanix-rust serve` exports a Wanix namespace over 9P. A bundle is the optional *browser front end* it ships alongside that export: when you pass `--bundle <name>`, `serve` hands the browser a generated HTML page whose only job is to fetch the discovery document and wire itself up to the routes it finds there. There are exactly three, and they are chosen by a single `match` (`crates/wanix-cli/src/serve/html.rs:13-20`). None of them is a runtime; each is a frontend over the same direct-9P contract.
+`wanix serve` exports a Wanix namespace over 9P. A bundle is the optional *browser front end* it ships alongside that export: when you pass `--bundle <name>`, `serve` hands the browser a generated HTML page whose only job is to fetch the discovery document and wire itself up to the routes it finds there. There are exactly three, and they are chosen by a single `match` (`crates/wanix-cli/src/serve/html.rs:13-20`). None of them is a runtime; each is a frontend over the same direct-9P contract.
 
 ## Show it: pick a bundle, get a page
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 # A plain filesystem browser
-wanix-rust serve --bundle fs9p
+wanix serve --bundle fs9p
 
 # The cockpit (Code OSS workbench)
-wanix-rust serve --wanix-services --bundle workbench-fs9p
+wanix serve --wanix-services --bundle workbench-fs9p
 
 # A browser v86 emulator handoff over a prepared guest root
-wanix-rust serve --root ./guest-root --bundle direct-v86
+wanix serve --root ./guest-root --bundle direct-v86
 ```
 
 Each invocation serves an `index.html` for that bundle and nothing else changes about the underlying 9P export. The three names are constants: `FS9P_BUNDLE = "fs9p"`, `WORKBENCH_FS9P_BUNDLE = "workbench-fs9p"` (`crates/wanix-cli/src/serve.rs:26-27`), and `DIRECT_V86_BUNDLE = "direct-v86"` (`crates/wanix-cli/src/serve/direct_v86.rs:10`). An unknown bundle name returns `None` from `bundle_html` and serves no page (`crates/wanix-cli/src/serve/html.rs:13-20`).

@@ -2,7 +2,7 @@
 title: Recipe 06 — Compose a Volume and Two Tools in One Shell Across the Mesh
 slug: recipes/06-compose-volume-and-tools
 pageType: use-case
-oneLiner: Serve a demo-notes volume and the upper/sha256 tools as three mesh resources, mount all three into one wanix-rust sh namespace, pipe a remote file through a remote tool back into the remote volume, then drive the raw job protocol with no sugar.
+oneLiner: Serve a demo-notes volume and the upper/sha256 tools as three mesh resources, mount all three into one wanix sh namespace, pipe a remote file through a remote tool back into the remote volume, then drive the raw job protocol with no sugar.
 audience: [developer]
 tags: [mesh, cli, tools, volumes, shell, shipped, caveat]
 sourceRefs:
@@ -35,7 +35,7 @@ canonicalCaveatFor: []
 
 # Recipe 06 — Compose a Volume and Two Tools in One Shell Across the Mesh
 
-Serve a `demo-notes` volume and the `upper`/`sha256` tools as three mesh resources, mount all three into one `wanix-rust sh` namespace, pipe a remote file through a remote tool back into the remote volume, then drive the raw job protocol with no sugar.
+Serve a `demo-notes` volume and the `upper`/`sha256` tools as three mesh resources, mount all three into one `wanix sh` namespace, pipe a remote file through a remote tool back into the remote volume, then drive the raw job protocol with no sugar.
 
 **What & why.** Three serves, three tickets, one shell line. The point is that "run a remote tool on a remote file and store the result remotely" needs no new verb: a volume is a `FileSystem`, a tool is a `FileSystem`, and the consuming shell just resolves paths. Everything below ran verbatim on one machine over loopback (tickets shortened to a recognizable prefix; yours will differ). The conceptual walkthrough is [Compose volumes and tools](/learn/compose-volumes-and-tools).
 
@@ -43,13 +43,13 @@ Serve a `demo-notes` volume and the `upper`/`sha256` tools as three mesh resourc
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 ## 1. Create and seed the volume
 
 ```sh
-wanix-rust volume create demo-notes
+wanix volume create demo-notes
 # created volume demo-notes at /root/.wanix/volumes/demo-notes
 printf 'wanix makes the mesh feel local\n' > ~/.wanix/volumes/demo-notes/hello.txt
 ```
@@ -59,14 +59,14 @@ A volume is a host directory plus its own persisted ed25519 identity (`~/.wanix/
 ## 2. Serve the volume (terminal 1)
 
 ```sh
-wanix-rust volume serve --volume demo-notes --addr 127.0.0.1:0
+wanix volume serve --volume demo-notes --addr 127.0.0.1:0
 ```
 
 The process parks forever (Ctrl-C to stop) and prints one two-line record per volume on stderr:
 
 ```text
 demo-notes	iroh://6e8a49fe...?addr=127.0.0.1:38119
-# mount with: wanix-rust mount-ls 'iroh://6e8a49fe...?addr=127.0.0.1:38119'
+# mount with: wanix mount-ls 'iroh://6e8a49fe...?addr=127.0.0.1:38119'
 ```
 
 `iroh://6e8a49fe...` (64 hex chars in full) is the volume's public key; `?addr=` is a route hint. Stop and restart the serve and the peer half is identical while the port changes — copy the fresh ticket after any restart.
@@ -74,22 +74,22 @@ demo-notes	iroh://6e8a49fe...?addr=127.0.0.1:38119
 ## 3. Serve the tools (terminal 2)
 
 ```sh
-wanix-rust tool serve --tool upper --tool sha256 --listen 127.0.0.1:0
+wanix tool serve --tool upper --tool sha256 --listen 127.0.0.1:0
 ```
 
 `upper` and `sha256` are built-in runners; serving *your own host programs* from a `tools.toml` is [Recipe 08](/recipes/08-real-tools-with-config). Port `0` is required when serving more than one tool (each gets its own endpoint). One record per tool, same format:
 
 ```text
 upper	iroh://2bcb5813...?addr=127.0.0.1:52164
-# mount with: wanix-rust mount-ls 'iroh://2bcb5813...?addr=127.0.0.1:52164'
+# mount with: wanix mount-ls 'iroh://2bcb5813...?addr=127.0.0.1:52164'
 sha256	iroh://ae985229...?addr=127.0.0.1:46571
-# mount with: wanix-rust mount-ls 'iroh://ae985229...?addr=127.0.0.1:46571'
+# mount with: wanix mount-ls 'iroh://ae985229...?addr=127.0.0.1:46571'
 ```
 
 Sanity-check a tool root — the whole API is five files:
 
 ```sh
-wanix-rust mount-ls 'iroh://2bcb5813...?addr=127.0.0.1:52164'
+wanix mount-ls 'iroh://2bcb5813...?addr=127.0.0.1:52164'
 ```
 
 ```text
@@ -109,7 +109,7 @@ VOL='iroh://6e8a49fe...?addr=127.0.0.1:38119'
 UP='iroh://2bcb5813...?addr=127.0.0.1:52164'
 SHA='iroh://ae985229...?addr=127.0.0.1:46571'
 
-wanix-rust sh -c 'cat /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt' \
+wanix sh -c 'cat /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt' \
   --mount-mesh "$VOL=/vol/notes" --mount-mesh "$UP=/n/upper" --mount-mesh "$SHA=/n/sha256"
 # job: /n/upper/jobs/j6ad9f09ad9bc2437      <- stderr; exit 0
 ```
@@ -129,7 +129,7 @@ WANIX MAKES THE MESH FEEL LOCAL
 Hash the new file with the third resource, and cross-check with a host tool:
 
 ```sh
-wanix-rust sh -c 'cat /vol/notes/HELLO.txt | tool /n/sha256' \
+wanix sh -c 'cat /vol/notes/HELLO.txt | tool /n/sha256' \
   --mount-mesh "$VOL=/vol/notes" --mount-mesh "$SHA=/n/sha256"
 ```
 
@@ -148,13 +148,13 @@ sha256sum ~/.wanix/volumes/demo-notes/HELLO.txt
 The ticket dance above is the no-catalog fallback. Add `--register NAME` to each serve (`volume serve --volume demo-notes ... --register demo-notes`, `tool serve --tool upper ... --register upper`) and the composition line shrinks to names that resolve through `~/.wanix/catalog` at launch — executed verbatim:
 
 ```sh
-wanix-rust sh -c 'cat /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt' \
+wanix sh -c 'cat /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt' \
   --mount-mesh demo-notes=/vol/notes --mount-mesh upper=/n/upper
 ```
 
 ```text
-wanix-rust: name 'demo-notes' -> iroh://a4166b05...?addr=127.0.0.1:40213 (resolved through the catalog at launch)
-wanix-rust: name 'upper' -> iroh://8c7a7009...?addr=127.0.0.1:54872 (resolved through the catalog at launch)
+wanix: name 'demo-notes' -> iroh://a4166b05...?addr=127.0.0.1:40213 (resolved through the catalog at launch)
+wanix: name 'upper' -> iroh://8c7a7009...?addr=127.0.0.1:54872 (resolved through the catalog at launch)
 job: /n/upper/jobs/j5fc61d9fe59708e6
 ```
 
@@ -162,7 +162,7 @@ Same result, no hex; the stderr audit lines record what each name resolved to. T
 
 ## 5. The raw job protocol (no `tool` sugar)
 
-The `tool` builtin is convenience over visible files. Drive one job by hand in the interactive REPL (`wanix-rust sh` with no `-c` — the same `--mount-mesh` flags). One session is convenient, not required: the CLI dials every mount with your persisted dialer identity, so a later invocation is the same principal and still sees this job (step 6).
+The `tool` builtin is convenience over visible files. Drive one job by hand in the interactive REPL (`wanix sh` with no `-c` — the same `--mount-mesh` flags). One session is convenient, not required: the CLI dials every mount with your persisted dialer identity, so a later invocation is the same principal and still sees this job (step 6).
 
 ```text
 / $ cat < /n/upper/new
@@ -184,7 +184,7 @@ RAW PROTOCOL, NO SUGAR
 When a job fails, the taxonomy stays visible through the builtin too — pipe invalid UTF-8 into `upper` and stderr carries the `result.json` error plus the job's `err` diagnostics, with a nonzero exit:
 
 ```sh
-wanix-rust sh -c 'cat /vol/notes/blob.bin | tool /n/upper' \
+wanix sh -c 'cat /vol/notes/blob.bin | tool /n/upper' \
   --mount-mesh "$VOL=/vol/notes" --mount-mesh "$UP=/n/upper"
 ```
 
@@ -201,9 +201,9 @@ input is not valid UTF-8
 Identity comes from the QUIC handshake, never from a payload. The CLI dials every mount with one persisted key (`~/.wanix/dialer.key`, created on first dial), so a job allocated in one invocation is still yours from the next:
 
 ```sh
-wanix-rust sh -c 'cat < /n/upper/new' --mount-mesh "$UP=/n/upper"
+wanix sh -c 'cat < /n/upper/new' --mount-mesh "$UP=/n/upper"
 # j31770e20a12797a3
-wanix-rust sh -c 'cat /n/upper/jobs/j31770e20a12797a3/status' --mount-mesh "$UP=/n/upper"
+wanix sh -c 'cat /n/upper/jobs/j31770e20a12797a3/status' --mount-mesh "$UP=/n/upper"
 ```
 
 ```text

@@ -30,7 +30,7 @@ canonicalCaveatFor: []
 
 Every cockpit operation is a 9P file read or write through `WanixP9Handle`; there is no MessagePort/CBOR bridge and no `globalThis.Wanix` in the Rust-hosted path.
 
-The browser cockpit is a VS Code / Code OSS web extension, and it would be easy to assume it talks to the Rust runtime through some bespoke editor RPC. It does not. When you boot `wanix-rust serve --bundle workbench-fs9p --wanix-services`, the cockpit opens one WebSocket to the served 9P endpoint and does *everything* — browse the tree, edit a file, drive a task, inspect a device — as 9P `walk`/`open`/`read`/`write`/`clunk` exchanges. The rule is worth stating flatly: in the Rust-hosted path there is no second channel. Open a file, read it, write it. That is the whole API surface, and it is the same one a native shell or a remote peer uses.
+The browser cockpit is a VS Code / Code OSS web extension, and it would be easy to assume it talks to the Rust runtime through some bespoke editor RPC. It does not. When you boot `wanix serve --bundle workbench-fs9p --wanix-services`, the cockpit opens one WebSocket to the served 9P endpoint and does *everything* — browse the tree, edit a file, drive a task, inspect a device — as 9P `walk`/`open`/`read`/`write`/`clunk` exchanges. The rule is worth stating flatly: in the Rust-hosted path there is no second channel. Open a file, read it, write it. That is the whole API surface, and it is the same one a native shell or a remote peer uses.
 
 ## Show it: one handle, file verbs all the way down
 

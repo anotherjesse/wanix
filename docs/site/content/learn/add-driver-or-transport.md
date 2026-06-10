@@ -45,7 +45,7 @@ Build once, then follow either branch:
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 ## Branch A: a task driver is `check` + `start`
@@ -53,7 +53,7 @@ alias wanix-rust='./target/debug/wanix-rust'
 Watch the effect first. A `.wasm` cmd auto-starts as a task and reports an exit (the fixture guest lists a directory in its namespace — `/` maps to your working directory here):
 
 ```sh
-wanix-rust wasm crates/wanix-wasm/fixtures/rust-guest.wasm --list /
+wanix wasm crates/wanix-wasm/fixtures/rust-guest.wasm --list /
 # rust-wasm: / has 48 entries
 # ...
 ```

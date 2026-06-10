@@ -43,10 +43,10 @@ Both answers are real systems. The difference is where the kernel lives.
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 # The kernel is this process, not a tab.
-wanix-rust qjs examples/qjs-demo.js
+wanix qjs examples/qjs-demo.js
 ```
 
 That command runs JavaScript outside Chrome as a Wanix task: it reads and writes files through a namespace, prints through Wanix stdio, exits with an observable status, and can read `#task/self/id` to prove task context crossed into QuickJS (`docs/rust-vs-go-wanix.md:182-190`). No DOM, no service worker, no `syscall/js`. The runtime is the process you launched. That is "the minimum useful proof that the host boundary moved."
@@ -71,7 +71,7 @@ When a QuickJS or `.wasm` guest opens a file, reads a directory, writes stdout, 
 
 ```sh
 # The guest sees a Wanix path. The host path is not ambient authority.
-wanix-rust qjs --mount /host/project=workspace main.js
+wanix qjs --mount /host/project=workspace main.js
 ```
 
 The guest can name `workspace/...`; it cannot name `/host/project` or anything else on the machine. That distinction matters for local demos and matters far more for cloud execution, where you want to say *this task gets this namespace, these mounts, these fds, this terminal, this export* — and nothing leaks in because it was convenient for a demo. The inversion has its own page; see [host, not ambient authority](/concepts/host-not-ambient-authority). It rests on Wasmtime being the substrate that lets every guest call be intercepted at the boundary; see [Wasmtime as substrate](/concepts/wasmtime-as-substrate).

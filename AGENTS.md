@@ -220,14 +220,14 @@ Keep this section concise. Detailed walkthrough output belongs in
 `rust-walkthrough.md`; implementation history belongs in commit messages and
 tests.
 
-- `wanix-rust qjs main.js`: JavaScript runs outside Chrome as a Wanix `qjs`
+- `wanix qjs main.js`: JavaScript runs outside Chrome as a Wanix `qjs`
   task with live Wanix-backed WASI, namespace access, stdio/fds, env/cwd/cmd,
   observable exit status, and `#task` service files. Tier-2 blocking reads
   (ADR 0010) cover the qjs layer too: `fd_read` on a stdio device fd parks the
   host thread until bytes or EOF (`wanix_wasi::wait`, the one home shared with
   `wanix-wasi-host`), so a resident qjs stdin loop is a working task shape;
   dynamic guest-opened fds stay nonblocking for drain-until-0 device loops.
-- `wanix-rust wasm FILE.wasm [args]`: the compiled-`wasm32-wasi` task runtime
+- `wanix wasm FILE.wasm [args]`: the compiled-`wasm32-wasi` task runtime
   (the `wanix-wasm` `WasiRunner` path) and second WASI task driver alongside
   `qjs`. `.wasm` is a first-class Wanix task kind: a `.wasm` cmd auto-starts via
   `#task/new` through `WasmTaskDriver` (`check` matches `.wasm`, `start` reads
@@ -285,7 +285,7 @@ tests.
   proven end-to-end through `#term` by
   `shell_repl_serves_a_terminal_session_over_blocking_reads`. Tab completion,
   history, and arrow keys are deliberately not built yet. The native-terminal
-  CLI entry is `wanix-rust sh` (`-c LINE` or interactive, with `--env`/`--cwd`/
+  CLI entry is `wanix sh` (`-c LINE` or interactive, with `--env`/`--cwd`/
   repeatable `--mount-mesh IROH=/path`). See
   [docs/site/content/concepts/wanix-sh.md](docs/site/content/concepts/wanix-sh.md)
   and `shell-command-resolution.md`.
@@ -311,7 +311,7 @@ tests.
   read→write→flush, exits at EOF/error). Proofs: end-to-end `#term` kill and
   live-pipe cancel tests in `crates/wanix-wasm/src/driver.rs` and the recipe
   07/08 transcripts.
-- `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
+- `wanix qjs-term main.js` and `wanix qjs-shell`: terminal-backed
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
   shell modes and served shell sessions use the same `#term` device contract,
   with a small filesystem command set (`cd`, `ls`, `cat`, `write`, `mkdir`,
@@ -327,7 +327,7 @@ tests.
   terminal resource when the session closes, and discovery advertises the
   qjs-shell cwd query, resize formats, exit frame, and session lifecycle
   contract for browser/editor clients.
-- `wanix-rust p9-stdio` and `serve`: the Rust 9P server exports Wanix
+- `wanix p9-stdio` and `serve`: the Rust 9P server exports Wanix
   filesystems over a process pipe (`p9-stdio`, the QEMU-v86 console bridge) and,
   through `serve`, over a binary 9P WebSocket (`/.well-known/export9p`) and raw
   9P over TCP (`serve --p9 ADDR`). One per-connection 9P session core
@@ -388,14 +388,14 @@ tests.
   reports rootfs handoff status including executable `/bin/init` readiness and,
   for trusted loopback clients, exposes `window.wanixRootfsHandoff` plus copyable
   QEMU/direct-v86 serve commands.
-- `wanix-rust rootfs --archive FILE.tgz --out DIR`: prepares a guest root,
+- `wanix rootfs --archive FILE.tgz --out DIR`: prepares a guest root,
   rejects unsafe archive paths, validates VM boot markers including executable
   `/bin/init`, and emits shell or `wanix-rootfs.v1` JSON handoffs for QEMU and
   direct-v86 without owning rootfs build or VM lifecycle.
 - `/.well-known/rootfs.json`: when loopback clients access `serve` on a
   prepared guest root, exposes the same `wanix-rootfs.v1` handoff for trusted
   local browser/editor/VM launchers.
-- `wanix-rust qemu --root DIR`: validates the same guest-root shape, including
+- `wanix qemu --root DIR`: validates the same guest-root shape, including
   an executable default `/bin/init` marker unless `--cmdline` owns init policy,
   and emits a shell or `wanix-qemu-virtio9p.v1` JSON handoff with discovered or
   explicit initrd support plus an explicit 9P `msize` boot knob; `--exec` is an
@@ -424,7 +424,7 @@ tests.
   like `--wanix-services`: refused on any non-loopback endpoint — public or LAN
   `--addr`, whose NodeID mDNS advertises — even with `--peer`/`--grant` or
   `--insecure-open`; `--peer`-scoped on a loopback `--addr` endpoint) and
-  `wanix-rust cpu --node TICKET -- KIND PROGRAM` dials and runs the job
+  `wanix cpu --node TICKET -- KIND PROGRAM` dials and runs the job
   (`crates/wanix-cli/src/mesh/serve_cpu.rs`, proof in
   `mesh_serve_cpu_runs_a_dialed_job_against_the_callers_reverse_export`).
   An ungranted non-loopback `mesh-serve` (data plane too) likewise requires
@@ -449,12 +449,12 @@ tests.
   finalize/expiry/close). Principal scoping rides `open_view(principal)`;
   runners are the in-process fakes, the `ModelEngine` seam (a model device is
   just ToolService with a model runner), and the `ProcRunner` process runner
-  (below). Served over the mesh by `wanix-rust tool serve`. Proofs:
+  (below). Served over the mesh by `wanix tool serve`. Proofs:
   `crates/wanix-tool/src/tests.rs` pins the docs/toolfs.md validation matrix.
 - Composed resource flow (volumes + tools + shell over the mesh, ADR 0007 +
-  ADR 0009): `wanix-rust volume create/serve` exports each `~/.wanix/volumes/
+  ADR 0009): `wanix volume create/serve` exports each `~/.wanix/volumes/
   <name>` dir as its own native-wire endpoint (one ticket per resource, persisted
-  per-resource ed25519 identity), `wanix-rust tool serve --tool upper|sha256|
+  per-resource ed25519 identity), `wanix tool serve --tool upper|sha256|
   model` does the same for built-in ToolFS devices (every connection bound to a
   private per-principal `jobs/` view from the verified `remote_id()`) and
   `tool serve --config tools.toml` serves *real host programs* through the
@@ -463,7 +463,7 @@ tests.
   empty child env, private per-job temp cwd, real timeout/abort kills with
   retained taxonomy; config names shadow built-ins — walkthrough: recipe 08),
   and
-  `wanix-rust sh -c '...' --mount-mesh TICKET=/path ...` composes them: `cat <
+  `wanix sh -c '...' --mount-mesh TICKET=/path ...` composes them: `cat <
   /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt` reads one peer,
   runs a job on another, and writes back to the first. The dialer identity
   persists at `~/.wanix/dialer.key`, so one user is one durable principal
@@ -473,7 +473,7 @@ tests.
   `sh`. Walkthrough: `docs/site/content/learn/compose-volumes-and-tools.md` and
   recipe 06 (tested transcript).
 - Names: the catalog + recipes layer (ADR 0007 Layer 1, no ACLs):
-  `wanix-rust catalog add/show/rm/ls` keeps one pretty-printed JSON entry per
+  `wanix catalog add/show/rm/ls` keeps one pretty-printed JSON entry per
   NAME under `~/.wanix/catalog/` (NAME grammar lowercase `[a-z0-9-]`,
   alphanumeric ends — never spellable as a ticket or path, so every surface
   routes on spelling alone); `catalog ls` probes liveness with one bounded
@@ -494,7 +494,7 @@ tests.
   `docs/site/content/learn/name-your-world.md` and recipe 10 (executed
   transcript, incl. the fresh-machine rebuild from copied catalog+recipes).
 - Guest-defined AppResources (`docs/appfs.md`; the ADR 0007 chatroom worked
-  example, implemented): `wanix-rust app serve --app DIR --state DIR --listen
+  example, implemented): `wanix app serve --app DIR --state DIR --listen
   IP:PORT` runs a manifest-declared qjs guest (`app.wanix.json`, the shared
   `"wanix.resource":"v0"` envelope) behind the `wanix-appfs` file2chan adapter
   and exports the resulting `FileSystem` over one native mesh endpoint — one
@@ -529,7 +529,7 @@ tests.
   release). Proofs:
   `crates/wanix-appfs/src/tests.rs`, `crates/wanix-cli/src/app/serve/tests.rs`;
   walkthrough: recipe 07 + `docs/site/content/learn/build-a-chatroom.md`.
-- `wanix-rust capsule`: freezes a Wanix world into a portable, CAS-backed
+- `wanix capsule`: freezes a Wanix world into a portable, CAS-backed
   `.wcap` (via `wanix-cas`) that can be loaded elsewhere; live mesh peers and
   ephemeral handles are not portable.
 

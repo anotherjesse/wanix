@@ -35,7 +35,7 @@ A `qjs` guest already has everything it needs: `qjs:std` and `qjs:os` for stdio 
 
 ## The headline win: spawn a child task
 
-This is what the SDK is for. The following guest, run as `wanix-rust qjs examples/qjs-task-spawn.js`, allocates a child `qjs` task, wires its stdio, starts it, and reads its exit code — all through `#task` service files (`examples/qjs-task-spawn.js:1-26`):
+This is what the SDK is for. The following guest, run as `wanix qjs examples/qjs-task-spawn.js`, allocates a child `qjs` task, wires its stdio, starts it, and reads its exit code — all through `#task` service files (`examples/qjs-task-spawn.js:1-26`):
 
 ```js
 import { spawn } from "lib/wanix/task.js";
@@ -69,7 +69,7 @@ Two `.d.ts` files give the workbench TypeScript service real completion. `wanix-
 
 ## Use the runtime, not `globalThis.Wanix`
 
-The SDK is the sanctioned shape of [guest JS](/concepts/guest-js-guardrails): build on `qjs:std`, `qjs:os`, `scriptArgs`, stdio, env, and service files. The old `globalThis.Wanix.*` browser-bridge helpers are retired — guests should not reach for them, and the runtime does not install them. Because the SDK is plain ES modules with zero non-runtime imports, the same script runs under `wanix-rust qjs` natively, in a served session, or in the browser cockpit, and reaches [Wanix-backed WASI](/concepts/wanix-backed-wasi) identically in each. Nothing here is privileged; it is ergonomics over the one contract.
+The SDK is the sanctioned shape of [guest JS](/concepts/guest-js-guardrails): build on `qjs:std`, `qjs:os`, `scriptArgs`, stdio, env, and service files. The old `globalThis.Wanix.*` browser-bridge helpers are retired — guests should not reach for them, and the runtime does not install them. Because the SDK is plain ES modules with zero non-runtime imports, the same script runs under `wanix qjs` natively, in a served session, or in the browser cockpit, and reaches [Wanix-backed WASI](/concepts/wanix-backed-wasi) identically in each. Nothing here is privileged; it is ergonomics over the one contract.
 
 ## See also
 

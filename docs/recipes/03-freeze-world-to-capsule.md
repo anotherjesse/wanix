@@ -42,7 +42,7 @@ hello, capsule
 TXT
 
 # (Optional) run it to confirm the world works before freezing.
-wanix-rust qjs --cwd /tmp/world-A scripts/hello.js
+wanix qjs --cwd /tmp/world-A scripts/hello.js
 ```
 
 If you have been driving `#kv` from a running agent, that state lives in the
@@ -65,7 +65,7 @@ The CLI is in [`crates/wanix-cli/src/capsule.rs`][cli]. The grammar (from
 [`help.rs`][help]) is:
 
 ```text
-wanix-rust capsule (save DIR | load CAPSULE_ID DIR) [--store DIR]
+wanix capsule (save DIR | load CAPSULE_ID DIR) [--store DIR]
 ```
 
 Flags, parsed in [`parse_capsule_command`][cli]:
@@ -86,7 +86,7 @@ the next steps can inspect it.
 
 ```sh
 export CAS=/tmp/cas-A
-wanix-rust capsule save /tmp/world-A --store "$CAS"
+wanix capsule save /tmp/world-A --store "$CAS"
 ```
 
 Output (the capsule id and a copy-pasteable load command):
@@ -99,7 +99,7 @@ load with: wanix capsule load 7f3a… <DIR>
 The id is what you share. Save it:
 
 ```sh
-CAPSULE_ID=$(wanix-rust capsule save /tmp/world-A --store "$CAS" \
+CAPSULE_ID=$(wanix capsule save /tmp/world-A --store "$CAS" \
   | awk '/^capsule/ {print $2}')
 echo "$CAPSULE_ID"
 ```
@@ -151,11 +151,11 @@ manifest blob and every blob it references.
 ### Same machine, different directory
 
 ```sh
-wanix-rust capsule load "$CAPSULE_ID" /tmp/world-B --store "$CAS"
+wanix capsule load "$CAPSULE_ID" /tmp/world-B --store "$CAS"
 # capsule 7f3a… restored (2 files, 38 bytes) to /tmp/world-B
 
 diff -r /tmp/world-A /tmp/world-B   # no output → byte-identical
-wanix-rust qjs --cwd /tmp/world-B scripts/hello.js
+wanix qjs --cwd /tmp/world-B scripts/hello.js
 # hello, capsule
 ```
 
@@ -174,7 +174,7 @@ destination store. A quick port-by-rsync:
 rsync -av --files-from=/tmp/capsule-files.txt / hostB:/tmp/cas-B/
 
 # On host B:
-wanix-rust capsule load "$CAPSULE_ID" /tmp/world-B --store /tmp/cas-B
+wanix capsule load "$CAPSULE_ID" /tmp/world-B --store /tmp/cas-B
 ```
 
 ### Over the mesh (no manual copy)
@@ -208,7 +208,7 @@ Not portable (do not expect a capsule to carry these):
   resources, in-flight 9P fids, `#cas/ingest` write handles — all gone the
   moment the originating process exits. A capsule that wants to "carry a
   running shell" needs the qjs snapshot/resume path
-  (`wanix-rust qjs-snapshot` / `qjs-resume`), which is a separate mechanism.
+  (`wanix qjs-snapshot` / `qjs-resume`), which is a separate mechanism.
 - **Live `#kv` state.** `#kv` is a service device, not a directory under the
   world root. Freeze KV state by copying the values you want into the world
   tree first (see section 1).
@@ -233,8 +233,8 @@ import * as std from "qjs:std";
 std.out.puts(std.loadFile("greeting.txt"));
 JS
 
-ID=$(wanix-rust capsule save "$SRC" --store "$CAS" | awk '/^capsule/ {print $2}')
-wanix-rust capsule load "$ID" "$DST" --store "$CAS"
+ID=$(wanix capsule save "$SRC" --store "$CAS" | awk '/^capsule/ {print $2}')
+wanix capsule load "$ID" "$DST" --store "$CAS"
 
 diff -r "$SRC" "$DST" && echo "round-trip ok: $ID"
 ```

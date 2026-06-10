@@ -42,7 +42,7 @@ honestLimits:
 ### `#cas/<hash>` — read a verified blob
 
 ```sh
-wanix-rust serve --wanix-services
+wanix serve --wanix-services
 # in a task or 9P client:
 cat '#cas/4a8a08...'      # 64 lowercase-hex chars
 ```

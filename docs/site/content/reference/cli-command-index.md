@@ -2,7 +2,7 @@
 title: CLI Command Index
 slug: reference/cli-command-index
 pageType: reference
-oneLiner: Every wanix-rust subcommand at a glance — qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-stdio, serve, rootfs, qemu, mesh-serve, mount-*, cpu, agent, capsule — each linked to its dedicated reference or recipe page.
+oneLiner: Every wanix subcommand at a glance — qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-stdio, serve, rootfs, qemu, mesh-serve, mount-*, cpu, agent, capsule — each linked to its dedicated reference or recipe page.
 audience: [developer]
 tags: [cli, reference, shipped, mesh, local-trust-only, caveat]
 sourceRefs:
@@ -29,9 +29,9 @@ canonicalCaveatFor: []
 
 # CLI Command Index
 
-Every `wanix-rust` subcommand at a glance — qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-stdio, serve, rootfs, qemu, mesh-serve, mount-*, cpu, agent, capsule — each linked to its dedicated reference or recipe page.
+Every `wanix` subcommand at a glance — qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-stdio, serve, rootfs, qemu, mesh-serve, mount-*, cpu, agent, capsule — each linked to its dedicated reference or recipe page.
 
-The native binary is one entry point with a flat subcommand surface: a verb, its flags, and (for the task runtimes) a script or module argument. This page is the map of that surface. It groups the commands the way the runtime groups them — task runtimes, the snapshot family, 9P transports, the `serve` composition layer, VM handoffs, the mesh, and the agent — and points each one at the page where the behaviour is actually documented. The single source of truth for the exact spelling of every flag is the `USAGE` string the binary prints (`crates/wanix-cli/src/help.rs:3-62`); run `wanix-rust --help` to see it verbatim.
+The native binary is one entry point with a flat subcommand surface: a verb, its flags, and (for the task runtimes) a script or module argument. This page is the map of that surface. It groups the commands the way the runtime groups them — task runtimes, the snapshot family, 9P transports, the `serve` composition layer, VM handoffs, the mesh, and the agent — and points each one at the page where the behaviour is actually documented. The single source of truth for the exact spelling of every flag is the `USAGE` string the binary prints (`crates/wanix-cli/src/help.rs:3-62`); run `wanix --help` to see it verbatim.
 
 ## Build once, alias once
 
@@ -39,11 +39,11 @@ Every command below is the same binary. Build it and alias it:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust --help
+alias wanix='./target/debug/wanix'
+wanix --help
 ```
 
-`wanix-rust --help` (and bare `wanix-rust` with no args) prints the demo target plus the full usage block (`crates/wanix-cli/src/lib.rs:260-268`, `help.rs:64-70`). The CLI is deliberately only composition and demo plumbing — it drives `wanix-task`, `wanix-vfs`, `wanix-wasi`, and the runtime crates; the core semantics live there, not here (`rust-walkthrough.md:53-55`).
+`wanix --help` (and bare `wanix` with no args) prints the demo target plus the full usage block (`crates/wanix-cli/src/lib.rs:260-268`, `help.rs:64-70`). The CLI is deliberately only composition and demo plumbing — it drives `wanix-task`, `wanix-vfs`, `wanix-wasi`, and the runtime crates; the core semantics live there, not here (`rust-walkthrough.md:53-55`).
 
 ## Task runtimes
 
@@ -130,4 +130,4 @@ See [the agent device](/devices/agent), [FakeEngine vs. codex](/concepts/fakeeng
 - **`mount-*` bind a single slot.** The shipped mount point is `/n/remote` (`crates/wanix-cli/src/mount.rs:25-29`); per-peer `/n/<peer-id>` routing is designed but not shipped. Use `/n/<peer>` only as a labelled convention in prose, not as a real path you can rely on the CLI to produce.
 - **`agent` without `--fake` is the only live-LLM path.** The served `#agent` device runs the deterministic `FakeEngine`; the real codex engine is reachable only through this local-trust CLI subcommand.
 - **`qemu --exec` is a foreground launch, not a VM supervisor**, and the JSON handoffs (`wanix-rootfs.v1`, `wanix-qemu-virtio9p.v1`) describe a boot rather than performing one.
-- **Flag spellings drift; the binary does not.** When this page and `wanix-rust --help` disagree, the `USAGE` string in `crates/wanix-cli/src/help.rs` is authoritative.
+- **Flag spellings drift; the binary does not.** When this page and `wanix --help` disagree, the `USAGE` string in `crates/wanix-cli/src/help.rs` is authoritative.

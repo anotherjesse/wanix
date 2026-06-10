@@ -24,8 +24,9 @@
   ],
   "browser": "./dist/web/extension.js",
   "scripts": {
-    "compile-web": "npm run check-types && go run ./build.go",
-    "watch-web": "go run ./build.go --watch",
+    "bundle-web": "esbuild src/web/extension.ts --bundle --format=cjs --platform=browser --outdir=dist/web --external:vscode --external:util --external:worker_threads --sourcemap=linked --sources-content=false --loader:.html=text --define:global=globalThis",
+    "compile-web": "npm run check-types && npm run bundle-web",
+    "watch-web": "npm run bundle-web -- --watch",
     "check-types": "tsc --noEmit"
   },
   "devDependencies": {

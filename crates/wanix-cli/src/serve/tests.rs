@@ -449,7 +449,7 @@ fn serve_once_returns_static_file_with_browser_isolation_headers() {
     assert_eq!(exit_code, 0);
     let stderr = String::from_utf8(stderr).unwrap();
     assert!(
-        stderr.contains("wanix-rust serve: listening on http://127.0.0.1:"),
+        stderr.contains("wanix serve: listening on http://127.0.0.1:"),
         "{stderr}"
     );
     assert!(stderr.contains("files with Wanix overlay"), "{stderr}");
@@ -1503,7 +1503,7 @@ fn serve_once_returns_rootfs_handoff_manifest() {
     assert_eq!(serve["bundle"], "direct-v86");
     assert_eq!(serve["wanixServices"], true);
     assert_eq!(serve["p9Msize"], 131072);
-    assert_eq!(serve["argv"][0], "wanix-rust");
+    assert_eq!(serve["argv"][0], "wanix");
     assert_eq!(serve["argv"][1], "serve");
     assert_eq!(serve["argv"][2], root.display().to_string());
 }

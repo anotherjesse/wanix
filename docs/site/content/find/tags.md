@@ -34,7 +34,7 @@ A page can hold a status tag and still be useful — `caveat` is not a warning t
 
 These route by topic and reader.
 
-- **`cli`** — the native `wanix-rust` command surface and its subcommands.
+- **`cli`** — the native `wanix` command surface and its subcommands.
 - **`mesh`** — the distributed layer: import/export, 9P over iroh QUIC, identity, capability binds.
 - **`devices`** — the `#name` service-device contracts (`#task`, `#term`, `#kv`, `#pipe`, `#plumb`, `#cas`, `#agent`, `#cpu`).
 - **`newcomer`**, **`developer`**, **`visionary`** — the audience personas (`docs/site/00-master-plan.md:79`); they also appear in the separate `audience` field and drive prerequisite badges.

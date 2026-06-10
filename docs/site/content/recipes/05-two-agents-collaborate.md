@@ -42,14 +42,14 @@ Build the CLI, then start a node that serves the agent device — `--wanix-servi
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 mkdir -p /tmp/two-agents
-wanix-rust serve --root /tmp/two-agents --listen 127.0.0.1:7654 \
+wanix serve --root /tmp/two-agents --listen 127.0.0.1:7654 \
   --p9 127.0.0.1:7664 --wanix-services
 ```
 
-One framing note before the transcript: the `cat`/`echo` lines below are **namespace operations** — they read as a shell *inside* the Wanix world (which is exactly how an agent, itself a task in that world, drives a sibling session). From your host shell, each `cat FILE` is `wanix-rust mount-cat tcp://127.0.0.1:7664 FILE` and each `echo TEXT > FILE` is `wanix-rust mount-write tcp://127.0.0.1:7664 FILE "TEXT"` — [recipe 01 §4](/recipes/01-repair-broken-qjs) shows that form end to end.
+One framing note before the transcript: the `cat`/`echo` lines below are **namespace operations** — they read as a shell *inside* the Wanix world (which is exactly how an agent, itself a task in that world, drives a sibling session). From your host shell, each `cat FILE` is `wanix mount-cat tcp://127.0.0.1:7664 FILE` and each `echo TEXT > FILE` is `wanix mount-write tcp://127.0.0.1:7664 FILE "TEXT"` — [recipe 01 §4](/recipes/01-repair-broken-qjs) shows that form end to end.
 
 Both agents run on one node behind one `AgentDevice` mounted at `#agent`. Each session is allocated lazily — the first read of `#agent/new` hands back a numeric id and creates the session. The file tree per session is:
 

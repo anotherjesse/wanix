@@ -409,7 +409,7 @@ mod tests {
         assert!(
             String::from_utf8(stderr)
                 .unwrap()
-                .contains("wanix-rust qemu exec:")
+                .contains("wanix qemu exec:")
         );
         assert!(
             error

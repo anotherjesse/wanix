@@ -43,10 +43,10 @@ Two nodes. Node B holds the source under `work/` (a `build.js` and a `dataset.tx
 
 ```sh
 cargo build --locked --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 cd "$ROOT_A"                                   # holds build.js — the job's world is A's cwd, reverse-exported
-wanix-rust cpu --node "$NODE_B" -- qjs build.js
+wanix cpu --node "$NODE_B" -- qjs build.js
 # -> ran on node B against A's reverse-exported namespace
 ```
 
@@ -56,12 +56,12 @@ That line of stdout was produced by a `qjs` task that ran on B; every file the j
 
 ## Reverse-export your cwd — read-only by default
 
-Before B can run anything useful, it needs a view of A's world. So `wanix-rust cpu` does the Plan 9 move in reverse: it *reverse-exports* A's working directory back across the connection, and B runs the job with that reverse export as its world (`docs/mesh-the-missing-half-of-9p.md:1898-1903`). The export is not A's whole host root. It is a scoped sub-namespace built by `ExportScope` in `wanix-cpu`: the job subtree re-rooted with `SubtreeFs`, plus any services you explicitly grant, and **read-only by default** (`crates/wanix-cpu/src/scope.rs:69-82`).
+Before B can run anything useful, it needs a view of A's world. So `wanix cpu` does the Plan 9 move in reverse: it *reverse-exports* A's working directory back across the connection, and B runs the job with that reverse export as its world (`docs/mesh-the-missing-half-of-9p.md:1898-1903`). The export is not A's whole host root. It is a scoped sub-namespace built by `ExportScope` in `wanix-cpu`: the job subtree re-rooted with `SubtreeFs`, plus any services you explicitly grant, and **read-only by default** (`crates/wanix-cpu/src/scope.rs:69-82`).
 
 Opt a subtree into read-write only when the remote run must write outputs back to you:
 
 ```sh
-wanix-rust cpu --node "$NODE_B" --cwd "$ROOT_A" --write -- qjs /work/build.js
+wanix cpu --node "$NODE_B" --cwd "$ROOT_A" --write -- qjs /work/build.js
 ```
 
 `--write` flips the scope's rights to read-write (`crates/wanix-cpu/src/scope.rs:84-92`); without it, a write-mode open is refused by the rights gate, and a path outside the declared subtree is simply not present in the exported namespace. Those two invariants are pinned by the `job_subtree_is_read_only_by_default` and `the_scope_cannot_reach_outside_the_job_subtree` tests in `wanix-cpu`. The named idea is the jail: the reverse export is a *room, not a house* — see [Confine to a prefix with SubtreeFs](/concepts/subtreefs-confine-to-prefix). A granted service (e.g. `#kv`) is re-rooted and rights-gated the same way and bound under its `#`-device name (`crates/wanix-cpu/src/scope.rs:94-123`), so the remote job can read exactly the state you handed it and nothing else.

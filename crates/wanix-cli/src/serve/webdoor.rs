@@ -297,7 +297,7 @@ pub(super) fn start_webdoor(
             process_stderr,
             "stderr",
             format!(
-                "wanix-rust serve: gateway origin http://{name}:{}/\n",
+                "wanix serve: gateway origin http://{name}:{}/\n",
                 local_addr.port()
             )
             .as_bytes(),

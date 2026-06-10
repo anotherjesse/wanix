@@ -40,7 +40,7 @@ honestLimits:
 
 The serve command surface, the discovery document shape, the well-known routes, and the rootfs/qemu/v86 handoff JSON contracts.
 
-`wanix-rust serve` is the one HTTP front door for the Rust runtime: it exports a Wanix namespace as 9P, optionally composes the service devices onto it, and publishes a machine-readable description of itself at `/.well-known/wanix.json` so browsers, the cockpit, direct-v86, and VM launchers can discover the routes instead of hard-coding them. This page is the reference for the flags, the discovery JSON, the well-known routes, and the two handoff document kinds. Every claim cites the file that produces it.
+`wanix serve` is the one HTTP front door for the Rust runtime: it exports a Wanix namespace as 9P, optionally composes the service devices onto it, and publishes a machine-readable description of itself at `/.well-known/wanix.json` so browsers, the cockpit, direct-v86, and VM launchers can discover the routes instead of hard-coding them. This page is the reference for the flags, the discovery JSON, the well-known routes, and the two handoff document kinds. Every claim cites the file that produces it.
 
 ## serve flags and modes
 
@@ -48,8 +48,8 @@ The command parser accepts a positional root directory plus a handful of options
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust serve ./root --bundle workbench-fs9p --wanix-services
+alias wanix='./target/debug/wanix'
+wanix serve ./root --bundle workbench-fs9p --wanix-services
 ```
 
 - **root** (positional, or `--root DIR`) — the directory exported as the served filesystem. Defaults to `.` (`command.rs:160-168`).
@@ -70,7 +70,7 @@ A GET to `/.well-known/wanix.json` returns the discovery JSON built in `serve_di
 ```json
 {
   "version": 1,
-  "runtime": "wanix-rust",
+  "runtime": "wanix",
   "routes": {
     "p9":      { "websocket": "ws://HOST/.well-known/export9p",
                  "tcp": "tcp://127.0.0.1:9999",

@@ -46,7 +46,7 @@ The `#agent` device is an LLM you can `cat`. Allocate a session, drive it, watch
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 id=$(cat '#agent/new')                          # allocate a session
 echo 'fix the failing test' > "#agent/$id/prompt"

@@ -139,7 +139,7 @@ pub(crate) fn read_recipe(dir: &Path, name: &str) -> Result<Recipe, CliError> {
         if error.kind() == std::io::ErrorKind::NotFound {
             CliError::new(
                 format!(
-                    "no recipe {name:?} (recipes {}); save one with `wanix-rust recipe save \
+                    "no recipe {name:?} (recipes {}); save one with `wanix recipe save \
                      {name} --mount NAME[=PATH] ... [--run LINE]`",
                     dir.display()
                 ),
@@ -213,7 +213,7 @@ fn resolve_bind_target(
                 && hint != &address
             {
                 notes.push(format!(
-                    "wanix-rust: recipe {recipe_name:?} bind '{}' DRIFTED since save: saved hint \
+                    "wanix: recipe {recipe_name:?} bind '{}' DRIFTED since save: saved hint \
                      {hint}, catalog now {address} — using the catalog address",
                     bind.target
                 ));
@@ -223,7 +223,7 @@ fn resolve_bind_target(
         None => match &bind.hint {
             Some(hint) => {
                 notes.push(format!(
-                    "wanix-rust: recipe {recipe_name:?} bind '{}' is no longer in the catalog; \
+                    "wanix: recipe {recipe_name:?} bind '{}' is no longer in the catalog; \
                      dialing the saved hint {hint}",
                     bind.target
                 ));
@@ -232,7 +232,7 @@ fn resolve_bind_target(
             None => Err(CliError::new(
                 format!(
                     "recipe {recipe_name:?}: bind '{}' has no catalog entry (catalog {}) and no \
-                     saved hint; add one with `wanix-rust catalog add {} IROH_URL`",
+                     saved hint; add one with `wanix catalog add {} IROH_URL`",
                     bind.target,
                     catalog_dir.display(),
                     bind.target

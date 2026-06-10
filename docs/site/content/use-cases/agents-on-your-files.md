@@ -48,9 +48,9 @@ Start with the smallest real loop: a qjs program that crashes with a `ReferenceE
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust serve \
+wanix serve \
   --root /tmp/repair-demo \
   --addr 127.0.0.1:7654 \
   --bundle workbench-fs9p \
@@ -60,12 +60,12 @@ wanix-rust serve \
 `--wanix-services` binds `#agent`, `#task`, `#term`, `#pipe`, `#kv`, `#plumb`, and `#cas` into the served namespace (`crates/wanix-cli/src/serve/roots.rs`). The agent device is bound in that same path — `AgentDevice::new(Arc::new(FakeEngine))` at `crates/wanix-cli/src/serve/roots.rs:166`. Now the entire LLM contract is reads and writes on one tree. Allocate a session by reading `#agent/new`, submit a repair prompt to `#agent/<id>/prompt`, watch `#agent/<id>/events`, and the engine pauses at an `approval.needed` before it touches your file:
 
 ```sh
-id=$(wanix-rust mount-cat tcp://127.0.0.1:7654 '#agent/new' | tr -d '\n')
-wanix-rust mount-write tcp://127.0.0.1:7654 "#agent/$id/prompt" \
+id=$(wanix mount-cat tcp://127.0.0.1:7654 '#agent/new' | tr -d '\n')
+wanix mount-write tcp://127.0.0.1:7654 "#agent/$id/prompt" \
   "approve: edit /tmp/repair-demo/agent/broken.js to declare missingValue"
-wanix-rust mount-cat   tcp://127.0.0.1:7654 "#agent/$id/pending"
+wanix mount-cat   tcp://127.0.0.1:7654 "#agent/$id/pending"
 # -> [{"id":"req-1","action":"edit /tmp/repair-demo/agent/broken.js ..."}]
-wanix-rust mount-write tcp://127.0.0.1:7654 "#agent/$id/ctl" "approve req-1"
+wanix mount-write tcp://127.0.0.1:7654 "#agent/$id/ctl" "approve req-1"
 ```
 
 That is the whole shape, named after the effect: an LLM session is a directory, a turn is a write, the result is a read, and the trust gate is a write to `ctl`. This is the [`#agent`](/devices/agent) device, and [Recipe 01](/recipes/01-repair-broken-qjs) walks it end to end — the cockpit's "Run Agent Repair Demo" button automates exactly these file operations (`docs/integration/STATUS.md:445-449`).
@@ -84,8 +84,8 @@ A confined agent can operate the world it booted into. The mesh hands it the res
 
 ```sh
 export NODE_B='iroh://829fbb…f986?addr=127.0.0.1:5680'
-wanix-rust mount-ls  "$NODE_B" work
-wanix-rust mount-cat "$NODE_B" work/dataset.txt   # bytes that only live on B
+wanix mount-ls  "$NODE_B" work
+wanix mount-cat "$NODE_B" work/dataset.txt   # bytes that only live on B
 ```
 
 The aspirational spelling is `/n/<peer>/…`, but the shipped `mount-*` verbs bind one slot — `MOUNT_POINT = "n/remote"` at `crates/wanix-cli/src/mount.rs:26`. The peer identity lives in the `iroh://` ticket you dialed, not in the path prefix; treat `/n/<peer>` as a labelled convention until per-peer roots ship.
@@ -111,7 +111,7 @@ Reach is gated, not ambient. A peer attaches only with a grant, and a grant is n
 
 ## Status / honest limits
 
-- **The served `#agent` is a deterministic `FakeEngine`, not a live LLM.** The cockpit and `serve --wanix-services` path bind `AgentDevice::new(Arc::new(FakeEngine))` (`crates/wanix-cli/src/serve/roots.rs:166`) so the demo runs end to end with no network keys. A real codex `app-server` engine runs only on the local-trust CLI path: `wanix-rust agent …` defaults to `CodexEngine` and falls back to `FakeEngine` under `--fake` (`crates/wanix-cli/src/agent.rs:83-90`). The wire shape is identical; the engine behind it is not.
+- **The served `#agent` is a deterministic `FakeEngine`, not a live LLM.** The cockpit and `serve --wanix-services` path bind `AgentDevice::new(Arc::new(FakeEngine))` (`crates/wanix-cli/src/serve/roots.rs:166`) so the demo runs end to end with no network keys. A real codex `app-server` engine runs only on the local-trust CLI path: `wanix agent …` defaults to `CodexEngine` and falls back to `FakeEngine` under `--fake` (`crates/wanix-cli/src/agent.rs:83-90`). The wire shape is identical; the engine behind it is not.
 - **Exec devices are local-trust only.** `#agent`, `#task`, and `#cpu` are remote code execution; they are never exposed to untrusted or public peers. This buys cheap, scalable isolation — not safety for arbitrary untrusted code — and there are no hard CPU or memory limits yet.
 - **One mount slot, not per-peer paths.** The shipped `mount-*` verbs bind the remote at `/n/remote` (`crates/wanix-cli/src/mount.rs:26`). Per-peer `/n/<peer-id>` is designed but unshipped; use `/n/<peer>` only as a labelled convention.
 - **Live cross-mesh pub/sub needs a second connection.** `serve` handles one 9P frame at a time per connection, so a blocking `#plumb/<topic>/recv` cannot interleave with a write on the same connection. Two agents collaborating live over `#plumb` across the mesh want a second 9P connection or concurrent frame handling.

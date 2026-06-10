@@ -40,7 +40,7 @@ A capsule is venti applied to a whole *world*. Take a directory the agent (or yo
 
 ## Show it: save and load a world
 
-A flow's first build step is `cargo build --package wanix-cli; alias wanix-rust='./target/debug/wanix-rust'`. Then build a tiny world and freeze it:
+A flow's first build step is `cargo build --package wanix-cli; alias wanix='./target/debug/wanix'`. Then build a tiny world and freeze it:
 
 ```sh
 mkdir -p /tmp/world-A/scripts
@@ -51,7 +51,7 @@ std.out.puts(std.loadFile("greeting.txt"));
 JS
 
 export CAS=/tmp/cas-A
-wanix-rust capsule save /tmp/world-A --store "$CAS"
+wanix capsule save /tmp/world-A --store "$CAS"
 ```
 
 The visible result is a content hash and a copy-pasteable load command (`crates/wanix-cli/src/capsule.rs:138-148`):
@@ -64,7 +64,7 @@ load with: wanix capsule load 7f3a… <DIR>
 That 64-hex string is the capsule id. Hand it to a different directory, a different user, or a different machine, and the world rebuilds:
 
 ```sh
-wanix-rust capsule load 7f3a… /tmp/world-B --store "$CAS"
+wanix capsule load 7f3a… /tmp/world-B --store "$CAS"
 # capsule 7f3a… restored (2 files, 38 bytes) to /tmp/world-B
 diff -r /tmp/world-A /tmp/world-B   # no output → byte-identical
 ```

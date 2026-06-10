@@ -98,7 +98,7 @@ fn error_task_output(
     if !stderr.is_empty() && !stderr.ends_with(b"\n") {
         stderr.push(b'\n');
     }
-    stderr.extend_from_slice(format!("wanix-rust {command}: {error}\n").as_bytes());
+    stderr.extend_from_slice(format!("wanix {command}: {error}\n").as_bytes());
     CliOutput::new(stdout, stderr, 1)
 }
 

@@ -1,4 +1,4 @@
-//! Running a parsed `wanix-rust cpu` job over the mesh.
+//! Running a parsed `wanix cpu` job over the mesh.
 //!
 //! Binds a fresh dialer [`MeshNode`] from an ephemeral identity (dialing out
 //! needs only an endpoint), dials the data node's cpu exec plane, reverse-exports

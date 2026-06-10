@@ -70,7 +70,7 @@ pub(in crate::serve) fn bind_raw9p_door(addr: &str) -> Result<(TcpListener, Sock
 /// per-connection thread model the standalone `p9-listen` used. It always loops
 /// (it is a long-lived service door for many `mount-*` clients); the thread is
 /// detached and reaped on process exit. The thread logs to the live process
-/// `stderr` directly, since the loop only runs in the live `wanix-rust` binary,
+/// `stderr` directly, since the loop only runs in the live `wanix` binary,
 /// never in collected/captured mode.
 pub(in crate::serve) fn spawn_raw9p_accept(
     listener: TcpListener,
@@ -116,7 +116,7 @@ fn write_continue_after_error(
     write_process_output(
         process_stderr,
         "stderr",
-        b"wanix-rust serve --p9: continuing after connection error\n",
+        b"wanix serve --p9: continuing after connection error\n",
     )
 }
 
@@ -135,8 +135,7 @@ fn serve_one_connection(
             write_process_output(
                 process_stderr,
                 "stderr",
-                format!("wanix-rust serve --p9: connection {peer_addr} failed: {error}\n")
-                    .as_bytes(),
+                format!("wanix serve --p9: connection {peer_addr} failed: {error}\n").as_bytes(),
             )?;
             Ok(1)
         }
@@ -159,7 +158,7 @@ fn serve_raw9p_connection(
 }
 
 pub(in crate::serve) fn raw9p_startup_message(local_addr: SocketAddr) -> String {
-    format!("wanix-rust serve: raw 9P listening on tcp://{local_addr}/\n")
+    format!("wanix serve: raw 9P listening on tcp://{local_addr}/\n")
 }
 
 #[cfg(test)]
@@ -254,7 +253,7 @@ mod tests {
         write_continue_after_error(1, &mut stderr).unwrap();
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
-            "wanix-rust serve --p9: continuing after connection error\n"
+            "wanix serve --p9: continuing after connection error\n"
         );
     }
 
@@ -263,7 +262,7 @@ mod tests {
         let addr = "127.0.0.1:4712".parse().unwrap();
         assert_eq!(
             raw9p_startup_message(addr),
-            "wanix-rust serve: raw 9P listening on tcp://127.0.0.1:4712/\n"
+            "wanix serve: raw 9P listening on tcp://127.0.0.1:4712/\n"
         );
     }
 

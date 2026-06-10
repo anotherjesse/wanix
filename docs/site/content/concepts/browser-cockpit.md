@@ -40,8 +40,8 @@ Start it the way the demo does:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust serve --root /tmp/world --bundle workbench-fs9p --wanix-services --addr 127.0.0.1:18021
+alias wanix='./target/debug/wanix'
+wanix serve --root /tmp/world --bundle workbench-fs9p --wanix-services --addr 127.0.0.1:18021
 ```
 
 Open the served URL, click the **Wanix** icon, and the activity-bar view fills in. The categories are fixed in `system-view.ts` — Actions, Tour, Reports, Data Stores, Checks, Activity, Routes, Route Runs, Agent, Tasks, Terminals, Namespace, Drivers (`workbench/src/web/system-view.ts:173-187`). The Tasks and Terminals rows are populated by reading the `#task` and `#term` service directories; a task row marked `· #task` was observed on the device, not invented by the extension (`workbench/src/web/system-view.ts:1043-1108`). That is the Plan 9 idea showing through the editor chrome: the operator surface inspects files, and the runtime's own service files are the single source of truth.

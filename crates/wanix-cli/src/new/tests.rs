@@ -68,7 +68,7 @@ fn new_rust_writes_cargo_config_and_main_with_name() {
     assert!(root.join("src/main.rs").is_file());
 
     let readme = fs::read_to_string(root.join("README.md")).unwrap();
-    assert!(readme.contains("wanix-rust wasm"));
+    assert!(readme.contains("wanix wasm"));
     assert!(readme.contains("widget.wasm"));
 
     fs::remove_dir_all(&parent).unwrap();

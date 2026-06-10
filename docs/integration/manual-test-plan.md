@@ -42,7 +42,7 @@ From the repo root:
 
 ```sh
 cargo build -p wanix-cli
-ls target/debug/wanix-rust
+ls target/debug/wanix
 ```
 
 ## 2. Start serve
@@ -51,7 +51,7 @@ ls target/debug/wanix-rust
 mkdir -p /tmp/wanix-test-root
 echo hello > /tmp/wanix-test-root/hello.txt
 
-target/debug/wanix-rust serve \
+target/debug/wanix serve \
   --root /tmp/wanix-test-root \
   --bundle workbench-fs9p \
   --wanix-services \
@@ -138,7 +138,7 @@ gate until the slice merges.
 ## 6. Tear down
 
 ```sh
-pkill -f wanix-rust
+pkill -f wanix
 rm -rf /tmp/wanix-test-root
 ```
 
@@ -146,7 +146,7 @@ rm -rf /tmp/wanix-test-root
 
 Automated portion of this plan was executed once before writing this file:
 
-- `target/debug/wanix-rust serve --root /tmp/wanix-test-root --bundle
+- `target/debug/wanix serve --root /tmp/wanix-test-root --bundle
   workbench-fs9p --wanix-services --addr 127.0.0.1:17999` started cleanly
   and logged
   `bundle available at http://127.0.0.1:17999/?bundle=workbench-fs9p`.

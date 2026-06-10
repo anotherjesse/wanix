@@ -8,9 +8,9 @@ use super::{INIT_PATH, RootfsReport};
 
 pub(super) fn rootfs_text_handoff(report: &RootfsReport) -> String {
     let out = report.out_path.to_string_lossy().into_owned();
-    let qemu = quote_cmd_argv(["wanix-rust", "qemu", "--root", &out, "--exec"]);
+    let qemu = quote_cmd_argv(["wanix", "qemu", "--root", &out, "--exec"]);
     let serve = quote_cmd_argv([
-        "wanix-rust",
+        "wanix",
         "serve",
         &out,
         "--bundle",
@@ -37,7 +37,7 @@ pub(super) fn rootfs_json_handoff(report: &RootfsReport) -> Result<String, CliEr
     let init_path = report.out_path.join(INIT_PATH);
     let qemu = qemu_default_json_handoff_for_root(&report.out_path)?;
     let serve_argv = [
-        "wanix-rust",
+        "wanix",
         "serve",
         out.as_str(),
         "--bundle",
@@ -78,10 +78,10 @@ mod tests {
         assert!(handoff.contains("rootfs extracted to /tmp/wanix root"));
         assert!(handoff.contains("kernel /boot/bzImage"));
         assert!(handoff.contains("init /bin/init"));
-        assert!(handoff.contains("qemu wanix-rust qemu --root '/tmp/wanix root' --exec"));
+        assert!(handoff.contains("qemu wanix qemu --root '/tmp/wanix root' --exec"));
         assert!(
             handoff.contains(
-                "serve wanix-rust serve '/tmp/wanix root' --bundle direct-v86 --wanix-services"
+                "serve wanix serve '/tmp/wanix root' --bundle direct-v86 --wanix-services"
             ),
             "{handoff}"
         );
@@ -116,7 +116,7 @@ mod tests {
         assert_eq!(
             manifest["serveDirectV86"]["argv"],
             serde_json::json!([
-                "wanix-rust",
+                "wanix",
                 "serve",
                 root.to_string_lossy(),
                 "--bundle",

@@ -95,7 +95,7 @@ pub(super) fn run_agent_exec_server_streaming(
             write_process_output(
                 process_stderr,
                 "stderr",
-                format!("wanix-rust agent-exec-server: {error}\n").as_bytes(),
+                format!("wanix agent-exec-server: {error}\n").as_bytes(),
             )?;
             Ok(1)
         }

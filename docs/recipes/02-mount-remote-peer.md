@@ -55,7 +55,7 @@ Node B holds `dataset.txt`. Node A holds `build.js` — the program A will run
 the **caller's** (reverse-exported to the server), and the server contributes
 its CPU.
 
-## 2. Start node B with `wanix-rust mesh-serve` (the data node)
+## 2. Start node B with `wanix mesh-serve` (the data node)
 
 Node B binds an iroh endpoint from its persistent key, exports `$ROOT_B` as 9P
 over QUIC, and prints its node id plus a dialable `iroh://` ticket on stderr.
@@ -87,7 +87,7 @@ socket is admitted, like the rest of a local open serve).
 Terminal 1 (node B):
 
 ```sh
-wanix-rust mesh-serve \
+wanix mesh-serve \
     --root  "$ROOT_B" \
     --key   "$NODE_B_KEY" \
     --addr  127.0.0.1:5680 \
@@ -98,10 +98,10 @@ wanix-rust mesh-serve \
 Executed stderr (the long hex is B's verifying key, your value will differ):
 
 ```
-wanix-rust mesh-serve: node 11fd26a61cf8294ea2ba8d16ce4ebb46cac06152313aa880b5e9072dfe9638a5
-wanix-rust mesh-serve: ticket iroh://11fd26a61cf8294ea2ba8d16ce4ebb46cac06152313aa880b5e9072dfe9638a5?addr=127.0.0.1:5680
-wanix-rust mesh-serve: mount with: wanix-rust mount-ls 'iroh://11fd26a61cf8294ea2ba8d16ce4ebb46cac06152313aa880b5e9072dfe9638a5?addr=127.0.0.1:5680'
-wanix-rust mesh-serve: serving the #cpu exec plane (remote code execution for admitted peers); run a job with: wanix-rust cpu --node 'iroh://11fd26a61cf8294ea2ba8d16ce4ebb46cac06152313aa880b5e9072dfe9638a5?addr=127.0.0.1:5680' -- qjs PROGRAM
+wanix mesh-serve: node 11fd26a61cf8294ea2ba8d16ce4ebb46cac06152313aa880b5e9072dfe9638a5
+wanix mesh-serve: ticket iroh://11fd26a61cf8294ea2ba8d16ce4ebb46cac06152313aa880b5e9072dfe9638a5?addr=127.0.0.1:5680
+wanix mesh-serve: mount with: wanix mount-ls 'iroh://11fd26a61cf8294ea2ba8d16ce4ebb46cac06152313aa880b5e9072dfe9638a5?addr=127.0.0.1:5680'
+wanix mesh-serve: serving the #cpu exec plane (remote code execution for admitted peers); run a job with: wanix cpu --node 'iroh://11fd26a61cf8294ea2ba8d16ce4ebb46cac06152313aa880b5e9072dfe9638a5?addr=127.0.0.1:5680' -- qjs PROGRAM
 ```
 
 The `ticket` line is B's **verified address**. Copy it; node A needs it.
@@ -128,7 +128,7 @@ a QUIC stream now.
 Terminal 2 (node A):
 
 ```sh
-wanix-rust mount-ls "$NODE_B"
+wanix mount-ls "$NODE_B"
 ```
 
 Expected stdout:
@@ -140,7 +140,7 @@ work
 The mount root is the directory B exported. List inside it:
 
 ```sh
-wanix-rust mount-ls "$NODE_B" work
+wanix mount-ls "$NODE_B" work
 ```
 
 ```
@@ -150,7 +150,7 @@ dataset.txt
 Read the file across the wire:
 
 ```sh
-wanix-rust mount-cat "$NODE_B" work/dataset.txt
+wanix mount-cat "$NODE_B" work/dataset.txt
 ```
 
 ```
@@ -172,7 +172,7 @@ as the mount slot for "whichever ticket I dialed".
 ## 4. Run a `#cpu` job on B from A's CLI
 
 The point of mesh isn't just importing files — it's also moving the
-computation. `wanix-rust cpu` dials B's exec plane (ALPN `wanix/cpu/1`,
+computation. `wanix cpu` dials B's exec plane (ALPN `wanix/cpu/1`,
 served because step 2 passed `--cpu`), **reverse-exports** A's working
 directory as a scoped read-only namespace, and asks B to run a task whose
 world *is* that reverse export. The task runs on B's CPU; every file it
@@ -189,7 +189,7 @@ From A's `$ROOT_A` (which holds `build.js` from step 1):
 
 ```sh
 cd "$ROOT_A"
-wanix-rust cpu --node "$NODE_B" -- qjs build.js
+wanix cpu --node "$NODE_B" -- qjs build.js
 ```
 
 Executed stdout (captured stdout from the task running *on B*):
@@ -204,16 +204,16 @@ in [`cpu/parse.rs`][cpu-cli]:
 
 ```sh
 # Options must precede the `--`, the job command follows it.
-wanix-rust cpu --node "$NODE_B" -- qjs build.js
+wanix cpu --node "$NODE_B" -- qjs build.js
 
 # Missing --node is refused at parse time:
-$ wanix-rust cpu -- qjs build.js
+$ wanix cpu -- qjs build.js
 cpu requires --node iroh://PEER[?addr=IP:PORT] naming the data node
 $ echo $?
 2
 
 # Missing `--` separator is refused at parse time:
-$ wanix-rust cpu --node "$NODE_B" qjs build.js
+$ wanix cpu --node "$NODE_B" qjs build.js
 cpu requires `-- KIND PROGRAM [ARG ...]` after its options
 $ echo $?
 2
@@ -223,7 +223,7 @@ By default A's reverse export is **read-only**; pass `--write` to opt the
 job's subtree into read-write so the remote run can write outputs back to A:
 
 ```sh
-wanix-rust cpu --node "$NODE_B" --cwd "$ROOT_A" --write -- qjs build.js
+wanix cpu --node "$NODE_B" --cwd "$ROOT_A" --write -- qjs build.js
 ```
 
 The export is scoped by [`wanix_cpu::ExportScope`][mesh-cpu] — paths outside

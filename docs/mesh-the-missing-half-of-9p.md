@@ -57,7 +57,7 @@ door over a host directory (a `serve` mode under ADR 0006; loopback-only):
 SROOT=$(mktemp -d)
 echo "hello from the server" > "$SROOT/greeting.txt"
 mkdir "$SROOT/docs"
-wanix-rust serve --root "$SROOT" --p9 127.0.0.1:5640
+wanix serve --root "$SROOT" --p9 127.0.0.1:5640
 # serve: 9P (tcp) listening on 127.0.0.1:5640
 ```
 
@@ -65,10 +65,10 @@ Client side imports it and reads, writes, and lists through the mount:
 
 ```sh
 # Terminal 2 — the client
-wanix-rust mount-ls    tcp://127.0.0.1:5640
-wanix-rust mount-cat   tcp://127.0.0.1:5640 greeting.txt
-wanix-rust mount-write tcp://127.0.0.1:5640 docs/note.txt "written across the wire"
-wanix-rust mount-cat   tcp://127.0.0.1:5640 docs/note.txt
+wanix mount-ls    tcp://127.0.0.1:5640
+wanix mount-cat   tcp://127.0.0.1:5640 greeting.txt
+wanix mount-write tcp://127.0.0.1:5640 docs/note.txt "written across the wire"
+wanix mount-cat   tcp://127.0.0.1:5640 docs/note.txt
 ```
 
 A file written through the client mount appears in the served directory on the
@@ -400,24 +400,24 @@ Server (terminal 1):
 
 ```
 $ SROOT=$(mktemp -d) && echo "hello from the server" > "$SROOT/greeting.txt" && mkdir "$SROOT/docs"
-$ wanix-rust serve --root "$SROOT" --p9 127.0.0.1:5640
+$ wanix serve --root "$SROOT" --p9 127.0.0.1:5640
 serve: 9P (tcp) listening on 127.0.0.1:5640
 ```
 
 Client (terminal 2):
 
 ```
-$ wanix-rust mount-ls tcp://127.0.0.1:5640
+$ wanix mount-ls tcp://127.0.0.1:5640
 docs
 greeting.txt
 
-$ wanix-rust mount-cat tcp://127.0.0.1:5640 greeting.txt
+$ wanix mount-cat tcp://127.0.0.1:5640 greeting.txt
 hello from the server
 
-$ wanix-rust mount-write tcp://127.0.0.1:5640 docs/note.txt "written across the wire"
+$ wanix mount-write tcp://127.0.0.1:5640 docs/note.txt "written across the wire"
 wrote 23 bytes to n/remote/docs/note.txt
 
-$ wanix-rust mount-cat tcp://127.0.0.1:5640 docs/note.txt
+$ wanix mount-cat tcp://127.0.0.1:5640 docs/note.txt
 written across the wire
 ```
 
@@ -427,7 +427,7 @@ is exactly what the server delivered.)
 Then the new directory entry shows up over the wire:
 
 ```
-$ wanix-rust mount-ls tcp://127.0.0.1:5640 docs
+$ wanix mount-ls tcp://127.0.0.1:5640 docs
 note.txt
 ```
 
@@ -836,7 +836,7 @@ Server (terminal 1):
 $ SROOT=$(mktemp -d) && mkdir -p "$SROOT/projects/foo" "$SROOT/docs" \
     && echo "foo project file" > "$SROOT/projects/foo/main.rs" \
     && echo "secret docs"      > "$SROOT/docs/readme.txt"
-$ wanix-rust serve --root "$SROOT" --p9 127.0.0.1:5652 --once \
+$ wanix serve --root "$SROOT" --p9 127.0.0.1:5652 --once \
     --peer 2222222222222222222222222222222222222222222222222222222222222222 \
     --grant projects/foo:projects/foo:rw \
     --grant docs:docs:ro
@@ -846,7 +846,7 @@ serve: 9P (tcp) listening on 127.0.0.1:5652
 Importer (terminal 2):
 
 ```
-$ wanix-rust mount-ls tcp://127.0.0.1:5652
+$ wanix mount-ls tcp://127.0.0.1:5652
 failed to negotiate 9P session: 9P server returned errno 13
 $ echo $?
 1
@@ -924,7 +924,7 @@ internet, and not one line of `wanix-fs`, `wanix-vfs`, `wanix-protocol`,
   it in a `BlockingDuplex`, and hands it to `RemoteFs`. Both directions drive the
   async stream halves on a **held** runtime `Handle`, never `block_on` on a
   worker thread.
-- **`wanix-rust mesh-serve` and the `iroh://` mount scheme** — the CLI surface:
+- **`wanix mesh-serve` and the `iroh://` mount scheme** — the CLI surface:
   `mesh-serve --root DIR` binds an endpoint and prints `iroh://<peer-id>?addr=...`;
   the existing `mount-ls`/`mount-cat`/`mount-write` verbs now accept that
   `iroh://` ticket and dial the peer over QUIC, running *identically* to the
@@ -1118,9 +1118,9 @@ Server (terminal 1):
 ```
 $ SROOT=$(mktemp -d) && mkdir "$SROOT/docs" \
     && printf 'hello from node A over QUIC\n' > "$SROOT/greeting.txt"
-$ wanix-rust mesh-serve --root "$SROOT" --key "$SROOT/../node.key" --addr 127.0.0.1:5680
-wanix-rust mesh-serve: node 829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986
-wanix-rust mesh-serve: mount iroh://829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986?addr=127.0.0.1:5680
+$ wanix mesh-serve --root "$SROOT" --key "$SROOT/../node.key" --addr 127.0.0.1:5680
+wanix mesh-serve: node 829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986
+wanix mesh-serve: mount iroh://829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986?addr=127.0.0.1:5680
 ```
 
 The client (terminal 2) mounts that exact ticket and round-trips ls / cat /
@@ -1130,20 +1130,20 @@ stream:
 ```
 $ TICKET='iroh://829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986?addr=127.0.0.1:5680'
 
-$ wanix-rust mount-ls "$TICKET"
+$ wanix mount-ls "$TICKET"
 docs
 greeting.txt
 
-$ wanix-rust mount-cat "$TICKET" greeting.txt
+$ wanix mount-cat "$TICKET" greeting.txt
 hello from node A over QUIC
 
-$ wanix-rust mount-write "$TICKET" docs/note.txt "written across QUIC"
+$ wanix mount-write "$TICKET" docs/note.txt "written across QUIC"
 wrote 19 bytes to n/remote/docs/note.txt
 
-$ wanix-rust mount-cat "$TICKET" docs/note.txt
+$ wanix mount-cat "$TICKET" docs/note.txt
 written across QUIC
 
-$ wanix-rust mount-ls "$TICKET" docs
+$ wanix mount-ls "$TICKET" docs
 note.txt
 ```
 
@@ -1171,17 +1171,17 @@ before any walk.
 Server (terminal 1):
 
 ```
-$ wanix-rust mesh-serve --root "$SROOT" --key "$SROOT/../node2.key" --addr 127.0.0.1:5681 \
+$ wanix mesh-serve --root "$SROOT" --key "$SROOT/../node2.key" --addr 127.0.0.1:5681 \
     --peer 2222222222222222222222222222222222222222222222222222222222222222 \
     --grant docs:docs:ro
-wanix-rust mesh-serve: node b0afc03cd92636a572460d7579f502c53686a96193b69f690d54eba0a23b3299
-wanix-rust mesh-serve: mount iroh://b0afc03cd92636a572460d7579f502c53686a96193b69f690d54eba0a23b3299?addr=127.0.0.1:5681
+wanix mesh-serve: node b0afc03cd92636a572460d7579f502c53686a96193b69f690d54eba0a23b3299
+wanix mesh-serve: mount iroh://b0afc03cd92636a572460d7579f502c53686a96193b69f690d54eba0a23b3299?addr=127.0.0.1:5681
 ```
 
 Importer (terminal 2):
 
 ```
-$ wanix-rust mount-ls 'iroh://b0afc03cd92636a572460d7579f502c53686a96193b69f690d54eba0a23b3299?addr=127.0.0.1:5681'
+$ wanix mount-ls 'iroh://b0afc03cd92636a572460d7579f502c53686a96193b69f690d54eba0a23b3299?addr=127.0.0.1:5681'
 failed to dial iroh peer: failed to negotiate mesh 9P session: 9P server returned errno 13
 $ echo $?
 1
@@ -1203,7 +1203,7 @@ Serving the public endpoint with no grant gate would export the whole root
 read-write to anyone with the ticket. `mesh-serve` refuses that at parse time:
 
 ```
-$ wanix-rust mesh-serve --root /tmp
+$ wanix mesh-serve --root /tmp
 mesh-serve on a non-loopback endpoint (public, or a LAN --addr whose node id mDNS advertises) with no --peer/--grant exports the entire root read-write to anyone who can reach it; pass --peer HEX with --grant to gate access, --addr 127.0.0.1:PORT to serve a loopback-only endpoint, or --insecure-open to deliberately export it open
 ```
 
@@ -1477,10 +1477,10 @@ Node A (terminal 1):
 
 ```
 $ SROOT=$(mktemp -d)
-$ wanix-rust mesh-serve --root "$SROOT" --key "$SROOT/../A-node.key" \
+$ wanix mesh-serve --root "$SROOT" --key "$SROOT/../A-node.key" \
     --addr 127.0.0.1:5684 --wanix-services
-wanix-rust mesh-serve: node 986da0a25beef6984cb7c48c7b598ae7bec32b9e76329ca83ed5a8d8eee3ce95
-wanix-rust mesh-serve: mount iroh://986da0a25beef6984cb7c48c7b598ae7bec32b9e76329ca83ed5a8d8eee3ce95?addr=127.0.0.1:5684
+wanix mesh-serve: node 986da0a25beef6984cb7c48c7b598ae7bec32b9e76329ca83ed5a8d8eee3ce95
+wanix mesh-serve: mount iroh://986da0a25beef6984cb7c48c7b598ae7bec32b9e76329ca83ed5a8d8eee3ce95?addr=127.0.0.1:5684
 ```
 
 Node B (terminal 2) mounts that exact ticket and operates node A's key store as
@@ -1492,28 +1492,28 @@ imported `#kv` device. (`mount-*` binds the remote at `n/remote`; the path
 $ TICKET='iroh://986da0a25beef6984cb7c48c7b598ae7bec32b9e76329ca83ed5a8d8eee3ce95?addr=127.0.0.1:5684'
 
 # node A authors a config key in its store (the value A owns):
-$ wanix-rust mount-write "$TICKET" '#kv/config' 'region=us
+$ wanix mount-write "$TICKET" '#kv/config' 'region=us
 replicas=3'
 wrote 20 bytes to n/remote/#kv/config
 
 # node B reads node A's config over QUIC — the streamed, non-seekable value,
 # byte-exact:
-$ wanix-rust mount-cat "$TICKET" '#kv/config'
+$ wanix mount-cat "$TICKET" '#kv/config'
 region=us
 replicas=3
 
 # node B writes a result back into node A's key store over QUIC:
-$ wanix-rust mount-write "$TICKET" '#kv/result' 'status=ok
+$ wanix mount-write "$TICKET" '#kv/result' 'status=ok
 built=42'
 wrote 18 bytes to n/remote/#kv/result
 
 # node B reads the result it just wrote, straight back over the mesh:
-$ wanix-rust mount-cat "$TICKET" '#kv/result'
+$ wanix mount-cat "$TICKET" '#kv/result'
 status=ok
 built=42
 
 # node B lists node A's key store:
-$ wanix-rust mount-ls "$TICKET" '#kv'
+$ wanix mount-ls "$TICKET" '#kv'
 config
 result
 ```
@@ -1524,7 +1524,7 @@ session (a new mount, a new QUIC connection) reads it straight back — proving 
 buffer:
 
 ```
-$ wanix-rust mount-cat "$TICKET" '#kv/result'
+$ wanix mount-cat "$TICKET" '#kv/result'
 status=ok
 built=42
 ```
@@ -1759,7 +1759,7 @@ MD5 (world/a/lib.js) = 987f3cfa31d7d224eddecfe9a16bdeab
 MD5 (world/b/lib.js) = 987f3cfa31d7d224eddecfe9a16bdeab    # identical content
 
 # --- Node A: capsule save -> the capsule id (the BlobTicket payload) ---
-$ wanix-rust capsule save world --store store-A
+$ wanix capsule save world --store store-A
 capsule ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df saved (4 files) from world
 load with: wanix capsule load ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df <DIR>
 
@@ -1783,7 +1783,7 @@ $ cat store-A/ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df
 # --- Node B: a different machine, empty store, given only A's blob objects
 #     (exactly the bytes iroh-blobs fetches+verifies over QUIC). It loads the
 #     world by the capsule id alone. ---
-$ wanix-rust capsule load ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df restored --store store-B
+$ wanix capsule load ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df restored --store store-B
 capsule ac8b46d6799fccb531e523dfb3a0a672162b582427ca66a22c8ca5a31c0be8df restored (4 files, 124 bytes) to restored
 
 # The materialized world is byte-for-byte node A's world.
@@ -1792,7 +1792,7 @@ IDENTICAL
 
 # "Verifies every blob" is real: tamper with one blob and the load refuses.
 $ printf 'console.log("PWNED");\n' > store-evil/4846acf...main.js-blob
-$ wanix-rust capsule load ac8b46d6...e8df restored-evil --store store-evil
+$ wanix capsule load ac8b46d6...e8df restored-evil --store store-evil
 capsule load: hash mismatch: requested 4846acf69b223aef6b1d99daa51f0bdbfc2991330c7c8c6622a27012b188a78b, got 141b7ff84dcebe1757a2b372449d4dca83893e55d5fefe55aa577490ee4dbdd5
 # exit status 1 — the corrupted world never materializes.
 ```
@@ -1900,7 +1900,7 @@ open internet, with a default jail.
 
 - **The `wanix-mesh` cpu plane and the `wanix cpu` CLI.** `MeshNode::serve_cpu` accepts
   on ALPN `wanix/cpu/1` behind a grant allowlist; `MeshNode::dial_cpu` is the caller.
-  `wanix-rust cpu --node iroh://PEER -- KIND PROGRAM [ARG…]` binds an ephemeral dialer
+  `wanix cpu --node iroh://PEER -- KIND PROGRAM [ARG…]` binds an ephemeral dialer
   identity, reverse-exports the local `--cwd` (read-only unless `--write`), runs the job
   on the data node, and writes its captured stdout/stderr and exit code to the process.
 
@@ -2062,18 +2062,18 @@ build.js`:
 ```sh
 # The command form: reverse-export DIR read-only by default, run KIND PROGRAM on the
 # data node against it; --write opts the export into read-write so outputs land back.
-$ wanix-rust help | grep -A1 "cpu --node"
-       wanix-rust cpu --node iroh://PEER[?addr=IP:PORT] [--cwd DIR] [--write] [--env KEY=VALUE ...] -- KIND PROGRAM [ARG ...]
+$ wanix help | grep -A1 "cpu --node"
+       wanix cpu --node iroh://PEER[?addr=IP:PORT] [--cwd DIR] [--write] [--env KEY=VALUE ...] -- KIND PROGRAM [ARG ...]
          (Plan 9 cpu over the mesh: reverse-exports DIR read-only by default and runs KIND PROGRAM on the data node against it; --write opts the export into read-write)
 
 # The grammar is enforced: options before `--`, the job command after it, --node required.
-$ wanix-rust cpu --node iroh://peer
+$ wanix cpu --node iroh://peer
 cpu requires `-- KIND PROGRAM [ARG ...]` after its options          # exit 2
 
-$ wanix-rust cpu -- qjs build.js
+$ wanix cpu -- qjs build.js
 cpu requires --node iroh://PEER[?addr=IP:PORT] naming the data node # exit 2
 
-$ wanix-rust cpu --node "not a ticket" -- qjs build.js
+$ wanix cpu --node "not a ticket" -- qjs build.js
 mesh address must start with iroh://: not a ticket                  # exit 2
 ```
 

@@ -34,15 +34,15 @@ Pass `--wanix-services` and `serve` stops exporting a bare directory: it binds t
 
 ## What & why
 
-A plain `wanix-rust serve --root DIR` exports `DIR` as 9P and nothing else. That is honest but inert — there is no task table to launch a `qjs` script, no `#kv` to hold app state, no `#agent` to drive. The `--wanix-services` flag composes those capabilities into the served namespace from a single source of truth, so the cockpit (or any direct-9P client) gets the same device set every time, and discovery tells it the set by name. The whole point of one bind list is that "what got bound," "what discovery advertises," and "what the tests exercise" cannot drift apart.
+A plain `wanix serve --root DIR` exports `DIR` as 9P and nothing else. That is honest but inert — there is no task table to launch a `qjs` script, no `#kv` to hold app state, no `#agent` to drive. The `--wanix-services` flag composes those capabilities into the served namespace from a single source of truth, so the cockpit (or any direct-9P client) gets the same device set every time, and discovery tells it the set by name. The whole point of one bind list is that "what got bound," "what discovery advertises," and "what the tests exercise" cannot drift apart.
 
 ## Show, then name: turn on the device set
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust serve --root /tmp/world --wanix-services
+wanix serve --root /tmp/world --wanix-services
 ```
 
 Now the served root carries seven `#`-named devices alongside your files. Over 9P:

@@ -6,131 +6,131 @@ use super::CliOutput;
 /// has something to run before reading the wall.
 const QUICK_START: &str = concat!(
     "quick start:\n",
-    "  wanix-rust qjs main.js                                       ",
+    "  wanix qjs main.js                                       ",
     "# run JavaScript as a Wanix task\n",
-    "  wanix-rust mesh-serve --root /tmp/share --addr 127.0.0.1:0   ",
+    "  wanix mesh-serve --root /tmp/share --addr 127.0.0.1:0   ",
     "# prints a dialable iroh:// ticket\n",
-    "  wanix-rust mount-ls 'iroh://PEER?addr=IP:PORT'               ",
+    "  wanix mount-ls 'iroh://PEER?addr=IP:PORT'               ",
     "# paste the ticket the server printed\n",
-    "  wanix-rust SUBCOMMAND --help                                 ",
+    "  wanix SUBCOMMAND --help                                 ",
     "# usage for one subcommand\n",
 );
 
 pub(super) const USAGE: &str = concat!(
-    "usage: wanix-rust qjs [--env KEY=VALUE ...] [--cwd DIR] ",
+    "usage: wanix qjs [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
     "[--interrupt-after N] [--memory-limit-bytes N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
-    "       wanix-rust qjs-term [--env KEY=VALUE ...] [--cwd DIR] ",
+    "       wanix qjs-term [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--event-loop-ms N] [--ready-io-turns N] ",
     "[--feed-after-eval TEXT ...] [--feed-after-eval-file PATH|- ...] ",
     "[--feed-after-eval-lines PATH|- ...] ",
     "[--resize-after-eval COLSxROWS ...] ",
     "[--interrupt-after N] [--memory-limit-bytes N] ",
     "[--mount HOST=GUEST ...] <script.js> [-- arg ...]\n",
-    "       wanix-rust qjs-shell [--raw] [--env KEY=VALUE ...] [--cwd DIR] ",
+    "       wanix qjs-shell [--raw] [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--event-loop-ms N] [--ready-io-turns N] ",
     "[--interrupt-after N] [--memory-limit-bytes N] ",
     "[--mount HOST=GUEST ...] [--mount-mesh (IROH_URL=GUEST | NAME[=GUEST]) ...]\n",
-    "       wanix-rust qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
+    "       wanix qjs-snapshot [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--interrupt-after N] ",
     "[--memory-limit-bytes N] [--event-loop-ms N] [--ready-io-turns N] ",
     "[--mount HOST=GUEST ...] ",
     "--snapshot FILE <script.js> [-- arg ...]\n",
-    "       wanix-rust qjs-resume [--env KEY=VALUE ...] [--cwd DIR] ",
+    "       wanix qjs-resume [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--interrupt-after N] ",
     "[--memory-limit-bytes N] [--event-loop-ms N] [--ready-io-turns N] ",
     "[--mount HOST=GUEST ...] ",
     "--snapshot FILE <script.js> [-- arg ...]\n",
-    "       wanix-rust qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
+    "       wanix qjs-restore [--cwd DIR] [--before-env KEY=VALUE ...] ",
     "[--after-env KEY=VALUE ...] [--before-arg VALUE ...] [--after-arg VALUE ...] ",
     "[--mount HOST=GUEST ...] <before.js> <after.js>\n",
-    "       wanix-rust wasm [--env KEY=VALUE ...] [--cwd DIR] ",
+    "       wanix wasm [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--stdin TEXT | --stdin-file PATH|-] [--mount-mesh (IROH_URL=GUEST | NAME[=GUEST]) ...] ",
     "FILE.wasm [args...] ",
     "(command-style WASI subset, no poll readiness; .wasm is also a first-class Wanix task driver; ",
     "--mount-mesh imports a served namespace at GUEST over the native mesh wire — a bare catalog ",
     "NAME resolves through ~/.wanix/catalog at launch and mounts at n/NAME)\n",
-    "       wanix-rust sh [-c LINE] [--env KEY=VALUE ...] [--cwd DIR] ",
+    "       wanix sh [-c LINE] [--env KEY=VALUE ...] [--cwd DIR] ",
     "[--mount-mesh (IROH_URL=GUEST | NAME[=GUEST]) ...]\n",
     "         (the Wanix-native shell as a wasm task: -c runs one line against the --cwd root ",
     "with #pipe, the command bin, and any mesh mounts bound; without -c it is an interactive ",
     "REPL on the host terminal — the guest shell owns echo and line editing, Ctrl-D exits)\n",
-    "       wanix-rust p9-stdio --root DIR\n",
-    "       wanix-rust mesh-serve (--root DIR | --volume NAME) [--key FILE] [--addr IP:PORT] ",
+    "       wanix p9-stdio --root DIR\n",
+    "       wanix mesh-serve (--root DIR | --volume NAME) [--key FILE] [--addr IP:PORT] ",
     "[--peer HEX --grant ANAME:PREFIX:RIGHTS ...] [--wanix-services] [--insecure-open]\n",
     "         (--wanix-services binds the #task/#agent exec devices = remote code execution; ",
     "local-trust only, so it requires a loopback --addr 127.0.0.1:PORT and is refused on any ",
     "non-loopback endpoint — a LAN --addr is mDNS-discoverable. ",
     "--insecure-open exports the host directory read-write, NOT the exec devices, to anyone with the ticket)\n",
-    "       wanix-rust cpu --node iroh://PEER[?addr=IP:PORT] [--cwd DIR] [--write] ",
+    "       wanix cpu --node iroh://PEER[?addr=IP:PORT] [--cwd DIR] [--write] ",
     "[--env KEY=VALUE ...] -- KIND PROGRAM [ARG ...]\n",
     "         (Plan 9 cpu over the mesh: reverse-exports DIR read-only by default and runs ",
     "KIND PROGRAM on the data node against it; --write opts the export into read-write)\n",
-    "       wanix-rust mount-ls (tcp://HOST:PORT | iroh://PEER[?addr=IP:PORT] | NAME) [PATH]\n",
-    "       wanix-rust mount-cat (tcp://HOST:PORT | iroh://PEER | NAME) PATH [--follow]\n",
+    "       wanix mount-ls (tcp://HOST:PORT | iroh://PEER[?addr=IP:PORT] | NAME) [PATH]\n",
+    "       wanix mount-cat (tcp://HOST:PORT | iroh://PEER | NAME) PATH [--follow]\n",
     "         (--follow streams incrementally on one open handle with no byte cap until EOF — ",
     "the consumer for never-EOF device streams like #pipe/<id>/data; Ctrl-C is plain process exit)\n",
-    "       wanix-rust mount-write (tcp://HOST:PORT | iroh://PEER | NAME) PATH TEXT\n",
+    "       wanix mount-write (tcp://HOST:PORT | iroh://PEER | NAME) PATH TEXT\n",
     "         (iroh://PEER is the resource identity, found by always-on mDNS on the LAN/same machine; ",
     "?addr=IP:PORT is only a direct-route hint — a stale hint falls back to mDNS/relay discovery, ",
     "and no route can ever mount a peer that fails the identity check; a bare NAME — no scheme, ",
     "no slash — resolves through ~/.wanix/catalog at invocation time)\n",
-    "       wanix-rust rootfs --archive FILE.tgz --out DIR [--json]\n",
-    "       wanix-rust new (--js NAME | --rust NAME) [--dir DIR]\n",
-    "       wanix-rust catalog add NAME IROH_URL [--description TEXT] [--tags a,b] [--force]\n",
-    "       wanix-rust catalog (show NAME | rm NAME | ls [--no-probe])\n",
+    "       wanix rootfs --archive FILE.tgz --out DIR [--json]\n",
+    "       wanix new (--js NAME | --rust NAME) [--dir DIR]\n",
+    "       wanix catalog add NAME IROH_URL [--description TEXT] [--tags a,b] [--force]\n",
+    "       wanix catalog (show NAME | rm NAME | ls [--no-probe])\n",
     "         (the local address book under ~/.wanix/catalog — ADR 0007 Layer 1 naming, no ACLs: ",
     "one NAME -> iroh:// ticket per entry, names are lowercase [a-z0-9-] so they can never be ",
     "mistaken for a ticket or path; ls probes each entry with one bounded dial and renders ",
     "online/offline/unknown — offline means nothing answered, which pre-ACL is all it can know)\n",
-    "       wanix-rust recipe save NAME --mount (NAME[=PATH] | IROH_URL=PATH) ... ",
+    "       wanix recipe save NAME --mount (NAME[=PATH] | IROH_URL=PATH) ... ",
     "[--description TEXT] [--run LINE] [--force]\n",
     "         (a saved mount+run composition at ~/.wanix/recipes/<name>.recipe — authored ",
     "explicitly, never captured; NAME targets resolve through the catalog at save time and the ",
     "resolved address is recorded as a drift-check hint; a bare NAME mounts at n/NAME)\n",
-    "       wanix-rust recipe run NAME [-- ARG ...]\n",
+    "       wanix recipe run NAME [-- ARG ...]\n",
     "         (resolves the binds through the catalog at launch — drift from the saved hint warns ",
     "loudly, a vanished entry falls back to the hint — composes the mounts, and runs the recipe's ",
     "run line through sh -c with the -- words appended; a recipe without a run line opens an ",
     "interactive sh over its mounts)\n",
-    "       wanix-rust volume (create NAME | ls)   (persistent volumes under ~/.wanix/volumes)\n",
-    "       wanix-rust volume serve (--volume NAME ... | --all) [--listen IP:PORT] ",
+    "       wanix volume (create NAME | ls)   (persistent volumes under ~/.wanix/volumes)\n",
+    "       wanix volume serve (--volume NAME ... | --all) [--listen IP:PORT] ",
     "[--register NAME] [--insecure-open]",
     "   (one mesh endpoint + ticket per volume; use --listen port 0 for multiple; ",
     "--register NAME writes/updates a catalog entry per announced ticket — NAME itself for one ",
     "resource, NAME-<resource> for several)\n",
-    "       wanix-rust tool serve [--config TOOLS.toml] [--tool NAME ...] [--listen IP:PORT] ",
+    "       wanix tool serve [--config TOOLS.toml] [--tool NAME ...] [--listen IP:PORT] ",
     "[--register NAME] [--insecure-open]\n",
     "         (ToolFS devices over the native mesh — one endpoint + ticket per tool, ",
     "use --listen port 0 for multiple; built-ins: model (deterministic fake), sha256, upper; ",
     "--config tools.toml serves real host programs with a host-fixed command/argv, ",
     "stdin/tempfile mapping, empty env, and a private per-job temp cwd; ",
     "every connection sees only its own jobs, keyed by the verified peer id)\n",
-    "       wanix-rust app serve --app DIR --state DIR [--name NAME] [--listen IP:PORT] ",
+    "       wanix app serve --app DIR --state DIR [--name NAME] [--listen IP:PORT] ",
     "[--restart on-failure] [--register NAME] [--insecure-open]\n",
     "         (a guest-defined AppResource over the native mesh: runs DIR's qjs app — see ",
     "examples/chatroom — as a resident task behind the wanix-appfs adapter, durable state ",
     "mounted at /state; attribution and presence come from the verified peer id — presented ",
     "as iroh:<hex> — never the payload; --restart on-failure re-runs an exited guest with ",
     "capped backoff behind the same ticket)\n",
-    "       wanix-rust agent [--fake] [--cwd DIR] [--world DIR] <prompt>\n",
-    "       wanix-rust capsule (save DIR | load CAPSULE_ID DIR) [--store DIR]\n",
-    "       wanix-rust qemu --root DIR [--kernel PATH] [--initrd PATH] [--cmdline TEXT] [--append TEXT ...] ",
+    "       wanix agent [--fake] [--cwd DIR] [--world DIR] <prompt>\n",
+    "       wanix capsule (save DIR | load CAPSULE_ID DIR) [--store DIR]\n",
+    "       wanix qemu --root DIR [--kernel PATH] [--initrd PATH] [--cmdline TEXT] [--append TEXT ...] ",
     "[--qemu-bin PATH] [--memory-mb N] ",
     "[--mount-tag TAG] [--security-model MODEL] [--p9-msize N] ",
     "[--json] [--no-kvm] [--exec]\n",
-    "       wanix-rust serve [--root DIR | DIR] [--listen HOST:PORT] ",
+    "       wanix serve [--root DIR | DIR] [--listen HOST:PORT] ",
     "[--p9 HOST:PORT [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]] ",
     "[--bind NAME=DIR | NAME=iroh://PEER | NAME=CATALOG_NAME ...] ",
     "[--bundle NAME] [--wanix-services] [--once]\n",
-    "       wanix-rust --help",
+    "       wanix --help",
 );
 
 pub(super) fn help_output() -> CliOutput {
     CliOutput::new(
         format!(
-            "wanix-rust: {}\n\n{QUICK_START}\n{USAGE}\n",
+            "wanix: {}\n\n{QUICK_START}\n{USAGE}\n",
             wanix_qjs::FIRST_DEMO_TARGET
         )
         .into_bytes(),
@@ -163,15 +163,15 @@ pub(super) fn subcommand_help_output(command: &str) -> Option<CliOutput> {
         text.push_str(line);
         text.push('\n');
     }
-    text.push_str("(see 'wanix-rust --help' for all commands)\n");
+    text.push_str("(see 'wanix --help' for all commands)\n");
     Some(CliOutput::new(text.into_bytes(), Vec::new(), 0))
 }
 
-/// Extracts the [`USAGE`] lines belonging to `command`: every `wanix-rust
+/// Extracts the [`USAGE`] lines belonging to `command`: every `wanix
 /// <command> ...` form plus the indented parenthetical notes that follow one.
 fn usage_lines_for(command: &str) -> Option<Vec<&'static str>> {
     if command.starts_with('-') {
-        // A flag is never a subcommand (the `wanix-rust --help` usage line
+        // A flag is never a subcommand (the `wanix --help` usage line
         // would otherwise match itself).
         return None;
     }
@@ -179,7 +179,7 @@ fn usage_lines_for(command: &str) -> Option<Vec<&'static str>> {
     let mut last_matched = false;
     for raw in USAGE.lines() {
         let line = raw.trim_start_matches("usage: ").trim_start();
-        if let Some(rest) = line.strip_prefix("wanix-rust ") {
+        if let Some(rest) = line.strip_prefix("wanix ") {
             last_matched = rest.split_whitespace().next() == Some(command);
             if last_matched {
                 matched.push(line);
@@ -218,9 +218,9 @@ mod tests {
     fn subcommand_help_extracts_only_the_named_command() {
         let output = subcommand_help_output("qjs").unwrap();
         let text = String::from_utf8(output.stdout().to_vec()).unwrap();
-        assert!(text.starts_with("usage: wanix-rust qjs "), "{text}");
-        assert!(!text.contains("wanix-rust qjs-term"), "{text}");
-        assert!(text.contains("wanix-rust --help"), "{text}");
+        assert!(text.starts_with("usage: wanix qjs "), "{text}");
+        assert!(!text.contains("wanix qjs-term"), "{text}");
+        assert!(text.contains("wanix --help"), "{text}");
     }
 
     #[test]
@@ -232,7 +232,7 @@ mod tests {
                 .to_vec(),
         )
         .unwrap();
-        assert!(text.contains("wanix-rust mesh-serve"), "{text}");
+        assert!(text.contains("wanix mesh-serve"), "{text}");
         assert!(text.contains("--insecure-open"), "{text}");
     }
 

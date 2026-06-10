@@ -47,11 +47,11 @@ canonicalCaveatFor: [engine-pinned-guest-clock]
 
 Serve a small qjs program as a mesh-mounted chatroom, post from two identities, claim display nicks the transport can't be fooled by, watch live delivery with `mount-cat --follow`, fail to impersonate your friend, and restart the room without losing a message.
 
-This flow is the [guest-defined resources](/concepts/guest-defined-resources) idea run end to end. Volumes made *data* a resource; tools made *one operation* a resource ([jobs are files](/concepts/jobs-are-files)). Here a running *program* is the resource: `wanix-rust app serve` turns a small JavaScript file into a mounted filesystem named by one `iroh://` ticket, and everything social about a chatroom — who said what, who is here, what arrives live — falls out of machinery the host already had. One machine, two terminals, about fifteen minutes. The tested transcript with real outputs is [Recipe 07](/recipes/07-chatroom-over-the-mesh).
+This flow is the [guest-defined resources](/concepts/guest-defined-resources) idea run end to end. Volumes made *data* a resource; tools made *one operation* a resource ([jobs are files](/concepts/jobs-are-files)). Here a running *program* is the resource: `wanix app serve` turns a small JavaScript file into a mounted filesystem named by one `iroh://` ticket, and everything social about a chatroom — who said what, who is here, what arrives live — falls out of machinery the host already had. One machine, two terminals, about fifteen minutes. The tested transcript with real outputs is [Recipe 07](/recipes/07-chatroom-over-the-mesh).
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 ## 1. The room is a program you can read
@@ -142,18 +142,18 @@ function post(request, bodyText) {
 
 ```sh
 # Terminal 1 — parks forever; Ctrl-C to stop.
-wanix-rust app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0
+wanix app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0
 ```
 
 ```text
 chatroom	iroh://71b44428...?addr=127.0.0.1:48171
-# mount with: wanix-rust mount-ls 'iroh://71b44428...?addr=127.0.0.1:48171'
+# mount with: wanix mount-ls 'iroh://71b44428...?addr=127.0.0.1:48171'
 ```
 
 The same two-line record every resource server prints: `iroh://PEER` is the room's persisted ed25519 identity ([the key is the address](/concepts/key-is-the-address)), `?addr=` is a route hint. The first ever start takes noticeably longer (~25 s in our debug-build run) while the QuickJS engine wasm compiles into the module cache; after that it is about a second. No `--addr` is refused outright — default-deny, same as `tool serve` and `volume serve`.
 
 ```sh
-wanix-rust mount-ls 'iroh://71b44428...?addr=127.0.0.1:48171'
+wanix mount-ls 'iroh://71b44428...?addr=127.0.0.1:48171'
 # latest  nick  post  roster  status  stream  who
 ```
 
@@ -161,8 +161,8 @@ wanix-rust mount-ls 'iroh://71b44428...?addr=127.0.0.1:48171'
 
 ```sh
 T='iroh://71b44428...?addr=127.0.0.1:48171'   # your full ticket from step 2
-wanix-rust mount-write "$T" post 'morning! mounted the room over the mesh'
-wanix-rust mount-cat "$T" latest
+wanix mount-write "$T" post 'morning! mounted the room over the mesh'
+wanix mount-cat "$T" latest
 ```
 
 (Serve with `--register room` and `"$T"` can be spelled `room` everywhere below; the room also ships shell verbs — `room:post`, `room:watch` — through its `bin/`. Both executed in [Recipe 10](/recipes/10-name-your-world) and [Name your world](/learn/name-your-world).)
@@ -178,10 +178,10 @@ One detail to notice now: `at` is real wall clock, but not the guest's — it is
 Now claim a nick and watch the rendering update — even for the message already posted:
 
 ```sh
-wanix-rust mount-write "$T" nick 'ada'
-wanix-rust mount-cat "$T" roster
+wanix mount-write "$T" nick 'ada'
+wanix mount-cat "$T" roster
 # {"iroh:36469a4270682126...":"ada"}
-wanix-rust mount-cat "$T" latest
+wanix mount-cat "$T" latest
 # {"at":1781080495768,"from":"ada (36469a42)","body":"morning! mounted the room over the mesh"}
 ```
 
@@ -192,8 +192,8 @@ A nick is display sugar you can only ever claim for *yourself*, never authority:
 A second person is just a second key. Every per-user Wanix path resolves under `$HOME/.wanix/` (`crates/wanix-id/src/identity.rs`), so an alternate `HOME` is a complete second principal — useful for demos, and an honest statement of what a principal *is*:
 
 ```sh
-HOME=/tmp/bob wanix-rust mount-write "$T" post 'hey A — same room, different key'
-HOME=/tmp/bob wanix-rust mount-cat "$T" latest
+HOME=/tmp/bob wanix mount-write "$T" post 'hey A — same room, different key'
+HOME=/tmp/bob wanix mount-cat "$T" latest
 ```
 
 ```text
@@ -209,11 +209,11 @@ First contact mints `/tmp/bob/.wanix/dialer.key`; B is `ed2f9c56...` from then o
 
 ```sh
 # Terminal 2 — a real subscription that also prints lines as they arrive:
-HOME=/tmp/bob wanix-rust mount-cat "$T" stream --follow
+HOME=/tmp/bob wanix mount-cat "$T" stream --follow
 ```
 
 ```sh
-wanix-rust mount-cat "$T" who
+wanix mount-cat "$T" who
 # iroh:ed2f9c560c4e8152...
 ```
 
@@ -226,7 +226,7 @@ Every open file on the native mesh wire rides its own QUIC stream ([ADR 0008](/c
 `mount-cat --follow` is the consumer built for exactly this shape: it holds one open handle and prints each read as it returns, instead of collecting until EOF. Terminal 2 is already running it. Post from terminal 1:
 
 ```sh
-wanix-rust mount-write "$T" post 'this line should show up live'
+wanix mount-write "$T" post 'this line should show up live'
 ```
 
 ```text
@@ -240,9 +240,9 @@ wanix-rust mount-write "$T" post 'this line should show up live'
 B claims to be A inside the payload:
 
 ```sh
-HOME=/tmp/bob wanix-rust mount-write "$T" post \
+HOME=/tmp/bob wanix mount-write "$T" post \
   '{"from":"36469a42...","body":"hi, this is definitely A"}'
-wanix-rust mount-cat "$T" latest | tail -1
+wanix mount-cat "$T" latest | tail -1
 ```
 
 ```text

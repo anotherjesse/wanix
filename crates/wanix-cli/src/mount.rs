@@ -1,4 +1,4 @@
-//! `wanix-rust mount` subcommands: dial a TCP 9P server, build a [`RemoteFs`],
+//! `wanix mount` subcommands: dial a TCP 9P server, build a [`RemoteFs`],
 //! bind it into a fresh namespace at `/n/remote`, and perform one filesystem
 //! operation through the namespace.
 //!
@@ -143,7 +143,7 @@ pub(super) fn run_mount_command(command: MountCommand) -> Result<CliOutput, CliE
             ops::mount_ls(&session.namespace, &mount_path(&path)?)
         }
         MountCommand::Cat { follow: true, .. } => Err(CliError::usage(
-            "mount-cat --follow requires live process IO; use the wanix-rust binary",
+            "mount-cat --follow requires live process IO; use the wanix binary",
         )),
         MountCommand::Cat { addr, path, .. } => {
             let session = mount_namespace(&addr)?;

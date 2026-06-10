@@ -57,10 +57,10 @@ You see the boundary directly when you want a host directory inside a guest:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 # The host path is NOT ambient. It enters the guest only as an explicit mount.
-wanix-rust qjs --mount /host/project=workspace main.js
+wanix qjs --mount /host/project=workspace main.js
 ```
 
 The guest sees `workspace/...`, a Wanix namespace path. The host path `/host/project` is not authority the guest holds; it is authority you *granted* by binding it (`docs/rust-vs-go-wanix.md:242-255`). That distinction is minor for a local demo and load-bearing for cloud execution: you say *this* task gets *this* namespace, *these* mounts, *these* fds — and "the host filesystem" does not leak in because it happened to be convenient. See [host, not ambient, authority](/concepts/host-not-ambient-authority).

@@ -9,7 +9,7 @@ HTTP and filesystem surfaces. It is a sibling to
 **Status update (2026-06): v0 shipped; wire v0.2 shipped.** The filesystem
 surface and the file2chan adapter live at `crates/wanix-appfs` (discrete ops
 as newline-JSON events to the guest, a host pump thread for guest output,
-host-owned never-EOF stream files, `open_view(principal)`), and `wanix-rust
+host-owned never-EOF stream files, `open_view(principal)`), and `wanix
 app serve` (`crates/wanix-cli/src/app/`) runs the bundled `examples/chatroom`
 qjs guest as a mesh-served AppResource — the Chatroom Proof below, pinned by
 `crates/wanix-cli/src/app/serve/tests.rs` and walked through in

@@ -104,7 +104,7 @@ The smallest "real database inside Wanix": an in-memory `Arc<RwLock<BTreeMap<Str
 - **`#kv/<key>`** is a file. Open read-only → `KvReadFile` serving a *snapshot taken at open* so a concurrent overwrite cannot tear an in-flight read (`files.rs:7-33`). Open with `write|create|truncate` → `KvWriteFile`, which buffers writes and commits the whole buffer on `Drop` (close) under one write lock (`files.rs:55-76`). The key is created eagerly at open (`ensure_key`, `lib.rs:93-100`) so a stat between open and close (the 9P `Tlcreate` flow) still finds it.
 - **list `#kv`** (`read_dir` on root) enumerates keys (`lib.rs:142-154`); **remove** a key deletes the entry (`remove_file`, `lib.rs:156-165`).
 - Path rule: a single segment is a key; any `/` in the path → `NotFound` (`parse_path`, `lib.rs:109-118`). Modes: value file `0o666`, dir `0o555`.
-- Recipe 04 (`docs/recipes/04-tiny-http-app-with-kv.md`) builds a counter handler doing read-modify-write on `#kv/counter`; state survives between requests only because the `KvDevice` lives for the serve process's lifetime. In a standalone `wanix-rust qjs` (no serve) `#kv` is unbound, so a fresh device resets the counter each run.
+- Recipe 04 (`docs/recipes/04-tiny-http-app-with-kv.md`) builds a counter handler doing read-modify-write on `#kv/counter`; state survives between requests only because the `KvDevice` lives for the serve process's lifetime. In a standalone `wanix qjs` (no serve) `#kv` is unbound, so a fresh device resets the counter each run.
 
 ### `#pipe` — in-memory byte channels (`crates/wanix-pipe/`)
 Shaped like `#term`: allocate then operate by id.
@@ -206,7 +206,7 @@ No ethernet/vnet. No public multi-user auth. Exec devices (`#task`/`#agent`/`#cp
 
 ## Serve surface, cockpit, and demos
 
-This brief covers the `wanix-rust serve` HTTP/9P composition layer, the browser
+This brief covers the `wanix serve` HTTP/9P composition layer, the browser
 "cockpit" (a Code OSS / VS Code web extension under `workbench/`), and every
 demoable thing wired through them. It reflects the *current* state on the
 `cockpit-mesh-integration` branch, where browser validation has reached **PASS**

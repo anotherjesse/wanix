@@ -306,7 +306,7 @@
       "crate-layering"
     ],
     "demoRefs": [
-      "wanix-rust wasm FILE.wasm"
+      "wanix wasm FILE.wasm"
     ],
     "sourceRefs": [
       "crates/wanix-task/src/driver.rs",
@@ -490,7 +490,7 @@
       "bounded-execution-policy"
     ],
     "demoRefs": [
-      "wanix-rust qjs main.js",
+      "wanix qjs main.js",
       "Pass process context into a task"
     ],
     "sourceRefs": [
@@ -529,7 +529,7 @@
       "compiled-artifact-cache"
     ],
     "demoRefs": [
-      "wanix-rust wasm FILE.wasm",
+      "wanix wasm FILE.wasm",
       "shared_vfs differential"
     ],
     "sourceRefs": [
@@ -857,7 +857,7 @@
       "the-task-device"
     ],
     "demoRefs": [
-      "wanix-rust qjs-shell / qjs-term",
+      "wanix qjs-shell / qjs-term",
       "QjsShellSession (served shell)"
     ],
     "sourceRefs": [
@@ -894,7 +894,7 @@
       "guest-js-guardrails"
     ],
     "demoRefs": [
-      "wanix-rust qjs-shell / qjs-term"
+      "wanix qjs-shell / qjs-term"
     ],
     "sourceRefs": [
       "examples/qjs-term-shell-demo.js",
@@ -1931,7 +1931,7 @@
       "Reverse-export a scoped namespace; the acceptor runs run_job: allocate_root -> task.bind(world,'.','.') -> configure -> start",
       "ExportScope: job subtree as a SubtreeFs, read-only by default (--write to opt in), only explicitly granted services",
       "CpuAcceptor is grant-allowlisted: a non-allowlisted peer's connection is closed before any stream is accepted",
-      "The wanix-rust cpu CLI grammar (--node, --, --cwd, --write)",
+      "The wanix cpu CLI grammar (--node, --, --cwd, --write)",
       "Status / honest limits: v1 output is a single batch after start returns (not streamed); CpuEvent::Cancel stops the caller draining, not the remote computation"
     ],
     "prerequisites": [
@@ -2290,7 +2290,7 @@
     "pageType": "concept",
     "audience": "developer",
     "persona": "Theo, the integrator / extension author",
-    "oneLiner": "wanix-rust serve combines static HTTP, the discovery doc, direct 9P over WebSocket, the qjs-shell WebSocket, and the HTTP-app route on one listener without making the 9P server own HTTP/browser policy.",
+    "oneLiner": "wanix serve combines static HTTP, the discovery doc, direct 9P over WebSocket, the qjs-shell WebSocket, and the HTTP-app route on one listener without making the 9P server own HTTP/browser policy.",
     "outline": [
       "The one-liner and what serve composes",
       "The four 9P transports (p9-stdio, p9-listen, p9-ws) plus serve",
@@ -2880,14 +2880,14 @@
     "pageType": "developer",
     "audience": "developer",
     "persona": "Priya, the Rust core contributor",
-    "oneLiner": "Orient: this is the Rust port, not the Go tree — ignore the Go Makefile/CONTRIBUTING; build with cargo and gate with just check.",
+    "oneLiner": "Orient: this is the Rust-native workspace — build with cargo and gate with just check.",
     "outline": [
-      "The one-liner: ignore the Go Makefile/CONTRIBUTING.md; the Rust workspace is the active port",
-      "Build: cargo build --locked --package wanix-cli; the wanix-rust binary",
+      "The one-liner: use the Rust workspace build; the original Go/browser implementation is upstream history",
+      "Build: cargo build --locked --package wanix-cli; the wanix binary",
       "Where core semantics live (the crates) vs where composition lives (wanix-cli)",
       "The walkthrough path and the recipes",
       "How to pick a first task (queued follow-ups)",
-      "Status / honest limits: the Go tree remains a semantic oracle, not a structure to copy"
+      "Status / honest limits: the original Go/browser project is historical reference, not a structure to copy"
     ],
     "prerequisites": [],
     "relatedConcepts": [
@@ -2914,7 +2914,7 @@
     "pageType": "reference",
     "audience": "developer",
     "persona": "Devraj, the personal-compute-mesh power user",
-    "oneLiner": "Every wanix-rust subcommand at a glance: qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-*, serve, rootfs, qemu, direct-v86, mesh-serve, mount-*, cpu, agent, capsule.",
+    "oneLiner": "Every wanix subcommand at a glance: qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-*, serve, rootfs, qemu, direct-v86, mesh-serve, mount-*, cpu, agent, capsule.",
     "outline": [
       "Task runtimes: qjs, qjs-term, qjs-shell, wasm",
       "Snapshot family: qjs-snapshot, qjs-resume, qjs-restore",
@@ -2935,8 +2935,8 @@
       "wanix-capsule"
     ],
     "demoRefs": [
-      "wanix-rust qjs main.js",
-      "wanix-rust wasm FILE.wasm",
+      "wanix qjs main.js",
+      "wanix wasm FILE.wasm",
       "Mount a remote peer and run a #cpu job on it"
     ],
     "sourceRefs": [
@@ -3297,7 +3297,7 @@
     "oneLiner": "Stand up two nodes, have A dial B over iroh QUIC, mount B's directory as a Plan 9 namespace, and send a #cpu job so the code runs on B against B's local data.",
     "outline": [
       "Each node gets a persistent ed25519 identity (~/.wanix/node.key)",
-      "Start node B with wanix-rust mesh-serve (the data node) and copy its iroh:// ticket",
+      "Start node B with wanix mesh-serve (the data node) and copy its iroh:// ticket",
       "From node A, mount B's root with mount-ls/mount-cat/mount-write",
       "Run a #cpu job on B from A's CLI (read-only by default, --write to opt in)",
       "Trust boundary in one line: both transports authenticate B as B first",
@@ -3510,8 +3510,8 @@
     "pageType": "flow",
     "oneLiner": "A guided first-win track: run JS as a Wanix task, feed it env/stdin/argv, mount a host dir, then meet the cockpit.",
     "outline": [
-      "Build once: cargo build --package wanix-cli; alias wanix-rust=./target/debug/wanix-rust (first build compiles 22 crates)",
-      "Hero: wanix-rust qjs examples/qjs-demo.js -> \"outside Chrome: true\"",
+      "Build once: cargo build --package wanix-cli; alias wanix=./target/debug/wanix (first build compiles 22 crates)",
+      "Hero: wanix qjs examples/qjs-demo.js -> \"outside Chrome: true\"",
       "What just happened: tasks + per-process namespaces, jargon-free",
       "Feed env/cwd/stdin/argv (walkthrough section 2)",
       "A short qjs-shell step: write/ls/cat builtins so \"files all the way down\" lands",
@@ -3795,7 +3795,7 @@
     "pageType": "flow",
     "oneLiner": "Land a clean Rust-core PR: the crate map, dependency rules, the active ADRs, and the quality gates.",
     "outline": [
-      "Contributor landing: the Rust port, not the Go tree; use just check, ignore the Go Makefile/CONTRIBUTING",
+      "Contributor landing: Rust-native workspace; use just check",
       "Crate map + dependency direction (async/iroh confined to wanix-mesh; no upward deps)",
       "Active ADRs 0001-0005 + the ADR-vs-commit-message workflow",
       "The FileSystem/File trait reference",

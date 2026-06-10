@@ -188,5 +188,5 @@ fn append_qjs_error(stderr: &mut Vec<u8>, command: &str, error: &str) {
     if !stderr.is_empty() && !stderr.ends_with(b"\n") {
         stderr.push(b'\n');
     }
-    stderr.extend_from_slice(format!("wanix-rust {command}: {error}\n").as_bytes());
+    stderr.extend_from_slice(format!("wanix {command}: {error}\n").as_bytes());
 }

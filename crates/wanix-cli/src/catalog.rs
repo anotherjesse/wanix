@@ -168,7 +168,7 @@ pub(crate) fn read_entry(dir: &Path, name: &str) -> Result<CatalogEntry, CliErro
     try_read_entry(dir, name)?.ok_or_else(|| {
         CliError::new(
             format!(
-                "no catalog entry {name:?} (catalog {}); add one with `wanix-rust catalog add \
+                "no catalog entry {name:?} (catalog {}); add one with `wanix catalog add \
                  {name} IROH_URL` or serve the resource with `--register {name}`",
                 dir.display()
             ),
@@ -327,7 +327,7 @@ pub(crate) fn resolve_mount_target(value: &str) -> Result<String, CliError> {
 
 /// The one audit line a name resolution emits (on stderr, once, at launch).
 pub(crate) fn resolution_log_line(name: &str, address: &str) -> String {
-    format!("wanix-rust: name '{name}' -> {address} (resolved through the catalog at launch)")
+    format!("wanix: name '{name}' -> {address} (resolved through the catalog at launch)")
 }
 
 /// Writes/updates catalog entries for served endpoints at announce time

@@ -389,7 +389,7 @@ wire). Concept walkthrough:
 
 ## Worked example: a chatroom
 
-*Implemented:* this example now runs — `wanix-rust app serve` exports
+*Implemented:* this example now runs — `wanix app serve` exports
 `examples/chatroom` behind the `crates/wanix-appfs` file2chan adapter with
 transport-verified attribution, `who` presence, and the never-EOF `stream`
 (design: `docs/appfs.md`; proofs: `crates/wanix-cli/src/app/serve/tests.rs`).

@@ -32,8 +32,8 @@ Run the fd demo from the walkthrough:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust qjs examples/qjs-fd-demo.js
+alias wanix='./target/debug/wanix'
+wanix qjs examples/qjs-fd-demo.js
 ```
 
 ```text

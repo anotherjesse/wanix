@@ -40,7 +40,7 @@ honestLimits:
   - The serve 9P WebSocket handles one frame at a time per connection, so a blocking read cannot interleave with a write on the same connection.
   - "#cpu exec and --wanix-services are local-trust-only; --wanix-services is refused on the public mesh endpoint because it is remote code execution."
   - Mesh imports currently land at /n/remote, not yet the per-peer /n/<peer-id> the design promises.
-  - The `wanix-rust cpu` dial verb ships, but no CLI serve mode binds the #cpu acceptor yet, so a cross-node cpu job has no shipped server side to dial.
+  - The `wanix cpu` dial verb ships, but no CLI serve mode binds the #cpu acceptor yet, so a cross-node cpu job has no shipped server side to dial.
 ---
 
 # Learn Wanix — Guided Flows
@@ -56,8 +56,8 @@ Every flow below starts from the same native entry point. Build once (full story
 ```sh
 # From the workspace root. The first build takes a few minutes.
 cargo build --locked --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust qjs examples/qjs-demo.js
+alias wanix='./target/debug/wanix'
+wanix qjs examples/qjs-demo.js
 ```
 
 ---
@@ -69,9 +69,9 @@ wanix-rust qjs examples/qjs-demo.js
 QuickJS is the engine *inside* the task; Wanix owns the identity, namespace, fds, and exit status around it. Three commands take you from "hello" to an interactive shell:
 
 ```sh
-wanix-rust qjs examples/qjs-demo.js
-wanix-rust qjs-term --stdin "hello terminal" examples/qjs-term-demo.js
-printf 'write note.txt hello\nls\ncat note.txt\nexit\n' | wanix-rust qjs-shell
+wanix qjs examples/qjs-demo.js
+wanix qjs-term --stdin "hello terminal" examples/qjs-term-demo.js
+printf 'write note.txt hello\nls\ncat note.txt\nexit\n' | wanix qjs-shell
 ```
 
 Newcomer note: guest JavaScript uses `qjs:std`, `qjs:os`, `scriptArgs`, and service files — *not* a `globalThis.Wanix` object. That bridge is retired.
@@ -85,12 +85,12 @@ Newcomer note: guest JavaScript uses `qjs:std`, `qjs:os`, `scriptArgs`, and serv
 ```sh
 # Node B exports a directory over iroh QUIC (the native wire) and prints
 # its verified address as an iroh:// ticket.
-wanix-rust mesh-serve --root "$ROOT_B" --key "$NODE_B_KEY" \
+wanix mesh-serve --root "$ROOT_B" --key "$NODE_B_KEY" \
     --addr 127.0.0.1:5680 --wanix-services
 
 # Node A imports B's namespace as local files.
-wanix-rust mount-ls "$NODE_B" work
-wanix-rust mount-cat "$NODE_B" work/dataset.txt
+wanix mount-ls "$NODE_B" work
+wanix mount-cat "$NODE_B" work/dataset.txt
 ```
 
 The peer's address *is* its ed25519 public key — no DNS, no IP-as-identity. Attach is default-deny and capability-gated. Three honest caveats the recipe owns: `--wanix-services` and `--cpu` are refused on the public endpoint (they are remote code execution); today the mount lands at `/n/remote`, not yet the per-peer `/n/<peer-id>` the design promises; and the [`#cpu`](../devices/cpu) job delivers its output as one batch after the task finishes, with no remote cancel.
@@ -106,7 +106,7 @@ The handler reads `#kv/http-counter`, increments, writes it back. Nothing about 
 ```sh
 mkdir -p project-root/apps        # the handler lives under the served root
 # ...write the recipe's handler to project-root/apps/counter.js...
-wanix-rust serve --wanix-services --listen 127.0.0.1:7654 ./project-root
+wanix serve --wanix-services --listen 127.0.0.1:7654 ./project-root
 curl -s http://127.0.0.1:7654/.wanix/app/counter   # counter=1, then 2, then 3 ...
 ```
 
@@ -164,7 +164,7 @@ echo "Rename foo() to bar() across the project. Plan first." > "#agent/$A/prompt
 cat "#agent/$A/events"      # watch it think; approvals appear under pending
 ```
 
-(`#agent/...` are paths *inside a served Wanix namespace*, not your host shell — drive them with `wanix-rust mount-cat`/`mount-write` as the flow shows.) Approvals are files; `ctl` takes `approve`/`deny`/`close`; one agent delegates to another by blocking on its `reply`. The served `#agent` uses a deterministic `FakeEngine` — real codex is local-trust only.
+(`#agent/...` are paths *inside a served Wanix namespace*, not your host shell — drive them with `wanix mount-cat`/`mount-write` as the flow shows.) Approvals are files; `ctl` takes `approve`/`deny`/`close`; one agent delegates to another by blocking on its `reply`. The served `#agent` uses a deterministic `FakeEngine` — real codex is local-trust only.
 
 ---
 
@@ -217,7 +217,7 @@ Each flow links the concept and recipe pages that own its caveats in full; this 
 - **The serve 9P WebSocket is single-frame-at-a-time.** A blocking read (e.g. `#plumb/<topic>/recv`) cannot be interleaved with a write on the same connection; live pub/sub needs a second connection.
 - **`#cpu` exec and `--wanix-services` are local-trust-only.** `--wanix-services` is remote code execution and is refused on the public mesh endpoint. Treat the mesh and cpu flows as trusted-peer demos, not multi-user auth.
 - **The mesh mounts at `/n/remote`.** Today an imported peer lands at `/n/remote`, not yet the per-peer `/n/<peer-id>` the design describes.
-- **`#cpu` ships both halves, batched.** `mesh-serve --cpu` serves the acceptor (refused on the public endpoint; `--peer`-scoped on the local one) and `wanix-rust cpu` dials it; output is one batch after the task finishes, with no remote cancel.
+- **`#cpu` ships both halves, batched.** `mesh-serve --cpu` serves the acceptor (refused on the public endpoint; `--peer`-scoped on the local one) and `wanix cpu` dials it; output is one batch after the task finishes, with no remote cancel.
 
 ## See also / next
 

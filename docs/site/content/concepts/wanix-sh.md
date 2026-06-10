@@ -39,7 +39,7 @@ The [QuickJS shell](qjs-shell) proved a shell can run as a guest task driving `#
 ## Show: a shell pipeline through real tasks
 
 ```sh
-wanix-rust wasm crates/wanix-wasm/fixtures/shell.wasm -c "echo '[1,2,3]' | jaq 'map(.+1)'"
+wanix wasm crates/wanix-wasm/fixtures/shell.wasm -c "echo '[1,2,3]' | jaq 'map(.+1)'"
 ```
 
 ```text
@@ -51,7 +51,7 @@ wanix-rust wasm crates/wanix-wasm/fixtures/shell.wasm -c "echo '[1,2,3]' | jaq '
 Both task kinds are first-class stages (ADR 0002): an interpreted `.js` external pipes into a compiled `.wasm` one through the same `#pipe`. Executed via the CLI entry, with a three-line qjs `gen.js` in the cwd:
 
 ```sh
-wanix-rust sh -c "gen.js | jaq 'map(.+1)'"
+wanix sh -c "gen.js | jaq 'map(.+1)'"
 ```
 
 ```text

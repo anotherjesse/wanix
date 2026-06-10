@@ -38,7 +38,7 @@ Allocate a pipe over 9P and watch a reader block on the empty end while a writer
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 id=$(cat '#pipe/new')
 # Reader blocks here — the pipe is open and empty, so read does NOT return 0.

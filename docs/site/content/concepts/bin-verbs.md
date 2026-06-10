@@ -24,7 +24,7 @@ prerequisites:
   - concepts/guest-defined-resources
   - concepts/wanix-sh
 honestLimits:
-  - "The confined-child seam is driver-agnostic and both verb kinds launch from `wanix-rust sh` (the CLI shell registers the wasm and qjs task drivers; `.js` and `.wasm` verbs are both proven end to end)."
+  - "The confined-child seam is driver-agnostic and both verb kinds launch from `wanix sh` (the CLI shell registers the wasm and qjs task drivers; `.js` and `.wasm` verbs are both proven end to end)."
   - "Widening — granting a verb anything beyond its own resource — is deliberately unimplemented; the future shape is an explicit `--allow`-style flag, never a default."
   - "Verbs must be self-contained: a confined namespace contains only /res, so a .js verb cannot import shared libraries from outside the resource."
 ---
@@ -40,7 +40,7 @@ size-capped (`wanix_fs::VerbBinFs`) — never routed through the app's guest.
 Mount the room and you have its vocabulary:
 
 ```sh
-wanix-rust sh --mount-mesh room -c 'room:post hello from the mesh'
+wanix sh --mount-mesh room -c 'room:post hello from the mesh'
 ```
 
 `NAME:CMD` is the whole grammar. `NAME` must be a current mount (`/n/NAME` or

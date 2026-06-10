@@ -36,7 +36,7 @@ THREADS=100 SLEEP_MS=10000 /usr/bin/time -l \
 
 ## Cold-start: where the time goes
 
-Per-process wall-clock of `wanix-rust qjs <file>` was flat regardless of script
+Per-process wall-clock of `wanix qjs <file>` was flat regardless of script
 (noop / one `puts` / the demo all ~545–558 ms): the JS work is not the cost.
 
 Decomposed (`startup_bench`, part 1):
@@ -62,7 +62,7 @@ temp path. The cache is advisory: a missing, stale, untrusted, or
 engine-incompatible artifact transparently recompiles, so a Wasmtime upgrade
 just recompiles under a new key.
 
-End-to-end `wanix-rust qjs examples/qjs-demo.js`:
+End-to-end `wanix qjs examples/qjs-demo.js`:
 
 | run                 | wall      |
 | ------------------- | --------- |

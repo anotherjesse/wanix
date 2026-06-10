@@ -111,7 +111,7 @@ pub(crate) fn run_run_in(
     let Some(line) = recipe.run.clone() else {
         return Err(CliError::usage(format!(
             "recipe {name:?} has no run line, so `recipe run {name}` opens an interactive shell \
-             over its mounts; run the wanix-rust binary on a tty or save it with --run LINE"
+             over its mounts; run the wanix binary on a tty or save it with --run LINE"
         )));
     };
     let (mesh_mounts, notes) = resolve_binds_in(catalog_dir, &recipe)?;

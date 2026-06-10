@@ -31,7 +31,7 @@ honestLimits:
 
 The bundled interactive shell is JavaScript inside a Wanix task driving `#term` and `#task` service files — not a separate process model.
 
-Run `wanix-rust qjs-shell` and you get a `$ ` prompt, `ls`, `cd`, `cat`, and the ability to launch other programs. It looks like a tiny `bash`. It is not. The whole thing is a single QuickJS script — `examples/qjs-term-shell-demo.js` — running as one ordinary Wanix `qjs` task. Every "shell feature" you see is that script opening, reading, and writing files: the terminal it talks through is `#term/<id>/data`, its current directory is `#task/self/dir`, and the children it spawns are allocated from `#task/new/auto`. There is no shell runtime in Rust. There is a guest program and the same service devices every other task can reach.
+Run `wanix qjs-shell` and you get a `$ ` prompt, `ls`, `cd`, `cat`, and the ability to launch other programs. It looks like a tiny `bash`. It is not. The whole thing is a single QuickJS script — `examples/qjs-term-shell-demo.js` — running as one ordinary Wanix `qjs` task. Every "shell feature" you see is that script opening, reading, and writing files: the terminal it talks through is `#term/<id>/data`, its current directory is `#task/self/dir`, and the children it spawns are allocated from `#task/new/auto`. There is no shell runtime in Rust. There is a guest program and the same service devices every other task can reach.
 
 ## Show: the prompt is a script reading its own files
 
@@ -39,9 +39,9 @@ Start a session and the first line printed is the task's own id, read straight o
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust qjs-shell
+wanix qjs-shell
 # shell task: 1
 # $ ls
 ```

@@ -75,7 +75,7 @@ pub(super) fn finish_terminal_task_output(
             write_process_output(
                 process_stderr,
                 "stderr",
-                format!("wanix-rust qjs-term: {error}\n").as_bytes(),
+                format!("wanix qjs-term: {error}\n").as_bytes(),
             )?;
             Ok(1)
         }

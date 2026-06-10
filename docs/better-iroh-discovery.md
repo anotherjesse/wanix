@@ -107,7 +107,7 @@ Purpose: deterministic tests and explicit diagnostics.
 Example:
 
 ```sh
-wanix-rust volume serve --all --addr 127.0.0.1:0
+wanix volume serve --all --addr 127.0.0.1:0
 ```
 
 Output:
@@ -128,13 +128,13 @@ Purpose: normal multi-node UX.
 Example shape:
 
 ```sh
-wanix-rust volume serve --all --discover
+wanix volume serve --all --discover
 ```
 
 or, if discovery is the default:
 
 ```sh
-wanix-rust volume serve --all
+wanix volume serve --all
 ```
 
 Output:
@@ -159,7 +159,7 @@ Purpose: humane names and composition.
 Example shape:
 
 ```sh
-wanix-rust mount notes=/vol/notes photos=/vol/photos
+wanix mount notes=/vol/notes photos=/vol/photos
 ```
 
 The catalog entry can store:
@@ -241,8 +241,8 @@ Add a non-local discovery option for real multi-network use.
 Candidate CLI:
 
 ```sh
-wanix-rust volume serve --all --discovery public
-wanix-rust qjs-shell --mesh-discovery public --mount-mesh iroh://PEER=/vol/notes
+wanix volume serve --all --discovery public
+wanix qjs-shell --mesh-discovery public --mount-mesh iroh://PEER=/vol/notes
 ```
 
 This should use iroh's existing discovery services instead of inventing a Wanix

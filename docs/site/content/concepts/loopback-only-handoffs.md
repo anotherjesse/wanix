@@ -51,7 +51,7 @@ The reason for the loopback gate is right there in the payload. The `wanix-rootf
 
 - `rootPath`, `kernelPath`, `initPath` — **absolute host filesystem paths** to the prepared root, the kernel, and `/bin/init`.
 - a `qemu` sub-manifest (`wanix-qemu-virtio9p.v1`) with launch argv and policy.
-- a `serveDirectV86.argv` array — a literal command line, `["wanix-rust", "serve", "<root>", "--bundle", "direct-v86", "--wanix-services"]`.
+- a `serveDirectV86.argv` array — a literal command line, `["wanix", "serve", "<root>", "--bundle", "direct-v86", "--wanix-services"]`.
 
 That is launch-grade trust. A document that names host paths and hands you an argv to execute is something you give a launcher you already trust on that machine, not something you broadcast to the network. So the trust model is the simplest one that is honest: `is_loopback_peer` is `peer_addr.ip().is_loopback()` (`crates/wanix-cli/src/serve/discovery/host.rs:40-42`), and only a loopback peer crosses it.
 
@@ -64,7 +64,7 @@ Loopback is necessary but not sufficient. The discovery document reports `rootfs
 - `invalid` — loopback and prepared, but building the manifest failed.
 - `available` — loopback, prepared, and the manifest built cleanly.
 
-Only `available` ever yields a real `wanix-rootfs.v1` body from `/.well-known/rootfs.json`. The boot-marker check is the same validation the `wanix-rust rootfs` and `wanix-rust qemu` subcommands run, so a root that the CLI would refuse to launch is also a root `serve` refuses to hand off. See [the rootfs/qemu/v86 CLI reference](/reference/cli-rootfs-qemu-v86) for how those markers are prepared.
+Only `available` ever yields a real `wanix-rootfs.v1` body from `/.well-known/rootfs.json`. The boot-marker check is the same validation the `wanix rootfs` and `wanix qemu` subcommands run, so a root that the CLI would refuse to launch is also a root `serve` refuses to hand off. See [the rootfs/qemu/v86 CLI reference](/reference/cli-rootfs-qemu-v86) for how those markers are prepared.
 
 ## The HTTP-app route is gated the same way
 
@@ -84,6 +84,6 @@ The browser v86 bundle (`serve --bundle direct-v86`) does not get a separate tru
 
 ## Status / honest limits
 
-- **These are validated handoffs, not a VM supervisor.** `serve` (and `wanix-rust qemu`) emit a stable manifest and an explicit foreground launch; rootfs build, boot, background supervision, and VM lifecycle are out of scope and remain separate future decisions (`docs/adrs/0005-serve-and-client-handoffs.md:56-61`).
+- **These are validated handoffs, not a VM supervisor.** `serve` (and `wanix qemu`) emit a stable manifest and an explicit foreground launch; rootfs build, boot, background supervision, and VM lifecycle are out of scope and remain separate future decisions (`docs/adrs/0005-serve-and-client-handoffs.md:56-61`).
 - **The gate is loopback by IP, plus prepared-root boot markers.** Anything else gets `403` (rootfs/app) or a `local-only`/`unprepared` discovery status — never the host paths and launch argv.
 - **Ethernet/vnet is advertised but not implemented.** The discovery document lists a `/.well-known/ethernet` websocket route, but no bridge exists yet; it is a future trust-boundary decision, not a shipped capability.

@@ -2,7 +2,7 @@
 title: Contributor Landing — This Is the Rust Port
 slug: reference/contributor-landing
 pageType: developer
-oneLiner: "Orient: this is the Rust port, not the Go tree — ignore the Go Makefile/CONTRIBUTING, build with cargo, and gate with just check."
+oneLiner: "Orient: this is the Rust-native Wanix workspace — build with cargo and gate with just check."
 audience: [developer]
 tags: [contributor, onboarding, cli, shipped, caveat]
 sourceRefs:
@@ -23,43 +23,49 @@ seeAlso:
 prerequisites: []
 usedInFlows: []
 honestLimits:
-  - "The Go tree (Makefile, CONTRIBUTING.md, cmd/, fs/, web/) is the original Wanix; it is a semantic oracle, not the structure the Rust port copies."
-  - "CONTRIBUTING.md documents the Go build (Docker, make, Go/TinyGo) — it does not apply to the Rust workspace."
+  - "The original Go/browser Wanix lives upstream at https://github.com/tractordev/wanix/; this workspace is the Rust-native implementation."
   - "The shipped CLI mount binds a single slot /n/remote (crates/wanix-cli/src/mount.rs:26); per-peer /n/<peer-id> is designed but unshipped."
 canonicalCaveatFor: []
 ---
 
 # Contributor Landing — This Is the Rust Port
 
-Orient: this is the Rust port, not the Go tree — ignore the Go Makefile/CONTRIBUTING, build with cargo, and gate with `just check`.
+Orient: this is the Rust-native Wanix workspace — build with cargo and gate with `just check`.
 
-This repository holds two Wanix codebases. The original is the Go/Wasm runtime that ships at [wanix.run](https://wanix.run) — `cmd/`, `fs/`, `web/`, the `Makefile`, and `CONTRIBUTING.md` all belong to it. The active port you are here to work on is the Rust-native one: a Cargo workspace of 22 crates that runs Wanix outside Chrome, with Wasmtime as the execution substrate and a Plan 9-style mesh on top. The two share intent and vocabulary, not files. This page tells you which tree is which, how to build the Rust one, where the semantics live, and how to pick a first task.
+The active codebase is a Cargo workspace that runs Wanix outside Chrome, with
+Wasmtime as the execution substrate and a Plan 9-style mesh on top. The original
+Wanix was a Go/browser implementation hosted at
+https://github.com/tractordev/wanix/; it is historical context, not a second
+tree in this workspace. This page tells you how to build the Rust workspace,
+where the semantics live, and how to pick a first task.
 
-## The one-liner: which tree, and what to ignore
+## The one-liner
 
-`CONTRIBUTING.md` is for the Go tree. It asks for Docker 20.10+, `make`, Go 1.25+, and optionally TinyGo, and its build is `make build` producing `.local/bin/wanix` (`CONTRIBUTING.md:8-67`). None of that applies to the Rust port. There is no Docker requirement, no `make`, no Go toolchain. If a doc tells you to run `make`, you are reading the wrong half of the repo.
+Use Cargo for the core and `just check` for the merge gate. `make build`,
+`make test`, and `make check` are thin wrappers around those Rust commands; the
+workbench bundle uses npm/esbuild through `make workbench`.
 
 The Rust port's canonical map is `AGENTS.md` (the project instructions, checked in at the repo root). It owns the crate shape, the dependency-direction rules, the capability map, the ADR index, and the queued follow-ups. When you start a change, read `AGENTS.md` first; it is the source of truth for "what is shipped" versus "what is designed but unbuilt."
 
-## Build: cargo, then the wanix-rust binary
+## Build: cargo, then the wanix binary
 
 The whole port builds from the workspace root with one command:
 
 ```sh
 cargo build --locked --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
-That produces `wanix-rust`, the aliased binary used throughout these docs and the walkthrough (`rust-walkthrough.md:24-28`). Confirm the surface:
+That produces `wanix`, the aliased binary used throughout these docs and the walkthrough (`rust-walkthrough.md:24-28`). Confirm the surface:
 
 ```sh
-wanix-rust --help
+wanix --help
 ```
 
 You should see subcommands for `qjs`, `qjs-term`, `qjs-shell`, the snapshot/resume/restore trio, `p9-stdio`, `rootfs`, `qemu`, the `mount-*` verbs, `mesh-serve`, and `serve` (`rust-walkthrough.md:38-51`). Raw 9P over TCP is no longer a standalone subcommand — the retired `p9-listen`/`p9-ws` folded into `serve --p9 ADDR` and the serve websocket door (ADR 0006). The fastest "is my build alive" check is a native QuickJS task:
 
 ```sh
-wanix-rust qjs examples/qjs-demo.js
+wanix qjs examples/qjs-demo.js
 ```
 
 JavaScript runs as a Wanix task — outside Chrome, on Wasmtime — with live Wanix-backed WASI, stdio, env, and an observable exit status (`README.md:31-35`). If that prints, your environment is sound.
@@ -110,6 +116,13 @@ just check   # fmt + module-lines + clippy -D warnings + test
 
 ## Status / honest limits
 
-The Go tree is not deprecated and not the structure to copy — it is the live product at wanix.run and a **semantic oracle**: when a Plan 9 behaviour is unclear, the Go implementation is a reference for *what it should do*, not a directory layout to mirror. The Rust port deliberately reorganizes everything around the downward-dependency rule, so mapping Go packages onto Rust crates one-to-one will mislead you.
+The original Go/browser Wanix is not part of this workspace anymore. When a Plan
+9 behaviour is unclear, treat https://github.com/tractordev/wanix/ as historical
+reference material, not as a directory layout to mirror. The Rust implementation
+is organized around the downward-dependency rule, so mapping old Go packages
+onto Rust crates one-to-one will mislead you.
 
-`CONTRIBUTING.md` (Docker, `make`, Go/TinyGo) applies only to the Go build; do not run it for the Rust workspace. And one shipped-vs-designed boundary worth knowing early as a contributor: the CLI mesh mount binds a single slot at `/n/remote` (`crates/wanix-cli/src/mount.rs:26`). Per-peer `/n/<peer-id>` mounts are designed but unshipped — treat `/n/<peer>` in docs and recipes as a labelled convention, not a working multi-peer path.
+One shipped-vs-designed boundary worth knowing early as a contributor: the CLI
+mesh mount binds a single slot at `/n/remote` (`crates/wanix-cli/src/mount.rs:26`).
+Per-peer `/n/<peer-id>` mounts are designed but unshipped — treat `/n/<peer>` in
+docs and recipes as a labelled convention, not a working multi-peer path.

@@ -29,7 +29,7 @@ seeAlso:
 prerequisites: []
 usedInFlows: []
 honestLimits:
-  - "The repo root CONTRIBUTING.md and the Makefile describe the Go tree; the Rust port uses the workspace crates and `just check`, not `make build`."
+  - "The original Go/browser Wanix lives at https://github.com/tractordev/wanix/; this workspace uses the Rust crates and `just check`."
   - "`#kv` is in-memory: a contributor's test state lives only as long as the process. Freeze a world to a capsule to persist it."
   - "The shipped CLI mount binds one slot at /n/remote; per-peer /n/<peer-id> is designed, not shipped."
 canonicalCaveatFor: []
@@ -39,18 +39,24 @@ canonicalCaveatFor: []
 
 Land a clean Rust-core PR: the crate map, dependency rules, the active ADRs, and the quality gates.
 
-This flow is for someone who has a change in hand and wants it to pass review on the first pass. It is a route across the contributor reference pages in the order you actually need them: orient on the Rust tree (not the Go one), learn the dependency direction the layering enforces, pick the ADR that governs your area, read the one trait every device implements, study `#kv` as the smallest worked example, then run the gate. The goal is a green `just check` and a diff that respects the boundaries the codebase already protects.
+This flow is for someone who has a change in hand and wants it to pass review on the first pass. It is a route across the contributor reference pages in the order you actually need them: orient on the Rust workspace, learn the dependency direction the layering enforces, pick the ADR that governs your area, read the one trait every device implements, study `#kv` as the smallest worked example, then run the gate. The goal is a green `just check` and a diff that respects the boundaries the codebase already protects.
 
-## Step 1 — You are in the Rust port, not the Go tree
+## Step 1 — You are in the Rust-native workspace
 
 Build the binary once and alias it, exactly as every other flow does ([build & install](/reference/build-and-install)):
 
 ```sh
 cargo build --locked --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
-If you read the repo-root `CONTRIBUTING.md`, you will find a Docker/`make build`/TinyGo workflow and a directory layout with `api/`, `gojs/`, and `web/`. That document describes the original Go-and-JavaScript Wanix and is not the runtime you are changing. The Rust-native port lives in `crates/`, builds with cargo, and gates with `just`. ADR 0001 records this directly: the Rust port rebuilds Wanix-owned contracts and is "not a line-by-line translation of the old tree" (`docs/adrs/0001-rust-native-wasmtime-runtime.md`). Use the Go tree only as a semantic oracle when behavior is ambiguous; ignore its build system.
+The original Wanix was a Go/browser implementation and lives at
+https://github.com/tractordev/wanix/. This workspace is the Rust-native core:
+it lives in `crates/`, builds with cargo, and gates with `just`. ADR 0001
+records this directly: the Rust port rebuilds Wanix-owned contracts and is "not
+a line-by-line translation of the old tree" (`docs/adrs/0001-rust-native-wasmtime-runtime.md`).
+Use the original project as historical reference material when behavior is
+ambiguous, not as a build system or directory layout to copy.
 
 ## Step 2 — The crate map and the dependency direction
 
@@ -106,7 +112,7 @@ Module-line health is enforced: `tools/check-module-lines.sh` warns at 250 non-t
 
 ## Status / honest limits
 
-- The repo-root `CONTRIBUTING.md` and `Makefile` describe the **Go tree** (Docker, `make build`, TinyGo). The Rust port builds with cargo and gates with `just check`; ignore the Go build instructions for core work.
-- `#kv` is **in-memory**: any state a test or demo writes lives only as long as the serve process. Freeze a world to a capsule (`wanix-rust capsule`) to persist it.
+- The original Go/browser implementation lives at https://github.com/tractordev/wanix/. This workspace builds with cargo and gates with `just check`.
+- `#kv` is **in-memory**: any state a test or demo writes lives only as long as the serve process. Freeze a world to a capsule (`wanix capsule`) to persist it.
 - The shipped CLI mount binds **one slot at `/n/remote`** (`crates/wanix-cli/src/mount.rs:26`). Per-peer `/n/<peer-id>` is designed, not shipped — use `/n/<peer>` only as a labelled convention.
 - Exec devices (`#task`, `#agent`, `#cpu`) are **local-trust only**; the served `#agent` runs a deterministic `FakeEngine`, not a live LLM (real codex is the `wanix agent` CLI path). Do not write contributor docs or code that implies they are safe for arbitrary untrusted peers.

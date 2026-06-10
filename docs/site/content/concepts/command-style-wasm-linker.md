@@ -30,7 +30,7 @@ honestLimits:
 
 `wanix-wasi-host` is a generic WASI Preview 1 linker for command-style wasm guests; `poll_oneoff` returns `ERRNO_NOSYS`, so there is no readiness polling, and qjs keeps its own richer host path.
 
-When you run `wanix-rust wasm hello.wasm`, a compiled `wasm32-wasi` module starts, reads and writes files and fds, sees its argv and environment, asks the clock for the time, and exits with a status Wanix records. That whole surface — and nothing more — is what one small crate registers on the Wasmtime linker. It is deliberately a *command* host: a guest runs `_start`, does its I/O, and exits. It does not get to block on readiness, because the one syscall that would let it do that is wired to "not implemented." This page explains why that boundary exists, what is on either side of it, and why Wanix runs two host paths instead of forcing every guest through one.
+When you run `wanix wasm hello.wasm`, a compiled `wasm32-wasi` module starts, reads and writes files and fds, sees its argv and environment, asks the clock for the time, and exits with a status Wanix records. That whole surface — and nothing more — is what one small crate registers on the Wasmtime linker. It is deliberately a *command* host: a guest runs `_start`, does its I/O, and exits. It does not get to block on readiness, because the one syscall that would let it do that is wired to "not implemented." This page explains why that boundary exists, what is on either side of it, and why Wanix runs two host paths instead of forcing every guest through one.
 
 ## What "command-style" means
 

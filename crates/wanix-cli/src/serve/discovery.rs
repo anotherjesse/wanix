@@ -56,7 +56,7 @@ pub(super) fn serve_discovery_json(
     let direct_v86_boot = direct_v86_boot_json(&roots.static_root);
     format!(
         "{{\"version\":1,\
-         \"runtime\":\"wanix-rust\",\
+         \"runtime\":\"wanix\",\
          \"routes\":{{\
          \"p9\":{},\
          \"rootfs\":{},\

@@ -4,7 +4,7 @@ build: dist code
 .PHONY: build 
 
 dist: node_modules
-	go run ./build.go
+	npm run compile-web
 .PHONY: dist
 
 clean:

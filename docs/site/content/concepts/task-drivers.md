@@ -41,12 +41,12 @@ Run a `.wasm` program as a Wanix task:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust wasm fixtures/rust-guest.wasm
+wanix wasm fixtures/rust-guest.wasm
 ```
 
-You did not tell Wanix "this is a wasm task." You handed it a program ending in `.wasm`, and the task table found the driver that claimed it. The same is true the other way: `wanix-rust qjs main.js` runs the QuickJS driver because the program ends in `.js`. The selection lives in two lines of code, one per runtime:
+You did not tell Wanix "this is a wasm task." You handed it a program ending in `.wasm`, and the task table found the driver that claimed it. The same is true the other way: `wanix qjs main.js` runs the QuickJS driver because the program ends in `.js`. The selection lives in two lines of code, one per runtime:
 
 ```rust
 // crates/wanix-wasm/src/driver.rs:30
@@ -121,7 +121,7 @@ table.register_driver("lua", Arc::new(LuaDriver))?;
 The registry is a `BTreeMap<String, Arc<dyn TaskDriver>>` on the task table (`crates/wanix-task/src/table.rs:20`). When you `start(id)` a task, the table reads the task's kind and dispatches (`crates/wanix-task/src/table.rs:122-154`):
 
 - **A concrete kind** (`"qjs"`, `"wasm"`) looks up that exact driver and calls `start()`; an unregistered kind returns `FsError::NotFound`.
-- **The `"auto"` kind** iterates the drivers, calls `check()` on each, sets the task's kind to the first match, and starts it. No match returns `Ok(())` — an allocated-but-unrunnable task, not an error. This is the dispatch behind `wanix-rust wasm FILE.wasm`: a `.wasm` cmd allocated as `auto` resolves to the wasm driver by suffix.
+- **The `"auto"` kind** iterates the drivers, calls `check()` on each, sets the task's kind to the first match, and starts it. No match returns `Ok(())` — an allocated-but-unrunnable task, not an error. This is the dispatch behind `wanix wasm FILE.wasm`: a `.wasm` cmd allocated as `auto` resolves to the wasm driver by suffix.
 
 `driver_kinds()` (`crates/wanix-task/src/table.rs:68`) returns the registered kinds with `"auto"` prepended — and `serve`'s discovery document derives its advertised driver list straight from that registry (`crates/wanix-cli/src/serve/discovery.rs:165`), so a client always sees exactly the kinds this process can start. The list is data, not a hardcoded string; the earlier driver-list drift is gone.
 

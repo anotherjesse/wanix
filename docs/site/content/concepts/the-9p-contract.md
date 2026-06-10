@@ -42,12 +42,12 @@ Start the server over standard streams:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust p9-stdio --root .
+wanix p9-stdio --root .
 ```
 
-That speaks 9P frames on stdin/stdout. The same server reaches foreign clients over `wanix-rust serve` — which carries 9P both over a WebSocket door (`/.well-known/export9p`) and, with `--p9 HOST:PORT`, over a raw TCP door — and over iroh QUIC on the foreign-edge ALPN (`wanix/9p/1`) for a peer that speaks only 9P. The transports differ; the contract does not. There is exactly one per-connection 9P session core (`P9Server::serve_duplex`); every transport is a thin byte adapter over it, not a second server (the standalone `p9-listen`/`p9-ws` subcommands were retired and folded into `serve` under ADR 0006). ADR 0004 states it plainly: stdio, TCP, WebSocket, and `serve` are *adapters over the same server contract*, and each must preserve binary frame boundaries and keep diagnostics out of the binary stream (`docs/adrs/0004-rust-9p-protocol-and-server-contract.md`). A Linux `mount -t 9p`, a v86 guest, and the VS Code workbench all hit `P9Server::handle_frame`; none of them invent filesystem semantics of their own. (A *Wanix* mesh peer does not — it uses the native wire's `serve_one` dispatch instead, against the same `FileSystem`.)
+That speaks 9P frames on stdin/stdout. The same server reaches foreign clients over `wanix serve` — which carries 9P both over a WebSocket door (`/.well-known/export9p`) and, with `--p9 HOST:PORT`, over a raw TCP door — and over iroh QUIC on the foreign-edge ALPN (`wanix/9p/1`) for a peer that speaks only 9P. The transports differ; the contract does not. There is exactly one per-connection 9P session core (`P9Server::serve_duplex`); every transport is a thin byte adapter over it, not a second server (the standalone `p9-listen`/`p9-ws` subcommands were retired and folded into `serve` under ADR 0006). ADR 0004 states it plainly: stdio, TCP, WebSocket, and `serve` are *adapters over the same server contract*, and each must preserve binary frame boundaries and keep diagnostics out of the binary stream (`docs/adrs/0004-rust-9p-protocol-and-server-contract.md`). A Linux `mount -t 9p`, a v86 guest, and the VS Code workbench all hit `P9Server::handle_frame`; none of them invent filesystem semantics of their own. (A *Wanix* mesh peer does not — it uses the native wire's `serve_one` dispatch instead, against the same `FileSystem`.)
 
 That one entry point is the whole server. `handle_frame` dispatches a decoded request through five groups — session, walk, I/O, metadata, mutation — and any message type that matches none of them returns `EOPNOTSUPP` (`crates/wanix-9p/src/dispatch.rs:23-40`). The grouping is just code organization; to a client it is one flat operation set.
 

@@ -42,8 +42,8 @@ Run a JavaScript task; the WASI calls behind `std.writeFile`/`std.loadFile` go t
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust qjs examples/qjs-demo.js
+alias wanix='./target/debug/wanix'
+wanix qjs examples/qjs-demo.js
 ```
 
 ```js

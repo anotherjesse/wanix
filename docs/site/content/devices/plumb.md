@@ -50,7 +50,7 @@ Topic names are caller-controlled — over an imported `#plumb`, a remote 9P cli
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 # in another terminal, against a services-enabled serve:
 echo '{"kind":"task.done","from":"nodeA","body":{"path":"/world/out"}}' \
   > '#plumb/build/send'

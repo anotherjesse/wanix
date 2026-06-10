@@ -38,8 +38,8 @@ Two engines back the same `#agent` device. One is a fixed-reply stub with no net
 Start a served namespace and drive the agent over 9P:
 
 ```sh
-cargo build --package wanix-cli; alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust serve --wanix-services &
+cargo build --package wanix-cli; alias wanix='./target/debug/wanix'
+wanix serve --wanix-services &
 
 # allocate a session, prompt it, read the reply
 id=$(cat '#agent/new')
@@ -51,7 +51,7 @@ cat "#agent/$id/events"
 The reply is literally `you said: <your prompt>`. That is the FakeEngine talking. Now the same files on the CLI path:
 
 ```sh
-wanix-rust agent --cwd ./myproject 'fix the failing test'
+wanix agent --cwd ./myproject 'fix the failing test'
 # streams real codex turn events: tool calls, message deltas, turn.completed
 ```
 

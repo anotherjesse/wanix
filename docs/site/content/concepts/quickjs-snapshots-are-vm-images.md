@@ -33,9 +33,9 @@ Run the bundled restore demo. The `before` script writes a global, Wanix snapsho
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust qjs-restore examples/qjs-snapshot-before.js examples/qjs-snapshot-after.js
+wanix qjs-restore examples/qjs-snapshot-before.js examples/qjs-snapshot-after.js
 echo "exit=$?"
 ```
 
@@ -73,11 +73,11 @@ This is why the task id ticked from `1` to `2`: Wanix minted a new task and wrap
 mkdir -p /tmp/wanix-persist
 SNAP=/tmp/wanix-persist/quickjs.snapshot
 
-wanix-rust qjs-snapshot --env MODE=before --mount /tmp/wanix-persist=host \
+wanix qjs-snapshot --env MODE=before --mount /tmp/wanix-persist=host \
   --snapshot "$SNAP" examples/qjs-persist-before.js
 # snapshot task: 1
 
-wanix-rust qjs-resume --env MODE=after --mount /tmp/wanix-persist=host \
+wanix qjs-resume --env MODE=after --mount /tmp/wanix-persist=host \
   --snapshot "$SNAP" examples/qjs-persist-after.js
 echo "exit=$?"
 ```

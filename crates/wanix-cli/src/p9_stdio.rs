@@ -73,7 +73,7 @@ pub(super) fn run_p9_stdio_streaming(
             write_process_output(
                 process_stderr,
                 "stderr",
-                format!("wanix-rust p9-stdio: {error}\n").as_bytes(),
+                format!("wanix p9-stdio: {error}\n").as_bytes(),
             )?;
             Ok(1)
         }
@@ -164,7 +164,7 @@ mod tests {
 
         assert_eq!(output.exit_code(), 1);
         assert!(output.stdout().is_empty());
-        assert!(String::from_utf8_lossy(output.stderr()).contains("wanix-rust p9-stdio"));
+        assert!(String::from_utf8_lossy(output.stderr()).contains("wanix p9-stdio"));
     }
 
     fn temp_dir(name: &str) -> PathBuf {

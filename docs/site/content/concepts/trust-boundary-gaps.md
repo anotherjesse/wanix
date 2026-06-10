@@ -44,9 +44,9 @@ Run a public mesh export with no grants and watch it refuse, not serve:
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust mesh-serve --root /tmp/world
+wanix mesh-serve --root /tmp/world
 # error: mesh-serve on a non-loopback endpoint (public, or a LAN --addr whose
 # node id mDNS advertises) with no --peer/--grant exports the entire root
 # read-write to anyone who can reach it; pass --peer HEX with --grant to gate
@@ -70,7 +70,7 @@ State the positive claim precisely. Wanix gives you cheap, scalable isolation fo
 
 A 9P `Tattach` carries `uname` (who is attaching) and `aname` (which tree). Wanix decodes both and, in the plain path, throws them away: `handle_attach` resolves every fid through one shared `P9Server.root` (`crates/wanix-9p/src/session.rs:31-49`). There is no per-principal namespace on a single served endpoint. The mesh path does scope by `aname` — `install_attach_root` consults the attach policy and installs a re-rooted tree when a grant matches, denying with `EACCES` otherwise (`crates/wanix-9p/src/session.rs:58-69`) — but that is the *capability bind* (a grant is a re-rooted `SubtreeFs`, not an ACL), not multi-user identity. A per-principal `NamespaceProvider` is designed but deliberately unshipped: adding the trait as a no-op seam would be a dead abstraction, so it waits for per-fid root storage and a first real consumer (`AGENTS.md:376-380`).
 
-The shipped CLI mount makes the same point at the import half. `wanix-rust mount-*` dials one server and binds the remote at a single fixed slot, `/n/remote` (`crates/wanix-cli/src/mount.rs:26-29`). Per-peer `/n/<peer-id>` addressing is the designed convention you will see in mesh prose, but the shipped binary mounts one slot. Use `/n/<peer>` only as a labelled convention, not as something the CLI produces today.
+The shipped CLI mount makes the same point at the import half. `wanix mount-*` dials one server and binds the remote at a single fixed slot, `/n/remote` (`crates/wanix-cli/src/mount.rs:26-29`). Per-peer `/n/<peer-id>` addressing is the designed convention you will see in mesh prose, but the shipped binary mounts one slot. Use `/n/<peer>` only as a labelled convention, not as something the CLI produces today.
 
 ## Single-frame serve, cancel that does not cancel, experimental blobs
 

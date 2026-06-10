@@ -43,31 +43,31 @@ Plan 9's `cpu(1)` let you log in to a remote machine and keep your own files: th
 
 ## Show it: run a job on a peer
 
-Both halves ship: `mesh-serve --cpu` binds the `CpuAcceptor` beside the namespace plane, and `wanix-rust cpu` dials it. Executed transcript (same laptop, two terminals):
+Both halves ship: `mesh-serve --cpu` binds the `CpuAcceptor` beside the namespace plane, and `wanix cpu` dials it. Executed transcript (same laptop, two terminals):
 
 ```sh
 cargo build --locked --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 # Terminal 1 — node Y, the cpu server. --cpu is refused on any non-loopback
 # endpoint; --addr 127.0.0.1:PORT pins a loopback-only socket (add --peer HEX
 # to admit only that identity).
-wanix-rust mesh-serve --root "$ROOT_Y" --key /tmp/Y.key \
+wanix mesh-serve --root "$ROOT_Y" --key /tmp/Y.key \
     --addr 127.0.0.1:5680 --cpu
 ```
 
 ```
-wanix-rust mesh-serve: node 11fd26a61cf8294ea2ba8d16ce4ebb46cac06152313aa880b5e9072dfe9638a5
-wanix-rust mesh-serve: ticket iroh://11fd26a6…dfe9638a5?addr=127.0.0.1:5680
-wanix-rust mesh-serve: mount with: wanix-rust mount-ls 'iroh://11fd26a6…dfe9638a5?addr=127.0.0.1:5680'
-wanix-rust mesh-serve: serving the #cpu exec plane (remote code execution for admitted peers); run a job with: wanix-rust cpu --node 'iroh://11fd26a6…dfe9638a5?addr=127.0.0.1:5680' -- qjs PROGRAM
+wanix mesh-serve: node 11fd26a61cf8294ea2ba8d16ce4ebb46cac06152313aa880b5e9072dfe9638a5
+wanix mesh-serve: ticket iroh://11fd26a6…dfe9638a5?addr=127.0.0.1:5680
+wanix mesh-serve: mount with: wanix mount-ls 'iroh://11fd26a6…dfe9638a5?addr=127.0.0.1:5680'
+wanix mesh-serve: serving the #cpu exec plane (remote code execution for admitted peers); run a job with: wanix cpu --node 'iroh://11fd26a6…dfe9638a5?addr=127.0.0.1:5680' -- qjs PROGRAM
 ```
 
 ```sh
 # Terminal 2 — node X, the caller. The job's world is X's cwd, reverse-
 # exported; build.js lives HERE, not on Y.
 cd "$ROOT_X"   # contains build.js and dataset.txt
-wanix-rust cpu --node 'iroh://11fd26a6…dfe9638a5?addr=127.0.0.1:5680' -- qjs build.js
+wanix cpu --node 'iroh://11fd26a6…dfe9638a5?addr=127.0.0.1:5680' -- qjs build.js
 ```
 
 ```
@@ -111,7 +111,7 @@ The export scope is the caller's half of the confinement; the acceptor enforces 
 
 ## Status / honest limits
 
-- **Both halves ship.** `wanix-rust cpu` dials and `mesh-serve --cpu` serves (`crates/wanix-cli/src/mesh/serve_cpu.rs`); the end-to-end proof over real loopback QUIC is `mesh_serve_cpu_runs_a_dialed_job_against_the_callers_reverse_export` in `crates/wanix-cli/src/mesh/serve.rs`. Serving cpu follows the exec-device rule: refused on any non-loopback endpoint entirely (even with `--peer`/`--grant` or `--insecure-open` — a LAN `--addr` is mDNS-discoverable, so only loopback is local trust); on the loopback `--addr` endpoint, `--peer HEX` scopes exec to that one verified identity and no `--peer` admits any dialer that reaches the loopback socket.
+- **Both halves ship.** `wanix cpu` dials and `mesh-serve --cpu` serves (`crates/wanix-cli/src/mesh/serve_cpu.rs`); the end-to-end proof over real loopback QUIC is `mesh_serve_cpu_runs_a_dialed_job_against_the_callers_reverse_export` in `crates/wanix-cli/src/mesh/serve.rs`. Serving cpu follows the exec-device rule: refused on any non-loopback endpoint entirely (even with `--peer`/`--grant` or `--insecure-open` — a LAN `--addr` is mDNS-discoverable, so only loopback is local trust); on the loopback `--addr` endpoint, `--peer HEX` scopes exec to that one verified identity and no `--peer` admits any dialer that reaches the loopback socket.
 - **Output is batched, not streamed.** The task model runs the guest to completion inside `start` and only then has its buffered stdout, so v1 delivers stdout, stderr, and exit as a single batch after `start` returns (`crates/wanix-cpu/src/lib.rs:33`, `crates/wanix-cpu/src/acceptor.rs:63`). Incremental streaming is a named follow-up, not an implied capability.
 - **Cancel stops draining, not computing.** The driver has no abort hook, so `CpuEvent::Cancel` stops the caller draining the control stream; it does not stop the remote computation (`crates/wanix-cpu/src/lib.rs:36`).
 - **Local-trust / grant-allowlisted only.** This crate provides the mechanism, not a public policy. Exporting `#cpu`/`#task` for remote code execution stays local-trust and allowlisted until public auth lands (`crates/wanix-cpu/src/lib.rs:43`). The acceptor caps concurrent jobs and bounds per-op I/O, but there are no hard CPU or memory limits on a running guest yet — read this as cheap, scalable isolation, not a sandbox safe for arbitrary untrusted code.

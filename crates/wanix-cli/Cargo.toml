@@ -43,7 +43,7 @@ wanix-wasi = { path = "../wanix-wasi" }
 wanix-wasm = { path = "../wanix-wasm" }
 
 [[bin]]
-name = "wanix-rust"
+name = "wanix"
 path = "src/main.rs"
 
 [lints]

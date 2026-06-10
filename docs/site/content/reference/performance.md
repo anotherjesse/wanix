@@ -70,7 +70,7 @@ story across the tiers; you choose how much you pay.
 
 ## What the bench actually measures
 
-Cold-start of a one-shot `wanix-rust qjs <file>` was ~545 ms, and **~100% of that
+Cold-start of a one-shot `wanix qjs <file>` was ~545 ms, and **~100% of that
 was Wasmtime cranelift-compiling** the 1.7 MiB QuickJS module — the JS workload
 was noise. Caching the compiled artifact drops the dominant cost to ~0.5 ms
 (a ~1000x fall) and cuts peak RSS ~5x; a warm cached invocation is ~18 ms

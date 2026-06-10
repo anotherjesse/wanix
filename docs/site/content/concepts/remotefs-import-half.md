@@ -39,17 +39,17 @@ Wanix could always *export*: it served its filesystems as 9P over a process pipe
 
 ## Show it: bind a remote at /n/remote and read through it
 
-The shipped `wanix-rust mount-*` subcommands are the smallest possible proof. One process exports a tree; another dials it, builds a `RemoteFs`, binds it into a fresh `Namespace`, and runs exactly one filesystem operation *through the namespace* (`crates/wanix-cli/src/mount.rs:1-29`):
+The shipped `wanix mount-*` subcommands are the smallest possible proof. One process exports a tree; another dials it, builds a `RemoteFs`, binds it into a fresh `Namespace`, and runs exactly one filesystem operation *through the namespace* (`crates/wanix-cli/src/mount.rs:1-29`):
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
 # Process A: export a host directory as raw 9P over TCP (a serve mode).
-wanix-rust serve --root ./shared --p9 127.0.0.1:5640 &
+wanix serve --root ./shared --p9 127.0.0.1:5640 &
 
 # Process B: dial it, bind the export at /n/remote, list through the namespace.
-wanix-rust mount-ls tcp://127.0.0.1:5640
+wanix mount-ls tcp://127.0.0.1:5640
 # -> the entries of ./shared, fetched over the wire
 ```
 

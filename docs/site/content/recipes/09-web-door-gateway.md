@@ -39,8 +39,8 @@ Bind the chat webapp and its mesh room under `http://chat.localhost:PORT` and a 
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0 --restart on-failure
+alias wanix='./target/debug/wanix'
+wanix app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0 --restart on-failure
 # chatroom	iroh://71b44428...?addr=127.0.0.1:46350
 ```
 
@@ -51,7 +51,7 @@ Bind the bundled web client *and* the room under the name `chat` (they share one
 ```sh
 mkdir -p /tmp/empty
 T='iroh://71b44428...?addr=127.0.0.1:46350'    # the room ticket
-wanix-rust serve --root /tmp/empty \
+wanix serve --root /tmp/empty \
   --bind chat=examples/chatroom/web \
   --bind "chat=$T" \
   --bind docs=docs/site/content \
@@ -59,13 +59,13 @@ wanix-rust serve --root /tmp/empty \
 ```
 
 ```text
-wanix-rust serve: gateway origin http://chat.localhost:7699/
-wanix-rust serve: gateway origin http://docs.localhost:7699/
-wanix-rust serve: serving /tmp/empty files with Wanix overlay
-wanix-rust serve: listening on http://127.0.0.1:7699/
+wanix serve: gateway origin http://chat.localhost:7699/
+wanix serve: gateway origin http://docs.localhost:7699/
+wanix serve: serving /tmp/empty files with Wanix overlay
+wanix serve: listening on http://127.0.0.1:7699/
 ```
 
-If the room registered itself in the catalog (`app serve ... --register room`, [Recipe 10](/recipes/10-name-your-world)), the ticket line collapses to `--bind chat=room` — executed: the serve printed `wanix-rust: name 'room' -> iroh://e1de10e6...?addr=... (resolved through the catalog at launch)` and the `POST /post` → `GET /latest` round trip below worked unchanged. `--bind` is the one *fallback* context: a name-spelled source with no catalog entry is treated as a relative directory (spell `./room` to force the directory when an entry exists).
+If the room registered itself in the catalog (`app serve ... --register room`, [Recipe 10](/recipes/10-name-your-world)), the ticket line collapses to `--bind chat=room` — executed: the serve printed `wanix: name 'room' -> iroh://e1de10e6...?addr=... (resolved through the catalog at launch)` and the `POST /post` → `GET /latest` round trip below worked unchanged. `--bind` is the one *fallback* context: a name-spelled source with no catalog entry is treated as a relative directory (spell `./room` to force the directory when an entry exists).
 
 ## 2. The bare host is the name index
 

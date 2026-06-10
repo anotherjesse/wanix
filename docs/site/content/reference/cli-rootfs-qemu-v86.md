@@ -22,7 +22,7 @@ usedInFlows: []
 honestLimits:
   - "These commands emit and validate launch handoffs; they do not supervise a VM lifecycle, daemonize, or manage a running guest."
   - "rootfs build is out of scope: rootfs --archive only extracts and validates a pre-built guest root, it does not produce a kernel or filesystem image."
-  - "qemu --exec is a foreground launch only and refuses to run unless the live wanix-rust binary supplies process IO; --json cannot combine with --exec."
+  - "qemu --exec is a foreground launch only and refuses to run unless the live wanix binary supplies process IO; --json cannot combine with --exec."
   - "The /.well-known/rootfs.json route is loopback-only because the manifest carries host paths and launch argv."
   - "Ethernet/vnet bridging is explicitly unimplemented; the v86 and QEMU 9P mounts are the only guest connectivity story today."
 ---
@@ -39,8 +39,8 @@ Start with a pre-built Linux guest archive and ask `rootfs` to lay it out and ch
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
-wanix-rust rootfs --archive extras/dist/alpine-linux.tgz --out /tmp/wanix-rootfs
+alias wanix='./target/debug/wanix'
+wanix rootfs --archive /path/to/linux-rootfs.tgz --out /tmp/wanix-rootfs
 ```
 
 The visible result is an extracted directory plus a copyable launch summary: the resolved kernel route, the init route, and ready-to-run `qemu` and `serve` commands (`crates/wanix-cli/src/rootfs/handoff.rs:9-30`). Behind that, extraction rejects any archive entry that escapes the output directory (`../escape.txt`, absolute paths) with `unsafe rootfs archive path` before writing the escape (`crates/wanix-cli/src/rootfs/archive.rs:65-101`). Preparation then validates two boot markers: a kernel at `boot/bzImage` or `bzImage`, and an init at `bin/init` that must be a regular file and, on Unix, executable — a non-executable `/bin/init` is a hard error (`crates/wanix-cli/src/rootfs/prepare.rs:9-90`). This is the whole point: a guest that will not boot fails here, at prepare time, not later inside an opaque emulator.
@@ -48,7 +48,7 @@ The visible result is an extracted directory plus a copyable launch summary: the
 For scripts and editors, `--json` emits the `wanix-rootfs.v1` manifest instead of prose (`crates/wanix-cli/src/rootfs.rs:38-86`):
 
 ```sh
-wanix-rust rootfs --archive extras/dist/alpine-linux.tgz --out /tmp/wanix-rootfs --json
+wanix rootfs --archive /path/to/linux-rootfs.tgz --out /tmp/wanix-rootfs --json
 ```
 
 It carries `rootPath`, `kernelRoute`/`kernelPath`, `initRoute`/`initPath`, an embedded `qemu` block, and a `serveDirectV86` argv with `bundle`, `wanixServices`, and `p9Msize` (`crates/wanix-cli/src/rootfs/handoff.rs:32-58`). The flag set is exactly `--archive FILE`, `--out DIR`, and `--json`; anything else is a usage error (`crates/wanix-cli/src/rootfs.rs:38-76`).
@@ -58,7 +58,7 @@ It carries `rootPath`, `kernelRoute`/`kernelPath`, `initRoute`/`initPath`, an em
 `qemu --root` validates the same guest-root shape and prints a QEMU command that mounts the root over virtio-9p:
 
 ```sh
-wanix-rust qemu --root /tmp/wanix-rootfs
+wanix qemu --root /tmp/wanix-rootfs
 ```
 
 By default it produces a quoted shell argv. Add `--json` to get the `wanix-qemu-virtio9p.v1` manifest — `rootPath`, kernel/initrd paths, memory, `mountTag`, `securityModel`, `p9Msize`, the resolved `cmdline`, and the full `argv` (`crates/wanix-cli/src/qemu/handoff.rs:84-92`, manifest kind asserted at `crates/wanix-cli/src/rootfs/handoff.rs:127`). Shell and JSON share one validated argv, so a script and a future UI consume the same launch without reinterpreting a shell string ([ADR 0005](/reference/adr-index); `rust-walkthrough.md:470-474`).
@@ -78,7 +78,7 @@ The knobs all affect the guest boot contract, so they stay explicit (`crates/wan
 The third surface is a serve bundle, not a separate command:
 
 ```sh
-wanix-rust serve --root /tmp/wanix-rootfs --listen 127.0.0.1:7654 --bundle direct-v86
+wanix serve --root /tmp/wanix-rootfs --listen 127.0.0.1:7654 --bundle direct-v86
 ```
 
 This serves the built-in v86 assets — `libv86.mjs`, the offscreen and re-export shims, `v86.wasm`, and the SeaBIOS/VGA BIOS blobs, all compiled into the binary via `include_bytes!` and served only when the bundle matches (`crates/wanix-cli/src/serve/direct_v86.rs:10-83`). The generated page reads the discovery document, attaches v86 to the advertised direct 9P route, and surfaces a boot-readiness JSON: it probes the static root for a kernel (`/boot/bzImage` or `/bzImage`), an initrd, and an executable `/bin/init`, then reports `ready` plus any `missing` markers (`crates/wanix-cli/src/serve/direct_v86.rs:85-128`). The default v86 cmdline carries the matching 9P rootflags (`crates/wanix-cli/src/serve/direct_v86.rs:11`); append `?bundle=direct-v86&p9-msize=65536` to a URL to change the mount size without rewriting the whole cmdline (`rust-walkthrough.md:429-430`).
@@ -96,7 +96,7 @@ curl http://127.0.0.1:7654/.well-known/rootfs.json
 
 ## See also
 
-- [CLI command index](/reference/cli-command-index) — every `wanix-rust` subcommand in one place.
+- [CLI command index](/reference/cli-command-index) — every `wanix` subcommand in one place.
 - [Loopback-only handoffs](/concepts/loopback-only-handoffs) — why these manifests never cross the network.
 - [The three serve bundles](/concepts/three-serve-bundles) — `fs9p`, `workbench-fs9p`, and `direct-v86`.
 - [The discovery document](/concepts/discovery-document) and [serve and discovery](/reference/serve-and-discovery) — what the v86 page reads on boot.

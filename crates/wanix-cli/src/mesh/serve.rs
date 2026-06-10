@@ -1,4 +1,4 @@
-//! `wanix-rust mesh-serve`: export a host directory over the native mesh wire.
+//! `wanix mesh-serve`: export a host directory over the native mesh wire.
 //!
 //! Binds an iroh endpoint from the persisted node identity (`~/.wanix/node.key`
 //! by default), serves `--root` over the native `wanix-mesh-wire` plane (ALPN
@@ -372,17 +372,17 @@ fn announce(
 fn announce_message(peer_hex: &str, query: &str, insecure_public: bool, cpu: bool) -> String {
     let ticket_url = format!("iroh://{peer_hex}{query}");
     let mut message = format!(
-        "wanix-rust mesh-serve: node {peer_hex}\n\
-         wanix-rust mesh-serve: ticket {ticket_url}\n\
-         wanix-rust mesh-serve: mount with: wanix-rust mount-ls '{ticket_url}'\n"
+        "wanix mesh-serve: node {peer_hex}\n\
+         wanix mesh-serve: ticket {ticket_url}\n\
+         wanix mesh-serve: mount with: wanix mount-ls '{ticket_url}'\n"
     );
     if cpu {
         // Name the hazard and the matching client command: serving #cpu means an
         // admitted peer runs task code on this host against its own reverse
         // export.
         message.push_str(&format!(
-            "wanix-rust mesh-serve: serving the #cpu exec plane (remote code execution \
-             for admitted peers); run a job with: wanix-rust cpu --node '{ticket_url}' \
+            "wanix mesh-serve: serving the #cpu exec plane (remote code execution \
+             for admitted peers); run a job with: wanix cpu --node '{ticket_url}' \
              -- qjs PROGRAM\n"
         ));
     }
@@ -393,7 +393,7 @@ fn announce_message(peer_hex: &str, query: &str, insecure_public: bool, cpu: boo
         // #task/#agent exec devices. Say so explicitly so the operator knows the
         // hazard is file read-write, not remote code execution.
         message.push_str(
-            "wanix-rust mesh-serve: WARNING --insecure-open exports the entire root \
+            "wanix mesh-serve: WARNING --insecure-open exports the entire root \
              read-write (file contents, not the #task/#agent exec devices) to anyone \
              with the ticket\n",
         );
@@ -589,7 +589,7 @@ mod tests {
         );
         // Whatever the server prints must paste into the matching client command.
         assert!(
-            message.contains("wanix-rust mount-ls 'iroh://ab12?addr=127.0.0.1:5610'"),
+            message.contains("wanix mount-ls 'iroh://ab12?addr=127.0.0.1:5610'"),
             "{message}"
         );
         assert!(!message.contains("WARNING"), "{message}");
@@ -609,7 +609,7 @@ mod tests {
         let message = announce_message("ab12", "?addr=127.0.0.1:5610", false, true);
         assert!(message.contains("remote code execution"), "{message}");
         assert!(
-            message.contains("wanix-rust cpu --node 'iroh://ab12?addr=127.0.0.1:5610'"),
+            message.contains("wanix cpu --node 'iroh://ab12?addr=127.0.0.1:5610'"),
             "{message}"
         );
     }
@@ -869,7 +869,7 @@ mod tests {
 
     /// The serve half the docs called "dial-only" until now: `mesh-serve --cpu`
     /// binds the [`wanix_mesh::CpuAcceptor`] beside the namespace plane on one
-    /// router, and the REAL CLI dial verb (`wanix-rust cpu`) runs a qjs job on
+    /// router, and the REAL CLI dial verb (`wanix cpu`) runs a qjs job on
     /// this node against the caller's reverse-exported cwd — output and exit
     /// observable on the caller's process streams, with the namespace plane
     /// still mountable on the same ticket.

@@ -98,9 +98,9 @@ Raw 9P over TCP is a serve mode (`serve --p9 ADDR`), not a separate daemon — t
 
 ```sh
 cargo build --package wanix-cli
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 
-wanix-rust serve --root . --p9 127.0.0.1:9999 \
+wanix serve --root . --p9 127.0.0.1:9999 \
   --peer <64-hex-ed25519-pubkey> \
   --grant projects/foo:projects/foo:rw \
   --grant docs:docs:ro

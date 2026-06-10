@@ -208,7 +208,7 @@ fn finish_qjs_restore_output(
             if !stderr.is_empty() && !stderr.ends_with(b"\n") {
                 stderr.push(b'\n');
             }
-            stderr.extend_from_slice(format!("wanix-rust qjs-restore: {error}\n").as_bytes());
+            stderr.extend_from_slice(format!("wanix qjs-restore: {error}\n").as_bytes());
             Ok(CliOutput::new(stdout, stderr, 1))
         }
     }

@@ -1,7 +1,7 @@
 // Wanix chatroom — a guest-defined room served as files (docs/appfs.md,
 // ADR 0007 "Worked example: a chatroom").
 //
-// This app IS the resource: `wanix-rust app serve --app examples/chatroom
+// This app IS the resource: `wanix app serve --app examples/chatroom
 // --state DIR` runs it as a resident qjs task behind the wanix-appfs
 // file2chan adapter. The host owns everything concurrent — open handles,
 // never-EOF `stream` subscriptions, presence (`who`) — and delivers each

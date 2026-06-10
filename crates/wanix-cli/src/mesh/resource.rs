@@ -96,7 +96,7 @@ pub(crate) fn serve_record_line(name: &str, ticket_url: &str) -> String {
 /// A copy-pasteable client command for a served resource, printed beside the
 /// stable tab record. Starts with `# ` so record parsers skip it as a comment.
 pub(crate) fn serve_record_example_line(ticket_url: &str) -> String {
-    format!("# mount with: wanix-rust mount-ls '{ticket_url}'\n")
+    format!("# mount with: wanix mount-ls '{ticket_url}'\n")
 }
 
 /// `--register NAME`: self-registration at announce time (ADR 0007 build-order
@@ -192,7 +192,7 @@ mod tests {
         assert!(line.starts_with("# "), "{line}");
         assert!(!line.contains('\t'), "{line}");
         assert!(
-            line.contains("wanix-rust mount-ls 'iroh://abc?addr=127.0.0.1:5610'"),
+            line.contains("wanix mount-ls 'iroh://abc?addr=127.0.0.1:5610'"),
             "{line}"
         );
     }

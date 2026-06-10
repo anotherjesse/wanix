@@ -1,4 +1,4 @@
-//! `wanix-rust mesh-serve` and the `iroh://` mount scheme.
+//! `wanix mesh-serve` and the `iroh://` mount scheme.
 //!
 //! These wire the `wanix-mesh` transport into the CLI: `mesh-serve` binds an iroh
 //! endpoint from the persisted node identity and exports a host directory (with

@@ -39,7 +39,7 @@ Open a key read-only and you get a `KvReadFile` whose bytes were captured the in
 
 ```sh
 # a value previously committed under the key "counter"
-wanix-rust ...   # (#kv is bound by serve --wanix-services; see below)
+wanix ...   # (#kv is bound by serve --wanix-services; see below)
 ```
 
 The handle then serves those bytes from a private offset. The point of snapshot-on-open (`files.rs:7-8`) is tear-free reads: a concurrent overwrite cannot rewrite the buffer underneath an in-flight read, because the reader already owns its own copy. The flip side is the honest limit — if the value changes after you open, your read does not see the new bytes. Open again to observe the new value. A missing key returns `FsError::NotFound` at open (`lib.rs:76`), not an empty read.
@@ -86,6 +86,6 @@ The path grammar is strict and total (`parse_path`, `lib.rs:109-118`). The norma
 ## Status / honest limits
 
 - **In-memory only.** The store is one `Arc<RwLock<BTreeMap<String, Vec<u8>>>>` (`crates/wanix-kv/src/lib.rs:21,61-65`). Values live exactly as long as the process that holds the `KvDevice`. On a `serve` restart the map is empty again — `lib.rs:7` says it outright: "an in-memory tier; durable and content-addressed backing is a follow-up." When you need durability across restarts, freeze the interesting keys into a [capsule](/concepts/wanix-capsule); do not blur the in-process line by pretending `#kv` persists.
-- **Bound by services, not standalone.** `#kv` is bound into the namespace only by `serve --wanix-services` (and the agent exec-server), so a fresh `wanix-rust qjs` with no serve allocates its own empty `KvDevice` per process (`docs/recipes/04-tiny-http-app-with-kv.md:180-184`). Two processes share state only when they share one serve's namespace.
+- **Bound by services, not standalone.** `#kv` is bound into the namespace only by `serve --wanix-services` (and the agent exec-server), so a fresh `wanix qjs` with no serve allocates its own empty `KvDevice` per process (`docs/recipes/04-tiny-http-app-with-kv.md:180-184`). Two processes share state only when they share one serve's namespace.
 - **Whole-value, last-writer-wins.** A write replaces the entire value atomically on close (`crates/wanix-kv/src/files.rs:70-76`); there is no append, partial update, or atomic increment. Concurrent writers race to commit, and the last `Drop` wins.
 - **Snapshot reads.** A read serves bytes captured at open (`files.rs:7-33`); a value that changes mid-read is not seen until you reopen.

@@ -24,7 +24,7 @@ Build the native demo CLI once:
 
 ```sh
 cargo build --locked --package wanix-cli
-WANIX=./target/debug/wanix-rust
+WANIX=./target/debug/wanix
 ```
 
 Check the CLI surface:
@@ -36,16 +36,16 @@ $WANIX --help
 You should see commands for:
 
 ```text
-wanix-rust qjs
-wanix-rust qjs-term
-wanix-rust qjs-shell
-wanix-rust qjs-snapshot
-wanix-rust qjs-resume
-wanix-rust qjs-restore
-wanix-rust p9-stdio
-wanix-rust rootfs
-wanix-rust qemu
-wanix-rust serve
+wanix qjs
+wanix qjs-term
+wanix qjs-shell
+wanix qjs-snapshot
+wanix qjs-resume
+wanix qjs-restore
+wanix p9-stdio
+wanix rootfs
+wanix qemu
+wanix serve
 ```
 
 > Developer aside: `wanix-cli` is intentionally only composition and demo
@@ -402,7 +402,7 @@ $WANIX serve --root /tmp/wanix-host --listen 127.0.0.1:7654 --bundle direct-v86
 When you have a Linux guest-root archive:
 
 ```sh
-$WANIX rootfs --archive extras/dist/alpine-linux.tgz --out /tmp/wanix-rootfs
+$WANIX rootfs --archive /path/to/linux-rootfs.tgz --out /tmp/wanix-rootfs
 $WANIX qemu --root /tmp/wanix-rootfs --exec
 ```
 
@@ -410,7 +410,7 @@ For scripts, editors, or browser launchers that want one prepared-root handoff,
 ask `rootfs` for JSON:
 
 ```sh
-$WANIX rootfs --archive extras/dist/alpine-linux.tgz --out /tmp/wanix-rootfs-json --json
+$WANIX rootfs --archive /path/to/linux-rootfs.tgz --out /tmp/wanix-rootfs-json --json
 ```
 
 When `serve` points at a prepared root, loopback clients can discover the same

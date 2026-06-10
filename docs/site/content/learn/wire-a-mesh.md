@@ -41,7 +41,7 @@ This flow takes two machines — call them A and B — and joins them so A can l
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
-alias wanix-rust='./target/debug/wanix-rust'
+alias wanix='./target/debug/wanix'
 ```
 
 ## Show it: two terminals, one namespace
@@ -54,16 +54,16 @@ export NODE_B_KEY=/tmp/wanix-B.key
 export ROOT_B=$(mktemp -d); mkdir -p "$ROOT_B/work"
 printf 'data that only lives on node B\n' > "$ROOT_B/work/dataset.txt"
 
-wanix-rust mesh-serve --root "$ROOT_B" --key "$NODE_B_KEY" \
+wanix mesh-serve --root "$ROOT_B" --key "$NODE_B_KEY" \
     --addr 127.0.0.1:5680 --wanix-services
 ```
 
 B prints three lines on stderr — its node id, a dialable `iroh://` ticket, and a copy-pasteable mount command (`docs/recipes/02-mount-remote-peer.md`):
 
 ```
-wanix-rust mesh-serve: node 829f…<64 hex>…f986
-wanix-rust mesh-serve: ticket iroh://829f…<64 hex>…f986?addr=127.0.0.1:5680
-wanix-rust mesh-serve: mount with: wanix-rust mount-ls 'iroh://829f…f986?addr=127.0.0.1:5680'
+wanix mesh-serve: node 829f…<64 hex>…f986
+wanix mesh-serve: ticket iroh://829f…<64 hex>…f986?addr=127.0.0.1:5680
+wanix mesh-serve: mount with: wanix mount-ls 'iroh://829f…f986?addr=127.0.0.1:5680'
 ```
 
 Copy the `ticket` value into A (yours will differ — use the full ticket your terminal printed). The 64 hex digits after `iroh://` *are* B's ed25519 public key; the `?addr=` carries first-contact direct addresses.
@@ -71,12 +71,12 @@ Copy the `ticket` value into A (yours will differ — use the full ticket your t
 ```sh
 # Terminal 2 (node A): the importer. A runs no server to import.
 export NODE_B='iroh://829f…f986?addr=127.0.0.1:5680'
-wanix-rust mount-ls  "$NODE_B" work          # -> dataset.txt
-wanix-rust mount-cat "$NODE_B" work/dataset.txt
+wanix mount-ls  "$NODE_B" work          # -> dataset.txt
+wanix mount-cat "$NODE_B" work/dataset.txt
 # -> data that only lives on node B
 ```
 
-(Pasting `$NODE_B` everywhere is the no-catalog fallback. `wanix-rust catalog add nodeb "$NODE_B"` names the peer locally, and every `mount-*` verb then takes `nodeb` — resolved through `~/.wanix/catalog` at launch with a one-line stderr audit. Executed in [Recipe 02](/recipes/02-mount-remote-peer) and the full story in [Recipe 10](/recipes/10-name-your-world); `cpu --node` below still wants the ticket.)
+(Pasting `$NODE_B` everywhere is the no-catalog fallback. `wanix catalog add nodeb "$NODE_B"` names the peer locally, and every `mount-*` verb then takes `nodeb` — resolved through `~/.wanix/catalog` at launch with a one-line stderr audit. Executed in [Recipe 02](/recipes/02-mount-remote-peer) and the full story in [Recipe 10](/recipes/10-name-your-world); `cpu --node` below still wants the ticket.)
 
 Those bytes never touched A's disk. They crossed a QUIC stream from B and deserialized through the mesh's import half on A. Because this is an `iroh://` mount between two Wanix nodes, the import is a `NativeFs` over the [native FileSystem-over-iroh wire](/concepts/missing-half-of-9p) (one `postcard`-framed stream for the read), not 9P — 9P is the foreign edge, reached over `tcp://`. **Now the name:** this is Plan 9 *import* — A bound B's exported namespace as a local `FileSystem`. The mount lands at `/n/remote` (`crates/wanix-cli/src/mount.rs:26`). See [the import half](/concepts/remotefs-import-half).
 
@@ -89,8 +89,8 @@ There is no DNS, no username, no IP-as-identity. A node's identity is a 32-byte 
 Because every Wanix service device is a plain `FileSystem`, the moment B binds one into its exported namespace, A reaches it through the same mount with no new code. With `--wanix-services`, B exported `#kv` alongside its host root, so A reads a remote key as a file:
 
 ```sh
-wanix-rust mount-write "$NODE_B" '#kv/config' 'set from node A'
-wanix-rust mount-cat   "$NODE_B" '#kv/config'   # -> set from node A — B's key store, over QUIC
+wanix mount-write "$NODE_B" '#kv/config' 'set from node A'
+wanix mount-cat   "$NODE_B" '#kv/config'   # -> set from node A — B's key store, over QUIC
 ```
 
 This is what [devices import for free](/concepts/devices-import-for-free) means: `#kv`, `#cas`, `#plumb`, and `#agent` all cross nodes the instant they are bound, because the mesh carries the one `FileSystem` contract (the native wire here) and they are all just filesystems. (Keep in mind `#kv` is in-memory — see [the `#kv` device](/devices/kv).)
@@ -100,17 +100,17 @@ This is what [devices import for free](/concepts/devices-import-for-free) means:
 Importing files is half of cpu(1); the other half is moving the *computation*. Add `--cpu` to B's serve command (restart Terminal 1 with it):
 
 ```sh
-wanix-rust mesh-serve --root "$ROOT_B" --key "$NODE_B_KEY" \
+wanix mesh-serve --root "$ROOT_B" --key "$NODE_B_KEY" \
     --addr 127.0.0.1:5680 --wanix-services --cpu
 ```
 
 B now also announces the exec plane, naming the hazard out loud:
 
 ```
-wanix-rust mesh-serve: serving the #cpu exec plane (remote code execution for admitted peers); run a job with: wanix-rust cpu --node 'iroh://829f…f986?addr=127.0.0.1:5680' -- qjs PROGRAM
+wanix mesh-serve: serving the #cpu exec plane (remote code execution for admitted peers); run a job with: wanix cpu --node 'iroh://829f…f986?addr=127.0.0.1:5680' -- qjs PROGRAM
 ```
 
-From A, `wanix-rust cpu` dials B's exec plane, reverse-exports A's working directory as a scoped namespace, and asks B to run a task whose world *is* that reverse export — the job runs on B's CPU, against A's files (Plan 9 cpu exactly: your namespace, their processor). Executed transcript:
+From A, `wanix cpu` dials B's exec plane, reverse-exports A's working directory as a scoped namespace, and asks B to run a task whose world *is* that reverse export — the job runs on B's CPU, against A's files (Plan 9 cpu exactly: your namespace, their processor). Executed transcript:
 
 ```sh
 # Terminal 2 (node A): build.js is in A's cwd; it never existed on B.
@@ -118,7 +118,7 @@ cat > build.js <<'JS'
 import * as std from "qjs:std";
 std.out.puts("ran on B against A's reverse export\n");
 JS
-wanix-rust cpu --node "$NODE_B" -- qjs build.js
+wanix cpu --node "$NODE_B" -- qjs build.js
 # -> ran on B against A's reverse export
 ```
 
@@ -143,8 +143,8 @@ Live mesh state is not portable — peers, tickets, and ephemeral fds vanish wit
 
 ```sh
 export CAS=/tmp/cas-A
-ID=$(wanix-rust capsule save "$ROOT_B" --store "$CAS" | awk '/^capsule/ {print $2}')
-wanix-rust capsule load "$ID" /tmp/world-B --store "$CAS"
+ID=$(wanix capsule save "$ROOT_B" --store "$CAS" | awk '/^capsule/ {print $2}')
+wanix capsule load "$ID" /tmp/world-B --store "$CAS"
 ```
 
 Every file becomes a BLAKE3 blob; the sorted manifest's hash *is* the capsule id (`docs/recipes/03-freeze-world-to-capsule.md`). Each blob is re-hashed on load, so a tampered blob is rejected, never served under the wrong address. Note `#kv` is a device, not a directory: to freeze KV state, copy the values you want into the world tree first. See [the `wanix capsule`](/concepts/wanix-capsule) world snapshot.
@@ -168,6 +168,6 @@ The [browser cockpit](/concepts/browser-cockpit) inspects the served devices ove
 
 - **One mount slot, not per-peer.** The shipped `mount-*` verbs always bind the remote at `/n/remote` (`crates/wanix-cli/src/mount.rs:26`). The per-peer `/n/<peer-id>` shape is designed but unshipped; treat `/n/<peer>` only as a labelled convention for "the ticket I dialed."
 - **Exec is local-trust only.** `#task`/`#agent`/`#cpu` are not exposed to untrusted public peers — `--wanix-services` and `--cpu` are refused on a public endpoint (`crates/wanix-cli/src/mesh/serve.rs:130-137`). Isolation is cheap and scalable, not a sandbox for arbitrary untrusted code; there are no hard CPU/memory limits yet.
-- **`#cpu` output is batched, with no remote cancel.** Both halves ship (`mesh-serve --cpu` serves, `wanix-rust cpu` dials), but stdout/stderr/exit arrive as one batch after the task finishes, and `CpuEvent::Cancel` stops the caller draining, not the remote computation.
+- **`#cpu` output is batched, with no remote cancel.** Both halves ship (`mesh-serve --cpu` serves, `wanix cpu` dials), but stdout/stderr/exit arrive as one batch after the task finishes, and `CpuEvent::Cancel` stops the caller draining, not the remote computation.
 - **Single frame per connection (WS-served 9P only).** The WebSocket-served 9P door processes one frame at a time per connection, so there a blocking `#plumb recv` cannot interleave with a write on the same connection — use a second connection for live pub/sub. The **native mesh wire does not have this constraint**: every open file rides its own QUIC stream.
 - **The served `#agent` is a deterministic `FakeEngine`,** not a live LLM. Real codex is the local-trust `wanix agent` CLI path only.
