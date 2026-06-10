@@ -9,6 +9,11 @@ the open questions we still need to answer. Once the contracts here stabilize,
 split the durable boundaries (the catalog format, the resource address model,
 the host-wrapper service contract, the Layer-2/3 authorization model) into
 consecutive accepted ADRs and let this draft retire into commit history.
+The Layer-1 naming layer has since shipped — the `~/.wanix/catalog` address
+book, `--register` self-registration, launch-time name resolution, and recipes
+(build-order steps 5–8 below) — and the BinVerbs confinement contract is
+accepted and pinned (its own section below); Layer 2/3 authorization remains
+the open half.
 
 ---
 
@@ -107,23 +112,23 @@ What is missing is mostly a *naming layer* and one *new kind of device*.
 > `FileSystem`s into namespaces regardless of encoding, but its mesh-facing
 > resource and authorization shapes should be designed for the native wire.
 
-**Not yet built (the story's missing half):**
+**The missing half at drafting time — since shipped:**
 
-- **There is no persistent registry of resources anywhere.** Identity persists
-  at `~/.wanix/node.key`, but addresses are pasted by hand as
-  `iroh://<64-hex>[?addr=IP:PORT]`. Even `#plumb` admits its topic list is "a
-  best-effort directory, not a global registry" (`crates/wanix-plumb/src/lib.rs`).
-- **Projecting a single local CLI program onto the mesh is half-built.** The
-  device and serving shape exist — ToolFS (ADR 0009) served per-resource by
-  `wanix tool serve`, one fixed capability per endpoint with per-connection
-  principal-scoped `jobs/` views — but its runners are in-process built-ins
-  (`upper`/`sha256`/`model`); wrapping an *actual host program* still needs the
-  fixed-command process runner (docs/toolfs.md §Build Slices). `#cpu` remains
-  the arbitrary-caller-supplied-spec direction, not this.
-- **There is no named "wire these together" artifact** (a recipe) distinct from
-  a state snapshot (a capsule).
+- **A persistent registry of resources** — shipped as the local catalog:
+  `wanix catalog add/show/rm/ls`, one JSON entry per name under
+  `~/.wanix/catalog/`, `--register NAME` on every resource serve, and
+  launch-time resolution of bare names at every ticket-accepting surface
+  (`--mount-mesh`, the `mount-*` verbs, `serve --bind`, recipe binds).
+- **Projecting a single local CLI program onto the mesh** — shipped as ToolFS
+  (ADR 0009) plus the `ProcRunner` fixed-policy inversion: `tool serve
+  --config tools.toml` wraps real host programs with operator-fixed
+  command/argv, no shell, empty child env, and real timeout/abort kills.
+  `#cpu` remains the arbitrary-caller-supplied-spec direction, not this.
+- **A named "wire these together" artifact** distinct from a state snapshot —
+  shipped as recipes (`recipe save/run`, TOML under `~/.wanix/recipes/`).
 
-So the work is naming, wrapping, and pairing — not composition.
+So the remaining work is pairing/authorization and sync — not naming,
+wrapping, or composition.
 
 ---
 
@@ -481,20 +486,37 @@ is solid.
 4. **Client composition across multiple served resources (shipped).** Repeated
    `--mount-mesh` flags mount two different volume tickets into one shell/task
    namespace, with writes scoped to their target volumes.
-5. **`#catalog` device backed by a volume.** Entries as files; model on
-   `#kv`/`#agent`. The first catalog can be local or a normal mounted volume.
-6. **Make commands register entries and mount by name.** `volume create` /
-   `mesh-serve` write catalog entries; `wanix mount <name>` resolves a catalog
-   name -> address -> `bind` at `/n/<name>` or `/vol/<name>`.
-7. **The host wrapper (device + serving shipped; process runner ahead).** The
-   wrapper device became ToolFS (ADR 0009, docs/toolfs.md): `wanix tool serve
-   --tool NAME` runs one native endpoint + ticket per tool, every connection
-   bound to a principal-scoped `jobs/` view from the verified `remote_id()`,
-   and the wanix-sh `tool` builtin drives it through the visible files (the
-   composed walkthrough is recipe 06). Remaining: the fixed-command process
-   runner that wraps a real host program (Whisper is the perfect first target),
-   request/response only.
-8. **Recipes.**
+5. **The catalog (shipped — as a CLI store, not yet a device).** `wanix
+   catalog add/show/rm/ls` keeps one pretty-printed JSON entry per name under
+   `~/.wanix/catalog/` (name grammar lowercase `[a-z0-9-]`, never spellable as
+   a ticket or path); `catalog ls` probes liveness through the exact mount
+   dial path (online/offline/unknown, bounded deadline, chunked fan-out);
+   v0 addresses are live `iroh://` tickets, with `cas:`/`local:` reserved and
+   refused with a pointer. The `#catalog`-device-backed-by-a-synced-volume
+   shape is deliberately ahead (open question 2).
+6. **Register entries and mount by name (shipped).** Every resource serve
+   takes `--register NAME` (one endpoint registers as NAME, several as
+   `NAME-<resource>`; re-announce refreshes the route hint), and a bare name
+   resolves through the catalog at LAUNCH time — logged once per name on
+   stderr — at every ticket-accepting surface: `--mount-mesh NAME[=GUEST]`
+   (sh/wasm/qjs-shell), `mount-ls/cat/write`, recipe binds, and `serve --bind`
+   (no entry falls back to a relative dir; `./name` forces the dir). There is
+   no separate `wanix mount` verb; mounting by name rides the existing flags.
+   `cpu --node` still takes tickets only.
+7. **The host wrapper (shipped).** The wrapper device became ToolFS (ADR 0009,
+   docs/toolfs.md): `wanix tool serve --tool NAME` runs one native endpoint +
+   ticket per tool, every connection bound to a principal-scoped `jobs/` view
+   from the verified `remote_id()`, and the wanix-sh `tool` builtin drives it
+   through the visible files (the composed walkthrough is recipe 06). The
+   fixed-command process runner shipped too: `tool serve --config tools.toml`
+   wraps real host programs through the `ProcRunner` fixed-policy inversion
+   (recipe 08), request/response only.
+8. **Recipes (shipped).** `recipe save NAME --mount ... [--run LINE]` authors
+   one TOML file at `~/.wanix/recipes/<name>.recipe` (binds + optional run
+   line; no magic capture); `recipe run` resolves binds through the catalog at
+   launch with the saved address as a drift-check hint (see open question 6),
+   and a run-less recipe opens an interactive `sh` over the mounts.
+   Remaining: `recipe ls/show/rm`.
 9. **Authorization (Layer 2) and ownership/delegation (Layer 3).** Start with
    per-resource endpoint ACLs. Re-evaluate scoped subresources only if one
    endpoint must intentionally expose multiple independently grantable resources.
@@ -526,9 +548,13 @@ These are the seams we should talk through before committing contracts.
    chicken-and-egg: how does device B first learn device A's address?
 
 3. **Liveness / status.** Catalog entries point at nodes that may be offline,
-   unlike CAS/capsule entries which are always loadable. Do we add a `probe` /
-   `status` per entry? How do we distinguish "the host is down" from "you are
-   not granted" in the UX?
+   unlike CAS/capsule entries which are always loadable. *Partially answered
+   (shipped):* `catalog ls` probes each entry through the exact mount dial
+   path within the shared deadline and renders online/offline/unknown, where
+   "offline" is ADR 0008's outage shape ("no route authenticated within the
+   deadline") — which, pre-ACL, is all Layer 1 can know. Still open:
+   distinguishing "the host is down" from "you are not granted" in the UX,
+   which arrives with Layer 2.
 
 4. **Host-wrapper safety surface.** Fixed program + argv template is the core
    safety property. But what about: environment leakage, working directory,
@@ -545,15 +571,27 @@ These are the seams we should talk through before committing contracts.
    until the cockpit becomes a composing native client?
 
 6. **Naming collisions and scope.** `/n/<peer>` is globally unambiguous (it is a
-   pubkey). `/n/whisper` is a *local* alias resolved through *my* catalog. What
-   happens when a shared recipe says `bind whisper-stt` and the recipient's
-   catalog has a different `whisper-stt`? Do recipes carry addresses inline,
-   names only, or both with name-as-hint?
+   pubkey). `/n/whisper` is a *local* alias resolved through *my* catalog.
+   *Answered (shipped):* the resolution rule is — names resolve through the
+   *resolver's own* catalog at LAUNCH time only (the spec/namespace always
+   carries the resolved address; a rebind affects the next launch), each
+   resolution is logged once per name on stderr for the audit trail,
+   resolution never probes, and names are sugar over keys, never authority.
+   Recipes carry **both, address-as-hint**: `recipe save` records the
+   resolved address beside the name as a drift-check hint; at `recipe run`
+   the catalog wins and drift warns loudly, and a vanished catalog entry
+   falls back to the recorded hint. So a shared recipe resolves against the
+   recipient's catalog by design — the hint makes drift visible, not
+   authoritative.
 
-7. **Address format / portability.** Is the catalog `address` the existing
-   `iroh://<hex>?addr=...` ticket string, or a richer typed value? In the v0
-   model the live iroh ticket names one resource root. How do `cas:` and
-   `local:` entries coexist with iroh resource tickets in one resolver?
+7. **Address format / portability.** *v0 answered (shipped):* the catalog
+   `address` is the existing `iroh://<hex>[?addr=...]` ticket string naming
+   one resource root, and the name grammar (lowercase `[a-z0-9-]`) guarantees
+   a name can never be mistaken for a ticket or a path at any resolution
+   point, so every surface routes on spelling alone. `cas:` and `local:` are
+   reserved kinds, refused with a pointer until a loader exists. Still open:
+   whether a richer typed value is ever needed, and how `cas:`/`local:`
+   entries behave in one resolver when they land.
 
 8. **When to re-evaluate scoped subresources.** Per-resource endpoints are the
    simple default and have a useful bearer-capability property: knowing the

@@ -8,7 +8,16 @@ Accepted
 > it records is runtime-agnostic and now also governs the compiled-`wasm32-wasi`
 > task driver. The file name is kept for ADR index stability; the contract below
 > covers any WASI task runtime. `.wasm` is a first-class task kind alongside
-> `.js`, with the same fd-mirroring contract.
+> `.js`, with the same fd-mirroring contract. The first-class claim holds from
+> inside the guests too, not just at the CLI top level: `wanix-sh` resolves
+> bare externals as `<name>.wasm`, then `<name>.js`, then the exact name and
+> launches both kinds through one `#task/new/auto` dispatch (mixed-kind
+> pipelines, `$?`, and confined bin-verbs included), and the qjs-shell
+> synchronous launcher dispatches children by extension the same way (proofs:
+> `crates/wanix-cli/src/sh/both_kinds_tests.rs`,
+> `qjs_shell_session_starts_child_wasm_task`). Known divergence, documented
+> not faked: the qjs driver has no per-task kill seam, unlike the wasm
+> driver's epoch interrupter (ADR 0010 status).
 
 ## Context
 

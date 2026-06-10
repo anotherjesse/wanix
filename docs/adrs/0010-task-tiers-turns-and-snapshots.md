@@ -20,7 +20,17 @@ layer too: `WasiCtx::fd_read` parks on stdio device fds via the shared
 through the same path as normal exit), with the interactive shell's foreground
 Ctrl-C and cancellable streaming `cat` bottoming out on it — the qjs driver
 still lacks a per-task interrupt seam, so kill on a running qjs task only sets
-the observable `kill_requested` flag.
+the observable `kill_requested` flag. Kill also reaches host parks: a
+`CancelToken` probing `Task::kill_requested` is injected through
+`task_wasi_config` into both WASI runtimes, the shared park loops
+(`wanix_wasi::wait::wait_read_ready`, the `wanix-wasi-host` `poll_oneoff`
+backoff) check it each wake, and a cancelled blocking read returns
+`Errno::Intr` instead of entering a device read that could block — so a
+killed task parked on a quiet stdin/`#pipe`/events read dies within one park
+interval (≤5 ms; proofs: `ctl_kill_unparks_a_task_blocked_*`). Write parks
+(a full bounded `#pipe`) and parks on server/mesh threads are deliberately
+not kill-aware — kill is a task operation and those are not task-thread
+parks.
 
 ## Context
 

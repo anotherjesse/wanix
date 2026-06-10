@@ -269,7 +269,12 @@ tests.
   `<app-dir>/bin`, `tool serve --config` takes a per-tool `bin` key), and
   `NAME:CMD args` runs `bin/CMD.{js,wasm}` from the `/n/NAME` or `/vol/NAME`
   mount as a child confined via the `#task` ctl `confine` verb to EXACTLY that
-  resource at `/res` + stdio + argv/env — no PATH merging, squatting-safe;
+  resource at `/res` + stdio + argv/env — no PATH merging, squatting-safe
+  (widening a verb beyond its resource is a deliberately unimplemented future
+  `--allow`-shaped act). A detached child's driver start failure (over-cap
+  verb refused at open, compile failure, missing program) is written to the
+  task's stderr before fds close (`Task::report_run_failure`), so a failed
+  `NAME:CMD` prints the honest error instead of a silent exit 1;
   proofs in `wanix-wasm` driver tests and
   `wanix-cli/src/app/serve/verb_tests.rs`, concept doc
   [docs/site/content/concepts/bin-verbs.md](docs/site/content/concepts/bin-verbs.md).
@@ -415,11 +420,15 @@ tests.
 - `#cpu` exec plane: a `wanix-cpu` acceptor runs a task against the caller's
   reverse-exported namespace, so a node can run compute on a peer that operates
   on the caller's files — Plan 9 cpu(1) over the mesh. Both CLI halves ship:
-  `mesh-serve --cpu` serves the acceptor behind the exec gate (refused on the
-  public endpoint entirely; `--peer`-scoped on the local `--addr` endpoint) and
+  `mesh-serve --cpu` serves the acceptor behind the exec gate (loopback-only,
+  like `--wanix-services`: refused on any non-loopback endpoint — public or LAN
+  `--addr`, whose NodeID mDNS advertises — even with `--peer`/`--grant` or
+  `--insecure-open`; `--peer`-scoped on a loopback `--addr` endpoint) and
   `wanix-rust cpu --node TICKET -- KIND PROGRAM` dials and runs the job
   (`crates/wanix-cli/src/mesh/serve_cpu.rs`, proof in
   `mesh_serve_cpu_runs_a_dialed_job_against_the_callers_reverse_export`).
+  An ungranted non-loopback `mesh-serve` (data plane too) likewise requires
+  `--peer`/`--grant` or an explicit `--insecure-open`.
 - `#agent` device: an LLM session as files (`new`/`prompt`/`events`/`pending`/
   `ctl`/`reply`/`status`), with approvals as files. The CLI `wanix agent` path
   uses the codex app-server engine against a confined Wanix world; the served
@@ -602,7 +611,10 @@ current-state docs, and commit messages instead of active ADRs.
   PROPOSED)**: the resource catalog / volume server / host-wrapper device /
   recipe story — a humane mesh front door where you address resources by name
   and compose namespaces from a catalog — plus the layered trust model (Layer 0
-  iroh identity → Layer 1 naming → Layer 2/3 authorization). A discussion draft,
+  iroh identity → Layer 1 naming → Layer 2/3 authorization). The Layer-1
+  naming layer (catalog + `--register` + launch-time resolution + recipes) and
+  the BinVerbs confinement contract are shipped and pinned; Layer 2/3
+  authorization is the open half. A discussion draft,
   to be split into accepted ADRs once its contracts stabilize.
 - [ADR 0008](docs/adrs/0008-live-mesh-resource-liveness.md): live `iroh://`
   resource liveness and retry semantics for agent/shell mounts — hard vs. soft
@@ -697,16 +709,23 @@ more feature work.
   9P-style `ANAME`-keyed sub-scoping is unreachable; settle it *with* the
   ADR 0006/0007 authorization layer (thread `aname` 1:1 vs a native
   scope-selection shape), not before. (a) and (b) are small cleanup-cycle items.
+- Names and verbs remainder (ADR 0007): the Layer-1 naming layer and the
+  BinVerbs confinement contract shipped (the "Names" and `wanix-sh` capability
+  bullets above); still open are name *exchange* (petnames between people —
+  ADR 0007 open question 9) and catalog sync across devices (open question 2:
+  the merge story plus the new-device bootstrap root of trust), Layer 2+
+  authorization (the deferred-but-inevitable project — until it lands,
+  `catalog ls` "offline" cannot distinguish host-down from not-granted),
+  threading names to `cpu --node`, `recipe ls/show/rm` verbs, and verb
+  widening (the explicit, visible `--allow`-shaped flag granting a verb
+  anything beyond its own resource — confinement-by-default is the pinned
+  contract, so widening must stay an explicit act, never a default).
 - Job protocol / ToolFS remainder ([docs/toolfs.md](docs/toolfs.md) §Build
-  Slices): ADR 0007's Layer 1 catalog/naming shipped (the "Names" capability
-  bullet above); the open slices are name *exchange* (petnames between
-  people / shared catalogs), Layer 2+ authorization, threading names to
-  `cpu --node`, and `recipe ls/show/rm` verbs. The agent adapter
-  is the other open slice, and `#agent`/`#cpu` convergence on the job grammar
-  (a prompt is a job; `events` already exists on `#agent`) waits until those
-  devices are next touched (ADR 0009 §Adopters). `--mount-mesh` still needs
-  threading to `qjs`/`qjs-term` (the keepalive home, `mesh::mounts`, already
-  exists).
+  Slices): the agent adapter is the open slice, and `#agent`/`#cpu`
+  convergence on the job grammar (a prompt is a job; `events` already exists
+  on `#agent`) waits until those devices are next touched (ADR 0009
+  §Adopters). `--mount-mesh` still needs threading to `qjs`/`qjs-term` (the
+  keepalive home, `mesh::mounts`, already exists).
 - AppResource + web-door remainder ([docs/appfs.md](docs/appfs.md) §Build
   Slices / §Status): the served guest is a tier-2 resident qjs loop, not the
   tier-1 turn model with a host handle table (ADR 0010) — move it when turns
@@ -716,16 +735,10 @@ more feature work.
   `fetch` handler (`wanix/http/1`) — so web users stop collapsing into the
   gateway's one dialer principal, and an off-loopback gateway auth story
   (today a non-loopback `--listen` with `--bind` is refused at startup).
-- Parked-read cancellation + permit pinning (the kill-shipped residue,
-  documented on `EpochInterrupter`/`Task::kill` and the ADR 0008 liveness
-  note): (a) ~~host parks~~ DONE — task-thread host parks are kill-aware via a
-  `CancelToken` injected by `task_wasi_config` (probes `Task::kill_requested`;
-  checked each wake in `wanix-wasi::wait::wait_read_ready` and the
-  `wanix-wasi-host` `poll_oneoff` backoff, with blocking reads returning
-  `Errno::Intr` instead of entering a device read that could block), so a
-  killed task parked on a quiet stdin/`#pipe`/events read dies within one park
-  interval (≤5 ms) — proofs: `ctl_kill_unparks_a_task_blocked_*` in
-  `wanix-wasm/src/driver.rs`. Residual: a *write* park (a killed task blocked
+- Kill residuals (documented on `EpochInterrupter`/`Task::kill`, the ADR 0008
+  liveness note, and the ADR 0010 status): task-thread host parks are
+  kill-aware now (the task-kill capability bullet above), but
+  (a) a *write* park (a killed task blocked
   writing a full bounded `#pipe` inside the channel condvar) and parks on
   server/mesh threads (LineBuffer reads held by serve sessions) are NOT
   kill-aware — kill is a task operation and those are not task-thread parks;
@@ -748,12 +761,12 @@ more feature work.
   as tickets, so re-derive them by running the binaries as a new user before
   the next UX pass.
 - Module-line health: `just module-lines` is green against the 350-line hard
-  limit, but six modules sit above the 250-line warn limit and should be split
-  before they grow — `wanix-agent/src/codex.rs` (~307), `wanix-agent/src/
-  exec_server.rs` (~283), `wanix-cli/src/serve/http/app.rs` (~273),
-  `wanix-sh/src/pipeline.rs` (~267), `wanix-sites/src/lib.rs` (~265), and
-  `wanix-mesh/src/node.rs` (~256). Keep running `just module-lines` during
-  cleanup.
+  limit, but seven modules sit above the 250-line warn limit and should be
+  split before they grow — `wanix-agent/src/codex.rs` (~307), `wanix-agent/src/
+  exec_server.rs` (~283), `wanix-cli/src/mesh/serve.rs` (~280),
+  `wanix-cli/src/serve/http/app.rs` (~273), `wanix-mesh/src/node.rs` (~270),
+  `wanix-sh/src/pipeline.rs` (~269), and `wanix-sites/src/lib.rs` (~265).
+  Keep running `just module-lines` during cleanup.
 - Cockpit follow-ups: `v86-shared-demo` is still a no-op stub in
   `workbench/src/web/extension.ts` (marked `// STUB:`); port it next. `#plumb`
   live receive in the self-check probes the publish path only because a blocking
