@@ -359,6 +359,22 @@ tests.
   (`crates/wanix-cli/src/mesh/mounts.rs`) carried by `qjs-shell`, `wasm`, and
   `sh`. Walkthrough: `docs/site/content/learn/compose-volumes-and-tools.md` and
   recipe 06 (tested transcript).
+- Guest-defined AppResources (`docs/appfs.md`): `wanix-rust app serve --app DIR
+  --state DIR --addr IP:PORT` runs a manifest-declared qjs guest
+  (`app.wanix.json`, the shared `"wanix.resource":"v0"` envelope) as a resident
+  task behind the `wanix-appfs` file2chan adapter and exports the resulting
+  `FileSystem` over one native mesh endpoint — one ticket names one running
+  app, identity persisted at `~/.wanix/app-identities/<name>.key`. Discrete
+  ops reach the guest as serialized newline-JSON events stamped with the
+  verified connection principal (`AppAttachPolicy`); declared stream files are
+  host-owned never-EOF subscriptions (bounded lossy `LineBuffer` fan-out fed
+  by guest publishes) with `who` presence from the open-subscription registry;
+  durable state is the explicit `--state` mount, so the bundled
+  `examples/chatroom` app survives guest restart with history intact, and a
+  dead guest fails ops `Unreachable` while blocked stream readers are released
+  with EOF (no auto-restart in v0). Proofs: `crates/wanix-appfs/src/tests.rs`,
+  `crates/wanix-cli/src/app/serve/tests.rs`; walkthrough: recipe 07 +
+  `docs/site/content/learn/build-a-chatroom.md`.
 - `wanix-rust capsule`: freezes a Wanix world into a portable, CAS-backed
   `.wcap` (via `wanix-cas`) that can be loaded elsewhere; live mesh peers and
   ephemeral handles are not portable.

@@ -16,6 +16,7 @@ seeAlso:
   - concepts/everything-is-a-file
   - concepts/approvals-as-files
   - concepts/devices-import-for-free
+  - concepts/guest-defined-resources
   - learn/compose-volumes-and-tools
   - recipes/06-compose-volume-and-tools
 prerequisites:
