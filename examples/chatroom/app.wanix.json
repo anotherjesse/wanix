@@ -1,0 +1,8 @@
+{
+  "wanix.resource": "v0",
+  "kind": "app",
+  "name": "chatroom",
+  "runtime": { "kind": "qjs", "main": "main.js" },
+  "files": ["post", "latest", "status"],
+  "streams": ["stream"]
+}

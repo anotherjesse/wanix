@@ -73,9 +73,9 @@ impl LineBuffer {
 
     /// Marks the buffer permanently closed so a blocked reader observes EOF.
     ///
-    /// No live AppFS path calls this (stream files are never-EOF while open);
-    /// it is kept so a future host-side teardown can release blocked readers.
-    #[cfg_attr(not(test), expect(dead_code))]
+    /// Stream files are never-EOF while the guest lives; this is the
+    /// host-side teardown ([`crate::AppStreamCloser`]) releasing blocked
+    /// readers once the guest app has exited.
     pub(crate) fn close(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.closed = true;

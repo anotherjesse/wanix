@@ -17,7 +17,10 @@
 //!   cannot block an existing stream reader, and a slow reader loses the
 //!   oldest backlog instead of blocking the app. The guest feeds streams by
 //!   emitting `{"publish":{...}}` lines, which the host fans out to every
-//!   subscriber of that stream.
+//!   subscriber of that stream. Never-EOF holds *while the guest lives*:
+//!   when the guest app exits, the host tears the stream surface down through
+//!   [`AppStreamCloser`] so blocked readers observe EOF instead of parking
+//!   forever on an app that can never publish again.
 //! - **Presence is host session state.** The reserved `who` file lists the
 //!   principals currently holding open stream subscriptions, one per line;
 //!   the guest is not consulted.
@@ -51,7 +54,7 @@ pub use protocol::{
     AppDirEntry, AppErr, AppErrKind, AppOk, AppOp, AppPublish, AppReply, AppRequest, GuestLine,
     MAX_LINE_LEN, decode_data, encode_data, publish_to_line,
 };
-pub use service::AppFsService;
+pub use service::{AppFsService, AppStreamCloser};
 pub use tree::{AppTree, WHO_FILE};
 
 #[cfg(test)]

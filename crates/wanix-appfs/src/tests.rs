@@ -649,3 +649,37 @@ fn host_answered_tree_shape() {
     // Stream/who metadata and the root listing never consulted the guest.
     assert!(state.sent().is_empty());
 }
+
+/// Guest-lifecycle teardown: [`AppFsService::stream_closer`] releases a
+/// parked stream reader with EOF and makes later subscriptions start at EOF
+/// — the lifecycle-honest inverse of never-EOF once the guest app has exited.
+#[test]
+fn stream_closer_releases_blocked_readers_with_eof() {
+    let (service, _state) = chat_service(|_request| Vec::new());
+    let closer = service.stream_closer();
+    let view = service.open_view("peer-a");
+    let mut parked = open(&view, "stream", OpenOptions::read());
+
+    let (sender, receiver) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let mut buf = [0_u8; 16];
+        sender.send(parked.read(&mut buf).unwrap()).unwrap();
+    });
+    // Let the reader park on the empty buffer, then tear the surface down.
+    thread::sleep(Duration::from_millis(50));
+    closer.close_all();
+    assert_eq!(
+        receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("parked stream reader must be released"),
+        0
+    );
+    reader.join().unwrap();
+
+    // A subscription opened after teardown reads EOF immediately instead of
+    // parking on a stream that can never receive another publish.
+    let mut late = open(&view, "stream", OpenOptions::read());
+    assert!(late.read_ready().unwrap());
+    let mut buf = [0_u8; 16];
+    assert_eq!(late.read(&mut buf).unwrap(), 0);
+}

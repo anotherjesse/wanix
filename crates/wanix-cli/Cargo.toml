@@ -11,6 +11,7 @@ version.workspace = true
 flate2 = "1"
 libc = "0.2"
 rustix = { version = "1.1.4", features = ["event", "fs", "termios"] }
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tar = "0.4"
@@ -18,6 +19,7 @@ tungstenite = "0.29.0"
 wanix-9p = { path = "../wanix-9p" }
 wanix-9p-client = { path = "../wanix-9p-client" }
 wanix-agent = { path = "../wanix-agent" }
+wanix-appfs = { path = "../wanix-appfs" }
 wanix-cas = { path = "../wanix-cas" }
 wanix-cpu = { path = "../wanix-cpu" }
 wanix-fs = { path = "../wanix-fs" }

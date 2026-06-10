@@ -3,7 +3,7 @@ use std::io::Read;
 
 use crate::wasm_args::parse_wasm_command;
 use crate::{
-    CliError, CliOutput, agent, agent_exec_server, capsule, cpu, mesh, mount, new, p9_stdio,
+    CliError, CliOutput, agent, agent_exec_server, app, capsule, cpu, mesh, mount, new, p9_stdio,
     parse_qjs_command, parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term, rootfs,
     serve, sh, tool, volume, wasm,
 };
@@ -37,6 +37,7 @@ pub(super) fn run_collected_command(
         Some("new") => new::run_new_command(new::parse_new_command(rest)?),
         Some("volume") => run_volume_collected_command(rest),
         Some("tool") => run_tool_collected_command(rest),
+        Some("app") => run_app_collected_command(rest),
         Some("rootfs") => rootfs::run_rootfs_command(rootfs::parse_rootfs_command(rest)?),
         Some("qemu") => qemu::run_qemu_command(qemu::parse_qemu_command(rest)?),
         Some("serve") => require_live_process_io(serve::parse_serve_command(rest), "serve"),
@@ -96,6 +97,18 @@ fn run_tool_collected_command(rest: &[OsString]) -> Result<CliOutput, CliError> 
     }
     Err(CliError::usage(
         "tool: expected a subcommand (serve --tool NAME ...)",
+    ))
+}
+
+/// `app serve` is streaming (it parks serving one mesh endpoint plus the
+/// resident guest task), so it parses here but defers to the live process-IO
+/// path, mirroring `tool serve`.
+fn run_app_collected_command(rest: &[OsString]) -> Result<CliOutput, CliError> {
+    if rest.first().and_then(|arg| arg.to_str()) == Some("serve") {
+        return require_live_process_io(app::parse_app_serve_command(&rest[1..]), "app serve");
+    }
+    Err(CliError::usage(
+        "app: expected a subcommand (serve --app DIR --state DIR ...)",
     ))
 }
 

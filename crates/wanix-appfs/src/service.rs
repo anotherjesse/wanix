@@ -34,6 +34,11 @@ struct Subscriber {
 struct Subscribers {
     next_id: u64,
     table: HashMap<u64, Subscriber>,
+    /// Set by [`AppStreamCloser::close_all`] once the guest app has exited:
+    /// every current buffer is closed (blocked readers observe EOF) and every
+    /// later subscription starts closed, so no stream read can hang on an app
+    /// that will never publish again.
+    closed: bool,
 }
 
 /// The shared adapter state every [`AppFs`] view and open file points at.
@@ -41,7 +46,7 @@ pub(crate) struct Shared {
     tree: AppTree,
     channel: Mutex<Box<dyn AppChannel>>,
     next_request_id: AtomicU64,
-    subscribers: Mutex<Subscribers>,
+    subscribers: Arc<Mutex<Subscribers>>,
 }
 
 impl Shared {
@@ -127,6 +132,13 @@ impl Shared {
         let id = subscribers.next_id;
         subscribers.next_id += 1;
         let buffer = Arc::new(LineBuffer::default());
+        if subscribers.closed {
+            // The guest is gone: the subscription still registers (so the
+            // open succeeds and `who` stays truthful) but reads see EOF
+            // immediately instead of parking on a stream that can never
+            // receive another publish.
+            buffer.close();
+        }
         subscribers.table.insert(
             id,
             Subscriber {
@@ -182,8 +194,20 @@ impl AppFsService {
                 tree,
                 channel: Mutex::new(channel),
                 next_request_id: AtomicU64::new(1),
-                subscribers: Mutex::new(Subscribers::default()),
+                subscribers: Arc::new(Mutex::new(Subscribers::default())),
             }),
+        }
+    }
+
+    /// Returns the guest-lifecycle teardown handle for this adapter's streams.
+    ///
+    /// The closer holds only the subscriber registry — not the guest channel —
+    /// so an exit watcher can keep one without keeping the guest's stdin pipe
+    /// (and therefore the guest itself) alive.
+    #[must_use]
+    pub fn stream_closer(&self) -> AppStreamCloser {
+        AppStreamCloser {
+            subscribers: Arc::clone(&self.shared.subscribers),
         }
     }
 
@@ -196,5 +220,31 @@ impl AppFsService {
     #[must_use]
     pub fn open_view(&self, principal: impl Into<String>) -> AppFs {
         AppFs::new(Arc::clone(&self.shared), principal.into())
+    }
+}
+
+/// Closes the host-owned stream surface when the guest app dies.
+///
+/// Stream files are honestly never-EOF *while the guest lives*; once the
+/// guest has exited it can never publish again, so the lifecycle-honest move
+/// is the opposite: every blocked stream reader is released with EOF (and
+/// every later subscription starts at EOF) instead of hanging forever.
+/// Discrete ops keep their own honesty through the broken channel
+/// ([`wanix_fs::FsError::Unreachable`]). Obtain one via
+/// [`AppFsService::stream_closer`] before handing the service out.
+pub struct AppStreamCloser {
+    subscribers: Arc<Mutex<Subscribers>>,
+}
+
+impl AppStreamCloser {
+    /// Closes every current subscription buffer and marks the stream surface
+    /// permanently down. Idempotent.
+    pub fn close_all(&self) {
+        if let Ok(mut subscribers) = self.subscribers.lock() {
+            subscribers.closed = true;
+            for subscriber in subscribers.table.values() {
+                subscriber.buffer.close();
+            }
+        }
     }
 }
