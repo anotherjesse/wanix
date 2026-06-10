@@ -110,6 +110,30 @@ impl Task {
         self.read_state(|state| state.fds.fds())
             .expect("task state lock should be readable")
     }
+
+    /// Reports a host-level run failure on the task's stderr fd, best effort.
+    ///
+    /// A detached task (`TaskTable::start_detached`, the shell's `start &`)
+    /// has no caller to surface a driver `Err` to — the table reduces it to an
+    /// exit code — so without this the honest error (an over-cap verb refused
+    /// at open, a module that fails to compile, a missing program) never
+    /// reaches the operator. The Unix shape is an exec that fails after fork:
+    /// the diagnostic goes to the child's inherited stderr. Drivers call this
+    /// in their failure arm BEFORE `close_all_fds`. Write failures are
+    /// swallowed: a task without fd 2 stays silent rather than failing the
+    /// failure path.
+    pub fn report_run_failure(&self, detail: &dyn std::fmt::Display) {
+        let cmd = self.cmd();
+        let program = cmd.split_whitespace().next().unwrap_or("task");
+        let line = format!("wanix: {program}: {detail}\n");
+        let mut bytes = line.as_bytes();
+        while !bytes.is_empty() {
+            match self.write_fd(Fd::STDERR, bytes) {
+                Ok(0) | Err(_) => return,
+                Ok(written) => bytes = &bytes[written..],
+            }
+        }
+    }
 }
 
 fn fd_bind_open_options(fd: Fd) -> OpenOptions {

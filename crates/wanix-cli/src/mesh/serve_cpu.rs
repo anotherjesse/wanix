@@ -3,11 +3,12 @@
 //! Serving the cpu plane is REMOTE CODE EXECUTION on this host: an admitted
 //! peer reverse-exports a namespace and this node runs a `qjs`/`wasm` task
 //! against it. The trust posture mirrors the `--wanix-services` exec-device
-//! rule (ADR 0006 / the mesh blueprint): the parser refuses `--cpu` on the
-//! public endpoint entirely, and on the local direct-address-only endpoint the
-//! acceptor admits either exactly the `--peer` identity or — with no `--peer`
-//! — anyone holding the out-of-band ticket, exactly like the rest of a local
-//! open serve.
+//! rule (ADR 0006 / the mesh blueprint): the parser refuses `--cpu` on any
+//! non-loopback endpoint entirely (a LAN `--addr` is mDNS-discoverable, so
+//! only loopback is local trust), and on the loopback endpoint the acceptor
+//! admits either exactly the `--peer` identity or — with no `--peer` — any
+//! dialer that can reach the loopback socket, exactly like the rest of a
+//! local open serve.
 //!
 //! Each admitted job gets a fresh, fully driver-registered [`TaskTable`] (the
 //! per-job isolation boundary); the QuickJS runner is built once at serve time
@@ -39,9 +40,9 @@ pub(super) fn cpu_acceptor_for(
 }
 
 /// The exec allowlist: with `--peer HEX` only that verified identity may run
-/// code; without it (local direct-address-only endpoint, ticket exchanged out
-/// of band) any dialing peer is admitted, matching the local open-serve
-/// posture for `--wanix-services`.
+/// code; without it (loopback-only endpoint, unreachable from other hosts)
+/// any dialing peer is admitted, matching the local open-serve posture for
+/// `--wanix-services`.
 fn cpu_allowlist(peer: Option<PeerId>) -> Arc<dyn Fn(PeerId) -> bool + Send + Sync> {
     match peer {
         Some(granted) => Arc::new(move |dialer| dialer == granted),
@@ -81,8 +82,8 @@ mod tests {
 
     #[test]
     fn allowlist_without_peer_admits_ticket_holders() {
-        // The local direct-address-only endpoint: the ticket is the capability,
-        // exchanged out of band, same as an open local --wanix-services serve.
+        // The loopback-only endpoint: the socket is unreachable from other
+        // hosts, same posture as an open local --wanix-services serve.
         let allowlist = cpu_allowlist(None);
         assert!(allowlist(PeerId::from_bytes([9u8; 32])));
     }

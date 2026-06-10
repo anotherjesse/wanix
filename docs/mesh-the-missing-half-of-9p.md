@@ -1051,9 +1051,10 @@ the public endpoint with no grant gate would export the whole root read-write to
 anyone holding the ticket — the exact inversion of default-deny, now on a
 transport that reaches the whole internet. `mesh-serve` *refuses* it: a public
 serve with no `--peer`/`--grant` and no explicit `--insecure-open` is a usage
-error, with guidance to gate it, pin it local, or opt in loudly. A
-direct-address-only `--addr` endpoint (peers exchange tickets out of band) is
-allowed without grants; the open public export must be deliberate.
+error, with guidance to gate it, pin it local, or opt in loudly. A loopback
+`--addr 127.0.0.1:PORT` endpoint (a socket no other host can reach) is allowed
+without grants; a non-loopback `--addr` is mDNS-discoverable on the LAN, so it
+follows the same default-deny rule as the public endpoint.
 
 ### Dependency layering: async stays at the edge
 
@@ -1203,12 +1204,12 @@ read-write to anyone with the ticket. `mesh-serve` refuses that at parse time:
 
 ```
 $ wanix-rust mesh-serve --root /tmp
-mesh-serve on the public endpoint with no --peer/--grant exports the entire root read-write to anyone with the ticket; pass --peer HEX with --grant to gate access, --addr IP:PORT to serve a local direct-address-only endpoint, or --insecure-open to deliberately export it to the open internet
+mesh-serve on a non-loopback endpoint (public, or a LAN --addr whose node id mDNS advertises) with no --peer/--grant exports the entire root read-write to anyone who can reach it; pass --peer HEX with --grant to gate access, --addr 127.0.0.1:PORT to serve a loopback-only endpoint, or --insecure-open to deliberately export it open
 ```
 
-A local `--addr` endpoint (peers trade tickets out of band) or a grant-gated
-public serve is allowed; the open global export must be opted into with
-`--insecure-open`, which prints a loud warning.
+A loopback `--addr` endpoint (unreachable from other hosts) or a grant-gated
+serve is allowed; the open export must be opted into with `--insecure-open`,
+which prints a loud warning.
 
 ## The Plan 9 Lineage, and What's Next
 
@@ -1289,10 +1290,11 @@ becomes reachable across every node the moment it exists.
 - **The exec-device export gate (the security correction).** `--wanix-services`
   also binds `#task`/`#agent` — the *real* QuickJS/Wasm exec devices. A remote
   peer that could read `#task/new/qjs` and write `cmd`+`ctl` would run arbitrary
-  WASI guest code on the serving host. So the flag is **refused on the public
-  endpoint** regardless of `--peer`/`--grant`/`--insecure-open`, and allowed only
-  on a local direct-address-only `--addr IP:PORT` socket whose ticket is traded
-  out of band. Exec-device export stays local-trust only until public auth lands.
+  WASI guest code on the serving host. So the flag is **refused on any
+  non-loopback endpoint** regardless of `--peer`/`--grant`/`--insecure-open`
+  (a LAN `--addr` is mDNS-discoverable, so it is not local trust), and allowed
+  only on a loopback `--addr 127.0.0.1:PORT` socket. Exec-device export stays
+  local-trust only until public auth lands.
 
 ## Why: `#kv` Descends From the Plan 9 Service Device, and `/n/` Carries It
 
@@ -1387,13 +1389,14 @@ anyone holding the ticket.
 
 So the gate is deliberately strict and stated at parse time:
 
-- `--wanix-services` is **refused on the public endpoint** (no `--addr`),
-  *regardless of* `--peer`/`--grant` (a grant's backing is the same services
-  namespace, so even a grant-gated public serve would expose `#task` to the
-  granted peer) and *regardless of* `--insecure-open` (which is file-sharing, not
-  an exec backdoor).
-- It is **allowed only on `--addr IP:PORT`** — a direct-address-only socket with
-  relays/DNS disabled, whose ticket is exchanged out of band, i.e. local trust.
+- `--wanix-services` is **refused on any non-loopback endpoint** (the public
+  endpoint, or a LAN `--addr` — mDNS advertises the NodeID to the local
+  network), *regardless of* `--peer`/`--grant` (a grant's backing is the same
+  services namespace, so even a grant-gated open serve would expose `#task` to
+  the granted peer) and *regardless of* `--insecure-open` (which is
+  file-sharing, not an exec backdoor).
+- It is **allowed only on a loopback `--addr 127.0.0.1:PORT`** — a socket no
+  other host can reach, i.e. local trust.
 - The `--insecure-open` warning and the `mesh-serve` help line both *name the
   hazard*: `--insecure-open` exports file contents read-write, **not** the
   `#task`/`#agent` exec devices, so an operator cannot mistake file sharing for

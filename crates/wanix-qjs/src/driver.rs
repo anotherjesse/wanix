@@ -111,6 +111,13 @@ impl TaskDriver for QuickJsTaskDriver {
             self.interrupt_poll_budget,
             self.memory_limit_bytes,
         );
+        // A host-level failure (script unreadable, an over-cap verb refused at
+        // open, engine setup) must reach the operator: a detached start (`start
+        // &`) reduces the Err to an exit code, so the task's own stderr is the
+        // only honest surface. Report before the fds close below.
+        if let Err(err) = &result {
+            task.report_run_failure(err);
+        }
         // A finished task releases its fds (`task-exit-closes-fds`, same as the
         // wasm driver): a qjs pipeline producer's `#pipe` writer drops here so
         // the consumer observes EOF instead of hanging.

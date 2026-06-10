@@ -35,6 +35,16 @@ impl TaskDriver for WasmTaskDriver {
 
     fn start(&self, task: &Task) -> FsResult<()> {
         let result = run_wasm_task(task);
+        // A host-level failure (module unreadable, an over-cap verb refused at
+        // open, compile failure) must reach the operator: a detached start
+        // (`start &`) reduces the Err to an exit code, so the task's own stderr
+        // is the only honest surface. Report before the fds close below; a
+        // kill-unwound run is not a failure and stays quiet.
+        if let Err(err) = &result
+            && !task.kill_requested()
+        {
+            task.report_run_failure(err);
+        }
         // A finished task releases its fds (Unix/Plan 9: an exited process holds
         // no descriptors), so a pipeline producer's `#pipe` writer drops and the
         // consumer observes EOF.
@@ -1024,6 +1034,35 @@ mod tests {
         let mut rest = [0u8; 16];
         assert_eq!(reader.read(&mut rest).expect("post-kill read"), 0);
         drop(writer);
+    }
+
+    #[test]
+    fn start_failure_reports_on_task_stderr() {
+        // The honest-error contract for detached children (`start &`): a
+        // host-level start failure — here bytes that are not a wasm module,
+        // the same arm an over-cap verb refusal lands in — must reach the
+        // task's stderr before its fds close, because the detached table run
+        // reduces the driver's Err to a bare exit code.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("guest.wasm", b"not a wasm module")
+            .expect("seed bogus module");
+        let task = wasm_task(namespace_on(&fs), "guest.wasm");
+        let cap = wire_shell_stdio(&task);
+
+        assert!(
+            WasmTaskDriver::new().start(&task).is_err(),
+            "a bogus module must fail to start"
+        );
+        assert_eq!(task.exit(), "1");
+        let stderr = String::from_utf8_lossy(&cap.read_file("err").expect("read err")).into_owned();
+        assert!(
+            stderr.contains("wanix: guest.wasm:"),
+            "the failure names the program on stderr: {stderr:?}"
+        );
+        assert!(
+            stderr.contains("compile"),
+            "the honest compile error reaches stderr: {stderr:?}"
+        );
     }
 
     #[test]

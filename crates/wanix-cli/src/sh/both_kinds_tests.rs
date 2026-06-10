@@ -194,6 +194,54 @@ fn js_bin_verb_posts_argv_into_its_resource() {
 }
 
 #[test]
+fn over_cap_verb_refusal_reaches_the_shell_stderr() {
+    // ADR 0007 §Confinement contract: an over-cap verb is refused at open with
+    // an honest error — and that error must reach the operator. The shell
+    // launches externals detached (`start &`), where the table reduces the
+    // driver's Err to an exit code, so the diagnostic's only honest surface is
+    // the child's inherited stderr (Task::report_run_failure).
+    let resource = Arc::new(MemFs::new());
+    resource
+        .write_file("data.txt", b"resource bytes")
+        .expect("seed resource data");
+    let bin_backing = Arc::new(MemFs::new());
+    bin_backing
+        .write_file("huge.js", [b'x'; 64])
+        .expect("seed over-cap verb");
+    let verb_bin = Arc::new(wanix_fs::VerbBinFs::with_max_bytes(bin_backing, 16));
+    let mut namespace = shell_namespace(Arc::new(MemFs::new()), &[]);
+    namespace
+        .bind(resource, ".", "n/room", BindOptions::default())
+        .expect("mount resource at n/room");
+    namespace
+        .bind(verb_bin, ".", "n/room/bin", BindOptions::default())
+        .expect("mount capped verb bin");
+
+    let output = run_line(namespace, "room:huge; echo status=$?");
+
+    assert_eq!(
+        output.exit_code(),
+        0,
+        "stderr: {}",
+        String::from_utf8_lossy(output.stderr())
+    );
+    assert_eq!(
+        output.stdout(),
+        b"status=1\n",
+        "the refused verb never runs and the child exits 1"
+    );
+    let stderr = String::from_utf8_lossy(output.stderr());
+    assert!(
+        stderr.contains("exceeds the 16-byte verb size cap"),
+        "the honest over-cap refusal must reach the operator: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("wanix:"),
+        "the diagnostic names its host-level origin: {stderr:?}"
+    );
+}
+
+#[test]
 fn js_bin_verb_reads_piped_stdin_with_no_argv() {
     // The documented input convention holds for the .js verb too: with no
     // argv it posts its stdin, so `echo hi | room:post` composes — a builtin

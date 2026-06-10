@@ -61,27 +61,28 @@ Node B binds an iroh endpoint from its persistent key, exports `$ROOT_B` as 9P
 over QUIC, and prints its node id plus a dialable `iroh://` ticket on stderr.
 The CLI surface is parsed in [`crates/wanix-cli/src/mesh/serve.rs`][mesh-serve].
 
-For a same-laptop demo we serve a **local direct-address-only endpoint** with
-`--addr 127.0.0.1:5680`. The blueprint refuses to serve the public endpoint
-without a grant gate (default-deny on the global transport) — see the parse
-test `parse_rejects_ungranted_public_serve` in
-[`mesh/serve.rs`][mesh-serve]. A direct-address endpoint is fine: the ticket
-is exchanged out of band, not via relays/DNS discovery.
+For a same-laptop demo we serve a **loopback-only endpoint** with
+`--addr 127.0.0.1:5680`. The blueprint refuses to serve any non-loopback
+endpoint without a grant gate (default-deny: the public endpoint is reachable
+by any NodeID with the ticket, and a LAN `--addr` is mDNS-discoverable) — see
+the parse test `parse_rejects_ungranted_public_serve` in
+[`mesh/serve.rs`][mesh-serve]. A loopback endpoint is fine: no other host can
+reach the socket at all.
 
 We also pass `--wanix-services`, which exports the full services namespace
 (`#term`, `#pipe`, `#kv`, `#agent`, `#task`, plus the host root) so node A
 can later launch tasks through `#task` and `#cpu`. **`--wanix-services` is
-local-trust only**: the parser refuses it on the public endpoint because
+local-trust only**: the parser refuses it on any non-loopback endpoint because
 `#task`/`#agent` are remote code execution. The error message in
 [`mesh/serve.rs`][mesh-serve] says so explicitly.
 
 We also pass `--cpu`, which serves the `#cpu` exec plane (ALPN `wanix/cpu/1`)
 beside the namespace plane so step 4 can run a job on B. **`--cpu` is the
 sharpest capability on the mesh — remote code execution on B** — so it
-follows the same exec rule: refused on the public endpoint entirely; on the
-local `--addr` endpoint, add `--peer HEX` to admit only that one verified
-identity (without it, any holder of the out-of-band ticket is admitted, like
-the rest of a local open serve).
+follows the same exec rule: refused on any non-loopback endpoint entirely; on
+the loopback `--addr` endpoint, add `--peer HEX` to admit only that one
+verified identity (without it, anything on this host that dials the loopback
+socket is admitted, like the rest of a local open serve).
 
 Terminal 1 (node B):
 

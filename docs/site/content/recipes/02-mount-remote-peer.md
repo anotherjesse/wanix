@@ -27,8 +27,8 @@ usedInFlows:
   - {flow: wire-a-mesh, step: 3}
 honestLimits:
   - "mount-* always binds the remote at the single slot /n/remote; per-peer /n/<peer-id> is designed but unshipped."
-  - "#cpu serving (mesh-serve --cpu) is refused on the public endpoint entirely; on a local --addr endpoint, --peer scopes exec to one verified identity."
-  - "--wanix-services exports the #task/#agent exec devices and is refused on the public endpoint; it is local-trust only."
+  - "#cpu serving (mesh-serve --cpu) is refused on any non-loopback endpoint entirely; on a loopback --addr endpoint, --peer scopes exec to one verified identity."
+  - "--wanix-services exports the #task/#agent exec devices and is refused on any non-loopback endpoint; it is local-trust (loopback) only."
   - "#cpu (and #task/#agent) are local-trust only: cheap isolation, not a sandbox for arbitrary untrusted code, with no hard CPU/memory limits yet."
   - "A node's #kv is in-memory; state survives only while mesh-serve runs."
 canonicalCaveatFor: []
@@ -73,9 +73,9 @@ Node B holds `dataset.txt`. Node A holds `build.js` — the program A will run *
 
 Node B binds an iroh endpoint from its persistent key, exports `$ROOT_B` over QUIC (the native wire, with 9P alongside for foreign clients), and prints its node id plus a dialable ticket on stderr (`announce_message`, `crates/wanix-cli/src/mesh/serve.rs:319-335`).
 
-For a same-laptop demo, serve a **local direct-address-only endpoint** with `--addr 127.0.0.1:5680`. The parser refuses to serve the *public* endpoint with no grant gate — that would hand the whole root read-write to anyone holding the ticket, and `parse_rejects_ungranted_public_serve` (`serve.rs:322`) pins that. A `--addr` endpoint is fine: its ticket is exchanged out of band, not discovered via relays.
+For a same-laptop demo, serve a **loopback-only endpoint** with `--addr 127.0.0.1:5680`. The parser refuses to serve any *non-loopback* endpoint with no grant gate — the public endpoint would hand the whole root read-write to anyone holding the ticket, and a LAN `--addr` is mDNS-discoverable by any LAN host; `parse_rejects_ungranted_public_serve` and `parse_rejects_ungranted_non_loopback_addr_serve` (`mesh/serve.rs`) pin that. A loopback `--addr` is fine: no other host can reach the socket at all.
 
-We also pass `--wanix-services`, which exports the full services namespace (`#term`, `#pipe`, `#kv`, `#agent`, `#task`, plus the host root), and `--cpu`, which serves the `#cpu` exec plane (ALPN `wanix/cpu/1`) beside the namespace plane. `--cpu` is remote code execution on B and follows the exec rule: refused on the public endpoint entirely; add `--peer HEX` on the local endpoint to admit only that one verified identity.
+We also pass `--wanix-services`, which exports the full services namespace (`#term`, `#pipe`, `#kv`, `#agent`, `#task`, plus the host root), and `--cpu`, which serves the `#cpu` exec plane (ALPN `wanix/cpu/1`) beside the namespace plane. `--cpu` is remote code execution on B and follows the exec rule: refused on any non-loopback endpoint entirely; add `--peer HEX` on the loopback endpoint to admit only that one verified identity.
 
 Terminal 1 (node B):
 

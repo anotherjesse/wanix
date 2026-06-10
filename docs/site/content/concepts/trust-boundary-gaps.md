@@ -47,13 +47,14 @@ cargo build --package wanix-cli
 alias wanix-rust='./target/debug/wanix-rust'
 
 wanix-rust mesh-serve --root /tmp/world
-# error: mesh-serve on the public endpoint with no --peer/--grant exports the
-# entire root read-write to anyone with the ticket; pass --peer HEX with --grant
-# to gate access, --addr IP:PORT to serve a local direct-address-only endpoint,
-# or --insecure-open to deliberately export it to the open internet
+# error: mesh-serve on a non-loopback endpoint (public, or a LAN --addr whose
+# node id mDNS advertises) with no --peer/--grant exports the entire root
+# read-write to anyone who can reach it; pass --peer HEX with --grant to gate
+# access, --addr 127.0.0.1:PORT to serve a loopback-only endpoint, or
+# --insecure-open to deliberately export it open
 ```
 
-That refusal is the shape of the whole trust story: an iroh `Endpoint` is reachable by any NodeID that holds the ticket, so default-deny is enforced at parse time (`crates/wanix-cli/src/mesh/serve.rs:106-119`). The boundary is real, and so are its holes. Below is the inventory.
+That refusal is the shape of the whole trust story: an iroh `Endpoint` is reachable by any NodeID that holds the ticket (and a LAN `--addr` is mDNS-discoverable by any LAN host), so default-deny is enforced at parse time (`crates/wanix-cli/src/mesh/serve.rs`). The boundary is real, and so are its holes. Below is the inventory.
 
 ## No ethernet/vnet, no public multi-user auth
 
@@ -61,7 +62,7 @@ Two whole categories are explicitly unbuilt. There is no ethernet/vnet plane and
 
 ## Exec devices are local-trust only
 
-The most important boundary on this page: the exec devices `#task`, `#agent`, and `#cpu` run guest code, and that capability is **never** handed to an untrusted or public peer. `mesh-serve --wanix-services` binds the exec devices into the served namespace, and the parser refuses it on the public endpoint outright — even with `--peer`/`--grant`, even with `--insecure-open` — because a grant's backing is the same services namespace, so a granted public serve would still expose `#task` (`crates/wanix-cli/src/mesh/serve.rs:120-139`). The only path that allows services export is `--addr IP:PORT`: a direct-address-only socket whose ticket is exchanged out of band rather than discovered via relays/DNS. And `--insecure-open` is deliberately *not* a backdoor — it exports the host directory read-write only, never the exec devices, and the announcement says so (`crates/wanix-cli/src/mesh/serve.rs:253-264`).
+The most important boundary on this page: the exec devices `#task`, `#agent`, and `#cpu` run guest code, and that capability is **never** handed to an untrusted or public peer. `mesh-serve --wanix-services` binds the exec devices into the served namespace, and the parser refuses it on any non-loopback endpoint outright — even with `--peer`/`--grant`, even with `--insecure-open` — because a grant's backing is the same services namespace, so a granted open serve would still expose `#task` (`crates/wanix-cli/src/mesh/serve.rs`). The only path that allows services export is a loopback `--addr 127.0.0.1:PORT`: a socket no other host can reach (a LAN `--addr` does not qualify — mDNS advertises the NodeID to the local network). And `--insecure-open` is deliberately *not* a backdoor — it exports the host directory read-write only, never the exec devices, and the announcement says so (`crates/wanix-cli/src/mesh/serve.rs`).
 
 State the positive claim precisely. Wanix gives you cheap, scalable isolation for code you already trust; it is **not** "safe for arbitrary untrusted code." There are no hard CPU or memory limits on a running guest yet. See [safe for untrusted is not yet claimable](/concepts/safe-for-untrusted-not-claimable). And on the served path the agent is a deterministic `FakeEngine`, not a live LLM — real codex is the local-trust `wanix agent` CLI path only ([FakeEngine vs codex](/concepts/fakeengine-vs-codex)).
 

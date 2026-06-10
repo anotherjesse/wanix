@@ -21,7 +21,7 @@ seeAlso:
 prerequisites: []
 usedInFlows: []
 honestLimits:
-  - "mesh-serve --wanix-services binds the #task/#agent exec devices, which is local-trust-only — it requires --addr IP:PORT and is refused on the public endpoint."
+  - "mesh-serve --wanix-services binds the #task/#agent exec devices, which is local-trust-only — it requires a loopback --addr 127.0.0.1:PORT and is refused on any non-loopback endpoint (a LAN --addr is mDNS-discoverable)."
   - "The shipped mount-* commands bind a remote into a single slot, /n/remote; per-peer /n/<peer-id> is a labelled convention, not shipped routing."
   - "The served #agent runs a deterministic FakeEngine; the real codex engine is the local-trust 'wanix agent' CLI path only."
 canonicalCaveatFor: []

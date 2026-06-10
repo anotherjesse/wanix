@@ -44,9 +44,10 @@ pub(crate) struct MeshServeCommand {
     peer_hex: Option<String>,
     grants: Vec<GrantSpec>,
     /// Explicit opt-in to export the whole root read-write to *any* peer over
-    /// the PUBLIC endpoint with no grant gate. Required because that inverts
-    /// default-deny on a global transport (anyone with the ticket gets the
-    /// directory). Ungranted public serving is refused without it.
+    /// a non-loopback binding (the public endpoint, or a LAN `--addr`) with no
+    /// grant gate. Required because that inverts default-deny on an open
+    /// network (anyone who can reach the socket gets the directory). Ungranted
+    /// non-loopback serving is refused without it.
     insecure_open: bool,
     /// Export a full Wanix services namespace (host root plus `#term`/`#pipe`/
     /// `#kv`/`#agent`/`#task`) rather than a bare host directory, so a remote
@@ -57,8 +58,8 @@ pub(crate) struct MeshServeCommand {
     /// Serve the `#cpu` exec plane (ALPN `wanix/cpu/1`) beside the namespace:
     /// an admitted peer runs a `qjs`/`wasm` task ON THIS HOST against its own
     /// reverse-exported namespace. Remote code execution, so it follows the
-    /// exec-device rule: refused on the public endpoint entirely, and scoped to
-    /// the `--peer` identity when one is named.
+    /// exec-device rule: refused on any non-loopback endpoint entirely, and
+    /// scoped to the `--peer` identity when one is named.
     cpu: bool,
 }
 
@@ -69,9 +70,10 @@ pub(crate) struct MeshServeCommand {
 /// # Errors
 ///
 /// Returns a usage error when neither (or both) of `--root`/`--volume` is given,
-/// an option lacks its value, a grant/peer/address token is malformed, or the
-/// public endpoint would be exported with no grants and no explicit
-/// `--insecure-open` opt-in.
+/// an option lacks its value, a grant/peer/address token is malformed, a
+/// non-loopback endpoint would be exported with no grants and no explicit
+/// `--insecure-open` opt-in, or `--wanix-services`/`--cpu` (exec export) is
+/// requested off loopback.
 pub(crate) fn parse_mesh_serve_command(
     args: &[std::ffi::OsString],
 ) -> Result<MeshServeCommand, CliError> {
@@ -145,56 +147,64 @@ pub(crate) fn parse_mesh_serve_command(
             "mesh-serve --grant requires --peer HEX to name the authorized peer",
         ));
     }
-    let public = local_addr.is_none();
+    // Trust tiers. The public endpoint (no --addr) is reachable by any NodeID
+    // holding the ticket. A NON-loopback --addr (0.0.0.0 or a LAN IP) is not
+    // local trust either: `MeshNode::bind_local` keeps mDNS advertise on, so
+    // the stable NodeID is discoverable by every LAN host and the "ticket
+    // exchanged out of band" assumption fails there. Only a loopback --addr —
+    // a socket other hosts cannot reach at all — is the local-trust tier,
+    // mirroring the ADR 0006 serve rule (`is_loopback_addr`) that refuses
+    // exec devices on any non-loopback door.
+    let loopback = local_addr.is_some_and(|addr| addr.ip().is_loopback());
     // `--wanix-services` binds the exec devices `#task`/`#agent` (remote code
     // execution) into the served namespace, backed by the real QuickJs/Wasm task
     // drivers. The blueprint pins exec-device export to local-trust only: we do
     // NOT hand arbitrary NodeIDs code execution on the serving host until public
-    // auth lands. The only local-trust endpoint here is `--addr IP:PORT` (a
-    // direct-address-only socket whose ticket is exchanged out of band, not via
-    // relays/DNS discovery). A public endpoint is reachable by any NodeID with
-    // the ticket, so refuse services there regardless of --peer/--grant or
-    // --insecure-open: a grant's backing is the same services namespace, so even
-    // a grant-gated public serve would expose #task to the granted peer. This
-    // sharper refusal is checked before the generic public-serve one so the
+    // auth lands, so refuse services off loopback regardless of --peer/--grant
+    // or --insecure-open: a grant's backing is the same services namespace, so
+    // even a grant-gated open serve would expose #task to the granted peer. This
+    // sharper refusal is checked before the generic open-serve one so the
     // operator hears about the exec-device hazard, not just the file export.
-    if wanix_services && public {
+    if wanix_services && !loopback {
         return Err(CliError::usage(
             "mesh-serve --wanix-services binds the #task/#agent exec devices (remote code \
              execution) into the served namespace; the blueprint keeps exec-device export \
-             local-trust only, so it is refused on the public endpoint (reachable by any \
-             NodeID with the ticket) even with --peer/--grant or --insecure-open. Pass \
-             --addr IP:PORT to serve a local direct-address-only endpoint, or drop \
-             --wanix-services to export only the host directory",
+             local-trust only, so it is refused on any non-loopback endpoint (the public \
+             endpoint is reachable by any NodeID with the ticket; a LAN --addr is \
+             mDNS-discoverable by any LAN host) even with --peer/--grant or \
+             --insecure-open. Pass --addr 127.0.0.1:PORT to serve a loopback-only \
+             endpoint, or drop --wanix-services to export only the host directory",
         ));
     }
     // `--cpu` binds the cpu exec plane (ALPN `wanix/cpu/1`): an admitted peer
     // runs arbitrary task code ON THIS HOST. That is the sharpest capability on
     // the mesh — sharper than `--wanix-services`, which at least confines the
     // peer to this node's service files — so it follows the same exec-device
-    // rule: local-trust only, refused on the public endpoint (reachable by any
-    // NodeID with the ticket) regardless of --peer/--grant or --insecure-open.
-    if cpu && public {
+    // rule: local-trust (loopback) only, regardless of --peer/--grant or
+    // --insecure-open.
+    if cpu && !loopback {
         return Err(CliError::usage(
             "mesh-serve --cpu binds the #cpu exec plane (remote code execution on this \
              host); the blueprint keeps exec export local-trust only, so it is refused on \
-             the public endpoint (reachable by any NodeID with the ticket) even with \
-             --peer/--grant or --insecure-open. Pass --addr IP:PORT to serve a local \
-             direct-address-only endpoint (add --peer HEX to admit only that identity), \
-             or drop --cpu",
+             any non-loopback endpoint (the public endpoint is reachable by any NodeID \
+             with the ticket; a LAN --addr is mDNS-discoverable by any LAN host) even \
+             with --peer/--grant or --insecure-open. Pass --addr 127.0.0.1:PORT to serve \
+             a loopback-only endpoint (add --peer HEX to admit only that identity), or \
+             drop --cpu",
         ));
     }
-    // Default-deny on the global transport: serving the public endpoint with no
-    // grant gate exports the whole root read-write to anyone holding the ticket.
-    // Refuse it unless the operator explicitly opts in, or pins to a local
-    // direct-address-only endpoint (--addr) where peers exchange tickets out of
-    // band rather than discovering it via relays/DNS.
-    if public && peer_hex.is_none() && !insecure_open {
+    // Default-deny on an open-network binding: serving the public endpoint — or
+    // a non-loopback --addr, whose NodeID mDNS advertises to the LAN — with no
+    // grant gate exports the whole root read-write to anyone who can reach it.
+    // Refuse it unless the operator explicitly opts in, or pins to a loopback
+    // --addr where the socket itself is unreachable from other hosts.
+    if !loopback && peer_hex.is_none() && !insecure_open {
         return Err(CliError::usage(
-            "mesh-serve on the public endpoint with no --peer/--grant exports the entire \
-             root read-write to anyone with the ticket; pass --peer HEX with --grant to \
-             gate access, --addr IP:PORT to serve a local direct-address-only endpoint, or \
-             --insecure-open to deliberately export it to the open internet",
+            "mesh-serve on a non-loopback endpoint (public, or a LAN --addr whose node id \
+             mDNS advertises) with no --peer/--grant exports the entire root read-write \
+             to anyone who can reach it; pass --peer HEX with --grant to gate access, \
+             --addr 127.0.0.1:PORT to serve a loopback-only endpoint, or --insecure-open \
+             to deliberately export it open",
         ));
     }
     Ok(MeshServeCommand {
@@ -685,14 +695,50 @@ mod tests {
 
     #[test]
     fn parse_allows_local_open_serve() {
-        // A local direct-address-only endpoint is fine without grants: peers
-        // exchange the ticket out of band, not via relays/DNS discovery.
+        // A loopback endpoint is fine without grants: the socket is
+        // unreachable from any other host.
         let command =
             parse_mesh_serve_command(&args(&["--root", "/tmp/x", "--addr", "127.0.0.1:0"]))
                 .unwrap();
         assert!(command.peer_hex.is_none());
         assert!(!command.insecure_open);
         assert_eq!(command.local_addr, Some("127.0.0.1:0".parse().unwrap()));
+    }
+
+    #[test]
+    fn parse_rejects_ungranted_non_loopback_addr_serve() {
+        // SECURITY: a non-loopback --addr is NOT the local-trust tier —
+        // `bind_local` keeps mDNS advertise on, so the stable NodeID is
+        // discoverable by any LAN host and an ungranted serve is the whole
+        // root read-write to the LAN. Same default-deny as the public door.
+        for addr in ["0.0.0.0:5000", "10.0.0.5:7000"] {
+            let error =
+                parse_mesh_serve_command(&args(&["--root", "/tmp/x", "--addr", addr])).unwrap_err();
+            let message = error.to_string();
+            assert!(
+                message.contains("exports the entire") && message.contains("--insecure-open"),
+                "ungranted non-loopback --addr {addr} must be refused, got {message:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_allows_granted_non_loopback_addr_serve() {
+        // The gated file plane stays available on a LAN --addr: --peer/--grant
+        // scopes it to one verified identity (no exec flags involved).
+        let command = parse_mesh_serve_command(&args(&[
+            "--root",
+            "/tmp/x",
+            "--addr",
+            "0.0.0.0:0",
+            "--peer",
+            &"ab".repeat(32),
+            "--grant",
+            "docs:docs:ro",
+        ]))
+        .unwrap();
+        assert_eq!(command.local_addr, Some("0.0.0.0:0".parse().unwrap()));
+        assert!(command.peer_hex.is_some());
     }
 
     #[test]
@@ -785,8 +831,8 @@ mod tests {
 
     #[test]
     fn parse_allows_wanix_services_on_local_addr_endpoint() {
-        // The one local-trust path: --addr IP:PORT is a direct-address-only socket
-        // whose ticket is exchanged out of band, so exec-device export is allowed.
+        // The one local-trust path: a LOOPBACK --addr, a socket no other host
+        // can reach, so exec-device export is allowed.
         let command = parse_mesh_serve_command(&args(&[
             "--root",
             "/tmp/x",
@@ -797,6 +843,28 @@ mod tests {
         .unwrap();
         assert!(command.wanix_services);
         assert_eq!(command.local_addr, Some("127.0.0.1:0".parse().unwrap()));
+    }
+
+    #[test]
+    fn parse_refuses_wanix_services_on_non_loopback_addr() {
+        // SECURITY: `--addr 0.0.0.0:PORT` (or a LAN IP) is reachable from the
+        // LAN and mDNS advertises the NodeID, so exec devices there would be
+        // unauthenticated LAN remote code execution. Refused even with --peer,
+        // mirroring the ADR 0006 non-loopback exec-door rule.
+        for addr in ["0.0.0.0:5000", "10.0.0.5:7000"] {
+            let error = parse_mesh_serve_command(&args(&[
+                "--root",
+                "/tmp/x",
+                "--addr",
+                addr,
+                "--wanix-services",
+            ]))
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("#task"),
+                "non-loopback --addr {addr} must refuse exec devices, got {error}"
+            );
+        }
     }
 
     /// The serve half the docs called "dial-only" until now: `mesh-serve --cpu`
@@ -983,6 +1051,26 @@ mod tests {
             error.to_string().contains("remote code execution"),
             "--cpu --insecure-open must be refused naming the exec hazard"
         );
+    }
+
+    #[test]
+    fn parse_refuses_cpu_on_non_loopback_addr() {
+        // SECURITY: with no --peer the cpu acceptor admits any dialer, and a
+        // non-loopback --addr is mDNS-discoverable on the LAN — so --cpu there
+        // is unauthenticated LAN RCE. Refused even with --peer/--grant, like
+        // the public endpoint.
+        for extra in [&[][..], &["--peer", "abababab"][..]] {
+            let mut argv = vec!["--root", "/tmp/x", "--addr", "192.168.1.9:7000", "--cpu"];
+            argv.extend_from_slice(extra);
+            if !extra.is_empty() {
+                argv.extend_from_slice(&["--grant", "docs:docs:ro"]);
+            }
+            let error = parse_mesh_serve_command(&args(&argv)).unwrap_err();
+            assert!(
+                error.to_string().contains("remote code execution"),
+                "non-loopback --cpu must be refused naming the exec hazard, got {error}"
+            );
+        }
     }
 
     #[test]

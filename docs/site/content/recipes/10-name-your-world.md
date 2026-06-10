@@ -253,7 +253,7 @@ wanix-rust mount-cat room latest | tail -1
 # {"at":1781105905105,"from":"desk (0f285641)","body":"MEET THE MESH AT NOON\n"}
 ```
 
-A recipe with no `--run` line opens an interactive shell over its mounts (refused on a captured stdin with a tty pointer, mirroring `sh`). Extra words after `recipe run NAME --` are appended to the run line.
+A recipe with no `--run` line opens an interactive shell over its mounts, mirroring `sh`: on a tty that is a live session; on a piped or redirected stdin it executes the input line by line and exits at EOF. Extra words after `recipe run NAME --` are appended to the run line.
 
 ## 6. Drift warns loudly, then the catalog wins
 

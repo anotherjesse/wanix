@@ -1,8 +1,9 @@
 //! `wanix catalog (add | show | rm | ls)` parsing and execution.
 //!
 //! `ls` is the liveness surface: by default it probes every entry with one
-//! bounded dial (concurrent, one thread per entry, never longer than the
-//! shared CLI mount deadline) and renders `online`/`offline`/`unknown` —
+//! bounded dial (concurrent in chunks of [`MAX_CONCURRENT_PROBES`], each probe
+//! never longer than the shared CLI mount deadline) and renders
+//! `online`/`offline`/`unknown` —
 //! pre-ACL, "offline" means "no route authenticated within the deadline",
 //! which is all Layer 1 can know (ADR 0007/0008). `--no-probe` lists
 //! instantly with a `-` status column.
@@ -216,8 +217,9 @@ pub(crate) struct LsProbe {
 
 /// Lists the catalog at `dir` as one `NAME\tSTATUS\tADDRESS` line per entry,
 /// sorted by name. With a probe, STATUS is `online`/`offline`/`unknown (...)`
-/// from one bounded dial per entry (concurrent, so the whole listing is
-/// bounded by one deadline, not the sum); without one it is `-`.
+/// from one bounded dial per entry (concurrent in chunks of
+/// [`MAX_CONCURRENT_PROBES`], so the whole listing is bounded by one deadline
+/// per chunk, not the sum); without one it is `-`.
 ///
 /// # Errors
 ///
@@ -235,29 +237,38 @@ pub(crate) fn run_ls_in(dir: &Path, probe: Option<&LsProbe>) -> Result<CliOutput
     Ok(CliOutput::new(text.into_bytes(), Vec::new(), 0))
 }
 
-/// One bounded dial per entry, concurrently (scoped threads: probes are
-/// blocking dials and each binds its own dial-out endpoint, exactly like a
-/// mount).
+/// Cap on concurrent probes. Each probe is a blocking dial that binds its own
+/// dial-out endpoint, exactly like a mount — a full multi-thread tokio runtime
+/// plus an iroh socket — so an unbounded fan-out across a large address book
+/// exhausts threads and fds. Entries are probed in chunks of this size.
+const MAX_CONCURRENT_PROBES: usize = 8;
+
+/// One bounded dial per entry, concurrently within each
+/// [`MAX_CONCURRENT_PROBES`]-sized chunk (scoped threads).
 fn probe_statuses(entries: &[CatalogEntry], probe: &LsProbe) -> Vec<String> {
-    std::thread::scope(|scope| {
-        let handles: Vec<_> = entries
-            .iter()
-            .map(|entry| {
-                let address = &entry.address;
-                scope.spawn(move || probe_iroh(&probe.identity, address, probe.deadline))
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| {
-                render_probe(
-                    handle
-                        .join()
-                        .unwrap_or_else(|_| ProbeOutcome::Unknown("probe panicked".to_owned())),
-                )
-            })
-            .collect()
-    })
+    let mut statuses = Vec::with_capacity(entries.len());
+    for chunk in entries.chunks(MAX_CONCURRENT_PROBES) {
+        statuses.extend(std::thread::scope(|scope| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|entry| {
+                    let address = &entry.address;
+                    scope.spawn(move || probe_iroh(&probe.identity, address, probe.deadline))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    render_probe(
+                        handle
+                            .join()
+                            .unwrap_or_else(|_| ProbeOutcome::Unknown("probe panicked".to_owned())),
+                    )
+                })
+                .collect::<Vec<_>>()
+        }));
+    }
+    statuses
 }
 
 fn render_probe(outcome: ProbeOutcome) -> String {
