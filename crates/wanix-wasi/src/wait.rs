@@ -51,14 +51,24 @@ impl Backoff {
     }
 }
 
-/// Blocks until a read on `fd` would produce data (or fail) without waiting.
+/// Blocks until a read on `fd` would produce data (or fail) without waiting,
+/// or the task is cancelled (killed).
 ///
 /// Returns as soon as the fd reports ready. A readiness *error* (bad fd,
 /// closed device, …) also returns immediately: the follow-up read is the one
 /// that reports the errno to the guest, keeping a single error path.
+///
+/// Cancellation ([`WasiCtx::is_cancelled`], the task kill seam) is checked on
+/// every wake, so a killed task parked here returns within one park interval
+/// instead of waiting for readiness that may never come; the caller must then
+/// consult `ctx.is_cancelled()` and report [`crate::Errno::Intr`] rather than
+/// entering a device read that could block indefinitely.
 pub fn wait_read_ready(ctx: &WasiCtx, fd: WasiFd) {
     let mut backoff = Backoff::new();
     while matches!(ctx.fd_read_ready(fd), Ok(false)) {
+        if ctx.is_cancelled() {
+            return;
+        }
         backoff.park();
     }
 }
@@ -135,6 +145,40 @@ mod tests {
         // A bad fd errors on the readiness probe; the wait must fall through so
         // the read path reports the errno.
         wait_read_ready(&ctx, WasiFd::new(99));
+    }
+
+    #[test]
+    fn a_killed_task_parked_on_a_quiet_stdin_gets_eintr_within_the_park_interval() {
+        // The kill seam (deadline-bounded): the scripted stdin never becomes
+        // ready, so only the cancel probe can end the park inside `fd_read`.
+        // After the probe flips, the blocked read must return `Errno::Intr`
+        // (never enter a device read that could block indefinitely), well
+        // within the test deadline.
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{CancelToken, Errno};
+
+        let killed = Arc::new(AtomicBool::new(false));
+        let probe = Arc::clone(&killed);
+        let stdin = ScriptedStdin::default(); // quiet: readiness stays false
+        let mut ctx = WasiCtx::new(
+            WasiConfig::new(Default::default())
+                .with_stdin(Box::new(stdin), "stdin")
+                .with_cancel_token(CancelToken::new(move || probe.load(Ordering::Relaxed))),
+        );
+        let killer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            killed.store(true, Ordering::Relaxed);
+        });
+        let started = std::time::Instant::now();
+        let mut buf = [0u8; 8];
+        let result = ctx.fd_read(WasiFd::STDIN, &mut buf);
+        assert_eq!(result, Err(Errno::Intr), "a cancelled park reports EINTR");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the kill must land within the park's poll interval"
+        );
+        killer.join().expect("killer thread");
     }
 
     #[test]

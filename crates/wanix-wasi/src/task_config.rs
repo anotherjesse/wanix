@@ -12,17 +12,21 @@
 use wanix_fs::{File, FsError, FsResult, Metadata, NormalizedPath};
 use wanix_task::{Fd, Task, task_wasi_argv, task_wasi_cwd, task_wasi_env};
 
-use crate::{Errno, WasiConfig, WasiFd, WasiFdObserver, WasiFile};
+use crate::{CancelToken, Errno, WasiConfig, WasiFd, WasiFdObserver, WasiFile};
 
 /// Builds the live WASI config for a task: namespace, cwd preopen, argv, env,
-/// stdio fds, and dynamic fd mirroring.
+/// stdio fds, dynamic fd mirroring, and the kill-aware cancel token (host
+/// parks probe `Task::kill_requested`, so `#task/<id>/ctl kill` reaches a task
+/// parked in a blocking host read within one park interval).
 #[must_use]
 pub fn task_wasi_config(task: &Task) -> WasiConfig {
+    let kill_probe = task.clone();
     let mut config = WasiConfig::new(task.namespace())
         .with_root_preopen_source(task_wasi_cwd(task))
         .with_args(task_wasi_argv(task))
         .with_env(task_wasi_env(task))
-        .with_fd_observer(TaskWasiFdMirror::new(task.clone()));
+        .with_fd_observer(TaskWasiFdMirror::new(task.clone()))
+        .with_cancel_token(CancelToken::new(move || kill_probe.kill_requested()));
     let fds = task.fd_numbers();
     if fds.contains(&Fd::STDIN) {
         config = config.with_stdin(

@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt, sync::Arc};
 use wanix_fs::NormalizedPath;
 use wanix_vfs::Namespace;
 
-use crate::{Errno, WasiConfig, WasiFd, WasiFdObserver, WasiRights};
+use crate::{CancelToken, Errno, WasiConfig, WasiFd, WasiFdObserver, WasiRights};
 
 mod fd_ops;
 mod handle;
@@ -28,6 +28,7 @@ pub struct WasiCtx {
     env: Vec<String>,
     clock_time_ns: u64,
     fd_observer: Option<Arc<dyn WasiFdObserver>>,
+    cancel: Option<CancelToken>,
 }
 
 impl fmt::Debug for WasiCtx {
@@ -40,6 +41,7 @@ impl fmt::Debug for WasiCtx {
             .field("env_count", &self.env.len())
             .field("clock_time_ns", &self.clock_time_ns)
             .field("has_fd_observer", &self.fd_observer.is_some())
+            .field("has_cancel_token", &self.cancel.is_some())
             .finish()
     }
 }
@@ -55,6 +57,17 @@ impl WasiCtx {
     #[must_use]
     pub fn namespace(&self) -> &Namespace {
         &self.namespace
+    }
+
+    /// Returns whether the owning task has requested cancellation (kill).
+    ///
+    /// Checked by every blocking host park (the [`crate::wait`] backoff and
+    /// the `wanix-wasi-host` `poll_oneoff` loop) so a killed task parked in a
+    /// blocking read dies within one park interval. Always `false` for a
+    /// context built without a [`CancelToken`].
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(CancelToken::is_cancelled)
     }
 
     /// Returns configured process arguments in WASI argv order.

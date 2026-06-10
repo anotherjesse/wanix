@@ -16,7 +16,13 @@
 //! including at EOF — and dynamic guest-opened fds stay nonblocking, because
 //! guest drain loops (read a device queue until 0) depend on empty reads
 //! returning immediately.
+//!
+//! Parks are kill-aware: a [`CancelToken`] (injected by [`task_wasi_config`],
+//! probing the task's kill flag) is checked on every park wake, and a
+//! cancelled blocking read returns [`Errno::Intr`] instead of waiting for
+//! readiness that may never come — see [`cancel`](CancelToken).
 
+mod cancel;
 mod config;
 mod ctx;
 mod error;
@@ -27,6 +33,7 @@ pub mod wait;
 #[cfg(test)]
 mod tests;
 
+pub use cancel::CancelToken;
 pub use config::{DEFAULT_CLOCK_TIME_NS, Preopen, WasiConfig, WasiFdObserver, WasiFile};
 pub use ctx::{WasiCtx, WasiWhence};
 pub use error::Errno;

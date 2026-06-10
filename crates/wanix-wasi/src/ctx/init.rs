@@ -19,6 +19,7 @@ impl WasiCtx {
             env: config.env().to_vec(),
             clock_time_ns: config.clock_time_ns(),
             fd_observer: config.fd_observer(),
+            cancel: config.cancel(),
         })
     }
 }

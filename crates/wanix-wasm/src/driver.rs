@@ -895,6 +895,137 @@ mod tests {
         assert_eq!(reader.read(&mut rest).expect("post-kill read"), 0);
     }
 
+    /// Writes `kill` through the task's `#task` ctl file, then asserts the
+    /// distinct killed exit lands within a hard deadline (the regression mode
+    /// for the parked-read tests is a task that hangs forever in a host park).
+    fn kill_and_await_killed_exit(table: &TaskTable, task: &Task) {
+        let taskfs = table.filesystem_for(task.id());
+        let mut ctl = taskfs
+            .open(
+                &NormalizedPath::new("self/ctl").expect("path"),
+                OpenOptions {
+                    write: true,
+                    ..OpenOptions::default()
+                },
+            )
+            .expect("open ctl");
+        ctl.write(b"kill").expect("write kill");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while task.exit().is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "kill did not reach the parked task"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(task.exit(), "killed", "the killed exit is distinct");
+    }
+
+    #[test]
+    fn ctl_kill_unparks_a_task_blocked_on_a_quiet_terminal_stdin() {
+        // The kill-aware host park proof for tier-2 blocking stdio (ADR 0010):
+        // a `--cat` guest parks inside the host `fd_read` wait on a quiet
+        // `#term` stdin — it never returns to guest code on its own, so only
+        // the cancel token can break the park (the epoch interrupt then traps
+        // the guest on its next instruction). Before the cancel seam this test
+        // hangs forever.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("guest.wasm", RUST_GUEST).expect("seed wasm");
+        let term = TermDevice::new();
+        let id = term.alloc().expect("alloc terminal");
+
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let task = table
+            .allocate_root_with_namespace("auto", namespace_on(&fs))
+            .expect("allocate task");
+        task.set_cmd("guest.wasm --cat").expect("set cmd");
+        for fd in [Fd::STDIN, Fd::STDOUT, Fd::STDERR] {
+            let file = term
+                .open(&term_path(&id, "program"), OpenOptions::read_write())
+                .expect("open program side");
+            task.insert_fd(fd, file, term_path(&id, "program"))
+                .expect("install fd");
+        }
+
+        table.start_detached(task.id()).expect("start cat");
+        // Give the guest a beat to enter the blocking read; the kill contract
+        // holds at any point (flag + cancel token + epoch interrupt), but the
+        // interesting regression is the parked state.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        kill_and_await_killed_exit(&table, &task);
+    }
+
+    #[test]
+    fn ctl_kill_unparks_a_task_blocked_reading_a_quiet_pipe() {
+        // Same contract for a quiet `#pipe` stdin with a HELD writer (never
+        // EOF, never ready): the cancel token must both break the readiness
+        // park and stop the read before it enters the pipe channel's internal
+        // blocking wait. Fd release on death is observable as EOF on the
+        // task's stdout pipe.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("guest.wasm", RUST_GUEST).expect("seed wasm");
+        let pipe = Arc::new(PipeDevice::new());
+        let quiet = pipe.alloc().expect("alloc quiet stdin pipe");
+        let out = pipe.alloc().expect("alloc stdout pipe");
+
+        let mut ns = namespace_on(&fs);
+        ns.bind(pipe.clone(), ".", "#pipe", BindOptions::default())
+            .expect("bind #pipe");
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let task = table
+            .allocate_root_with_namespace("auto", ns)
+            .expect("allocate task");
+        task.set_cmd("guest.wasm --cat").expect("set cmd");
+        task.bind_fd_from_namespace_with(format!("#pipe/{quiet}/data"), Fd::STDIN, {
+            OpenOptions::read()
+        })
+        .expect("bind stdin to quiet pipe");
+        task.bind_fd_from_namespace_with(
+            format!("#pipe/{out}/data"),
+            Fd::STDOUT,
+            OpenOptions {
+                write: true,
+                ..OpenOptions::default()
+            },
+        )
+        .expect("bind stdout to pipe");
+
+        // Held writer: the quiet pipe never reports EOF, so the guest's
+        // read_to_end can only end through the kill.
+        let writer = pipe
+            .open(
+                &NormalizedPath::new(format!("{quiet}/data")).expect("path"),
+                OpenOptions {
+                    write: true,
+                    ..OpenOptions::default()
+                },
+            )
+            .expect("open held writer");
+        // Held reader on stdout: observes EOF when the killed task's fds drop.
+        let mut reader = pipe
+            .open(
+                &NormalizedPath::new(format!("{out}/data")).expect("path"),
+                OpenOptions::read(),
+            )
+            .expect("open stdout reader");
+
+        table.start_detached(task.id()).expect("start cat");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        kill_and_await_killed_exit(&table, &task);
+
+        // task-exit-closes-fds: the killed task's stdout writer dropped, so
+        // the reader observes end-of-file instead of blocking forever.
+        let mut rest = [0u8; 16];
+        assert_eq!(reader.read(&mut rest).expect("post-kill read"), 0);
+        drop(writer);
+    }
+
     #[test]
     fn kill_does_not_disturb_a_normal_exit() {
         // Normal-exit regression next to the kill machinery: an uninterrupted

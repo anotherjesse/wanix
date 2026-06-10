@@ -19,6 +19,7 @@ macro_rules! wanix_errno_to_quickjs {
             Errno::Notempty => QuickJsWasiErrno::Notempty,
             Errno::Nosys => QuickJsWasiErrno::Nosys,
             Errno::Notcapable => QuickJsWasiErrno::Notcapable,
+            Errno::Intr => QuickJsWasiErrno::Intr,
             Errno::Io => QuickJsWasiErrno::Io,
         }
     };

@@ -11,6 +11,8 @@ pub enum QuickJsWasiErrno {
     Noent,
     /// File exists.
     Exist,
+    /// Interrupted: the task was cancelled (killed) while blocked.
+    Intr,
     /// Generic I/O error.
     Io,
     /// Path names a directory where a file was expected.
@@ -30,6 +32,7 @@ impl QuickJsWasiErrno {
         match self {
             Self::Badf => 8,
             Self::Exist => 20,
+            Self::Intr => 27,
             Self::Inval => 28,
             Self::Io => 29,
             Self::Isdir => 31,

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use wanix_fs::{File, FsResult, NormalizedPath};
 use wanix_vfs::Namespace;
 
-use crate::{Errno, WasiFd};
+use crate::{CancelToken, Errno, WasiFd};
 
 mod file;
 
@@ -97,6 +97,7 @@ pub struct WasiConfig {
     env: Vec<String>,
     clock_time_ns: u64,
     fd_observer: Option<Arc<dyn WasiFdObserver>>,
+    cancel: Option<CancelToken>,
 }
 
 impl fmt::Debug for WasiConfig {
@@ -109,6 +110,7 @@ impl fmt::Debug for WasiConfig {
             .field("env_count", &self.env.len())
             .field("clock_time_ns", &self.clock_time_ns)
             .field("has_fd_observer", &self.fd_observer.is_some())
+            .field("has_cancel_token", &self.cancel.is_some())
             .finish()
     }
 }
@@ -125,6 +127,7 @@ impl WasiConfig {
             env: Vec::new(),
             clock_time_ns: DEFAULT_CLOCK_TIME_NS,
             fd_observer: None,
+            cancel: None,
         }
     }
 
@@ -170,6 +173,19 @@ impl WasiConfig {
 
     pub(crate) fn fd_observer(&self) -> Option<Arc<dyn WasiFdObserver>> {
         self.fd_observer.as_ref().map(Arc::clone)
+    }
+
+    pub(crate) fn cancel(&self) -> Option<CancelToken> {
+        self.cancel.clone()
+    }
+
+    /// Attaches a cancellation token checked by blocking host parks, so a
+    /// killed task parked in a blocking read dies within one park interval
+    /// (the kill seam — see [`CancelToken`]).
+    #[must_use]
+    pub fn with_cancel_token(mut self, cancel: CancelToken) -> Self {
+        self.cancel = Some(cancel);
+        self
     }
 
     /// Attaches an observer for dynamic regular-file fd lifecycle events.

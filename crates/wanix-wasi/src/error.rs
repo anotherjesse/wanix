@@ -23,6 +23,8 @@ pub enum Errno {
     Notempty,
     /// Operation not supported.
     Nosys,
+    /// Interrupted: the task was cancelled (killed) while blocked.
+    Intr,
     /// Capability rights are insufficient.
     Notcapable,
     /// Unknown host filesystem error.
@@ -37,6 +39,7 @@ impl Errno {
             Self::Success => 0,
             Self::Badf => 8,
             Self::Inval => 28,
+            Self::Intr => 27,
             Self::Io => 29,
             Self::Isdir => 31,
             Self::Nametoolong => 37,

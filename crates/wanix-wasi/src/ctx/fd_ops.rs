@@ -25,6 +25,12 @@ impl WasiCtx {
     pub fn fd_read(&mut self, fd: WasiFd, buf: &mut [u8]) -> Result<usize, Errno> {
         if matches!(self.fds.get(&fd), Some(Handle::Stdio { .. })) {
             crate::wait::wait_read_ready(self, fd);
+            // The kill seam: a cancelled task's park returns early; report the
+            // interruption instead of entering a device read that could block
+            // indefinitely (a quiet `#pipe` read blocks inside the channel).
+            if self.is_cancelled() {
+                return Err(Errno::Intr);
+            }
         }
         match self.fds.get_mut(&fd).ok_or(Errno::Badf)? {
             Handle::Stdio { file } => {

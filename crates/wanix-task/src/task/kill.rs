@@ -8,11 +8,15 @@
 //! [`KILLED_EXIT`] status and runs the same fd-release path as a normal exit
 //! (`task-exit-closes-fds`, which gives pipeline EOF on death for free).
 //!
-//! The hook trips guest *code*: a guest parked inside a blocking host read
-//! dies on its next return to guest execution, not mid-park. A driver without
-//! an interrupt seam (today the qjs driver, whose tasks share one engine)
-//! ignores the request; the flag stays observable via
-//! [`Task::kill_requested`].
+//! The hook trips guest *code*; host parks are covered separately: the shared
+//! WASI park loops (`wanix-wasi::wait`, the `wanix-wasi-host` `poll_oneoff`
+//! backoff) probe [`Task::kill_requested`] through a `CancelToken` injected by
+//! `task_wasi_config`, so a guest parked inside a blocking host read (quiet
+//! stdin, quiet `#pipe`, quiet events stream) unblocks with `EINTR` within one
+//! park interval and the armed hook then traps it on its next instruction. A
+//! driver without an interrupt seam (today the qjs driver, whose tasks share
+//! one engine) is not forced to exit; the flag stays observable via
+//! [`Task::kill_requested`] and its blocked stdio reads still return `EINTR`.
 
 use std::sync::Arc;
 

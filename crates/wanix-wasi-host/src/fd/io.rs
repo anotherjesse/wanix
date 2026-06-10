@@ -1,6 +1,6 @@
 //! WASI Preview 1 fd read/write imports.
 
-use wanix_wasi::WasiFd;
+use wanix_wasi::{Errno, WasiFd};
 use wasmtime::{Caller, Linker, Result};
 
 use super::super::ERRNO_SUCCESS;
@@ -49,6 +49,14 @@ pub(super) fn register<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<
             // through so the read below reports its errno.
             wait_read_ready(caller.data_mut().wasi(), WasiFd::new(fd as u32));
             let mem = memory(&mut caller)?;
+            // The kill seam: a cancelled (killed) task's park returns early —
+            // report EINTR instead of entering a device read that could block
+            // indefinitely (a quiet `#pipe`/`events` read blocks internally).
+            // The wasm epoch interrupt then traps the guest on its next
+            // instruction, so the run unwinds and records the killed exit.
+            if caller.data_mut().wasi().is_cancelled() {
+                return errno(&mem, &mut caller, nout, 0, Errno::Intr);
+            }
             let mut total = 0usize;
             for (index, (ptr, len)) in read_iovs(&mem, &mut caller, iovs, iovs_len)?
                 .into_iter()

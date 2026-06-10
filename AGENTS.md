@@ -289,7 +289,13 @@ tests.
   same path as normal exit, and the wasm driver arms a per-run Wasmtime epoch
   interrupter so a running tier-2 guest dies promptly (the qjs driver has no
   per-task seam yet: kill on a running qjs task only sets the observable
-  `kill_requested` flag). On top of it the shell is livable around never-EOF
+  `kill_requested` flag). Kill reaches host parks too: `task_wasi_config`
+  injects a `CancelToken` probing `kill_requested`, the shared park loops
+  (`wanix-wasi::wait`, `wanix-wasi-host` `poll_oneoff`) check it each wake,
+  and a blocked read returns `Errno::Intr` — so a task parked on a quiet
+  stdin/`#pipe`/events read dies within one park interval instead of waiting
+  for readiness (proofs: `ctl_kill_unparks_a_task_blocked_*`).
+  On top of it the shell is livable around never-EOF
   device streams: the REPL `cat` streams chunk-by-chunk and cancels on Ctrl-C
   to a fresh prompt with status 130 (`poll_oneoff` over {source, stdin};
   honest read readiness crosses the mesh wire via `FileOp::ReadReady`, and raw
@@ -690,17 +696,28 @@ more feature work.
   (today a non-loopback `--listen` with `--bind` is refused at startup).
 - Parked-read cancellation + permit pinning (the kill-shipped residue,
   documented on `EpochInterrupter`/`Task::kill` and the ADR 0008 liveness
-  note): (a) a task parked inside a blocking *host* read (e.g. a quiet stdin)
-  only dies on its next return to guest code — make the host `Backoff` park
-  loops kill-aware; (b) the qjs driver has no per-task interrupt seam (all qjs
-  tasks share one engine), so kill on a running qjs task only sets the
-  observable `kill_requested` flag; (c) no process groups: while a foreground
-  external runs, the shell's Ctrl-C watcher drains stdin and preserves
-  non-Ctrl-C bytes as type-ahead for the next prompt instead of delivering
-  them to a child that reads inherited stdin; (d) a live-but-idle parked mesh
-  read pins its per-connection session permit — hard-killed subscribers
-  release in bounded time via the pinned QUIC keep-alive/idle posture
-  (5s/30s), but a healthy idle subscriber holds its permit until it closes.
+  note): (a) ~~host parks~~ DONE — task-thread host parks are kill-aware via a
+  `CancelToken` injected by `task_wasi_config` (probes `Task::kill_requested`;
+  checked each wake in `wanix-wasi::wait::wait_read_ready` and the
+  `wanix-wasi-host` `poll_oneoff` backoff, with blocking reads returning
+  `Errno::Intr` instead of entering a device read that could block), so a
+  killed task parked on a quiet stdin/`#pipe`/events read dies within one park
+  interval (≤5 ms) — proofs: `ctl_kill_unparks_a_task_blocked_*` in
+  `wanix-wasm/src/driver.rs`. Residual: a *write* park (a killed task blocked
+  writing a full bounded `#pipe` inside the channel condvar) and parks on
+  server/mesh threads (LineBuffer reads held by serve sessions) are NOT
+  kill-aware — kill is a task operation and those are not task-thread parks;
+  (b) the qjs driver has no per-task interrupt seam (all qjs tasks share one
+  engine), so kill on a running qjs task only sets the observable
+  `kill_requested` flag — though its blocking stdio reads now also return
+  `Errno::Intr` once the flag is set, the guest JS is not forced to exit;
+  (c) no process groups: while a foreground external runs, the shell's Ctrl-C
+  watcher drains stdin and preserves non-Ctrl-C bytes as type-ahead for the
+  next prompt instead of delivering them to a child that reads inherited
+  stdin; (d) a live-but-idle parked mesh read pins its per-connection session
+  permit — hard-killed subscribers release in bounded time via the pinned QUIC
+  keep-alive/idle posture (5s/30s), but a healthy idle subscriber holds its
+  permit until it closes.
 - CLI UX remainder: the hands-on new-user audit behind commit bc05331 landed
   only its top S/M findings (lean usage errors, per-subcommand `--help`,
   ADR 0008 unreachable text, split peer-id parse diagnostics, copy-pasteable

@@ -11,7 +11,7 @@
 //! command-style WASI subset and refuses rather than fakes what it does not
 //! implement.
 
-use wanix_wasi::{WasiCtx, WasiFd};
+use wanix_wasi::{Errno, WasiCtx, WasiFd};
 use wasmtime::{Caller, Linker, Result};
 
 use super::mem::{memory, read_bytes, write_bytes, write_u32};
@@ -60,7 +60,14 @@ pub(super) fn register<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<
                 Ok(subscriptions) => subscriptions,
                 Err(errno) => return Ok(errno),
             };
-            let events = wait_fd_read_events(caller.data_mut().wasi(), &subscriptions);
+            let events = match wait_fd_read_events(caller.data_mut().wasi(), &subscriptions) {
+                PollOutcome::Decided(events) => events,
+                // The kill seam: a cancelled (killed) task's poll park returns
+                // EINTR for the whole call instead of waiting for readiness
+                // that may never come; the wasm epoch interrupt then traps the
+                // guest on its next instruction.
+                PollOutcome::Cancelled => return Ok(Errno::Intr.preview1_result()),
+            };
             let mut encoded = Vec::with_capacity(events.len() * EVENT_SIZE);
             for event in &events {
                 encoded.extend_from_slice(&encode_event(event));
@@ -95,14 +102,27 @@ fn parse_subscriptions(raw: &[u8]) -> std::result::Result<Vec<FdReadSubscription
     Ok(subscriptions)
 }
 
-/// Blocks until at least one subscribed fd is decided, then returns the
-/// decided events: readiness as errno 0, a readiness failure as its errno.
-fn wait_fd_read_events(ctx: &WasiCtx, subscriptions: &[FdReadSubscription]) -> Vec<FdReadEvent> {
+/// What the blocking poll park decided.
+enum PollOutcome {
+    /// At least one subscribed fd is decided: readiness as errno 0, a
+    /// readiness failure as its errno.
+    Decided(Vec<FdReadEvent>),
+    /// The task was cancelled (killed) while parked; the call reports EINTR.
+    Cancelled,
+}
+
+/// Blocks until at least one subscribed fd is decided or the task is
+/// cancelled, checking the kill seam ([`WasiCtx::is_cancelled`]) on every
+/// wake so a killed task parked here returns within one park interval.
+fn wait_fd_read_events(ctx: &WasiCtx, subscriptions: &[FdReadSubscription]) -> PollOutcome {
     let mut backoff = Backoff::new();
     loop {
         let events = decided_events(ctx, subscriptions);
         if !events.is_empty() {
-            return events;
+            return PollOutcome::Decided(events);
+        }
+        if ctx.is_cancelled() {
+            return PollOutcome::Cancelled;
         }
         backoff.park();
     }
@@ -141,9 +161,16 @@ mod tests {
 
     use super::super::wait::tests::ctx_with_scripted_stdin;
     use super::{
-        ERRNO_NOSYS, EVENTTYPE_FD_READ, FdReadSubscription, SUBSCRIPTION_SIZE, parse_subscriptions,
-        wait_fd_read_events,
+        ERRNO_NOSYS, EVENTTYPE_FD_READ, FdReadSubscription, PollOutcome, SUBSCRIPTION_SIZE,
+        parse_subscriptions, wait_fd_read_events,
     };
+
+    fn decided(outcome: PollOutcome) -> Vec<super::FdReadEvent> {
+        match outcome {
+            PollOutcome::Decided(events) => events,
+            PollOutcome::Cancelled => panic!("poll was cancelled, expected decided events"),
+        }
+    }
 
     fn raw_subscription(userdata: u64, tag: u8, fd: u32) -> [u8; SUBSCRIPTION_SIZE] {
         let mut record = [0u8; SUBSCRIPTION_SIZE];
@@ -184,11 +211,55 @@ mod tests {
             userdata: 42,
             fd: WasiFd::STDIN,
         }];
-        let events = wait_fd_read_events(&ctx, &subscriptions);
+        let events = decided(wait_fd_read_events(&ctx, &subscriptions));
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].userdata, 42);
         assert_eq!(events[0].errno, 0);
         feeder.join().expect("feeder thread");
+    }
+
+    #[test]
+    fn poll_parked_on_a_quiet_fd_returns_cancelled_when_the_task_is_killed() {
+        // The kill seam (deadline-bounded): no bytes ever arrive on the quiet
+        // stdin, so only the cancel probe can end this park. The probe flips
+        // after 30ms; the park must return Cancelled well within the deadline
+        // instead of waiting forever for readiness.
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use wanix_wasi::{CancelToken, WasiConfig, WasiCtx};
+
+        use super::super::wait::tests::ScriptedStdin;
+
+        let killed = Arc::new(AtomicBool::new(false));
+        let probe = Arc::clone(&killed);
+        let stdin = ScriptedStdin::default(); // quiet: readiness stays false
+        let ctx = WasiCtx::new(
+            WasiConfig::new(Default::default())
+                .with_stdin(Box::new(stdin), "stdin")
+                .with_cancel_token(CancelToken::new(move || probe.load(Ordering::Relaxed))),
+        );
+        let killer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            killed.store(true, Ordering::Relaxed);
+        });
+        let started = std::time::Instant::now();
+        let outcome = wait_fd_read_events(
+            &ctx,
+            &[FdReadSubscription {
+                userdata: 1,
+                fd: WasiFd::STDIN,
+            }],
+        );
+        assert!(
+            matches!(outcome, PollOutcome::Cancelled),
+            "a killed task's poll park must report cancellation"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "cancellation must land within the park's poll interval"
+        );
+        killer.join().expect("killer thread");
     }
 
     #[test]
@@ -200,7 +271,7 @@ mod tests {
         }];
         // Decided immediately: the readiness probe fails, so the event carries
         // the errno instead of blocking forever on an unreadable fd.
-        let events = wait_fd_read_events(&ctx, &subscriptions);
+        let events = decided(wait_fd_read_events(&ctx, &subscriptions));
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].userdata, 9);
         assert_ne!(events[0].errno, 0);
