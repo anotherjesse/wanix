@@ -9,7 +9,23 @@ mod stat;
 
 impl WasiCtx {
     /// Reads bytes from an open fd.
+    ///
+    /// Stdio fds get blocking POSIX-style reads (ADR 0010 tier 2): when the
+    /// attached file is a queue-backed device (`#term` program side, `#pipe`)
+    /// with nothing buffered yet, this parks the calling host thread with
+    /// bounded-backoff readiness polling (see [`crate::wait`]) until bytes
+    /// arrive, the device errors, or end-of-stream is decidable. Regular byte
+    /// files always report ready — including at EOF, where the read honestly
+    /// returns zero — so they never wait. Dynamic fds opened by the guest stay
+    /// nonblocking: guest drain loops (read until 0, e.g. the qjs shell's
+    /// `#term/<id>/winch` drain) rely on empty-queue reads returning
+    /// immediately, and callers that loop one `fd_read` per iov should consult
+    /// [`Self::fd_read_ready`] before continuation reads on a stdio fd to
+    /// preserve short-read semantics.
     pub fn fd_read(&mut self, fd: WasiFd, buf: &mut [u8]) -> Result<usize, Errno> {
+        if matches!(self.fds.get(&fd), Some(Handle::Stdio { .. })) {
+            crate::wait::wait_read_ready(self, fd);
+        }
         match self.fds.get_mut(&fd).ok_or(Errno::Badf)? {
             Handle::Stdio { file } => {
                 if !file.can_read() {

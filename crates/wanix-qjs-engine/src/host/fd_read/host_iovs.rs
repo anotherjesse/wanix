@@ -23,6 +23,13 @@ pub(super) fn read_host_iovs(
 ) -> wasmtime::Result<Result<u32, QuickJsWasiErrno>> {
     let mut total_read = 0u32;
     for index in 0..request.iovs_len {
+        // The host's `fd_read` may park for a stdio device fd (blocking
+        // tier-2 reads in `wanix-wasi`), so a continuation iov after a
+        // fully-filled one must only read bytes that are already buffered
+        // (POSIX short read), never wait for more.
+        if index > 0 && !matches!(host.fd_read_ready(fd), Ok(true)) {
+            return Ok(Ok(total_read));
+        }
         match advance_host_read(host, fd, request, caller, iovs_ptr, index, total_read)? {
             HostReadLoop::Continue(next_total) => total_read = next_total,
             HostReadLoop::Stop(final_total) => return Ok(Ok(final_total)),

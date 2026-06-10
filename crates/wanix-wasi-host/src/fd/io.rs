@@ -50,7 +50,25 @@ pub(super) fn register<S: WasiHost + 'static>(linker: &mut Linker<S>) -> Result<
             wait_read_ready(caller.data_mut().wasi(), WasiFd::new(fd as u32));
             let mem = memory(&mut caller)?;
             let mut total = 0usize;
-            for (ptr, len) in read_iovs(&mem, &mut caller, iovs, iovs_len)? {
+            for (index, (ptr, len)) in read_iovs(&mem, &mut caller, iovs, iovs_len)?
+                .into_iter()
+                .enumerate()
+            {
+                // `WasiCtx::fd_read` itself parks stdio fds until ready, so a
+                // continuation iov after a fully-filled one must only read
+                // bytes that are already buffered (POSIX short read), never
+                // wait for more.
+                if index > 0
+                    && !matches!(
+                        caller
+                            .data_mut()
+                            .wasi()
+                            .fd_read_ready(WasiFd::new(fd as u32)),
+                        Ok(true)
+                    )
+                {
+                    break;
+                }
                 let mut buf = vec![0u8; len];
                 match caller
                     .data_mut()

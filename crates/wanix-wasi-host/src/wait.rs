@@ -1,52 +1,14 @@
 //! Readiness parking for blocking tier-2 syscalls.
 //!
-//! A command task gets blocking POSIX-style reads (ADR 0010 tier 2): when a
-//! queue-backed device fd (`#term`, `#pipe`, …) has nothing to read yet, the
-//! host thread running the guest parks here until the device reports
-//! readiness. Regular byte files report ready unconditionally (including at
-//! EOF, where a read honestly returns 0), so they never wait.
-//!
-//! Wanix files carry no wake primitive across the `File` trait, so parking is
-//! readiness polling with exponential backoff capped at a small bound — never
-//! a busy spin, never a missed wakeup (the queue is re-checked each interval).
+//! The wait machinery lives in [`wanix_wasi::wait`] (it also backs the
+//! blocking stdio reads inside [`wanix_wasi::WasiCtx::fd_read`]); this module
+//! re-exports it for the linker's `fd_read` wait — which covers *every* fd of
+//! a command-style wasm task, not just stdio — and for the `poll_oneoff`
+//! backoff. See that module for the parking contract: regular byte files are
+//! always ready (including at EOF), queue-backed device fds park with bounded
+//! backoff, and a readiness error falls through so the read reports the errno.
 
-use std::time::Duration;
-
-use wanix_wasi::{WasiCtx, WasiFd};
-
-const INITIAL_PARK: Duration = Duration::from_micros(100);
-const MAX_PARK: Duration = Duration::from_millis(5);
-
-/// Exponential sleep backoff between readiness re-checks.
-pub(crate) struct Backoff {
-    delay: Duration,
-}
-
-impl Backoff {
-    pub(crate) fn new() -> Self {
-        Self {
-            delay: INITIAL_PARK,
-        }
-    }
-
-    /// Sleeps the current interval, then doubles it up to [`MAX_PARK`].
-    pub(crate) fn park(&mut self) {
-        std::thread::sleep(self.delay);
-        self.delay = (self.delay * 2).min(MAX_PARK);
-    }
-}
-
-/// Blocks until a read on `fd` would produce data (or fail) without waiting.
-///
-/// Returns as soon as the fd reports ready. A readiness *error* (bad fd,
-/// closed device, …) also returns immediately: the follow-up read is the one
-/// that reports the errno to the guest, keeping a single error path.
-pub(crate) fn wait_read_ready(ctx: &WasiCtx, fd: WasiFd) {
-    let mut backoff = Backoff::new();
-    while matches!(ctx.fd_read_ready(fd), Ok(false)) {
-        backoff.park();
-    }
-}
+pub(crate) use wanix_wasi::wait::{Backoff, wait_read_ready};
 
 #[cfg(test)]
 pub(crate) mod tests {

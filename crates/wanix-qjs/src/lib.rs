@@ -1595,6 +1595,130 @@ std.out.flush();
     }
 
     #[test]
+    fn detached_qjs_task_parks_on_pipe_stdin_and_serves_lines_until_eof() {
+        // The resident-loop proof (blocking stdio reads, ADR 0010 tier 2): a
+        // detached qjs guest loops `os.read(0)` against a `#pipe` stdin,
+        // parking between lines fed with real gaps, replies on a `#pipe`
+        // stdout, and exits cleanly (releasing its fds) when the stdin writer
+        // closes. The watchdog deadline turns a blocking-read regression into
+        // a test failure instead of a hung CI job.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("resident-qjs-proof".into())
+            .spawn(move || {
+                run_resident_qjs_echo_loop();
+                let _ = done_tx.send(());
+            })
+            .expect("spawn proof thread");
+        done_rx
+            .recv_timeout(Duration::from_secs(120))
+            .expect("resident qjs echo loop deadlocked or panicked");
+    }
+
+    fn run_resident_qjs_echo_loop() {
+        let table = TaskTable::new();
+        table
+            .register_driver("qjs", std::sync::Arc::new(QuickJsTaskDriver::new(runner())))
+            .unwrap();
+        let task = table.allocate_root("qjs").unwrap();
+        let root = std::sync::Arc::new(MemFs::new());
+        root.write_file(
+            "main.js",
+            br##"
+import * as std from "qjs:std";
+import * as os from "qjs:os";
+
+const bytes = new Uint8Array(256);
+let pending = "";
+for (;;) {
+  const count = os.read(0, bytes.buffer, 0, bytes.length);
+  if (count < 0) {
+    throw new Error("stdin read failed: " + count);
+  }
+  if (count === 0) {
+    break;
+  }
+  pending += Array.from(bytes.slice(0, count)).map((byte) => String.fromCharCode(byte)).join("");
+  let newline;
+  while ((newline = pending.indexOf("\n")) >= 0) {
+    const line = pending.slice(0, newline);
+    pending = pending.slice(newline + 1);
+    std.out.puts(line.toUpperCase() + "\n");
+    std.out.flush();
+  }
+}
+"##,
+        )
+        .unwrap();
+        task.bind(root, ".", ".", BindOptions::default()).unwrap();
+
+        let pipes = wanix_pipe::PipeDevice::new();
+        let write_only = wanix_fs::OpenOptions {
+            write: true,
+            ..wanix_fs::OpenOptions::default()
+        };
+        let stdin_path = NormalizedPath::new(format!("{}/data", pipes.alloc().unwrap())).unwrap();
+        let stdout_path = NormalizedPath::new(format!("{}/data", pipes.alloc().unwrap())).unwrap();
+        let mut stdin_writer = pipes.open(&stdin_path, write_only).unwrap();
+        let stdin_reader = pipes.open(&stdin_path, OpenOptions::read()).unwrap();
+        let stdout_writer = pipes.open(&stdout_path, write_only).unwrap();
+        let mut stdout_reader = pipes.open(&stdout_path, OpenOptions::read()).unwrap();
+        task.insert_fd(Fd::STDIN, stdin_reader, stdin_path).unwrap();
+        task.insert_fd(Fd::STDOUT, stdout_writer, stdout_path)
+            .unwrap();
+        task.set_cmd("main.js").unwrap();
+
+        table.start_detached(task.id()).unwrap();
+
+        for (line, reply) in [
+            ("first probe", "FIRST PROBE\n"),
+            ("second probe", "SECOND PROBE\n"),
+            ("third probe", "THIRD PROBE\n"),
+        ] {
+            // The gap guarantees the guest reached its blocking read and
+            // parked on an empty pipe before any bytes exist; only a genuine
+            // cross-thread wakeup can produce the reply.
+            std::thread::sleep(Duration::from_millis(40));
+            let line = format!("{line}\n");
+            let mut remaining: &[u8] = line.as_bytes();
+            while !remaining.is_empty() {
+                let written = stdin_writer.write(remaining).unwrap();
+                remaining = &remaining[written..];
+            }
+            assert_eq!(read_pipe_line(&mut *stdout_reader), reply);
+        }
+
+        drop(stdin_writer);
+        // EOF on the reply stream can only come from the exiting task
+        // releasing its stdout writer (`task-exit-closes-fds` swaps the whole
+        // fd table at once), so after it the descriptor table is empty.
+        let mut buf = [0u8; 8];
+        assert_eq!(
+            stdout_reader.read(&mut buf).unwrap(),
+            0,
+            "stdout pipe sees EOF once the exited task released its writer"
+        );
+        assert_eq!(task.wait_exit().unwrap(), "0");
+        assert!(
+            task.fd_numbers().is_empty(),
+            "an exited resident qjs task holds no descriptors"
+        );
+    }
+
+    fn read_pipe_line(reader: &mut dyn wanix_fs::File) -> String {
+        let mut line = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let count = reader.read(&mut byte).unwrap();
+            assert_ne!(count, 0, "stdout pipe closed before a full line");
+            line.push(byte[0]);
+            if byte[0] == b'\n' {
+                return String::from_utf8(line).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn task_driver_runs_multiple_ready_io_turns_when_configured() {
         let table = TaskTable::new();
         let runner = runner();

@@ -8,6 +8,19 @@ use crate::QuickJsRunner;
 use crate::task_command::task_program_for_check;
 
 /// Wanix task driver for QuickJS tasks.
+///
+/// Stdio reads are blocking (ADR 0010 tier 2, via `wanix-wasi`): a guest that
+/// loops `os.read(0, …)` parks inside the host import until bytes arrive or
+/// end-of-stream is decidable, so a resident qjs task can serve a `#pipe`- or
+/// `#term`-backed stdin line stream indefinitely — run it detached
+/// (`TaskTable::start_detached`) so the park owns its own host thread. The
+/// default execution policy is deliberately unbounded
+/// (`interrupt_poll_budget` and `memory_limit_bytes` default to none), so a
+/// resident loop trips no limit by accident; bounding one is an explicit
+/// choice via [`Self::with_interrupt_poll_budget`], which counts JavaScript
+/// interrupt polls between reads — time parked inside a blocking read
+/// consumes none. Snapshots are not reachable while the guest is parked in a
+/// read.
 #[derive(Debug, Clone)]
 pub struct QuickJsTaskDriver {
     runner: Arc<QuickJsRunner>,
