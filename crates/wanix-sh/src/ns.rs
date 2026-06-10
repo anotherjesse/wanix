@@ -57,6 +57,35 @@ impl SpawnHandle {
     }
 }
 
+/// An opaque handle to a streaming read source opened by
+/// [`NamespaceOps::source_open`]. The WASI backing carries an open-file id;
+/// fakes carry whatever they need.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceHandle(String);
+
+impl SourceHandle {
+    /// Wraps a backend-specific identifier.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Returns the backend-specific identifier.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.0
+    }
+}
+
+/// What a cancellable wait on a streaming source observed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceWait {
+    /// The source is readable (bytes or end-of-stream).
+    Ready,
+    /// Interactive stdin delivered Ctrl-C while the source was idle.
+    Cancelled,
+}
+
 /// A request to launch an external command as a child task.
 ///
 /// The launcher (the WASI backing) resolves [`program`](Self::program) to a task
@@ -188,6 +217,56 @@ pub trait NamespaceOps {
     /// Returns an error if the channel cannot be written.
     fn pipe_write_all_and_close(&mut self, id: &str, bytes: &[u8]) -> ShellResult<()>;
 
+    /// Opens `path` for incremental streaming reads (the streaming `cat`
+    /// source). Pair with [`Self::source_read`] / [`Self::source_close`].
+    ///
+    /// The default refuses with [`ShellError::Unsupported`]; callers fall back
+    /// to the collected [`Self::read_file`] path, so fakes without streaming
+    /// support keep working.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path cannot be opened for reading.
+    fn source_open(&mut self, path: &str) -> ShellResult<SourceHandle> {
+        let _ = path;
+        Err(crate::ShellError::Unsupported(
+            "streaming source reads".into(),
+        ))
+    }
+
+    /// Reads the next chunk from a streaming source. `Ok(0)` is end-of-stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source cannot be read.
+    fn source_read(&mut self, handle: &SourceHandle, buf: &mut [u8]) -> ShellResult<usize> {
+        let _ = (handle, buf);
+        Err(crate::ShellError::Unsupported(
+            "streaming source reads".into(),
+        ))
+    }
+
+    /// Closes a streaming source (dropping the open handle).
+    fn source_close(&mut self, handle: SourceHandle) {
+        let _ = handle;
+    }
+
+    /// Blocks until the source is readable, watching interactive stdin while
+    /// waiting: Ctrl-C (`0x03`) on stdin cancels the wait, and other typed
+    /// bytes are preserved as type-ahead for the next [`Self::read_stdin`].
+    /// The WASI backing is `poll_oneoff` over the source fd and fd 0.
+    ///
+    /// The default reports the source ready (a plain streaming loop), so
+    /// fakes without an interactive stdin keep working.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if readiness cannot be observed.
+    fn source_wait_cancellable(&mut self, handle: &SourceHandle) -> ShellResult<SourceWait> {
+        let _ = handle;
+        Ok(SourceWait::Ready)
+    }
+
     /// Launches an external command WITHOUT waiting for it.
     ///
     /// The child runs concurrently with the shell (on the host, each running
@@ -207,6 +286,23 @@ pub trait NamespaceOps {
     ///
     /// Returns an error if the exit status cannot be observed.
     fn spawn_wait(&mut self, handle: &SpawnHandle) -> ShellResult<i32>;
+
+    /// [`Self::spawn_wait`] for an interactive *foreground* child: watches the
+    /// shell's stdin while waiting and forwards Ctrl-C (`0x03`) as `kill` to
+    /// the child's `#task/<id>/ctl` instead of line-editing it (ADR 0003: the
+    /// byte is terminal input and the shell decides; ADR 0010: death belongs
+    /// to `#task`). Other typed bytes are preserved as type-ahead. A killed
+    /// child reports status 130 (the POSIX `128 + SIGINT` convention).
+    ///
+    /// The default is a plain [`Self::spawn_wait`], so non-interactive
+    /// backings and fakes keep working.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the exit status cannot be observed.
+    fn spawn_wait_foreground(&mut self, handle: &SpawnHandle) -> ShellResult<i32> {
+        self.spawn_wait(handle)
+    }
 
     /// Launches an external command, waits for it, and returns its exit code.
     ///

@@ -25,8 +25,12 @@
 //!
 //! Without `-c` the shell is an interactive REPL ([`run_repl`]): a prompt over
 //! blocking stdin reads with guest-owned cooked-line editing per ADR 0003
-//! (echo, backspace, Ctrl-C line cancel, Ctrl-D exit). Tab completion and
-//! history are deliberately not implemented yet.
+//! (echo, backspace, Ctrl-C line cancel, Ctrl-D exit). At the REPL, Ctrl-C
+//! also cancels a running terminal-bound `cat` (which streams chunk by chunk
+//! instead of collecting, so never-EOF sources are usable) and kills a
+//! foreground external child through `#task/<id>/ctl kill` — both report
+//! status 130. Tab completion and history are deliberately not implemented
+//! yet.
 
 mod builtins;
 mod error;
@@ -39,11 +43,14 @@ mod prompt;
 mod repl;
 mod resolve;
 mod state;
+mod stream;
 mod syntax;
 mod tool;
 
 pub use error::{ShellError, ShellResult};
-pub use ns::{InputSource, NamespaceOps, OutputSink, SpawnHandle, SpawnSpec};
+pub use ns::{
+    InputSource, NamespaceOps, OutputSink, SourceHandle, SourceWait, SpawnHandle, SpawnSpec,
+};
 pub use prompt::{DEFAULT_PS1, render as render_prompt};
 pub use repl::run_repl;
 pub use state::ShellState;

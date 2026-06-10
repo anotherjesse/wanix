@@ -21,6 +21,12 @@ use crate::task_command::task_program_for_check;
 /// interrupt polls between reads — time parked inside a blocking read
 /// consumes none. Snapshots are not reachable while the guest is parked in a
 /// read.
+///
+/// `#task/<id>/ctl kill` has no interrupt seam here yet: qjs tasks share one
+/// runner (one Wasmtime engine), so an engine-wide epoch interrupt would kill
+/// every running qjs task — a killed running qjs task only carries the
+/// observable `Task::kill_requested` flag until a per-task seam lands. The
+/// wasm driver (one engine per run) implements kill today.
 #[derive(Debug, Clone)]
 pub struct QuickJsTaskDriver {
     runner: Arc<QuickJsRunner>,

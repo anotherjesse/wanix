@@ -28,6 +28,7 @@ fn parses_each_verb_with_operands() {
         MountCommand::Cat {
             addr: "tcp://h:1".to_owned(),
             path: "a/b.txt".to_owned(),
+            follow: false,
         }
     );
     assert_eq!(
@@ -41,6 +42,27 @@ fn parses_each_verb_with_operands() {
 }
 
 #[test]
+fn parses_follow_flag_anywhere_in_the_cat_operands() {
+    for follow_args in [
+        ["--follow", "tcp://h:1", "a/b.txt"],
+        ["tcp://h:1", "--follow", "a/b.txt"],
+        ["tcp://h:1", "a/b.txt", "--follow"],
+    ] {
+        assert_eq!(
+            parse_mount_command("mount-cat", &args(&follow_args)).unwrap(),
+            MountCommand::Cat {
+                addr: "tcp://h:1".to_owned(),
+                path: "a/b.txt".to_owned(),
+                follow: true,
+            },
+            "args: {follow_args:?}"
+        );
+    }
+    // --follow alone still misses its operands.
+    assert!(parse_mount_command("mount-cat", &args(&["--follow", "tcp://h:1"])).is_err());
+}
+
+#[test]
 fn rejects_missing_operands() {
     assert!(parse_mount_command("mount-cat", &args(&["tcp://h:1"])).is_err());
     assert!(parse_mount_command("mount-write", &args(&["tcp://h:1", "f.txt"])).is_err());
@@ -50,13 +72,13 @@ fn rejects_missing_operands() {
 
 /// Spawns a serial 9P server over one accepted loopback connection and returns a
 /// namespace with the dialed remote bound at `/n/remote`.
-fn mount_local(fs: Arc<MemFs>) -> Namespace {
+fn mount_local(fs: Arc<dyn FileSystem>) -> Namespace {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let read = stream.try_clone().unwrap();
-        let mut server = P9Server::new(fs as Arc<dyn FileSystem>);
+        let mut server = P9Server::new(fs);
         let _ = server.serve_stream(read, stream);
     });
     let stream = TcpStream::connect(addr).unwrap();
@@ -90,10 +112,92 @@ fn write_then_cat_round_trips_through_namespace() {
         &MountCommand::Cat {
             addr: String::new(),
             path: "note.txt".to_owned(),
+            follow: false,
         },
     )
     .unwrap();
     assert_eq!(read.stdout(), b"mounted bytes");
+}
+
+#[test]
+fn cat_follow_streams_a_never_eof_pipe_incrementally_then_exits_at_eof() {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use wanix_fs::{NormalizedPath, OpenOptions};
+    use wanix_pipe::PipeDevice;
+
+    /// A `Write` sink shared with the asserting thread.
+    #[derive(Clone, Default)]
+    struct SharedSink(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn wait_for(sink: &SharedSink, expected: &[u8]) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if sink.0.lock().unwrap().as_slice() == expected {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "follow output never reached {:?}: {:?}",
+                String::from_utf8_lossy(expected),
+                String::from_utf8_lossy(&sink.0.lock().unwrap())
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    // Serve a namespace holding a #pipe device over loopback 9P; the pipe is
+    // a real never-EOF stream while its writer lives.
+    let pipe = Arc::new(PipeDevice::new());
+    let pipe_id = pipe.alloc().unwrap();
+    let mut served = Namespace::new();
+    served
+        .bind(pipe.clone(), ".", "#pipe", BindOptions::default())
+        .unwrap();
+    let mut writer = pipe
+        .open(
+            &NormalizedPath::new(format!("{pipe_id}/data")).unwrap(),
+            OpenOptions {
+                write: true,
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+    writer.write(b"alpha ").unwrap();
+
+    let namespace = mount_local(Arc::new(served));
+    let sink = SharedSink::default();
+    let stream_sink = sink.clone();
+    let path = format!("#pipe/{pipe_id}/data");
+    let follower = thread::spawn(move || {
+        let mut stdout = stream_sink;
+        super::run_mount_cat_follow_for_tests(&namespace, &path, &mut stdout)
+    });
+
+    // The pre-fed chunk arrives without any EOF; later chunks stream as the
+    // writer produces them (incremental write-through, no byte cap heuristics).
+    wait_for(&sink, b"alpha ");
+    writer.write(b"beta").unwrap();
+    wait_for(&sink, b"alpha beta");
+
+    // Dropping the last writer is EOF: the follow loop exits cleanly.
+    drop(writer);
+    follower
+        .join()
+        .expect("follower thread")
+        .expect("follow ended at EOF");
+    assert_eq!(sink.0.lock().unwrap().as_slice(), b"alpha beta");
 }
 
 #[test]

@@ -28,7 +28,7 @@ usedInFlows:
   - {flow: js-outside-chrome, step: 1}
 honestLimits:
   - "Exec is local-trust: qjs/wasm drivers run in-process on the host; #task does not run code across the mesh trust boundary (cross-node compute is the separate #cpu exec plane)."
-  - "No signals, no process groups, no kill: the only ctl verbs are bind and start, and a running guest cannot be cancelled through #task."
+  - "No signals and no process groups: the ctl verbs are bind, start, and kill. kill (ADR 0010) promises fd release and an observable distinct `killed` exit only — the wasm driver epoch-trips the guest; a running qjs guest has no interrupt seam yet."
   - "Child launches are synchronous and foreground: a started child runs to completion on the controlling thread before start returns; there is no background task supervisor."
   - "exit is free-form text written by the driver (numeric code for qjs/wasm); the device imposes no schema."
 canonicalCaveatFor: [exec-local-trust-only]
@@ -243,9 +243,12 @@ file-level flow (`examples/lib/wanix/task.js`).
   code execution is not exposed across the mesh trust boundary by `#task`
   itself; cross-node compute is the separate `#cpu` exec plane, which runs a
   task against a caller's reverse-exported namespace.
-- **No signals, no process groups.** There is no `kill`, no `SIGTERM`, no job
-  control through `ctl`. The only verbs are `bind` and `start`. Cancellation of
-  a running guest is not yet a `#task` operation.
+- **No signals, no process groups.** There is no `SIGTERM` and no job control
+  through `ctl`. The verbs are `bind`, `start`, and `kill` — and `kill`
+  (ADR 0010) promises exactly fd release plus an observable, distinct `killed`
+  exit, nothing transactional. The wasm driver implements it by Wasmtime epoch
+  interruption; a running qjs guest has no per-task interrupt seam yet (its
+  kill request stays observable but does not stop the run).
 - **Child launches are synchronous and foreground.** Today a started child runs
   to completion on the controlling thread before `start`'s write returns;
   `exit` then reflects the finished status. There is no detached/background task

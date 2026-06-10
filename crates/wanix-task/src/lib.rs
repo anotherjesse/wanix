@@ -19,7 +19,7 @@ pub use cmd::quote_cmd_argv;
 pub use driver::{NoopDriver, TaskDriver};
 pub use fd::{Fd, FdTable, OpenFile};
 pub use table::TaskTable;
-pub use task::{Task, TaskId, TaskSpec};
+pub use task::{InterruptHook, KILLED_EXIT, Task, TaskId, TaskSpec};
 pub use task_command::{
     TaskCommand, task_command, task_program_for_check, task_wasi_argv, task_wasi_cwd, task_wasi_env,
 };

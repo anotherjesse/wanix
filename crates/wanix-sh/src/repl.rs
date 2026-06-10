@@ -102,6 +102,7 @@ impl LineEditor {
 /// otherwise the last command's status.
 #[must_use]
 pub fn run_repl(state: &mut ShellState, ns: &mut dyn NamespaceOps) -> i32 {
+    state.set_interactive(true);
     let mut editor = LineEditor::default();
     write_prompt(state, ns);
     let mut byte = [0u8; 1];

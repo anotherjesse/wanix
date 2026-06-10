@@ -173,6 +173,11 @@ fn dispatch(
     state: &ShellState,
     ns: &mut dyn NamespaceOps,
 ) -> ShellResult<i32> {
+    // A terminal-bound interactive `cat` streams (and is Ctrl-C-cancellable)
+    // instead of collecting — a never-EOF source must be usable at the REPL.
+    if argv[0] == "cat" && state.interactive() && matches!(stdout, OutputSink::Inherit) {
+        return Ok(crate::stream::stream_cat(argv, &stdin, ns));
+    }
     if let Some(builtin) = builtin(&argv[0]) {
         let input = gather_input(&stdin, ns)?;
         let (output, status) = builtin(argv, &input, state);
@@ -220,7 +225,15 @@ fn run_external(
         stdin,
         stdout,
     };
-    match ns.spawn(&spec) {
+    // At the interactive REPL the foreground wait watches stdin so Ctrl-C
+    // kills the child (`#task/<id>/ctl kill`) instead of buffering as input.
+    let result = if state.interactive() {
+        ns.spawn_start(&spec)
+            .and_then(|handle| ns.spawn_wait_foreground(&handle))
+    } else {
+        ns.spawn(&spec)
+    };
+    match result {
         Ok(code) => Ok(code),
         Err(err) => {
             ns.write_stderr(format!("wsh: {}: {err}\n", spec.program).as_bytes())?;
@@ -283,6 +296,7 @@ mod tests {
         deferred_on_pipe: HashMap<String, String>,
         statuses: HashMap<String, i32>,
         wait_order: Vec<String>,
+        foreground_waits: Vec<String>,
     }
 
     impl FakeNs {
@@ -435,6 +449,10 @@ mod tests {
                 .get(handle.id())
                 .copied()
                 .ok_or_else(|| crate::ShellError::Io("unknown spawn handle".into()))
+        }
+        fn spawn_wait_foreground(&mut self, handle: &SpawnHandle) -> ShellResult<i32> {
+            self.foreground_waits.push(handle.id().to_owned());
+            self.spawn_wait(handle)
         }
     }
 
@@ -648,6 +666,45 @@ mod tests {
         // gen (external) -> cat (builtin, runs in-shell) -> wc (external)
         assert_eq!(run_on("gen | cat | wc", &mut ns), 0);
         assert_eq!(String::from_utf8(ns.out).unwrap(), "3\n");
+    }
+
+    // ---- interactive foreground wait (Ctrl-C -> kill seam) ----------------
+
+    #[test]
+    fn interactive_single_external_waits_in_the_foreground() {
+        // At the REPL a single external command is waited through
+        // `spawn_wait_foreground`, the seam that watches stdin for Ctrl-C and
+        // forwards it as a `#task/<id>/ctl kill`.
+        let mut state = ShellState::new();
+        state.set_interactive(true);
+        let mut ns = FakeNs::default();
+        ns.register("prog", |_in, _args| (Vec::new(), 0));
+        assert_eq!(run_with("prog", &mut state, &mut ns), 0);
+        assert_eq!(ns.foreground_waits.len(), 1, "foreground wait used");
+    }
+
+    #[test]
+    fn non_interactive_external_uses_the_plain_wait() {
+        let mut ns = FakeNs::default();
+        ns.register("prog", |_in, _args| (Vec::new(), 0));
+        assert_eq!(run_on("prog", &mut ns), 0);
+        assert!(
+            ns.foreground_waits.is_empty(),
+            "-c runs must not watch stdin"
+        );
+    }
+
+    #[test]
+    fn interactive_pipeline_stages_keep_the_plain_wait() {
+        // The foreground Ctrl-C seam applies to the single foreground
+        // command; pipeline stages are collected with `spawn_wait`.
+        let mut state = ShellState::new();
+        state.set_interactive(true);
+        let mut ns = FakeNs::default();
+        ns.register("gen", |_in, _args| (b"x".to_vec(), 0));
+        ns.register("sink", |input, _args| (input.to_vec(), 0));
+        assert_eq!(run_with("gen | sink", &mut state, &mut ns), 0);
+        assert!(ns.foreground_waits.is_empty());
     }
 
     // ---- command resolution ---------------------------------------------

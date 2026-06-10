@@ -7,9 +7,11 @@ use wanix_vfs::{BindOptions, Namespace};
 use crate::cmd::parse_cmd_argv;
 
 mod fd_ops;
+mod kill;
 mod state;
 mod types;
 
+pub use kill::{InterruptHook, KILLED_EXIT};
 use state::TaskState;
 pub use types::{TaskId, TaskSpec};
 

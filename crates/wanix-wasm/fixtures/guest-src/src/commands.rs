@@ -20,6 +20,7 @@ const COMMANDS: &[(&str, CommandHandler)] = &[
     ("--cat", cat_command),
     ("--gen", gen_command),
     ("--env", env_command),
+    ("--spin", spin_command),
 ];
 
 pub(crate) fn run(args: &[String]) -> bool {
@@ -113,6 +114,21 @@ fn gen_command(args: &[String]) {
             std::process::exit(1);
         }
         written += len;
+    }
+}
+
+/// Prints `spinning` then loops forever in pure guest code (no syscalls), so
+/// kill tests can observe the guest is live and then prove it can only die
+/// through Wasmtime epoch interruption.
+fn spin_command(_args: &[String]) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(b"spinning\n");
+    let _ = stdout.flush();
+    let mut counter: u64 = 0;
+    loop {
+        counter = counter.wrapping_add(1);
+        std::hint::black_box(counter);
     }
 }
 

@@ -2,12 +2,13 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use wanix_fs::LocalFs;
 use wanix_vfs::{BindOptions, Namespace};
 use wanix_wasi::{WasiConfig, WasiCtx};
 use wasmtime::error::Context as _;
-use wasmtime::{Engine, Error, Linker, Module, Result, Store};
+use wasmtime::{Config, Engine, Error, Linker, Module, Result, Store};
 
 use crate::capture::{host_stderr, host_stdout};
 use crate::state::WasiState;
@@ -16,6 +17,41 @@ use crate::state::WasiState;
 pub struct WasiRunner {
     engine: Engine,
     module: Module,
+    interrupted: Arc<AtomicBool>,
+}
+
+/// A clonable handle that interrupts every guest currently running on one
+/// [`WasiRunner`] by bumping the engine's Wasmtime epoch (the ADR 0010
+/// `#task/<id>/ctl kill` seam). The Wanix wasm driver builds one runner per
+/// task run, so interrupting it kills exactly that task's guest.
+///
+/// The epoch trips inside guest *code*: a guest parked in a blocking host
+/// import returns to the host's control first and traps on its next entry
+/// into guest execution.
+#[derive(Clone)]
+pub struct EpochInterrupter {
+    engine: Engine,
+    interrupted: Arc<AtomicBool>,
+}
+
+impl EpochInterrupter {
+    /// Interrupts the runner's running guests: any in-flight or future
+    /// [`WasiRunner::run`] on the same runner traps with an epoch interrupt.
+    pub fn interrupt(&self) {
+        // Flag first: `run` checks the flag after arming its store deadline,
+        // so an interrupt the flag-check misses must have bumped the epoch
+        // after the deadline was armed — and therefore trips it.
+        self.interrupted.store(true, Ordering::SeqCst);
+        self.engine.increment_epoch();
+    }
+}
+
+/// Engine configuration for command guests: epoch interruption is enabled so
+/// a running task can be killed (`#task/<id>/ctl kill`).
+fn command_engine() -> Result<Engine> {
+    let mut config = Config::new();
+    config.epoch_interruption(true);
+    Engine::new(&config)
 }
 
 impl WasiRunner {
@@ -25,9 +61,26 @@ impl WasiRunner {
     ///
     /// Returns an error if Wasmtime cannot compile the bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let engine = Engine::default();
+        let engine = command_engine()?;
         let module = Module::new(&engine, bytes).context("failed to compile wasm module")?;
-        Ok(Self { engine, module })
+        Ok(Self::new(engine, module))
+    }
+
+    fn new(engine: Engine, module: Module) -> Self {
+        Self {
+            engine,
+            module,
+            interrupted: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Returns the kill handle for guests run by this runner.
+    #[must_use]
+    pub fn interrupter(&self) -> EpochInterrupter {
+        EpochInterrupter {
+            engine: self.engine.clone(),
+            interrupted: Arc::clone(&self.interrupted),
+        }
     }
 
     /// Compiles a `wasm32-wasi` module from bytes, loading a cached compiled
@@ -51,12 +104,12 @@ impl WasiRunner {
     pub fn from_bytes_cached(bytes: &[u8], cache_dir: &Path) -> Result<Self> {
         use sha2::{Digest, Sha256};
 
-        let engine = Engine::default();
+        let engine = command_engine()?;
         let wasm_sha256: [u8; 32] = Sha256::digest(bytes).into();
         let module =
             wanix_module_cache::load_or_compile(&engine, bytes, &wasm_sha256, cache_dir)
                 .map_err(|err| Error::msg(format!("failed to compile wasm module: {err:#}")))?;
-        Ok(Self { engine, module })
+        Ok(Self::new(engine, module))
     }
 
     /// Runs the module's `_start` entry with WASI backed by `config`'s namespace.
@@ -73,6 +126,14 @@ impl WasiRunner {
         let ctx = WasiCtx::try_new(config)
             .map_err(|err| Error::msg(format!("invalid WASI config: {err:?}")))?;
         let mut store = Store::new(&self.engine, WasiState::new(ctx, clock_ns));
+        // One epoch tick kills the guest. Arm the deadline BEFORE checking the
+        // interrupt flag: an interrupt the check misses then necessarily bumped
+        // the epoch after the deadline was armed, so it still trips.
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_trap();
+        if self.interrupted.load(Ordering::SeqCst) {
+            return Err(Error::msg("wasm task interrupted before start"));
+        }
 
         let mut linker = Linker::new(&self.engine);
         wanix_wasi_host::add_to_linker(&mut linker)?;

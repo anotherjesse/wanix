@@ -5,13 +5,20 @@
 //! `#pipe` for byte channels between pipeline stages. The Wanix `wanix-wasm`
 //! driver wires this guest's fd 0/1/2 to the task's stdio.
 
-use std::collections::HashMap;
+mod poll;
+
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
+use std::os::wasi::io::AsRawFd;
 
 use wanix_sh::{
-    InputSource, NamespaceOps, OutputSink, ShellError, ShellResult, SpawnHandle, SpawnSpec,
-    run_shell,
+    InputSource, NamespaceOps, OutputSink, ShellError, ShellResult, SourceHandle, SourceWait,
+    SpawnHandle, SpawnSpec, run_shell,
 };
+
+/// The status reported for a child whose `#task/<id>/wait` reads `killed`
+/// (the distinct exit `ctl kill` records): POSIX `128 + SIGINT`.
+const KILLED_STATUS: i32 = 130;
 
 #[derive(Default)]
 struct WasiNamespace {
@@ -20,6 +27,30 @@ struct WasiNamespace {
     /// Unix "create the pipe before forking" move. Released by
     /// `pipe_write_all_and_close`.
     held_writers: HashMap<String, std::fs::File>,
+    /// Streaming `cat` sources held open by id (see `source_open`).
+    sources: HashMap<String, std::fs::File>,
+    next_source: u64,
+    /// Type-ahead: stdin bytes drained while watching for Ctrl-C during a
+    /// foreground command, served to the next `read_stdin`.
+    pending_stdin: VecDeque<u8>,
+}
+
+impl WasiNamespace {
+    fn source_file(&mut self, handle: &SourceHandle) -> ShellResult<&mut std::fs::File> {
+        self.sources
+            .get_mut(handle.id())
+            .ok_or_else(|| ShellError::Io("unknown streaming source".to_owned()))
+    }
+}
+
+/// Parses a child's `#task/<id>/wait` text; the kill-distinct `killed` exit
+/// maps to the POSIX-conventional 130.
+fn parse_exit_status(exit: &str) -> ShellResult<i32> {
+    if exit == "killed" {
+        return Ok(KILLED_STATUS);
+    }
+    exit.parse::<i32>()
+        .map_err(|_| ShellError::Io(format!("invalid exit status {exit:?}")))
 }
 
 impl NamespaceOps for WasiNamespace {
@@ -40,6 +71,14 @@ impl NamespaceOps for WasiNamespace {
     }
 
     fn read_stdin(&mut self, buf: &mut [u8]) -> ShellResult<usize> {
+        // Serve type-ahead drained during a foreground command first.
+        if !self.pending_stdin.is_empty() {
+            let len = buf.len().min(self.pending_stdin.len());
+            for slot in buf.iter_mut().take(len) {
+                *slot = self.pending_stdin.pop_front().expect("pending byte");
+            }
+            return Ok(len);
+        }
         // WASI fd_read on fd 0; the host parks until the backing device
         // (e.g. #term/<id>/program) has bytes, so this is a true blocking read.
         std::io::stdin()
@@ -155,9 +194,60 @@ impl NamespaceOps for WasiNamespace {
     fn spawn_wait(&mut self, handle: &SpawnHandle) -> ShellResult<i32> {
         // The wait file's read parks until the child records its exit.
         let path = format!("#task/{}/wait", handle.id());
-        let exit = read_service(&path)?;
-        exit.parse::<i32>()
-            .map_err(|_| ShellError::Io(format!("invalid exit status {exit:?}")))
+        parse_exit_status(&read_service(&path)?)
+    }
+
+    fn spawn_wait_foreground(&mut self, handle: &SpawnHandle) -> ShellResult<i32> {
+        // Wait for the child while watching stdin: Ctrl-C is forwarded as a
+        // `kill` to the child's #task ctl (ADR 0003/0010 — the byte is
+        // terminal input, the shell decides, death belongs to #task); other
+        // typed bytes survive as type-ahead.
+        let path = format!("#task/{}/wait", handle.id());
+        let mut wait = std::fs::File::open(&path)
+            .map_err(|err| ShellError::Io(format!("{path}: {err}")))?;
+        let wait_fd = wait.as_raw_fd() as u32;
+        loop {
+            match poll::watch_fd_or_stdin(wait_fd, &mut self.pending_stdin)
+                .map_err(ShellError::Io)?
+            {
+                poll::Watch::Ready => break,
+                poll::Watch::CtrlC => {
+                    let _ = self.write_stdout(b"^C\n");
+                    write_service(&format!("#task/{}/ctl", handle.id()), "kill")?;
+                }
+            }
+        }
+        let mut exit = String::new();
+        wait.read_to_string(&mut exit)
+            .map_err(|err| ShellError::Io(format!("{path}: {err}")))?;
+        parse_exit_status(exit.trim())
+    }
+
+    fn source_open(&mut self, path: &str) -> ShellResult<SourceHandle> {
+        let file = std::fs::File::open(path)
+            .map_err(|err| ShellError::Io(format!("{path}: {err}")))?;
+        self.next_source += 1;
+        let id = self.next_source.to_string();
+        self.sources.insert(id.clone(), file);
+        Ok(SourceHandle::new(id))
+    }
+
+    fn source_read(&mut self, handle: &SourceHandle, buf: &mut [u8]) -> ShellResult<usize> {
+        self.source_file(handle)?
+            .read(buf)
+            .map_err(|err| ShellError::Io(err.to_string()))
+    }
+
+    fn source_close(&mut self, handle: SourceHandle) {
+        self.sources.remove(handle.id());
+    }
+
+    fn source_wait_cancellable(&mut self, handle: &SourceHandle) -> ShellResult<SourceWait> {
+        let fd = self.source_file(handle)?.as_raw_fd() as u32;
+        match poll::watch_fd_or_stdin(fd, &mut self.pending_stdin).map_err(ShellError::Io)? {
+            poll::Watch::Ready => Ok(SourceWait::Ready),
+            poll::Watch::CtrlC => Ok(SourceWait::Cancelled),
+        }
     }
 }
 

@@ -43,6 +43,10 @@ impl File for ControlFile {
                 self.table.start_detached(self.task.id())?;
                 self.data.clear();
             }
+            ControlCommand::Kill => {
+                self.task.kill()?;
+                self.data.clear();
+            }
             ControlCommand::Bind {
                 source,
                 fd,
@@ -71,6 +75,8 @@ enum ControlCommand {
     /// Must arrive in one write — a write of exactly `start` fires the
     /// synchronous start immediately (the incremental-write contract).
     StartDetached,
+    /// `kill`: request the task's death (see [`Task::kill`]).
+    Kill,
     Bind {
         source: String,
         fd: Fd,
@@ -79,7 +85,7 @@ enum ControlCommand {
 }
 
 fn parse_control_command(task: &Task, command: &str) -> FsResult<ControlCommand> {
-    if let Some(command) = parse_start_command(command) {
+    if let Some(command) = parse_verb_command(command) {
         return Ok(command);
     }
 
@@ -89,18 +95,18 @@ fn parse_control_command(task: &Task, command: &str) -> FsResult<ControlCommand>
     parse_complete_control_command(task, &parts)
 }
 
-fn parse_start_command(command: &str) -> Option<ControlCommand> {
-    if command.is_empty() {
-        return Some(ControlCommand::Pending);
+/// Parses the bare control verbs (`start`, `kill`), treating an incomplete
+/// prefix as pending per the incremental-write contract.
+fn parse_verb_command(command: &str) -> Option<ControlCommand> {
+    match command {
+        "" => Some(ControlCommand::Pending),
+        "start" => Some(ControlCommand::Start),
+        "kill" => Some(ControlCommand::Kill),
+        prefix if "start".starts_with(prefix) || "kill".starts_with(prefix) => {
+            Some(ControlCommand::Pending)
+        }
+        _ => None,
     }
-    if !"start".starts_with(command) {
-        return None;
-    }
-    Some(if command == "start" {
-        ControlCommand::Start
-    } else {
-        ControlCommand::Pending
-    })
 }
 
 fn parse_control_parts(command: &str) -> FsResult<Option<Vec<String>>> {

@@ -33,8 +33,15 @@ const MOUNT_LABEL: &str = "/n/remote";
 pub(super) enum MountCommand {
     /// List a directory at `path` (default the mount root).
     Ls { addr: String, path: String },
-    /// Print the bytes of the file at `path`.
-    Cat { addr: String, path: String },
+    /// Print the bytes of the file at `path`. With `follow`, stream
+    /// incrementally on one open handle with no byte cap, exiting only at
+    /// end-of-file or on error (Ctrl-C is plain process exit) — the consumer
+    /// for never-EOF device streams (`#pipe/<id>/data`, `#task/<id>/wait`).
+    Cat {
+        addr: String,
+        path: String,
+        follow: bool,
+    },
     /// Write `text` to the file at `path`, creating or truncating it.
     Write {
         addr: String,
@@ -67,9 +74,15 @@ fn parse_ls(rest: &[OsString]) -> Result<MountCommand, CliError> {
 }
 
 fn parse_cat(rest: &[OsString]) -> Result<MountCommand, CliError> {
-    let addr = mount_addr(rest.first(), "mount-cat")?;
-    let path = required_path_arg(rest.get(1), "mount-cat")?;
-    Ok(MountCommand::Cat { addr, path })
+    // `--follow` may appear anywhere among the operands.
+    let operands: Vec<&OsString> = rest
+        .iter()
+        .filter(|arg| arg.to_str() != Some("--follow"))
+        .collect();
+    let follow = operands.len() != rest.len();
+    let addr = mount_addr(operands.first().copied(), "mount-cat")?;
+    let path = required_path_arg(operands.get(1).copied(), "mount-cat")?;
+    Ok(MountCommand::Cat { addr, path, follow })
 }
 
 fn parse_write(rest: &[OsString]) -> Result<MountCommand, CliError> {
@@ -125,7 +138,10 @@ pub(super) fn run_mount_command(command: MountCommand) -> Result<CliOutput, CliE
             let session = mount_namespace(&addr)?;
             ops::mount_ls(&session.namespace, &mount_path(&path)?)
         }
-        MountCommand::Cat { addr, path } => {
+        MountCommand::Cat { follow: true, .. } => Err(CliError::usage(
+            "mount-cat --follow requires live process IO; use the wanix-rust binary",
+        )),
+        MountCommand::Cat { addr, path, .. } => {
             let session = mount_namespace(&addr)?;
             ops::mount_cat(&session.namespace, &mount_path(&path)?)
         }
@@ -134,6 +150,32 @@ pub(super) fn run_mount_command(command: MountCommand) -> Result<CliOutput, CliE
             ops::mount_write(&session.namespace, &mount_path(&path)?, text.as_bytes())
         }
     }
+}
+
+/// Runs `mount-cat --follow` as a streaming command: chunks flow to the live
+/// process stdout as they arrive on one open handle, with no byte cap, until
+/// end-of-file or an error. Returns `Ok(None)` when the invocation is not a
+/// follow (the collected `mount-cat` path then handles it).
+///
+/// # Errors
+///
+/// Returns a CLI error when parsing, dialing, binding, or streaming fails.
+pub(super) fn run_mount_cat_follow_streaming(
+    rest: &[std::ffi::OsString],
+    stdout: &mut dyn std::io::Write,
+) -> Result<Option<i32>, CliError> {
+    let MountCommand::Cat {
+        addr,
+        path,
+        follow: true,
+    } = parse_mount_command("mount-cat", rest)?
+    else {
+        return Ok(None);
+    };
+    // The session (and its iroh keepalive, if any) must outlive the stream.
+    let session = mount_namespace(&addr)?;
+    ops::mount_cat_follow(&session.namespace, &mount_path(&path)?, stdout)?;
+    Ok(Some(0))
 }
 
 /// A live mount: a namespace with the remote bound at `/n/remote`, plus the
@@ -238,4 +280,15 @@ pub(crate) fn run_mount_op_for_tests(
             ops::mount_write(namespace, &mount_path(path)?, text.as_bytes())
         }
     }
+}
+
+/// Runs the streaming follow loop against an already-built namespace, so tests
+/// exercise the exact loop the CLI runs over a real loopback mount.
+#[cfg(test)]
+pub(crate) fn run_mount_cat_follow_for_tests(
+    namespace: &Namespace,
+    path: &str,
+    stdout: &mut dyn std::io::Write,
+) -> Result<(), CliError> {
+    ops::mount_cat_follow(namespace, &mount_path(path)?, stdout)
 }

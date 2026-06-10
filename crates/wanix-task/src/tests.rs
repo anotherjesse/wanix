@@ -1038,3 +1038,132 @@ fn noop_driver_is_available_for_early_cycles() {
     table.start(task.id()).unwrap();
     assert_eq!(task.exit(), "");
 }
+
+// ---- kill (`#task/<id>/ctl kill`, ADR 0010) ------------------------------
+
+/// A trivial open file used to observe fd release on kill.
+#[derive(Debug)]
+struct NullFile;
+
+impl File for NullFile {
+    fn read(&mut self, _buf: &mut [u8]) -> wanix_fs::FsResult<usize> {
+        Ok(0)
+    }
+    fn write(&mut self, buf: &[u8]) -> wanix_fs::FsResult<usize> {
+        Ok(buf.len())
+    }
+    fn metadata(&self) -> wanix_fs::FsResult<Metadata> {
+        Ok(Metadata::new(FileType::File, 0, 0o666))
+    }
+}
+
+#[test]
+fn ctl_kill_before_start_records_killed_exit_without_running() {
+    let table = TaskTable::new();
+    let driver = Arc::new(CountingDriver::new());
+    table.register_driver("qjs", driver.clone()).unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    task.insert_fd(
+        Fd::STDOUT,
+        Box::new(NullFile),
+        NormalizedPath::new("out").unwrap(),
+    )
+    .unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    write_file(&taskfs, "self/ctl", b"kill");
+
+    assert_eq!(task.exit(), "killed", "killed exit is observable");
+    assert_eq!(read_file(&taskfs, "self/wait"), "killed\n");
+    assert_eq!(driver.starts(), 0, "the driver never ran");
+    assert!(task.fd_numbers().is_empty(), "kill released the fds");
+
+    // The kill claimed the task's one start: a later start is an honest error.
+    let result = table.start(task.id());
+    assert!(result.is_err(), "a killed task must not start");
+    assert_eq!(driver.starts(), 0);
+}
+
+#[test]
+fn kill_after_exit_is_a_noop() {
+    let table = TaskTable::new();
+    let driver = Arc::new(CountingDriver::new());
+    table.register_driver("qjs", driver.clone()).unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    table.start(task.id()).unwrap();
+    assert_eq!(task.exit(), "0");
+
+    task.kill().unwrap();
+    assert_eq!(task.exit(), "0", "an exited task keeps its real exit");
+    assert!(
+        !task.kill_requested(),
+        "kill on an exited task is a pure no-op"
+    );
+}
+
+#[test]
+fn ctl_kill_accepts_incremental_writes() {
+    // The incremental-write contract: `ki` is pending, the completing `ll`
+    // fires the kill — mirroring how `start` parses.
+    let table = TaskTable::new();
+    table.register_noop_driver("noop").unwrap();
+    let task = table.allocate_root("noop").unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    let mut ctl = taskfs
+        .open(
+            &NormalizedPath::new("self/ctl").unwrap(),
+            OpenOptions {
+                write: true,
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+    ctl.write(b"ki").unwrap();
+    assert_eq!(task.exit(), "", "a kill prefix must stay pending");
+    ctl.write(b"ll").unwrap();
+    assert_eq!(task.exit(), "killed");
+}
+
+#[test]
+fn kill_on_running_task_without_interrupt_seam_only_flags_the_request() {
+    // A driver that armed no interrupt hook (e.g. qjs today) cannot be
+    // stopped mid-run; the request stays observable and the real exit wins.
+    let task = TaskTable::new().allocate_root("auto").unwrap();
+    assert!(task.try_mark_started().unwrap());
+
+    task.kill().unwrap();
+    assert!(task.kill_requested(), "the request is observable");
+    assert_eq!(task.exit(), "", "no exit is fabricated for a live run");
+
+    task.set_exit("0").unwrap();
+    assert_eq!(task.exit(), "0");
+}
+
+#[test]
+fn arm_interrupt_fires_immediately_when_kill_already_requested() {
+    // The startup race: kill lands after the start was claimed but before the
+    // driver armed its hook. Arming must deliver the missed interrupt.
+    let task = TaskTable::new().allocate_root("auto").unwrap();
+    assert!(task.try_mark_started().unwrap());
+    task.kill().unwrap();
+
+    let fired = Arc::new(AtomicUsize::new(0));
+    let observed = fired.clone();
+    task.arm_interrupt(Arc::new(move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+    }))
+    .unwrap();
+    assert_eq!(
+        fired.load(Ordering::SeqCst),
+        1,
+        "missed interrupt delivered"
+    );
+
+    // A later kill invokes the armed hook again; disarm stops delivery.
+    task.kill().unwrap();
+    assert_eq!(fired.load(Ordering::SeqCst), 2);
+    task.disarm_interrupt();
+    task.kill().unwrap();
+    assert_eq!(fired.load(Ordering::SeqCst), 2);
+}

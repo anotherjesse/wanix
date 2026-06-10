@@ -51,6 +51,36 @@ pub(super) fn mount_cat(
     Ok(CliOutput::new(bytes, Vec::new(), 0))
 }
 
+/// Streams the file at `path` to `stdout` incrementally until end-of-file.
+///
+/// One open handle, no byte cap: each chunk is written and flushed as the
+/// server delivers it, so a never-EOF device stream (`#pipe/<id>/data`,
+/// `#task/<id>/wait`) is consumable live — the read simply parks until the
+/// remote has bytes. The loop ends only at EOF or on an error; interrupting a
+/// stream that never ends is plain process exit (Ctrl-C).
+pub(super) fn mount_cat_follow(
+    namespace: &Namespace,
+    path: &NormalizedPath,
+    stdout: &mut dyn std::io::Write,
+) -> Result<(), CliError> {
+    let mut file = namespace
+        .open(path, OpenOptions::read())
+        .map_err(|error| CliError::new(format!("mount-cat failed to open: {error}"), 1))?;
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let read = file
+            .read(&mut chunk)
+            .map_err(|error| CliError::new(format!("mount-cat failed to read: {error}"), 1))?;
+        if read == 0 {
+            return Ok(());
+        }
+        stdout
+            .write_all(&chunk[..read])
+            .and_then(|()| stdout.flush())
+            .map_err(|error| CliError::new(format!("mount-cat failed to write: {error}"), 1))?;
+    }
+}
+
 /// Writes `text` to the file at `path`, creating or truncating it.
 pub(super) fn mount_write(
     namespace: &Namespace,

@@ -4,8 +4,8 @@ use std::io::{Read, Write};
 mod fd;
 
 use crate::{
-    CliError, agent_exec_server, app, cpu, mesh, p9_stdio, qemu, qjs_term, run_collected, serve,
-    tool, volume, write_process_output,
+    CliError, agent_exec_server, app, cpu, mesh, mount, p9_stdio, qemu, qjs_term, run_collected,
+    serve, tool, volume, write_process_output,
 };
 
 /// Unix fd pair used by terminal-aware CLI entrypoints.
@@ -138,6 +138,9 @@ fn run_streaming_command(
             serve::parse_serve_command(rest)?,
             io.stderr,
         )?)),
+        // `mount-cat --follow` streams a (possibly never-EOF) remote file to
+        // the live stdout; a plain `mount-cat` falls through to collected.
+        Some("mount-cat") => mount::run_mount_cat_follow_streaming(rest, io.stdout),
         // `volume serve` parks (one mesh endpoint per volume); `volume create`/`ls`
         // are filesystem-only and fall through to the collected path.
         Some("volume") => run_volume_streaming_command(rest, io),

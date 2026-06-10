@@ -14,6 +14,7 @@ pub struct ShellState {
     cwd: String,
     env: BTreeMap<String, String>,
     last_status: i32,
+    interactive: bool,
 }
 
 impl Default for ShellState {
@@ -22,6 +23,7 @@ impl Default for ShellState {
             cwd: ".".to_owned(),
             env: BTreeMap::new(),
             last_status: 0,
+            interactive: false,
         }
     }
 }
@@ -73,6 +75,20 @@ impl ShellState {
     /// Iterates the environment in sorted key order.
     pub fn env_iter(&self) -> impl Iterator<Item = (&String, &String)> {
         self.env.iter()
+    }
+
+    /// Whether this run is an interactive REPL session (stdin is a terminal
+    /// byte stream the user is typing into). Drives terminal-bound behavior:
+    /// streaming `cat` with Ctrl-C cancellation, and Ctrl-C forwarding to a
+    /// foreground child. `-c` runs stay non-interactive.
+    #[must_use]
+    pub fn interactive(&self) -> bool {
+        self.interactive
+    }
+
+    /// Marks this run as an interactive REPL session.
+    pub fn set_interactive(&mut self, interactive: bool) {
+        self.interactive = interactive;
     }
 
     /// The last pipeline's exit status (drives `$?` and `&&`/`||`).

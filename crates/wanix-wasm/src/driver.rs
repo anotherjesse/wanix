@@ -1,7 +1,9 @@
 //! Wanix task driver for compiled `wasm32-wasi` command tasks.
 
+use std::sync::Arc;
+
 use wanix_fs::{FileSystem, FsError, FsResult, NormalizedPath, OpenOptions};
-use wanix_task::{Task, TaskDriver, task_command, task_program_for_check};
+use wanix_task::{KILLED_EXIT, Task, TaskDriver, task_command, task_program_for_check};
 
 use crate::WasiRunner;
 use crate::task_stdio::task_wasi_config;
@@ -39,6 +41,9 @@ impl TaskDriver for WasmTaskDriver {
         task.close_all_fds();
         match result {
             Ok(code) => task.set_exit(code.to_string()),
+            // A run unwound by `#task/<id>/ctl kill` (the epoch interrupt) is
+            // not a driver failure: record the distinct killed exit.
+            Err(_) if task.kill_requested() => task.set_exit(KILLED_EXIT),
             Err(err) => {
                 let _ = task.set_exit("1");
                 Err(err)
@@ -52,10 +57,17 @@ fn run_wasm_task(task: &Task) -> FsResult<i32> {
     let bytes = read_namespace_bytes(&task.namespace(), &command.program)?;
     let runner = WasiRunner::from_bytes_cached(&bytes, &crate::module_cache_dir())
         .map_err(|err| FsError::Other(format!("failed to compile wasm task: {err:?}")))?;
+    // Arm the kill seam for the duration of the run (ADR 0010: `ctl kill`
+    // epoch-trips the guest; one runner runs one task, so the interrupt is
+    // task-scoped).
+    let interrupter = runner.interrupter();
+    task.arm_interrupt(Arc::new(move || interrupter.interrupt()))?;
     let config = task_wasi_config(task);
-    runner
+    let result = runner
         .run(config)
-        .map_err(|err| FsError::Other(format!("wasm task failed: {err:?}")))
+        .map_err(|err| FsError::Other(format!("wasm task failed: {err:?}")));
+    task.disarm_interrupt();
+    result
 }
 
 fn read_namespace_bytes(namespace: &impl FileSystem, path: &NormalizedPath) -> FsResult<Vec<u8>> {
@@ -689,6 +701,99 @@ mod tests {
         assert_eq!(out, "HELLO MESH", "tool output flows through the pipeline");
     }
 
+    // ---- kill (`#task/<id>/ctl kill`, ADR 0010) --------------------------
+
+    #[test]
+    fn ctl_kill_interrupts_a_spinning_wasm_task_and_releases_fds() {
+        // The kill proof: a guest spinning in pure wasm code (no syscalls to
+        // return from) dies only through epoch interruption. The spinner's
+        // stdout is a #pipe write end, so the fd-release half of the contract
+        // is observable as pipe EOF.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("guest.wasm", RUST_GUEST).expect("seed wasm");
+        let pipe = Arc::new(PipeDevice::new());
+        let pipe_id = pipe.alloc().expect("alloc pipe");
+
+        let mut ns = namespace_on(&fs);
+        ns.bind(pipe.clone(), ".", "#pipe", BindOptions::default())
+            .expect("bind #pipe");
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let task = table
+            .allocate_root_with_namespace("auto", ns)
+            .expect("allocate task");
+        task.set_cmd("guest.wasm --spin").expect("set cmd");
+        task.bind_fd_from_namespace_with(
+            format!("#pipe/{pipe_id}/data"),
+            Fd::STDOUT,
+            OpenOptions {
+                write: true,
+                ..OpenOptions::default()
+            },
+        )
+        .expect("bind stdout to pipe");
+
+        // Hold the pipe's read end across the kill: the guest's hello proves
+        // it is live IN guest code, and the post-kill read proves fd release.
+        let mut reader = pipe
+            .open(
+                &NormalizedPath::new(format!("{pipe_id}/data")).expect("path"),
+                OpenOptions::read(),
+            )
+            .expect("open pipe reader");
+        table.start_detached(task.id()).expect("start spinner");
+        let mut hello = [0u8; 9];
+        let mut seen = 0;
+        while seen < hello.len() {
+            seen += reader.read(&mut hello[seen..]).expect("read hello");
+        }
+        assert_eq!(&hello, b"spinning\x0a", "guest is live in its spin loop");
+
+        // Kill from this thread through the control file, then observe the
+        // killed exit within a hard deadline (the regression mode is a task
+        // that spins forever).
+        let taskfs = table.filesystem_for(task.id());
+        let mut ctl = taskfs
+            .open(
+                &NormalizedPath::new("self/ctl").expect("path"),
+                OpenOptions {
+                    write: true,
+                    ..OpenOptions::default()
+                },
+            )
+            .expect("open ctl");
+        ctl.write(b"kill").expect("write kill");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while task.exit().is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "kill did not stop the spinning guest"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(task.exit(), "killed", "the killed exit is distinct");
+
+        // Fd release on death: the spinner's pipe writer dropped, so the
+        // reader observes end-of-file instead of blocking forever.
+        let mut rest = [0u8; 16];
+        assert_eq!(reader.read(&mut rest).expect("post-kill read"), 0);
+    }
+
+    #[test]
+    fn kill_does_not_disturb_a_normal_exit() {
+        // Normal-exit regression next to the kill machinery: an uninterrupted
+        // run still records the guest's own exit code.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("guest.wasm", RUST_GUEST).expect("seed wasm");
+        let task = wasm_task(namespace_on(&fs), "guest.wasm --echo hi");
+        WasmTaskDriver::new().start(&task).expect("run guest");
+        assert_eq!(task.exit(), "0");
+        assert!(!task.kill_requested());
+    }
+
     // ---- interactive REPL over #term ------------------------------------
 
     use wanix_term::TermDevice;
@@ -733,6 +838,136 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn repl_streaming_cat_of_a_live_pipe_writes_through_and_cancels_on_ctrl_c() {
+        // The interactive `cat` proof: a never-EOF source (a #pipe with a held
+        // writer) streams to the terminal chunk by chunk BEFORE any EOF, and
+        // Ctrl-C cancels the builtin (status 130, fresh prompt) instead of
+        // wedging the session.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell.wasm");
+        let pipe = Arc::new(PipeDevice::new());
+        let pipe_id = pipe.alloc().expect("alloc pipe");
+        let mut ns = namespace_on(&fs);
+        ns.bind(pipe.clone(), ".", "#pipe", BindOptions::default())
+            .expect("bind #pipe");
+
+        // Held writer: the pipe never reports EOF during the test.
+        let mut writer = pipe
+            .open(
+                &NormalizedPath::new(format!("{pipe_id}/data")).expect("path"),
+                OpenOptions {
+                    write: true,
+                    ..OpenOptions::default()
+                },
+            )
+            .expect("open pipe writer");
+        writer.write(b"alpha ").expect("feed alpha");
+
+        let term = TermDevice::new();
+        let id = term.alloc().expect("alloc terminal");
+        let task = wasm_task(ns, "shell.wasm");
+        for fd in [Fd::STDIN, Fd::STDOUT, Fd::STDERR] {
+            let file = term
+                .open(&term_path(&id, "program"), OpenOptions::read_write())
+                .expect("open program side");
+            task.insert_fd(fd, file, term_path(&id, "program"))
+                .expect("install fd");
+        }
+        let shell = task.clone();
+        let session = std::thread::spawn(move || WasmTaskDriver::new().start(&shell));
+
+        let mut seen = Vec::new();
+        read_terminal_until(&term, &id, &mut seen, "$ ");
+        type_into_terminal(
+            &term,
+            &id,
+            format!("cat '#pipe/{pipe_id}/data'\r").as_bytes(),
+        );
+        // Bytes written before the command flow through immediately…
+        read_terminal_until(&term, &id, &mut seen, "alpha ");
+        // …and bytes fed while cat is parked stream too: write-through, no EOF.
+        writer.write(b"beta ").expect("feed beta");
+        read_terminal_until(&term, &id, &mut seen, "beta ");
+
+        // Ctrl-C cancels the cat: ^C echo, then a fresh [130] prompt.
+        type_into_terminal(&term, &id, b"\x03");
+        read_terminal_until(&term, &id, &mut seen, "^C");
+        read_terminal_until(&term, &id, &mut seen, "[130]");
+
+        type_into_terminal(&term, &id, b"\x04");
+        session
+            .join()
+            .expect("session thread")
+            .expect("shell task ran");
+        assert_eq!(task.exit(), "130", "Ctrl-D exits with the cat's status");
+        drop(writer);
+    }
+
+    #[test]
+    fn repl_ctrl_c_kills_a_spinning_foreground_child() {
+        // The interactive-shell kill proof: Ctrl-C while a foreground external
+        // spins is forwarded by the guest REPL as `#task/<id>/ctl kill`; the
+        // child records the distinct killed exit and the prompt returns with
+        // status 130.
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell.wasm");
+        fs.create_dir_all("bin").expect("make bin");
+        fs.write_file("bin/spinner.wasm", RUST_GUEST)
+            .expect("seed spinner");
+
+        let term = TermDevice::new();
+        let id = term.alloc().expect("alloc terminal");
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let shell = table
+            .allocate_root_with_namespace("auto", namespace_with_pipe(&fs))
+            .expect("allocate shell");
+        shell.set_cmd("shell.wasm").expect("set cmd");
+        for fd in [Fd::STDIN, Fd::STDOUT, Fd::STDERR] {
+            let file = term
+                .open(&term_path(&id, "program"), OpenOptions::read_write())
+                .expect("open program side");
+            shell
+                .insert_fd(fd, file, term_path(&id, "program"))
+                .expect("install fd");
+        }
+        table.start_detached(shell.id()).expect("start shell");
+
+        let mut seen = Vec::new();
+        read_terminal_until(&term, &id, &mut seen, "$ ");
+        type_into_terminal(&term, &id, b"spinner --spin\r");
+        // Inherited stdout: the spinner's hello proves it is live in guest code.
+        read_terminal_until(&term, &id, &mut seen, "spinning");
+
+        type_into_terminal(&term, &id, b"\x03");
+        read_terminal_until(&term, &id, &mut seen, "^C");
+        read_terminal_until(&term, &id, &mut seen, "[130]");
+
+        let spinner = table
+            .tasks()
+            .into_iter()
+            .find(|task| task.cmd().contains("--spin"))
+            .expect("spinner child task");
+        assert_eq!(spinner.exit(), "killed", "the child died the kill way");
+
+        // Ctrl-D ends the session; the shell exits with the last status.
+        type_into_terminal(&term, &id, b"\x04");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while shell.exit().is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "shell did not exit after Ctrl-D"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(shell.exit(), "130");
     }
 
     #[test]

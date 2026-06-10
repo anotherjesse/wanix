@@ -19,6 +19,10 @@ pub(super) struct TaskState {
     pub(super) exit: String,
     /// Whether a start has been accepted: a task runs at most once.
     pub(super) started: bool,
+    /// Whether a kill has been requested (see [`Task::kill`]).
+    pub(super) kill_requested: bool,
+    /// The running driver's armed guest interrupter, if any.
+    pub(super) interrupt_hook: Option<super::InterruptHook>,
     pub(super) namespace: Namespace,
     pub(super) fds: FdTable,
 }
@@ -35,6 +39,8 @@ impl TaskState {
             dir: spec.cwd.clone(),
             exit: String::new(),
             started: false,
+            kill_requested: false,
+            interrupt_hook: None,
             spec,
             namespace,
             fds: FdTable::new(),
@@ -58,6 +64,8 @@ impl TaskState {
             dir: NormalizedPath::new(".").expect("root path is valid"),
             exit: String::new(),
             started: false,
+            kill_requested: false,
+            interrupt_hook: None,
             namespace,
             fds: FdTable::new(),
         }
