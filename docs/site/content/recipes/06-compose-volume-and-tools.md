@@ -20,6 +20,7 @@ seeAlso:
   - concepts/wanix-sh
   - recipes/02-mount-remote-peer
   - recipes/08-real-tools-with-config
+  - recipes/10-name-your-world
 prerequisites:
   - concepts/key-is-the-address
   - concepts/wanix-sh
@@ -141,6 +142,23 @@ job: /n/sha256/jobs/jadf6716e90d09c55
 sha256sum ~/.wanix/volumes/demo-notes/HELLO.txt
 # 46faf38c2de00014c7d96ee93363da026cab6ca90f12f7e4f43ed49e5c01ee49  .../HELLO.txt
 ```
+
+### Or: skip the pasting and use names
+
+The ticket dance above is the no-catalog fallback. Add `--register NAME` to each serve (`volume serve --volume demo-notes ... --register demo-notes`, `tool serve --tool upper ... --register upper`) and the composition line shrinks to names that resolve through `~/.wanix/catalog` at launch — executed verbatim:
+
+```sh
+wanix-rust sh -c 'cat /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt' \
+  --mount-mesh demo-notes=/vol/notes --mount-mesh upper=/n/upper
+```
+
+```text
+wanix-rust: name 'demo-notes' -> iroh://a4166b05...?addr=127.0.0.1:40213 (resolved through the catalog at launch)
+wanix-rust: name 'upper' -> iroh://8c7a7009...?addr=127.0.0.1:54872 (resolved through the catalog at launch)
+job: /n/upper/jobs/j5fc61d9fe59708e6
+```
+
+Same result, no hex; the stderr audit lines record what each name resolved to. The full naming story — `catalog ls` liveness, recipes, the fresh-machine rebuild — is [Recipe 10](/recipes/10-name-your-world).
 
 ## 5. The raw job protocol (no `tool` sugar)
 

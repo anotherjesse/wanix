@@ -31,6 +31,7 @@ honestLimits:
   - "v1 delivers stdout/stderr/exit as a single batch after the remote task's start returns, not incrementally streamed."
   - "CpuEvent::Cancel stops the caller draining the control stream; it does not stop the remote computation (the driver has no abort hook)."
   - "The exec plane is LOCAL-TRUST / grant-allowlisted only; remote code execution is not exposed to untrusted public peers, and there are no hard CPU/memory limits yet (only a concurrent-job cap and per-op deadlines)."
+  - "cpu --node takes an iroh:// ticket only — catalog names do not resolve here (executed: `cpu --node nodeb` is refused with \"mesh address must start with iroh://: nodeb\"); names cover the mount surfaces (recipe 10)."
 canonicalCaveatFor: []
 ---
 

@@ -463,6 +463,27 @@ tests.
   (`crates/wanix-cli/src/mesh/mounts.rs`) carried by `qjs-shell`, `wasm`, and
   `sh`. Walkthrough: `docs/site/content/learn/compose-volumes-and-tools.md` and
   recipe 06 (tested transcript).
+- Names: the catalog + recipes layer (ADR 0007 Layer 1, no ACLs):
+  `wanix-rust catalog add/show/rm/ls` keeps one pretty-printed JSON entry per
+  NAME under `~/.wanix/catalog/` (NAME grammar lowercase `[a-z0-9-]`,
+  alphanumeric ends — never spellable as a ticket or path, so every surface
+  routes on spelling alone); `catalog ls` probes liveness with one bounded
+  dial per entry (online/offline/unknown; `--no-probe` lists instantly).
+  Every resource serve takes `--register NAME` (one endpoint registers as
+  NAME, several as `NAME-<resource>`; re-announce overwrites, refreshing the
+  route hint). A bare NAME resolves through the catalog at LAUNCH time —
+  logged once per name on stderr — on `--mount-mesh` (sh/wasm/qjs-shell),
+  `mount-ls/cat/write`, recipe binds, and `serve --bind` (the one fallback
+  context: no entry falls back to a relative dir; `./name` forces the dir);
+  `cpu --node` still takes tickets only. `recipe save/run` persists a
+  mount+run composition as TOML at `~/.wanix/recipes/<name>.recipe` with
+  resolved addresses recorded as drift-check hints (drift warns loudly and
+  follows the catalog; a vanished entry falls back to the hint; no run line =
+  interactive sh over the mounts). Resolution never probes and names are
+  sugar over keys, never authority. Proofs: `crates/wanix-cli/src/catalog/
+  tests.rs` (pinned file format), `recipe/tests.rs`; walkthrough:
+  `docs/site/content/learn/name-your-world.md` and recipe 10 (executed
+  transcript, incl. the fresh-machine rebuild from copied catalog+recipes).
 - Guest-defined AppResources (`docs/appfs.md`; the ADR 0007 chatroom worked
   example, implemented): `wanix-rust app serve --app DIR --state DIR --listen
   IP:PORT` runs a manifest-declared qjs guest (`app.wanix.json`, the shared
@@ -677,9 +698,10 @@ more feature work.
   ADR 0006/0007 authorization layer (thread `aname` 1:1 vs a native
   scope-selection shape), not before. (a) and (b) are small cleanup-cycle items.
 - Job protocol / ToolFS remainder ([docs/toolfs.md](docs/toolfs.md) §Build
-  Slices): the catalog story is the open front door — ADR 0007's resource
-  catalog/naming layer (one entry per served volume/tool/app, addressed by
-  name instead of pasted tickets) has no implementation yet. The agent adapter
+  Slices): ADR 0007's Layer 1 catalog/naming shipped (the "Names" capability
+  bullet above); the open slices are name *exchange* (petnames between
+  people / shared catalogs), Layer 2+ authorization, threading names to
+  `cpu --node`, and `recipe ls/show/rm` verbs. The agent adapter
   is the other open slice, and `#agent`/`#cpu` convergence on the job grammar
   (a prompt is a job; `events` already exists on `#agent`) waits until those
   devices are next touched (ADR 0009 §Adopters). `--mount-mesh` still needs

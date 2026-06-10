@@ -43,7 +43,7 @@ wanix-rust serve --root /tmp/empty \
   --listen 127.0.0.1:7699
 ```
 
-`--bind NAME=SOURCE` (repeatable) composes, per NAME, one namespace from every source bound to it — static directories and dialed `iroh://` mesh mounts unioned at the root — and serves it at `http://NAME.localhost:PORT` by `Host`-header routing. `*.localhost` resolves to loopback by resolver convention, so there is nothing to configure; where it doesn't, `curl -H 'Host: chat.localhost'` is the same thing said explicitly. The bare host serves an index of bound names.
+`--bind NAME=SOURCE` (repeatable) composes, per NAME, one namespace from every source bound to it — static directories, dialed `iroh://` mesh mounts, and catalog names (a registered room makes the ticket line just `--bind chat=room`, resolved at launch — executed in [Recipe 09](/recipes/09-web-door-gateway)) unioned at the root — and serves it at `http://NAME.localhost:PORT` by `Host`-header routing. `*.localhost` resolves to loopback by resolver convention, so there is nothing to configure; where it doesn't, `curl -H 'Host: chat.localhost'` is the same thing said explicitly. The bare host serves an index of bound names.
 
 Binding the webapp's static files *and* the room's mesh ticket under one name is the move that matters: page and data share one origin, so the browser fetches `post`, `latest`, and `stream` with no CORS ceremony — the web client is static files plus `fetch()` against its own origin.
 

@@ -18,6 +18,7 @@ seeAlso:
   - concepts/capability-is-a-bind
   - concepts/send-agent-to-the-data
   - use-cases/personal-compute-mesh
+  - recipes/10-name-your-world
 prerequisites:
   - concepts/import-export-and-n
   - concepts/key-is-the-address
@@ -124,6 +125,20 @@ You can write back, too — `mount-write` truncates-or-creates a file at the pat
 ```sh
 wanix-rust mount-write "$NODE_B" work/note.txt 'written from A'
 ```
+
+Tired of `$NODE_B`? Give the peer a name in your local catalog and every `mount-*` verb takes the name instead — executed:
+
+```sh
+wanix-rust catalog add nodeb "$NODE_B" --description 'mesh node B'
+wanix-rust mount-cat nodeb work/dataset.txt
+```
+
+```text
+wanix-rust: name 'nodeb' -> iroh://11fd26…638a5?addr=127.0.0.1:5680 (resolved through the catalog at launch)
+data that only lives on node B
+```
+
+The ticket stays the truth (the name resolves through `~/.wanix/catalog` at launch, logged once on stderr); see [Recipe 10](/recipes/10-name-your-world) for the whole naming layer. One edge, executed: `cpu --node` still wants a ticket — `cpu --node nodeb` is refused with `mesh address must start with iroh://: nodeb`.
 
 ## 4. Run the `#cpu` job on B
 

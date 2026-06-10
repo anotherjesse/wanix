@@ -76,6 +76,8 @@ wanix-rust mount-cat "$NODE_B" work/dataset.txt
 # -> data that only lives on node B
 ```
 
+(Pasting `$NODE_B` everywhere is the no-catalog fallback. `wanix-rust catalog add nodeb "$NODE_B"` names the peer locally, and every `mount-*` verb then takes `nodeb` — resolved through `~/.wanix/catalog` at launch with a one-line stderr audit. Executed in [Recipe 02](/recipes/02-mount-remote-peer) and the full story in [Recipe 10](/recipes/10-name-your-world); `cpu --node` below still wants the ticket.)
+
 Those bytes never touched A's disk. They crossed a QUIC stream from B and deserialized through the mesh's import half on A. Because this is an `iroh://` mount between two Wanix nodes, the import is a `NativeFs` over the [native FileSystem-over-iroh wire](/concepts/missing-half-of-9p) (one `postcard`-framed stream for the read), not 9P — 9P is the foreign edge, reached over `tcp://`. **Now the name:** this is Plan 9 *import* — A bound B's exported namespace as a local `FileSystem`. The mount lands at `/n/remote` (`crates/wanix-cli/src/mount.rs:26`). See [the import half](/concepts/remotefs-import-half).
 
 ## Identity: the key is the address

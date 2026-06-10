@@ -131,12 +131,15 @@ function setNick(request, bodyText) {
   return {};
 }
 
-// post: one write is one message. Attribution is NEVER client-claimed: the
-// author is the transport-verified principal ("iroh:<hex>") stamped into the
-// request event by the host, and the timestamp is the host-stamped at_ms. If
-// the body arrives as JSON carrying its own `from`/author, only its `body`
-// text is kept and the claimed author is discarded.
+// post: one non-empty write is one message. Attribution is NEVER
+// client-claimed: the author is the transport-verified principal
+// ("iroh:<hex>") stamped into the request event by the host, and the
+// timestamp is the host-stamped at_ms. If the body arrives as JSON carrying
+// its own `from`/author, only its `body` text is kept and the claimed author
+// is discarded. A zero-length write is a flush, not a message (buffered-stdio
+// clients — e.g. a qjs verb's std file close — emit one on close); ignore it.
 function post(request, bodyText) {
+  if (bodyText.length === 0) return {};
   let body = bodyText;
   try {
     const claimed = JSON.parse(bodyText);

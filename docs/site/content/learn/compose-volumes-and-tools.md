@@ -169,7 +169,7 @@ That durability is ADR 0009's "survives caller death" promise actually crossing 
 
 ## Where this goes
 
-The full tested transcript — real tickets, real digests, and the failure modes (unreachable peer, a failed job) — is [Recipe 06](/recipes/06-compose-volume-and-tools). The job-directory idea stands alone in [jobs are files](/concepts/jobs-are-files). The catalog/pairing layer that would let you say `notes` instead of pasting a 64-hex ticket is ADR 0007's next slice, not yet shipped.
+The full tested transcript — real tickets, real digests, and the failure modes (unreachable peer, a failed job) — is [Recipe 06](/recipes/06-compose-volume-and-tools). The job-directory idea stands alone in [jobs are files](/concepts/jobs-are-files). And the ticket-pasting is now optional: ADR 0007's catalog layer shipped, so each serve can take `--register NAME` and the composition line becomes `wanix-rust sh -c '...' --mount-mesh demo-notes=/vol/notes --mount-mesh upper=/n/upper` — executed end to end in [Name your world](/learn/name-your-world) and [Recipe 10](/recipes/10-name-your-world). Tickets remain the no-catalog fallback and the thing a name resolves to.
 
 ## Status / honest limits
 

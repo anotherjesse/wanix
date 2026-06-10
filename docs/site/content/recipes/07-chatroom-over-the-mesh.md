@@ -21,6 +21,8 @@ seeAlso:
   - concepts/blocking-stream-eof-contract
   - recipes/06-compose-volume-and-tools
   - recipes/09-web-door-gateway
+  - recipes/10-name-your-world
+  - concepts/bin-verbs
 prerequisites:
   - concepts/key-is-the-address
 usedInFlows:
@@ -61,6 +63,8 @@ chatroom	iroh://71b44428...?addr=127.0.0.1:48171
 ```
 
 `iroh://71b44428...` is the room's persisted identity (`~/.wanix/app-identities/chatroom.key`, created on first serve); `?addr=` is a route hint. The very first start in a fresh environment takes ~25 s (debug build, cold module cache compiling the QuickJS wasm) before the ticket appears; subsequent starts take about a second. `--state /tmp/room` is the room's whole durable memory — the guest sees it at `/state`.
+
+Optional: add `--register room` and the serve also writes a catalog entry, so every `"$T"` below can be spelled `room` instead (`wanix-rust mount-cat room latest`, `--mount-mesh room`) — executed end to end in [Recipe 10](/recipes/10-name-your-world), along with the room's shipped `bin/` verbs (`room:post`, `room:watch`, `room:roster` — [bin verbs](/concepts/bin-verbs)). The ticket flow below is the no-catalog fallback and what a name resolves to.
 
 ## 2. Person A: mount, post, read
 

@@ -27,6 +27,7 @@ seeAlso:
   - recipes/07-chatroom-over-the-mesh
   - recipes/08-real-tools-with-config
   - recipes/09-web-door-gateway
+  - recipes/10-name-your-world
   - reference/contributor-landing
   - concepts/the-9p-contract
   - reference/crate-map-and-layering
@@ -128,6 +129,12 @@ Each request spawns a fresh qjs task; the count climbs anyway because the `KvDev
 ## Flow: Publish apps via the web door — *for Maya shipping it*
 
 **Goal:** give that room (or any file-shaped app) a browser audience: named origins by `Host` routing, SSE off a never-EOF stream, honest 503s. **Route:** [publish apps via the web door](../learn/publish-apps-via-web-door) → recipe [09](../recipes/09-web-door-gateway). The honest boundary up front: the gateway is ONE principal to the room — every web user posts as the gateway's key (per-user web identity is named follow-up work).
+
+---
+
+## Flow: Name your world — *for Maya settling in*
+
+**Goal:** stop pasting 64-hex tickets: register served resources under your own names, mount and compose by name, gain each mount's verbs (confined by construction), and rebuild the whole desk anywhere with a saved recipe. **Route:** [name your world](../learn/name-your-world) → [bin verbs](../concepts/bin-verbs) → recipe [10](../recipes/10-name-your-world). The honest boundary up front: the catalog is YOUR address book (ADR 0007 Layer 1 — no ACLs, no shared registry yet), and a name is sugar over a key, never authority.
 
 ---
 

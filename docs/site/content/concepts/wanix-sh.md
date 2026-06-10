@@ -48,6 +48,16 @@ wanix-rust wasm crates/wanix-wasm/fixtures/shell.wasm -c "echo '[1,2,3]' | jaq '
 
 `echo` is a builtin; `jaq` is an *external command* resolved from a `bin` directory and run as its own `#task`, fed by a real [`#pipe`](devices/pipe). No part of the shell knows what `jaq` is — it is [resolved like any command](shell-command-resolution).
 
+Both task kinds are first-class stages (ADR 0002): an interpreted `.js` external pipes into a compiled `.wasm` one through the same `#pipe`. Executed via the CLI entry, with a three-line qjs `gen.js` in the cwd:
+
+```sh
+wanix-rust sh -c "gen.js | jaq 'map(.+1)'"
+```
+
+```text
+[2,3,4]
+```
+
 ## The three stages
 
 1. **parse** (`syntax.rs`) — `brush-parser` turns the line into an AST. brush understands the full bash grammar but only *parses*; it never evaluates.

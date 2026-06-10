@@ -65,6 +65,8 @@ wanix-rust serve: serving /tmp/empty files with Wanix overlay
 wanix-rust serve: listening on http://127.0.0.1:7699/
 ```
 
+If the room registered itself in the catalog (`app serve ... --register room`, [Recipe 10](/recipes/10-name-your-world)), the ticket line collapses to `--bind chat=room` — executed: the serve printed `wanix-rust: name 'room' -> iroh://e1de10e6...?addr=... (resolved through the catalog at launch)` and the `POST /post` → `GET /latest` round trip below worked unchanged. `--bind` is the one *fallback* context: a name-spelled source with no catalog entry is treated as a relative directory (spell `./room` to force the directory when an entry exists).
+
 ## 2. The bare host is the name index
 
 ```sh

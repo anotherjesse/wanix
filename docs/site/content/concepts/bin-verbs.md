@@ -18,6 +18,8 @@ seeAlso:
   - concepts/host-not-ambient-authority
   - concepts/capability-is-a-bind
   - concepts/wanix-sh
+  - learn/name-your-world
+  - recipes/10-name-your-world
 prerequisites:
   - concepts/guest-defined-resources
   - concepts/wanix-sh

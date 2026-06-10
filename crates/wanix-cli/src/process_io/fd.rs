@@ -74,6 +74,10 @@ enum TerminalSessionRoute {
     Passthrough,
     QjsShell(qjs_term::QjsShellCommand),
     Sh(sh::ShCommand),
+    /// `sh -c LINE`: routing already parsed the command (and parsing resolves
+    /// catalog names, emitting the once-per-name audit line), so the collected
+    /// run reuses the parse instead of re-parsing — and re-resolving — it.
+    ShCollected(sh::ShCommand),
 }
 
 #[cfg(unix)]
@@ -87,6 +91,12 @@ fn run_with_qjs_shell_input(
         TerminalSessionRoute::Sh(command) => {
             let (stdin_fd, terminal_size_fd) = input_fds(input);
             sh::run_sh_session(command, stdin_fd, terminal_size_fd, io.stdin, io.stdout)
+        }
+        TerminalSessionRoute::ShCollected(command) => {
+            let output = sh::run_sh(command, io.stdin)?;
+            super::write_process_output(io.stdout, "stdout", output.stdout())?;
+            super::write_process_output(io.stderr, "stderr", output.stderr())?;
+            Ok(output.exit_code())
         }
         TerminalSessionRoute::QjsShell(command) => run_qjs_shell_with_input(command, io, input),
     }
@@ -108,9 +118,11 @@ fn terminal_session_route(args: &[OsString]) -> Result<TerminalSessionRoute, Cli
     }
     if command == "sh" {
         let parsed = sh::parse_sh_command(rest)?;
-        if parsed.line.is_none() {
-            return Ok(TerminalSessionRoute::Sh(parsed));
-        }
+        return Ok(if parsed.line.is_none() {
+            TerminalSessionRoute::Sh(parsed)
+        } else {
+            TerminalSessionRoute::ShCollected(parsed)
+        });
     }
     if command == "recipe"
         && let Some(session) = crate::recipe::interactive_recipe_session(rest)?
@@ -173,5 +185,36 @@ fn qjs_shell_streaming_io<'a>(io: &'a mut ProcessIo<'_>) -> QjsShellStreamingIo<
         process_stdin: io.stdin,
         process_stdout: io.stdout,
         process_stderr: io.stderr,
+    }
+}
+
+#[cfg(all(unix, test))]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::{TerminalSessionRoute, terminal_session_route};
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    /// `sh -c` routing must reuse the parse it already made: parsing resolves
+    /// catalog names (emitting the once-per-name stderr audit line), so a
+    /// Passthrough re-parse would resolve — and log — every name twice.
+    #[test]
+    fn sh_with_a_line_routes_to_the_collected_run_without_reparsing() {
+        let route = terminal_session_route(&args(&["sh", "-c", "echo hi"])).unwrap();
+        match route {
+            TerminalSessionRoute::ShCollected(command) => {
+                assert_eq!(command.line.as_deref(), Some("echo hi"));
+            }
+            _ => panic!("sh -c must route to ShCollected, not re-parse via Passthrough"),
+        }
+    }
+
+    #[test]
+    fn sh_without_a_line_routes_to_the_interactive_session() {
+        let route = terminal_session_route(&args(&["sh"])).unwrap();
+        assert!(matches!(route, TerminalSessionRoute::Sh(_)));
     }
 }

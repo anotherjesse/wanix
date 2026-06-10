@@ -27,7 +27,10 @@ seeAlso:
   - concepts/service-devices
   - recipes/07-chatroom-over-the-mesh
   - recipes/09-web-door-gateway
+  - recipes/10-name-your-world
   - learn/publish-apps-via-web-door
+  - learn/name-your-world
+  - concepts/bin-verbs
 prerequisites:
   - learn/js-outside-chrome
 usedInFlows: []
@@ -161,6 +164,8 @@ T='iroh://71b44428...?addr=127.0.0.1:48171'   # your full ticket from step 2
 wanix-rust mount-write "$T" post 'morning! mounted the room over the mesh'
 wanix-rust mount-cat "$T" latest
 ```
+
+(Serve with `--register room` and `"$T"` can be spelled `room` everywhere below; the room also ships shell verbs — `room:post`, `room:watch` — through its `bin/`. Both executed in [Recipe 10](/recipes/10-name-your-world) and [Name your world](/learn/name-your-world).)
 
 ```text
 {"at":1781080495768,"from":"(36469a42)","body":"morning! mounted the room over the mesh"}

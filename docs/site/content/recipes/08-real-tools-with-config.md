@@ -26,7 +26,7 @@ usedInFlows:
 honestLimits:
   - "Tool job state lives only while tool serve runs; retention TTLs bound how long a finished job stays inspectable within one serve lifetime."
   - "tool serve admits any ticket holder (no allow-list yet); each connection is confined to its own private jobs/ view keyed by the verified peer id."
-  - "visibility = \"private\" is the only accepted value; catalogs/discovery for served tools are ADR 0007 follow-up."
+  - "visibility = \"private\" is the only accepted value; local naming shipped (--register NAME writes ~/.wanix/catalog entries, recipe 10) but shared catalogs/discovery for served tools remain ADR 0007 follow-up."
   - "The runner refuses nothing about what the wrapped program does on the host beyond env/cwd/caps: choosing safe commands is the operator's job — the config is the trust decision."
 canonicalCaveatFor: []
 ---
@@ -119,7 +119,7 @@ summarize	iroh://a1b4a6d8...?addr=127.0.0.1:48416
 ...
 ```
 
-Each tool keeps its own ed25519 identity under `~/.wanix/tool-identities/<name>.key`, so its ticket's peer half survives restarts. Config names shadow built-ins in the merged registry (`--tool upper` still works alongside `--config`). The tool advertises exactly what you configured:
+Each tool keeps its own ed25519 identity under `~/.wanix/tool-identities/<name>.key`, so its ticket's peer half survives restarts. Config names shadow built-ins in the merged registry (`--tool upper` still works alongside `--config`). Add `--register NAME` to also write catalog entries and skip the ticket-pasting below: one served tool registers as `NAME`, several as `NAME-<resource>` (executed: `--tool upper --tool sha256 --register text` wrote `text-upper` and `text-sha256`); a re-announce overwrites in place, so restarts keep the route hint fresh. See [Recipe 10](/recipes/10-name-your-world). The tool advertises exactly what you configured:
 
 ```sh
 ROT='iroh://d3fa691d...?addr=127.0.0.1:32850'
