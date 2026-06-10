@@ -19,6 +19,7 @@ seeAlso:
   - concepts/key-is-the-address
   - concepts/wanix-sh
   - recipes/02-mount-remote-peer
+  - recipes/08-real-tools-with-config
 prerequisites:
   - concepts/key-is-the-address
   - concepts/wanix-sh
@@ -27,7 +28,7 @@ usedInFlows:
 honestLimits:
   - "The dialer principal is the persisted ~/.wanix/dialer.key: every invocation by one user is one principal, so anyone who can read that key file can present it. Distinct users/machines remain distinct principals."
   - "tool serve admits any ticket holder (no allow-list yet); each is confined to its own private jobs/ view."
-  - "Only the model/sha256/upper built-in runners are servable; volume state is plain host files, but tool job state lives only while tool serve runs."
+  - "Volume state is plain host files, but tool job state lives only while tool serve runs."
 canonicalCaveatFor: []
 ---
 
@@ -72,10 +73,10 @@ demo-notes	iroh://6e8a49fe...?addr=127.0.0.1:38119
 ## 3. Serve the tools (terminal 2)
 
 ```sh
-wanix-rust tool serve --tool upper --tool sha256 --addr 127.0.0.1:0
+wanix-rust tool serve --tool upper --tool sha256 --listen 127.0.0.1:0
 ```
 
-Port `0` is required when serving more than one tool (each gets its own endpoint). One record per tool, same format:
+`upper` and `sha256` are built-in runners; serving *your own host programs* from a `tools.toml` is [Recipe 08](/recipes/08-real-tools-with-config). Port `0` is required when serving more than one tool (each gets its own endpoint). One record per tool, same format:
 
 ```text
 upper	iroh://2bcb5813...?addr=127.0.0.1:52164
@@ -109,8 +110,10 @@ SHA='iroh://ae985229...?addr=127.0.0.1:46571'
 
 wanix-rust sh -c 'cat /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt' \
   --mount-mesh "$VOL=/vol/notes" --mount-mesh "$UP=/n/upper" --mount-mesh "$SHA=/n/sha256"
-# (no output; exit 0)
+# job: /n/upper/jobs/j6ad9f09ad9bc2437      <- stderr; exit 0
 ```
+
+The `job:` line on stderr is the builtin announcing the job path as soon as it is allocated — the crash-resume handle: a successor of a crashed caller can find the retained job directory and resume from its `status`/`result.json`.
 
 Verify on the serving side — the bytes really landed in the volume's host directory:
 
@@ -131,6 +134,7 @@ wanix-rust sh -c 'cat /vol/notes/HELLO.txt | tool /n/sha256' \
 
 ```text
 46faf38c2de00014c7d96ee93363da026cab6ca90f12f7e4f43ed49e5c01ee49
+job: /n/sha256/jobs/jadf6716e90d09c55
 ```
 
 ```sh
@@ -157,7 +161,22 @@ RAW PROTOCOL, NO SUGAR
 / $ exit
 ```
 
-`new` allocates, `in` receives bytes, `ctl run` is synchronous (terminal on return), `out` and `result.json` are the answer, `close` releases retention early. See [jobs are files](/concepts/jobs-are-files).
+`new` allocates, `in` receives bytes, `ctl run` is synchronous (terminal on return), `out` and `result.json` are the answer, `close` releases retention early. The full job directory is `{request, params.json, in, ctl, out, err, status, result.json, events}` — `err` is the runner's diagnostics and `events` is a never-EOF progress stream you can watch live with `mount-cat --follow` ([Recipe 08](/recipes/08-real-tools-with-config) does, plus timeout and abort). See [jobs are files](/concepts/jobs-are-files).
+
+When a job fails, the taxonomy stays visible through the builtin too — pipe invalid UTF-8 into `upper` and stderr carries the `result.json` error plus the job's `err` diagnostics, with a nonzero exit:
+
+```sh
+wanix-rust sh -c 'cat /vol/notes/blob.bin | tool /n/upper' \
+  --mount-mesh "$VOL=/vol/notes" --mount-mesh "$UP=/n/upper"
+```
+
+```text
+job: /n/upper/jobs/j48f273aaf171eeb4
+tool: invalid_input: input is not valid UTF-8
+input is not valid UTF-8
+```
+
+(exit status 1; `blob.bin` here was three bytes of `\xff\xfe\xfd`.)
 
 ## 6. Your invocations are one principal; strangers stay strangers
 
@@ -180,8 +199,8 @@ That durability is what makes a retained job a real audit/recovery record (ADR 0
 - **`resource unreachable: peer 6e8a49fe... did not answer within 5s`** — the serve behind that ticket is down (or the route hint is stale). The full message says it plainly: "the provider is offline or not discoverable from here, and the mount will work again when it returns (a bare iroh://PEER is found by mDNS on the LAN; pass ?addr=IP:PORT as a direct route hint)". Restart the serve and re-copy the ticket — the peer id stays the same, but `--addr 127.0.0.1:0` picks a new port each run.
 - **Mount flag parses the wrong path.** `--mount-mesh` splits on the *last* `=`, so an unquoted ticket lets your host shell or the parser carve it at `?addr=`. Always quote the whole `TICKET=/guest/path` argument.
 - **A job id reads as `No such file or directory` from another machine or user.** Not a bug — see step 6: `jobs/` is per-principal, and the principal is your `~/.wanix/dialer.key`. A different key (different user, different machine, a deleted key file) is a stranger to your jobs.
-- **`tool serve` / `volume serve` refuses to start without `--addr`.** Default-deny: serving on the public endpoint hands the resource to anyone with the ticket, so it demands either `--addr IP:PORT` or an explicit `--insecure-open`.
-- **`tool serve --tool a --tool b --addr 127.0.0.1:5700` is rejected.** A fixed nonzero port cannot back multiple endpoints; use port `0` when serving more than one tool (or volume).
+- **`tool serve` / `volume serve` refuses to start without a listen address.** Default-deny: serving on the public endpoint hands the resource to anyone with the ticket, so it demands an explicit address (verbatim: "pass --listen IP:PORT (use port 0 to serve multiple tools) or --insecure-open to deliberately export to the open internet"). `--addr` still parses as an alias for `--listen`.
+- **`tool serve --tool a --tool b --listen 127.0.0.1:5700` is rejected.** A fixed nonzero port cannot back multiple endpoints; use port `0` when serving more than one tool (or volume).
 
 ## Cleanup
 

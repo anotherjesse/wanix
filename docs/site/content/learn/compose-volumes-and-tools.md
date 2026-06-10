@@ -27,6 +27,8 @@ seeAlso:
   - concepts/wanix-sh
   - concepts/attach-policy
   - concepts/everything-is-a-file
+  - recipes/06-compose-volume-and-tools
+  - recipes/08-real-tools-with-config
 prerequisites:
   - learn/js-outside-chrome
 usedInFlows: []
@@ -34,7 +36,7 @@ honestLimits:
   - "The dialer principal is the persisted ~/.wanix/dialer.key (crates/wanix-cli/src/mesh/ticket.rs): every invocation by one user is one principal, so retained jobs survive a remount — and anyone who can read that key file can present it. Distinct users/machines remain distinct principals."
   - "tool serve has no allow-list yet: any holder of a tool's ticket may attach (each bound to its own private job view). Grant lifecycle is ADR 0007 follow-up work."
   - "Command substitution is not yet supported in the shell, so a job id cannot be captured into a variable — use the REPL or the `tool` builtin."
-  - "Tool runners are deterministic in-process v0 built-ins (model/sha256/upper); the process runner is a later crate."
+  - "The model/sha256/upper built-ins are deterministic in-process runners; real host programs are served from a tools.toml via tool serve --config (recipe 08)."
 canonicalCaveatFor: [ephemeral-dialer-identity]
 ---
 
@@ -173,5 +175,5 @@ The full tested transcript — real tickets, real digests, and the failure modes
 
 - **The dialer principal is a key file.** `dial_iroh_remote` presents the persisted `~/.wanix/dialer.key` (`crates/wanix-cli/src/mesh/ticket.rs`), so a remount resumes your jobs — and whoever can read that file can be you to every job-scoped server. Per-principal grants/allow-lists are ADR 0007 follow-up work.
 - **No allow-list on `tool serve`.** Any ticket holder attaches (each confined to its own job view); grant lifecycle is ADR 0007 follow-up work.
-- **Built-in runners only.** `tool serve` accepts `model`, `sha256`, `upper` — deterministic in-process v0 runners. The process runner is a later crate.
+- **Built-ins are demo runners.** `--tool` accepts `model`, `sha256`, `upper` — deterministic in-process runners. Wrapping *your own host programs* (fixed command/argv, empty env, private per-job cwd, real timeouts and aborts) is `tool serve --config tools.toml` — [Recipe 08](/recipes/08-real-tools-with-config).
 - **Shell subset.** No command substitution, so capturing a job id into a variable is not yet expressible — use the REPL or the `tool` builtin.

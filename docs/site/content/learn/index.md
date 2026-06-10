@@ -23,6 +23,10 @@ seeAlso:
   - recipes/04-tiny-http-app-with-kv
   - recipes/01-repair-broken-qjs
   - recipes/05-two-agents-collaborate
+  - recipes/06-compose-volume-and-tools
+  - recipes/07-chatroom-over-the-mesh
+  - recipes/08-real-tools-with-config
+  - recipes/09-web-door-gateway
   - reference/contributor-landing
   - concepts/the-9p-contract
   - reference/crate-map-and-layering
@@ -104,6 +108,24 @@ State survives between calls because the `KvDevice` lives in the serve process. 
 
 ---
 
+## Flow: Compose volumes and tools across the mesh — *for Devraj*
+
+**Goal:** serve a data volume and tools as independent mesh resources, mount them into one shell namespace, and pipe a remote file through a remote tool back into the remote volume. **Route:** [compose volumes and tools](../learn/compose-volumes-and-tools) → [jobs are files](../concepts/jobs-are-files) → recipe [06](../recipes/06-compose-volume-and-tools), then wrap *your own host programs* from a `tools.toml` — recipe [08](../recipes/08-real-tools-with-config) (live `events --follow`, real timeouts, real aborts).
+
+---
+
+## Flow: Build a chatroom (a guest-defined room) — *for Maya going social*
+
+**Goal:** serve a small qjs program as a mesh-mounted chatroom: transport-verified attribution, display nicks, live delivery with `mount-cat --follow`, durable restart. **Route:** [build a chatroom](../learn/build-a-chatroom) → [guest-defined resources](../concepts/guest-defined-resources) → recipe [07](../recipes/07-chatroom-over-the-mesh).
+
+---
+
+## Flow: Publish apps via the web door — *for Maya shipping it*
+
+**Goal:** give that room (or any file-shaped app) a browser audience: named origins by `Host` routing, SSE off a never-EOF stream, honest 503s. **Route:** [publish apps via the web door](../learn/publish-apps-via-web-door) → recipe [09](../recipes/09-web-door-gateway). The honest boundary up front: the gateway is ONE principal to the room — every web user posts as the gateway's key (per-user web identity is named follow-up work).
+
+---
+
 ## Flow: Add a service device — *for Theo*
 
 **Goal:** ship a new device that is a plain `FileSystem`, so it imports across the mesh for free. **Route:** [everything-is-a-file](../concepts/everything-is-a-file) → study `#pipe`/`#kv` as the simplest models → the [contribute](../reference/contributor-landing) reference.
@@ -163,6 +185,9 @@ Each flow header carries a badge so you can pick by appetite:
 | JS outside Chrome | Rust toolchain | ~10 min |
 | Wire a mesh | one flow done; two terminals | ~20 min |
 | HTTP app with #kv | JS-outside-Chrome flow | ~15 min |
+| Compose volumes & tools | JS-outside-Chrome flow; two terminals | ~15 min |
+| Build a chatroom | JS-outside-Chrome flow | ~15 min |
+| Publish via the web door | the chatroom flow | ~15 min |
 | Add a service device | Rust; read `#kv`/`#pipe` | ~1 hr |
 | Add a driver/transport | the service-device flow | ~2 hr |
 | Agent on your files | JS-outside-Chrome flow | ~15 min |

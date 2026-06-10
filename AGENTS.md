@@ -318,7 +318,8 @@ tests.
   refusal). v0 principal honesty: the gateway dials with ITS dialer key, so a
   mounted room sees one principal for all web users (per-user web identity =
   delegation certs / gateway principals, docs/appfs.md). Demo:
-  `examples/chatroom/web` + recipe 07 §8; proofs in
+  `examples/chatroom/web` + recipe 09 and
+  `docs/site/content/learn/publish-apps-via-web-door.md`; proofs in
   `crates/wanix-cli/src/serve/webdoor/tests.rs`.
 - `serve --bundle fs9p`: browser filesystem client over direct 9P.
 - `serve --bundle workbench-fs9p`: the browser cockpit — a Code OSS/workbench
@@ -393,7 +394,13 @@ tests.
   <name>` dir as its own native-wire endpoint (one ticket per resource, persisted
   per-resource ed25519 identity), `wanix-rust tool serve --tool upper|sha256|
   model` does the same for built-in ToolFS devices (every connection bound to a
-  private per-principal `jobs/` view from the verified `remote_id()`), and
+  private per-principal `jobs/` view from the verified `remote_id()`) and
+  `tool serve --config tools.toml` serves *real host programs* through the
+  same protocol (the `ProcRunner` fixed-policy inversion: operator-fixed
+  absolute command/argv with `{input}`/`{output}` tempfile mapping, no shell,
+  empty child env, private per-job temp cwd, real timeout/abort kills with
+  retained taxonomy; config names shadow built-ins — walkthrough: recipe 08),
+  and
   `wanix-rust sh -c '...' --mount-mesh TICKET=/path ...` composes them: `cat <
   /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt` reads one peer,
   runs a job on another, and writes back to the first. The dialer identity
@@ -415,12 +422,15 @@ tests.
   time as newline-JSON stamped with the verified connection principal
   (`AppAttachPolicy`), with a host pump thread owning guest output. Declared
   stream files are host-owned never-EOF subscriptions (bounded lossy
-  `LineBuffer` fan-out fed by guest publishes) with `who` presence from the
+  `LineBuffer` fan-out fed by guest publishes; `mount-cat PATH --follow` is
+  the streaming CLI consumer) with `who` presence from the
   open-subscription registry; durable state is the explicit `--state` mount,
   so the bundled `examples/chatroom` app survives guest restart with history
   intact; a dead guest fails ops `Unreachable` while blocked stream readers
-  are released with EOF (no auto-restart in v0; serve death is abrupt — only
-  guest-exit-while-serve-lives gets the clean EOF release). Proofs:
+  are released with EOF (auto-restart is opt-in: `--restart on-failure`
+  re-runs an exited guest with capped backoff behind the same ticket; serve
+  death is abrupt — only guest-exit-while-serve-lives gets the clean EOF
+  release). Proofs:
   `crates/wanix-appfs/src/tests.rs`, `crates/wanix-cli/src/app/serve/tests.rs`;
   walkthrough: recipe 07 + `docs/site/content/learn/build-a-chatroom.md`.
 - `wanix-rust capsule`: freezes a Wanix world into a portable, CAS-backed
@@ -600,22 +610,22 @@ more feature work.
   ADR 0006/0007 authorization layer (thread `aname` 1:1 vs a native
   scope-selection shape), not before. (a) and (b) are small cleanup-cycle items.
 - Job protocol / ToolFS remainder ([docs/toolfs.md](docs/toolfs.md) §Build
-  Slices): the fixed-command **process runner** (wraps a real host program;
-  lives outside `wanix-tool`/`wanix-jobfs`, implementing the `wanix-jobfs`
-  `JobRunner`/`RunContext` seam), catalog integration (one entry per served tool),
-  and the agent adapter are the slices still ahead. `--mount-mesh` still needs
-  threading to `qjs`/`qjs-term` (the keepalive home, `mesh::mounts`, already
-  exists). `#agent`/`#cpu` convergence on the job grammar waits until those
-  devices are next touched (ADR 0009 §Adopters).
+  Slices): the fixed-command process runner shipped (`tool serve --config
+  tools.toml`, `crates/wanix-cli/src/tool/process.rs`); still ahead are
+  catalog integration (one entry per served tool) and the agent adapter.
+  `--mount-mesh` still needs threading to `qjs`/`qjs-term` (the keepalive
+  home, `mesh::mounts`, already exists). `#agent`/`#cpu` convergence on the
+  job grammar waits until those devices are next touched (ADR 0009 §Adopters).
 - AppResource v0 remainder ([docs/appfs.md](docs/appfs.md) §Build Slices /
   §Status): the served guest is a tier-2 resident qjs loop, not the tier-1
   turn model with a host handle table (ADR 0010) — move it when turns land.
-  Also still ahead: a guest restart policy (today a dead guest stays
-  `Unreachable` until the serve restarts), CAS-pinned app manifests (`main` is
-  read from `--app` by path; provenance is a doc note only), the HTTP surface
-  (`fetch` handler, gateway principals, `wanix/http/1`), and a request
-  deadline on the adapter's single-in-flight channel lock so one wedged
-  discrete op cannot park every later caller forever.
+  Wire v0.2 shipped the op deadline (`DEFAULT_OP_DEADLINE`), host-stamped
+  `at_ms`, ranged reads, and the hello handshake; `--restart on-failure`
+  shipped the guest restart policy; the WebDoor (`serve --bind`) shipped the
+  generic HTTP gateway. Still ahead: CAS-pinned app manifests (`main` is read
+  from `--app` by path; provenance is a doc note only) and per-user gateway
+  principals / a guest `fetch` handler (`wanix/http/1`) so web users stop
+  collapsing into the gateway's one principal.
 - CLI UX remainder: the hands-on new-user audit behind commit bc05331 landed
   only its top S/M findings (lean usage errors, per-subcommand `--help`,
   ADR 0008 unreachable text, split peer-id parse diagnostics, copy-pasteable

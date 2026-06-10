@@ -2,7 +2,7 @@
 title: Recipe 07 — A Chatroom That Is a Mounted Program
 slug: recipes/07-chatroom-over-the-mesh
 pageType: use-case
-oneLiner: app-serve the bundled qjs chatroom with a durable --state dir, post from two principals with no usernames, watch presence and live delivery, defeat a payload impersonation, then kill and restart the room with its history intact.
+oneLiner: app-serve the bundled qjs chatroom with a durable --state dir, post from two principals, claim nicks that render but never authenticate, watch live delivery with mount-cat --follow, defeat a payload impersonation, then kill and restart the room with its history and nicks intact.
 audience: [developer]
 tags: [mesh, cli, apps, appfs, qjs, shipped, caveat]
 sourceRefs:
@@ -14,29 +14,28 @@ sourceRefs:
   - crates/wanix-appfs/src/buffer.rs:18-25
   - crates/wanix-cli/src/mesh/ticket.rs:195-206
   - crates/wanix-id/src/identity.rs:90-93
-  - crates/wanix-cli/src/serve/webdoor.rs
-  - examples/chatroom/web/app.js
 seeAlso:
   - learn/build-a-chatroom
   - concepts/guest-defined-resources
   - concepts/key-is-the-address
   - concepts/blocking-stream-eof-contract
   - recipes/06-compose-volume-and-tools
+  - recipes/09-web-door-gateway
 prerequisites:
   - concepts/key-is-the-address
 usedInFlows:
   - {flow: build-a-chatroom, step: 2}
 honestLimits:
-  - "Message timestamps are the host-stamped at_ms on each request (wire v0.2), not the guest's clock — Date.now() inside the served qjs guest is still engine-pinned and should not be used for time."
-  - "mount-cat is collected (prints at EOF), so reading the never-EOF stream file shows nothing until the process is killed — bound it with timeout; the live view today is a host-side tail of the --state log."
+  - "Message timestamps are real wall clock: the host stamps at_ms on every request (wire v0.2). The guest's own Date.now() is still engine-pinned and must not be used for time — the shipped chatroom uses at_ms."
+  - "A parked stream reader pins one server session permit and one blocking-pool thread per open file while it lives, and after abrupt serve death it blocks until QUIC liveness fires (~33 s observed) — though with --follow every line it already printed is already out."
   - "Any ticket holder may attach (attribution stays unforgeable); allow-list rooms and CAS-pinned code provenance are deferred (docs/appfs.md)."
-  - "The WebDoor gateway is ONE principal to the room: every browser user posts as the gateway's dialer key, and a web-set nick names that shared principal. Per-user web identity needs delegation certs / gateway principals (docs/appfs.md §Identity And Trust) — not v0."
+  - "The WebDoor gateway (recipe 09) is ONE principal to the room: every browser user posts as the gateway's dialer key, and a web-set nick names that shared principal. Per-user web identity needs delegation certs / gateway principals (docs/appfs.md §Identity And Trust) — not v0."
 canonicalCaveatFor: []
 ---
 
 # Recipe 07 — A Chatroom That Is a Mounted Program
 
-`app serve` the bundled qjs chatroom with a durable `--state` dir, post from two principals with no usernames, watch presence and live delivery, defeat a payload impersonation, then kill and restart the room with its history intact.
+`app serve` the bundled qjs chatroom with a durable `--state` dir, post from two principals, claim nicks that render but never authenticate, watch live delivery with `mount-cat --follow`, defeat a payload impersonation, then kill and restart the room with its history and nicks intact.
 
 **What & why.** The room is `examples/chatroom/` — a manifest plus one readable `main.js` run as a resident qjs guest behind the `wanix-appfs` file2chan adapter. The host owns the ticket, the verified principals, the never-EOF `stream` fan-out, and `who`; the guest owns only what the files *mean*. Everything below ran verbatim on one machine over loopback (tickets and 64-hex keys shortened to a recognizable prefix; yours will differ). The conceptual walkthrough is [Build a chatroom](/learn/build-a-chatroom).
 
@@ -56,16 +55,16 @@ wanix-rust app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:
 The process parks forever (Ctrl-C to stop) and prints the standard resource record on stderr:
 
 ```text
-chatroom	iroh://bd4e24de...?addr=127.0.0.1:43490
-# mount with: wanix-rust mount-ls 'iroh://bd4e24de...?addr=127.0.0.1:43490'
+chatroom	iroh://71b44428...?addr=127.0.0.1:48171
+# mount with: wanix-rust mount-ls 'iroh://71b44428...?addr=127.0.0.1:48171'
 ```
 
-`iroh://bd4e24de...` is the room's persisted identity (`~/.wanix/app-identities/chatroom.key`, created on first serve); `?addr=` is a route hint. The very first start in a fresh environment took ~25 s in this run (debug build, cold module cache compiling the QuickJS wasm) before the ticket appeared; subsequent starts take about a second. `--state /tmp/room` is the room's whole durable memory — the guest sees it at `/state`.
+`iroh://71b44428...` is the room's persisted identity (`~/.wanix/app-identities/chatroom.key`, created on first serve); `?addr=` is a route hint. The very first start in a fresh environment takes ~25 s (debug build, cold module cache compiling the QuickJS wasm) before the ticket appears; subsequent starts take about a second. `--state /tmp/room` is the room's whole durable memory — the guest sees it at `/state`.
 
 ## 2. Person A: mount, post, read
 
 ```sh
-T='iroh://bd4e24de...?addr=127.0.0.1:43490'
+T='iroh://71b44428...?addr=127.0.0.1:48171'
 wanix-rust mount-ls "$T"
 ```
 
@@ -86,12 +85,33 @@ wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-{"at":1765000000000,"from":"(36469a42)","body":"morning! mounted the room over the mesh"}
+{"at":1781080495768,"from":"(36469a42)","body":"morning! mounted the room over the mesh"}
 ```
 
-No username was supplied anywhere. `from` is the derived display of A's persisted dialer key (`~/.wanix/dialer.key`): `(shorthex)` — the first 8 hex chars of the scheme-prefixed principal `iroh:<hex>` taken from the verified QUIC handshake by the serve's attach policy, never from the payload. Writing a name to `nick` renders it `nick (shorthex)` instead; `roster` is the raw principal→nick map, the raw principal stays in the stored log, and you can only ever name *yourself* — a nick is display sugar, never authority (two principals claiming the same nick stay disambiguated by shorthex). `at` is the host-stamped wall clock (`at_ms`) the adapter puts on every request — the guest's one trusted time source (wire v0.2).
+No username was supplied anywhere. `from` is the derived display of A's persisted dialer key (`~/.wanix/dialer.key`): `(shorthex)` — the first 8 hex chars of the scheme-prefixed principal `iroh:<hex>` taken from the verified QUIC handshake by the serve's attach policy, never from the payload. And `at` is real wall clock: the host stamps `at_ms` on every request (wire v0.2) — the guest's one trusted time source.
 
-## 3. Person B: a second principal on one machine
+## 3. Claim a nick — display sugar, never authority
+
+```sh
+wanix-rust mount-write "$T" nick 'ada'
+# wrote 3 bytes to n/remote/nick
+wanix-rust mount-cat "$T" roster
+```
+
+```text
+{"iroh:36469a4270682126...":"ada"}
+```
+
+`roster` is the raw principal→nick map. `latest` now renders A's messages — including the one already posted — as `nick (shorthex)`:
+
+```sh
+wanix-rust mount-cat "$T" latest
+# {"at":1781080495768,"from":"ada (36469a42)","body":"morning! mounted the room over the mesh"}
+```
+
+The stored log keeps the raw principal; display is derived at read time, truth is the key. A nick is keyed *only* by the writer's verified principal, so you can only ever name yourself, and two principals claiming the same nick stay disambiguated by shorthex.
+
+## 4. Person B: a second principal on one machine
 
 A friend is just a different key. Simulate one with an alternate `HOME` (all per-user Wanix state lives under `$HOME/.wanix/`; first contact mints `/tmp/bob/.wanix/dialer.key`):
 
@@ -101,8 +121,8 @@ HOME=/tmp/bob wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-{"at":1765000000000,"from":"(36469a42)","body":"morning! mounted the room over the mesh"}
-{"at":1765000000113,"from":"(04bd5311)","body":"hey A — same room, different key"}
+{"at":1781080495768,"from":"ada (36469a42)","body":"morning! mounted the room over the mesh"}
+{"at":1781080509944,"from":"(ed2f9c56)","body":"hey A — same room, different key"}
 ```
 
 ```sh
@@ -110,43 +130,35 @@ wanix-rust mount-cat "$T" status
 # {"app":"chatroom","messages":2}
 ```
 
-## 4. Presence: `who` lists open stream subscriptions
+## 5. The live moment: `mount-cat --follow`, and `who`
 
-`stream` is a never-EOF read, and `mount-cat` is collected — so a stream read parks silently. Use that deliberately, bounded with `timeout`, to hold a subscription open while A asks who is around:
+`stream` is an honest never-EOF read, and `mount-cat --follow` is its streaming consumer — it prints each line as it arrives on one open handle. Park B on the stream in terminal 2:
 
 ```sh
-HOME=/tmp/bob timeout 12 wanix-rust mount-cat "$T" stream &
-sleep 2
+# Terminal 2 — blocks, printing lines as they arrive (Ctrl-C to stop):
+HOME=/tmp/bob wanix-rust mount-cat "$T" stream --follow
+```
+
+While that subscription is open, A asks who is around:
+
+```sh
 wanix-rust mount-cat "$T" who
+# iroh:ed2f9c560c4e8152...
 ```
 
-```text
-iroh:04bd5311...
-```
-
-Presence is host session state — the principals currently holding open `stream` subscriptions, one per line, sorted. The guest is never asked.
-
-## 5. The live moment
-
-The room's memory is the `--state` log on the serving machine, appended by the guest on every post *before* it publishes to subscribers. Tail it there while B posts from terminal 2:
+Presence is host session state — the principals currently holding open `stream` subscriptions, one per line, sorted. The guest is never asked. Now A posts:
 
 ```sh
-# Terminal 1 (serving machine):
-timeout 8 tail -n 0 -f /tmp/room/log
+wanix-rust mount-write "$T" post 'this line should show up live'
 ```
 
-```sh
-# Terminal 2:
-HOME=/tmp/bob wanix-rust mount-write "$T" post 'this line should show up live'
-```
-
-The tail prints the line within a beat of the write returning:
+...and terminal 2 prints the line within a beat of the write returning:
 
 ```text
-{"at":1765000000291,"from":"iroh:04bd5311...","body":"this line should show up live"}
+{"at":1781080530768,"from":"iroh:36469a4270682126...","body":"this line should show up live"}
 ```
 
-(The mesh `stream` file delivers the same line to every parked subscriber buffer — step 4 proved the subscription exists — but no shipped CLI verb prints it incrementally yet; see Troubleshooting.)
+(The stream fan-out carries the raw stored line — raw principal, no nick rendering; rendering is `latest`'s job.)
 
 ## 6. The attribution proof
 
@@ -159,10 +171,20 @@ wanix-rust mount-cat "$T" latest | tail -1
 ```
 
 ```text
-{"at":1765000000404,"from":"(04bd5311)","body":"hi, this is definitely A"}
+{"at":1781080547257,"from":"(ed2f9c56)","body":"hi, this is definitely A"}
 ```
 
-Still attributed to B. The guest keeps only the `body` of a JSON payload and discards any claimed author; the principal it stamps came from the host, which took it from the transport. Identity rides the transport; `post` carries body only.
+Still attributed to B. The guest keeps only the `body` of a JSON payload and discards any claimed author; the principal it stamps came from the host, which took it from the transport. Identity rides the transport; `post` carries body only. And a nick changes nothing — let B claim one now:
+
+```sh
+HOME=/tmp/bob wanix-rust mount-write "$T" nick 'bob'
+wanix-rust mount-cat "$T" roster
+# {"iroh:36469a4270682126...":"ada","iroh:ed2f9c560c4e8152...":"bob"}
+wanix-rust mount-cat "$T" latest | tail -1
+# {"at":1781080547257,"from":"bob (ed2f9c56)","body":"hi, this is definitely A"}
+```
+
+The impersonation attempt is now signed with B's *own chosen name* — the rendering follows the verified key wherever it goes.
 
 ## 7. Kill the room; restart it; nothing is lost
 
@@ -173,99 +195,58 @@ wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-resource unreachable: peer bd4e24de... did not answer within 5s — the provider is offline or not discoverable from here, and the mount will work again when it returns (a bare iroh://PEER is found by mDNS on the LAN; pass ?addr=IP:PORT as a direct route hint)
+resource unreachable: peer 71b44428... did not answer within 5s — the provider is offline or not discoverable from here, and the mount will work again when it returns (a bare iroh://PEER is found by mDNS on the LAN; pass ?addr=IP:PORT as a direct route hint)
 ```
 
-The history is sitting in plain host files — `cat /tmp/room/log` shows all four messages. Restart against the same state:
+The history is sitting in plain host files — `ls /tmp/room` shows `log` and `nicks`, and `cat /tmp/room/log` shows all four messages with raw principals. Restart against the same state, this time with the guest supervisor on:
 
 ```sh
-wanix-rust app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0
-# chatroom	iroh://bd4e24de...?addr=127.0.0.1:41108     <- same peer, new port
+wanix-rust app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0 --restart on-failure
+# chatroom	iroh://71b44428...?addr=127.0.0.1:53497     <- same peer, new port
 ```
 
 ```sh
-wanix-rust mount-cat 'iroh://bd4e24de...?addr=127.0.0.1:41108' latest   # all 4 messages
-wanix-rust mount-cat "$T" status      # the OLD ticket — stale port hint — still works
+wanix-rust mount-cat 'iroh://71b44428...?addr=127.0.0.1:53497' latest
 ```
 
 ```text
-{"app":"chatroom","messages":4}
+{"at":1781080495768,"from":"ada (36469a42)","body":"morning! mounted the room over the mesh"}
+{"at":1781080509944,"from":"bob (ed2f9c56)","body":"hey A — same room, different key"}
+{"at":1781080530768,"from":"ada (36469a42)","body":"this line should show up live"}
+{"at":1781080547257,"from":"bob (ed2f9c56)","body":"hi, this is definitely A"}
 ```
 
-The room's memory was never guest RAM (`main.js` reloads `/state/log` at boot), the identity key survives the process, and on loopback/LAN even the stale ticket keeps working: the peer half is the address, mDNS finds the new route, the hint is just a hint. Both a bare `iroh://bd4e24de...` (no `?addr=` at all) and the old ticket reached the restarted room in this run.
+```sh
+wanix-rust mount-cat "$T" status      # the OLD ticket — stale port hint — still works
+# {"app":"chatroom","messages":4}
+```
 
-The manual restart is also automatable: `app serve ... --restart on-failure` supervises the guest, re-running it with capped backoff whenever it exits and swapping the fresh adapter behind the *same* ticket and endpoint. Connections opened against the dead generation keep failing honestly (`Unreachable`); new connections reach the restarted room.
+The room's memory was never guest RAM (`main.js` reloads `/state/log` *and* `/state/nicks` at boot — the nick rendering survived the restart above), the identity key survives the process, and on loopback/LAN even the stale ticket keeps working: the peer half is the address, mDNS finds the new route, the hint is just a hint. Both a bare `iroh://71b44428...` (no `?addr=` at all) and the old ticket reached the restarted room in this run.
 
-## 8. Put a browser on it: the WebDoor gateway
+`--restart on-failure` supervises the *guest*: whenever it exits, the supervisor re-runs it with capped backoff and swaps the fresh adapter behind the *same* ticket and endpoint. Connections opened against the dead generation keep failing honestly (`Unreachable`); new connections reach the restarted room. The default stays dead-stays-dead.
+
+## 8. Put a browser on it
 
 A browser has no iroh key — so the `serve` HTTP door can act as a gateway:
-`--bind NAME=SOURCE` (repeatable) composes, per NAME, one namespace from every
-source bound to it and serves it at `http://NAME.localhost:PORT` by
-`Host`-header routing (`*.localhost` resolves to loopback by resolver
-convention — zero DNS setup). Bind the bundled web client *and* the room under
-one name and they share one origin, so the page fetches the room's files with
-no CORS:
-
-```sh
-T='iroh://bd4e24de...?addr=127.0.0.1:43490'    # the room ticket from step 1
-wanix-rust serve --root /tmp/empty \
-  --bind chat=examples/chatroom/web \
-  --bind "chat=$T" \
-  --bind docs=docs/site/content \
-  --listen 127.0.0.1:7699
-# wanix-rust serve: gateway origin http://chat.localhost:7699/
-# wanix-rust serve: gateway origin http://docs.localhost:7699/
-```
-
-(`docs` shows the same door serving a plain static site: any directory bound
-to a name is an origin — `http://docs.localhost:7699/` lists it as JSON when
-there is no `index.html`, and serves files by content type.)
-
-Open `http://chat.localhost:7699/` for the webapp (post form, live
-EventSource feed, nick form), or drive it with curl — the bare host lists the
-bound names, and the room's files are plain same-origin URLs:
-
-```sh
-curl http://127.0.0.1:7699/                            # index of bound names
-curl -X POST -d 'hello from curl' http://chat.localhost:7699/post
-curl http://chat.localhost:7699/latest
-curl -N http://chat.localhost:7699/stream              # chunked, never-EOF: lines arrive as posted
-curl -N -H 'Accept: text/event-stream' http://chat.localhost:7699/stream   # same feed as SSE
-```
-
-The mapping is generic, not chat-specific: GET of a sized file returns it
-whole; GET of a zero-length device file streams as chunked transfer (or SSE
-`data:` lines under `Accept: text/event-stream`); POST/PUT writes the body;
-GET of a directory serves its `index.html` or a JSON listing; and errors map
-honestly — kill the room's `app serve` and `GET /latest` answers
-`503 Service Unavailable` with `Retry-After: 5` (an outage, never a 404).
-The gateway is loopback-only in v0: a non-loopback `--listen` with `--bind`
-is refused at startup (the ADR 0006 trust rule; off-loopback gateway auth is
-recorded follow-up work).
-
-> **v0 gateway principals — read this before demoing identity.** The gateway
-> dials the room with **its** dialer key (`~/.wanix/dialer.key`), so the room
-> sees one principal for ALL web users: every browser post lands as the same
-> `(shorthex)` — the gateway's — and a nick set through the web names the
-> gateway principal, shared by everyone on that gateway. Session isolation,
-> if any, is gateway/HTTP-layer state only, never mesh principal enforcement,
-> and the webapp deliberately does not fake per-user attribution: it shows
-> messages exactly as the room records them and only locally tags posts it
-> sent itself. The mesh wire binds one principal per connection, and that
-> connection is dialed by the gateway, not the browser; the future per-user
-> path is delegation certs / gateway principals threaded into the attach
-> (docs/appfs.md §Identity And Trust), out of scope here.
+`serve --bind chat=examples/chatroom/web --bind "chat=$T"` composes the
+bundled web client and the room into one origin at
+`http://chat.localhost:PORT`, with posts, the live EventSource feed, and the
+nick form working in a plain browser. That is its own tested transcript —
+[Recipe 09 — The web door](/recipes/09-web-door-gateway) — including the one
+identity caveat to read before demoing: the gateway is a *single* principal
+to the room, so every browser user posts as the gateway's key.
 
 ## Troubleshooting (friction actually hit while testing)
 
-- **`mount-cat "$T" stream` prints nothing, forever.** Not a bug, two contracts stacking: `stream` is an honest never-EOF read (its own QUIC stream, blocking until a publish), and `mount-cat` is collected — it prints only at EOF. Killing it loses the collected bytes. Always bound it with `timeout` (it still registers a real subscription — `who` shows you), read `latest` for history, and tail the `--state` log for a live view. Do not park `cat` on it in the `sh` REPL either: Ctrl-C there cancels the input line, not a blocked read.
+- **Plain `mount-cat "$T" stream` prints nothing, forever.** Without `--follow`, `mount-cat` is collected — it prints only at EOF, and `stream` never EOFs while the guest lives. Use `mount-cat "$T" stream --follow` for the live view (it prints each line as it arrives), or bound a collected read with `timeout`. The `sh` REPL's `cat` streams too: `cat /n/room/stream` at the prompt printed a post live in this run, and at a real terminal Ctrl-C cancels it back to a fresh prompt (status 130) instead of wedging.
 - **`who` keeps listing someone who left.** A hard-killed subscriber (process killed mid-read) holds its registry entry until the transport declares the connection dead — about 30 s of silence on loopback in this run. Presence is session state, not a heartbeat.
-- **A parked `mount-cat "$T" stream` outlives the serve dying — for ~35 s.** An already-blocked stream read carries no per-op deadline (ADR 0008), so when the serve is killed it keeps blocking until QUIC connection liveness declares the peer dead (~35 s on loopback in our run), then fails with `resource unreachable: ... connection lost` — and its collected bytes are lost. Only a *fresh* op gets the friendly 5 s message above. Blocked stream readers are released with EOF only when the guest exits while the serve stays up.
+- **A parked `mount-cat "$T" stream --follow` outlives the serve dying — for ~33 s.** An already-blocked stream read carries no per-op deadline (ADR 0008), so when the serve is killed it keeps blocking until QUIC connection liveness declares the peer dead (33 s on loopback in this run), then fails with `resource unreachable: mesh: mesh wire transport error: quic recv read failed: connection lost`. Everything `--follow` printed before the death is already on your screen — only a still-buffered collected read loses bytes. Only a *fresh* op gets the friendly 5 s message above. Blocked stream readers are released with EOF only when the guest exits while the serve stays up.
 - **First `app serve` seems to hang before printing the ticket.** Cold module cache: the QuickJS engine wasm is being compiled (~25 s in this debug-build run). Subsequent starts are ~1 s.
 - **`app serve` refuses to start without `--addr`.** Default-deny, verbatim: "app serve on the public endpoint exposes the app to anyone with its ticket; pass --addr IP:PORT or --insecure-open to deliberately export to the open internet".
-- **Reading `post` fails with `operation not supported: post is write-only; read latest instead`.** It is write-only by the guest's own rules, and the guidance after the colon is the guest's own `not_supported` message, carried across the wire (verbatim from this run: `mount-cat failed to read: operation not supported: post is write-only; read latest instead`).
+- **Reading `post` fails with `operation not supported`.** It is write-only by the guest's own rules, and the guidance after the colon is the guest's own `not_supported` message, carried across the wire (verbatim from this run: `mount-cat failed to read: operation not supported: post is write-only; read latest or roster instead`).
+- **A nick is refused with `invalid`.** The guest validates: 32 chars max after trimming, no control characters — a bad nick fails the write and changes nothing (verbatim from this run: `mount-write failed: invalid path: nick longer than 32 characters`; `roster` was untouched).
 - **`resource unreachable: peer ... did not answer within 5s`.** The serve is down. The message says the recovery: the mount works again when the room returns, and the peer id half of the ticket never changes.
 
 ## Cleanup
 
-Ctrl-C the serve. The room's history stays in `/tmp/room/log`, its identity in `~/.wanix/app-identities/chatroom.key`, your principal in `~/.wanix/dialer.key`, and the simulated friend in `/tmp/bob/.wanix/dialer.key` — delete `/tmp/room` and `/tmp/bob` when you are done with them.
+Ctrl-C the serve. The room's history stays in `/tmp/room/log` and its nicks in `/tmp/room/nicks`, its identity in `~/.wanix/app-identities/chatroom.key`, your principal in `~/.wanix/dialer.key`, and the simulated friend in `/tmp/bob/.wanix/dialer.key` — delete `/tmp/room` and `/tmp/bob` when you are done with them.
