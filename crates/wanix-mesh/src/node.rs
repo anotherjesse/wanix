@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use iroh::endpoint::presets;
+use iroh::endpoint::{IdleTimeout, QuicTransportConfig, presets};
 use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointAddr};
 use tokio::runtime::{Handle, Runtime};
@@ -442,6 +442,40 @@ fn endpoint_alpns() -> Vec<Vec<u8>> {
     vec![crate::WANIX_9P_ALPN.to_vec(), crate::WANIX_FS_ALPN.to_vec()]
 }
 
+/// QUIC keep-alive interval on every Wanix endpoint (see
+/// [`endpoint_transport_config`]).
+const ENDPOINT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// QUIC max idle timeout on every Wanix endpoint (see
+/// [`endpoint_transport_config`]).
+const ENDPOINT_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The explicit liveness posture of every Wanix endpoint: keep-alives every
+/// [`ENDPOINT_KEEP_ALIVE_INTERVAL`], connections idle-timed-out after
+/// [`ENDPOINT_MAX_IDLE_TIMEOUT`].
+///
+/// This is what bounds detection of a hard-killed peer: a subscriber that
+/// vanishes without closing (power loss, SIGKILL, vanished network) stops
+/// acking keep-alives and its connection — with every server-side stream,
+/// session permit, and blocking-pool thread pinned by it — is torn down
+/// within the idle timeout instead of leaking until process exit. Pinned
+/// here as an explicit contract rather than inherited from iroh defaults.
+///
+/// Residual (documented, not fixed): a *live but idle* subscriber answers
+/// keep-alives forever, so a parked never-EOF read (an appfs `stream`
+/// subscription, a `#plumb` recv) still pins one session permit and one
+/// blocking-pool thread per open file for as long as the client keeps the
+/// file open. Bounded by [`MAX_CONCURRENT_SESSIONS`]; making parked reads
+/// permit-free is ADR 0008 liveness follow-up work.
+fn endpoint_transport_config() -> QuicTransportConfig {
+    let idle = IdleTimeout::try_from(ENDPOINT_MAX_IDLE_TIMEOUT)
+        .expect("endpoint idle timeout fits the QUIC varint range");
+    QuicTransportConfig::builder()
+        .keep_alive_interval(ENDPOINT_KEEP_ALIVE_INTERVAL)
+        .max_idle_timeout(Some(idle))
+        .build()
+}
+
 /// Builds and binds the iroh endpoint for `binding`.
 ///
 /// Every endpoint enables mDNS local-network address lookup (advertise +
@@ -463,6 +497,7 @@ async fn build_endpoint(secret: iroh::SecretKey, binding: Binding) -> Result<End
             .map_err(|err| err.to_string())?,
     };
     let builder = builder
+        .transport_config(endpoint_transport_config())
         .address_lookup(iroh_mdns_address_lookup::MdnsAddressLookup::builder().advertise(true));
     builder.bind().await.map_err(|err| err.to_string())
 }

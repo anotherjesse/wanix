@@ -30,7 +30,14 @@
 //!   permit and blocking-pool thread are already held — a peer stalling
 //!   mid-first-frame on enough streams would otherwise pin all
 //!   [`crate::node::MAX_CONCURRENT_SESSIONS`] permits forever and wedge the
-//!   endpoint for every other peer.
+//!   endpoint for every other peer. A *hard-killed* peer no longer pins its
+//!   permits indefinitely either: the endpoint's explicit keep-alive/idle-
+//!   timeout posture (see `endpoint_transport_config` in [`crate::node`])
+//!   tears its connection — and every stream parked in that untimed read —
+//!   down in bounded time. The remaining residual is a live-but-idle
+//!   subscriber holding a parked never-EOF read: one pinned permit and thread
+//!   per open file for as long as the file stays open (ADR 0008 liveness
+//!   follow-up).
 
 use std::fmt;
 use std::sync::Arc;

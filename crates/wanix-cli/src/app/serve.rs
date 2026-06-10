@@ -4,10 +4,12 @@
 //! ticket names one resource): a persisted per-app endpoint identity, one
 //! parse-stable `NAME\tTICKET` record plus a copy-pasteable mount comment,
 //! then park forever. The trust-boundary heart is [`AppAttachPolicy`]: every
-//! connection is served `AppFsService::open_view(<verified remote_id hex>)`,
-//! so the principal stamped into every guest event — message attribution,
-//! `who` presence — is derived from the QUIC handshake identity and never
-//! from anything the client sent.
+//! connection is served `open_view("iroh:<verified remote_id hex>")` from the
+//! currently live [`AppFsService`] (read out of a [`ServiceSlot`] so
+//! `--restart on-failure` can swap a fresh guest behind the same ticket), so
+//! the principal stamped into every guest event — message attribution, `who`
+//! presence — is derived from the QUIC handshake identity and never from
+//! anything the client sent.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -15,12 +17,12 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use wanix_appfs::AppFsService;
 use wanix_id::{AttachPolicy, Authorization, NodeIdentity, PeerId};
 use wanix_mesh::NativeServeConfig;
 use wanix_vfs::Rights;
 
 use super::guest::start_app_guest;
+use super::restart::{RestartPolicy, ServiceSlot, spawn_restart_supervisor};
 use super::{app_identity_path, load_app_manifest};
 use crate::mesh::resource::{
     ServedEndpoint, bind_endpoints, load_identity_at, serve_record_example_line, serve_record_line,
@@ -35,10 +37,11 @@ pub(crate) struct AppServeCommand {
     name: Option<String>,
     local_addr: Option<SocketAddr>,
     insecure_open: bool,
+    restart: RestartPolicy,
 }
 
 /// Parses `app serve --app DIR --state DIR [--name NAME] [--addr IP:PORT]
-/// [--insecure-open]`.
+/// [--restart on-failure] [--insecure-open]`.
 ///
 /// # Errors
 ///
@@ -50,6 +53,7 @@ pub(crate) fn parse_app_serve_command(args: &[OsString]) -> Result<AppServeComma
     let mut name = None;
     let mut local_addr = None;
     let mut insecure_open = false;
+    let mut restart = RestartPolicy::default();
     let mut index = 0;
     while index < args.len() {
         let flag = args[index]
@@ -59,6 +63,18 @@ pub(crate) fn parse_app_serve_command(args: &[OsString]) -> Result<AppServeComma
             "--insecure-open" => {
                 insecure_open = true;
                 index += 1;
+            }
+            "--restart" => {
+                let raw = value(args, index, "--restart")?;
+                restart = match raw.as_str() {
+                    "on-failure" => RestartPolicy::OnFailure,
+                    other => {
+                        return Err(CliError::usage(format!(
+                            "app serve --restart supports on-failure, got {other:?}"
+                        )));
+                    }
+                };
+                index += 2;
             }
             "--app" => {
                 app_dir = Some(PathBuf::from(value(args, index, "--app")?));
@@ -106,6 +122,7 @@ pub(crate) fn parse_app_serve_command(args: &[OsString]) -> Result<AppServeComma
         name,
         local_addr,
         insecure_open,
+        restart,
     })
 }
 
@@ -145,7 +162,8 @@ pub(crate) fn run_app_serve_streaming(
     })?;
     let (guest, service) = start_app_guest(&command.app_dir, &command.state_dir, &manifest)?;
     let identity = load_identity_at(&app_identity_path(&name)?)?;
-    let served = bind_app_endpoint(name, identity, &service, command.local_addr)?;
+    let slot = ServiceSlot::new(service);
+    let served = bind_app_endpoint(name, identity, slot.clone(), command.local_addr)?;
     for endpoint in &served {
         write_process_output(
             process_stderr,
@@ -159,44 +177,63 @@ pub(crate) fn run_app_serve_streaming(
         )?;
     }
     // Park: the endpoint serves and the guest task runs until the process is
-    // terminated (the guest then sees stdin EOF and exits; no auto-restart).
-    let _guest = guest;
+    // terminated. With --restart on-failure the supervisor owns the guest
+    // and re-runs it across exits; otherwise a dead guest stays dead (its
+    // stdin EOFs when the slot — the last service handle — is dropped).
+    let _guest = match command.restart {
+        RestartPolicy::OnFailure => {
+            spawn_restart_supervisor(
+                guest,
+                slot,
+                command.app_dir.clone(),
+                command.state_dir.clone(),
+                manifest,
+            );
+            None
+        }
+        RestartPolicy::Never => Some(guest),
+    };
     loop {
         std::thread::park();
     }
 }
 
-/// Binds one native mesh endpoint serving the app's [`AppFsService`] through
-/// a per-connection principal-scoped view.
+/// Binds one native mesh endpoint serving the app's currently live
+/// [`wanix_appfs::AppFsService`] through a per-connection principal-scoped
+/// view.
 pub(crate) fn bind_app_endpoint(
     name: String,
     identity: NodeIdentity,
-    service: &AppFsService,
+    slot: ServiceSlot,
     local_addr: Option<SocketAddr>,
 ) -> Result<Vec<ServedEndpoint>, CliError> {
-    let policy = Arc::new(AppAttachPolicy {
-        service: service.clone(),
-    });
+    let policy = Arc::new(AppAttachPolicy { slot });
     let config = NativeServeConfig::per_peer(policy);
     bind_endpoints("app", vec![(name, identity, config)], local_addr)
 }
 
 /// The AppFS attach seam: binds each connection's verified peer id to a
-/// principal-scoped [`wanix_appfs::AppFs`] view.
+/// principal-scoped [`wanix_appfs::AppFs`] view of the currently live
+/// service generation.
 ///
 /// The `peer` argument is the cryptographically verified `remote_id()` of the
-/// QUIC connection — never a client-claimed name or payload field. Every
-/// ticket holder is admitted (an open room; allow-list rooms are the ADR 0007
-/// Layer 2 follow-up), but every guest event this connection causes carries
-/// the verified principal, which is what makes chat attribution and `who`
-/// presence unforgeable.
+/// QUIC connection — never a client-claimed name or payload field — and is
+/// presented to the app as the scheme-prefixed principal `iroh:<hex>` (the
+/// adapter and guest treat principals as opaque strings; the prefix names the
+/// proof scheme so future gateway principals cannot collide with mesh ones).
+/// Every ticket holder is admitted (an open room; allow-list rooms are the
+/// ADR 0007 Layer 2 follow-up), but every guest event this connection causes
+/// carries the verified principal, which is what makes chat attribution and
+/// `who` presence unforgeable. While no guest generation is live (mid
+/// restart) the slot is empty and the attach is refused.
 struct AppAttachPolicy {
-    service: AppFsService,
+    slot: ServiceSlot,
 }
 
 impl AttachPolicy for AppAttachPolicy {
     fn evaluate(&self, peer: PeerId, _aname: &str) -> Option<Authorization> {
-        let view = self.service.open_view(peer.to_hex());
+        let service = self.slot.current()?;
+        let view = service.open_view(format!("iroh:{}", peer.to_hex()));
         Some(Authorization::new(Arc::new(view), Rights::read_write()))
     }
 }

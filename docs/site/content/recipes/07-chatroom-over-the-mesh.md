@@ -25,7 +25,7 @@ prerequisites:
 usedInFlows:
   - {flow: build-a-chatroom, step: 2}
 honestLimits:
-  - "Date.now() inside the served guest is engine-pinned: every message carries at=1700000000000, so order is log order, not wall clock."
+  - "Message timestamps are the host-stamped at_ms on each request (wire v0.2), not the guest's clock — Date.now() inside the served qjs guest is still engine-pinned and should not be used for time."
   - "mount-cat is collected (prints at EOF), so reading the never-EOF stream file shows nothing until the process is killed — bound it with timeout; the live view today is a host-side tail of the --state log."
   - "Any ticket holder may attach (attribution stays unforgeable); allow-list rooms and CAS-pinned code provenance are deferred (docs/appfs.md)."
 canonicalCaveatFor: []
@@ -81,10 +81,10 @@ wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-{"at":1700000000000,"from":"36469a42...","body":"morning! mounted the room over the mesh"}
+{"at":1765000000000,"from":"iroh:36469a42...","body":"morning! mounted the room over the mesh"}
 ```
 
-No username was supplied anywhere. `from` is the hex of A's persisted dialer key (`~/.wanix/dialer.key`), taken from the verified QUIC handshake by the serve's attach policy — never from the payload. (Note `at`: the served guest's clock is engine-pinned, so every message carries the same deterministic timestamp.)
+No username was supplied anywhere. `from` is A's persisted dialer key (`~/.wanix/dialer.key`) as the scheme-prefixed principal `iroh:<hex>`, taken from the verified QUIC handshake by the serve's attach policy — never from the payload. `at` is the host-stamped wall clock (`at_ms`) the adapter puts on every request — the guest's one trusted time source (wire v0.2).
 
 ## 3. Person B: a second principal on one machine
 
@@ -96,8 +96,8 @@ HOME=/tmp/bob wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-{"at":1700000000000,"from":"36469a42...","body":"morning! mounted the room over the mesh"}
-{"at":1700000000000,"from":"04bd5311...","body":"hey A — same room, different key"}
+{"at":1765000000000,"from":"iroh:36469a42...","body":"morning! mounted the room over the mesh"}
+{"at":1765000000113,"from":"iroh:04bd5311...","body":"hey A — same room, different key"}
 ```
 
 ```sh
@@ -116,7 +116,7 @@ wanix-rust mount-cat "$T" who
 ```
 
 ```text
-04bd5311...
+iroh:04bd5311...
 ```
 
 Presence is host session state — the principals currently holding open `stream` subscriptions, one per line, sorted. The guest is never asked.
@@ -138,7 +138,7 @@ HOME=/tmp/bob wanix-rust mount-write "$T" post 'this line should show up live'
 The tail prints the line within a beat of the write returning:
 
 ```text
-{"at":1700000000000,"from":"04bd5311...","body":"this line should show up live"}
+{"at":1765000000291,"from":"iroh:04bd5311...","body":"this line should show up live"}
 ```
 
 (The mesh `stream` file delivers the same line to every parked subscriber buffer — step 4 proved the subscription exists — but no shipped CLI verb prints it incrementally yet; see Troubleshooting.)
@@ -154,7 +154,7 @@ wanix-rust mount-cat "$T" latest | tail -1
 ```
 
 ```text
-{"at":1700000000000,"from":"04bd5311...","body":"hi, this is definitely A"}
+{"at":1765000000404,"from":"iroh:04bd5311...","body":"hi, this is definitely A"}
 ```
 
 Still attributed to B. The guest keeps only the `body` of a JSON payload and discards any claimed author; the principal it stamps came from the host, which took it from the transport. Identity rides the transport; `post` carries body only.
@@ -188,6 +188,8 @@ wanix-rust mount-cat "$T" status      # the OLD ticket — stale port hint — s
 ```
 
 The room's memory was never guest RAM (`main.js` reloads `/state/log` at boot), the identity key survives the process, and on loopback/LAN even the stale ticket keeps working: the peer half is the address, mDNS finds the new route, the hint is just a hint. Both a bare `iroh://bd4e24de...` (no `?addr=` at all) and the old ticket reached the restarted room in this run.
+
+The manual restart is also automatable: `app serve ... --restart on-failure` supervises the guest, re-running it with capped backoff whenever it exits and swapping the fresh adapter behind the *same* ticket and endpoint. Connections opened against the dead generation keep failing honestly (`Unreachable`); new connections reach the restarted room.
 
 ## Troubleshooting (friction actually hit while testing)
 

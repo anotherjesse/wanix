@@ -9,16 +9,18 @@
 //! Stdio reads are blocking (ADR 0010 tier 2), so the guest's
 //! read-decide-reply loop parks between events instead of polling.
 //!
-//! Lifecycle honesty (no auto-restart in v0): when the guest exits or
-//! crashes, its fds close, so the adapter's pump observes the broken pipe,
-//! latches the channel down — discrete ops surface as
-//! [`wanix_fs::FsError::Unreachable`], the honest variant, because the app
-//! endpoint still exists but the implementation behind it is down (the same
-//! "resource down, not missing" vocabulary the mesh uses for a dead peer) —
-//! and closes the stream surface so blocked `stream` readers observe EOF
-//! rather than parking forever. The exit watcher thread here additionally
-//! logs the exit (with the guest's captured stderr) to the serve process's
-//! stderr.
+//! Lifecycle honesty: when the guest exits or crashes, its fds close, so the
+//! adapter's pump observes the broken pipe, latches the channel down —
+//! discrete ops surface as [`wanix_fs::FsError::Unreachable`], the honest
+//! variant, because the app endpoint still exists but the implementation
+//! behind it is down (the same "resource down, not missing" vocabulary the
+//! mesh uses for a dead peer) — and closes the stream surface so blocked
+//! `stream` readers observe EOF rather than parking forever. The exit
+//! watcher thread here additionally logs the exit (with the guest's captured
+//! stderr) to the serve process's stderr. Restarting a failed guest is the
+//! serve policy's business: see [`super::restart`] (`--restart on-failure`),
+//! which swaps a fresh adapter behind the endpoint while exited generations
+//! keep this honest dead-view behavior.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -41,9 +43,8 @@ use crate::{CliError, configure_qjs_task, quickjs_runner};
 pub(crate) struct AppGuest {
     /// Keepalive for the driver registry backing the detached task.
     _table: TaskTable,
-    /// The guest task handle. Production observes exit through the watcher
-    /// thread; tests wait on it directly to pin the lifecycle contracts.
-    #[cfg_attr(not(test), expect(dead_code))]
+    /// The guest task handle. The restart supervisor (and tests pinning the
+    /// lifecycle contracts) wait on it for exit.
     pub(crate) task: Task,
 }
 
@@ -78,7 +79,11 @@ pub(crate) fn start_app_guest(
     table.start_detached(task.id())?;
 
     let tree = declare_tree(manifest)?;
-    let service = AppFsService::new(tree, Box::new(sender), Box::new(receiver));
+    // The blocking v0.2 hello handshake: the guest's first line declares its
+    // proto (and optionally its tree, which wins over the manifest). A wrong
+    // proto or a non-hello first line is a clear serve-time error here.
+    let service = AppFsService::new(tree, Box::new(sender), Box::new(receiver))
+        .map_err(|error| CliError::new(format!("app serve: guest handshake: {error}"), 1))?;
     spawn_exit_watcher(&task, &service, stderr);
     Ok((
         AppGuest {
@@ -212,8 +217,8 @@ fn spawn_exit_watcher(task: &Task, service: &AppFsService, stderr: Arc<LineBuffe
         closer.close_all();
         let diagnostics = drain_captured(&stderr);
         eprintln!(
-            "wanix-rust app serve: guest exited with status {exit}; discrete ops now fail \
-             Unreachable and stream readers see EOF (no auto-restart in v0){}{diagnostics}",
+            "wanix-rust app serve: guest exited with status {exit}; discrete ops on this guest \
+             now fail Unreachable and stream readers see EOF{}{diagnostics}",
             if diagnostics.is_empty() {
                 ""
             } else {

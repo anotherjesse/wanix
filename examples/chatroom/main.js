@@ -9,7 +9,14 @@
 // The guest only decides: read one request, reply one line on stdout,
 // repeat until stdin EOF.
 //
-// The tree (declared in app.wanix.json):
+// Wire v0.2: the guest's FIRST line is a hello declaring its protocol
+// version and its tree — the guest is the tree authority, and the manifest's
+// files/streams are documentation. Read requests carry a byte range
+// (offset/len); every request carries host wall-clock time (at_ms) and the
+// transport-verified principal as "iroh:<hex>" (opaque to this app); stat
+// replies may declare a size.
+//
+// The tree (declared by the hello below; documented in app.wanix.json):
 //   post     write a message body            (guest: this file)
 //   latest   read the last 50 messages       (guest: this file)
 //   status   read app status JSON            (guest: this file)
@@ -22,8 +29,18 @@ const LATEST_COUNT = 50; // how many messages `latest` returns
 
 // The adapter carries arbitrary bytes as base64. qjs has atob/btoa, which
 // speak byte-strings, so text crosses through an explicit UTF-8 step.
-const encodeText = (text) => btoa(unescape(encodeURIComponent(text)));
+const textBytes = (text) => unescape(encodeURIComponent(text)); // one char per byte
+const encodeText = (text) => btoa(textBytes(text));
 const decodeText = (data) => decodeURIComponent(escape(atob(data)));
+
+// One ranged read reply (v0.2): serve the requested byte range of `text`.
+// A reply shorter than the requested len tells the host it hit end-of-file.
+function rangeReply(text, request) {
+  const bytes = textBytes(text);
+  const offset = request.offset || 0;
+  const len = request.len === undefined ? bytes.length : request.len;
+  return { data: btoa(bytes.slice(offset, offset + len)) };
+}
 
 // Guest memory is a cache: history lives in /state/log (one message JSON per
 // line) and is reloaded at boot, so the room survives a guest restart.
@@ -54,10 +71,11 @@ function appendLog(line) {
 }
 
 // post: one write is one message. Attribution is NEVER client-claimed: the
-// author is the transport-verified principal stamped into the request event
-// by the host. If the body arrives as JSON carrying its own `from`/author,
-// only its `body` text is kept and the claimed author is discarded.
-function post(principal, bodyText) {
+// author is the transport-verified principal ("iroh:<hex>") stamped into the
+// request event by the host, and the timestamp is the host-stamped at_ms. If
+// the body arrives as JSON carrying its own `from`/author, only its `body`
+// text is kept and the claimed author is discarded.
+function post(request, bodyText) {
   let body = bodyText;
   try {
     const claimed = JSON.parse(bodyText);
@@ -67,7 +85,7 @@ function post(principal, bodyText) {
   } catch (_ignored) {
     // Plain text body.
   }
-  const line = JSON.stringify({ at: Date.now(), from: principal, body });
+  const line = JSON.stringify({ at: request.at_ms, from: request.principal, body });
   messages.push(line);
   appendLog(line);
   // Feed the host-owned `stream` file: the host fans this line out to every
@@ -76,32 +94,41 @@ function post(principal, bodyText) {
   return {};
 }
 
-function latest() {
+function latestText() {
   const recent = messages.slice(-LATEST_COUNT);
-  return { data: encodeText(recent.map((line) => line + "\n").join("")) };
+  return recent.map((line) => line + "\n").join("");
 }
 
-function status() {
-  const line = JSON.stringify({ app: "chatroom", messages: messages.length });
-  return { data: encodeText(line + "\n") };
+function statusText() {
+  return JSON.stringify({ app: "chatroom", messages: messages.length }) + "\n";
 }
 
 // One discrete operation -> one ok payload (or a thrown {kind, message}).
 function handle(request) {
-  const { op, path, principal } = request;
-  if (op === "stat") return {}; // every path the adapter routes is declared
+  const { op, path } = request;
+  if (op === "stat") {
+    // Declared sizes (v0.2): the host reports them as metadata lengths.
+    if (path === "latest") return { size: textBytes(latestText()).length };
+    if (path === "status") return { size: textBytes(statusText()).length };
+    return {}; // every path the adapter routes is declared
+  }
   if (op === "readdir") fail("not_supported", path + " is a file, not a directory");
   if (op === "write") {
-    if (path === "post") return post(principal, decodeText(request.data || ""));
+    if (path === "post") return post(request, decodeText(request.data || ""));
     fail("not_supported", path + " is read-only; write to post");
   }
   if (op === "read") {
-    if (path === "latest") return latest();
-    if (path === "status") return status();
+    if (path === "latest") return rangeReply(latestText(), request);
+    if (path === "status") return rangeReply(statusText(), request);
     fail("not_supported", "post is write-only; read latest instead");
   }
   fail("not_found", "unknown path " + path);
 }
+
+// Wire v0.2 handshake: declare the protocol version and the tree before
+// anything else. This hello is the tree authority; app.wanix.json documents
+// the same shape for humans and catalogs.
+reply({ hello: { proto: 1, files: ["post", "latest", "status"], streams: ["stream"] } });
 
 // The resident loop: one request in flight at a time (the adapter
 // guarantees it), blocking in getline between events. stdin EOF means the

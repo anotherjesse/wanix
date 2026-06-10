@@ -10,8 +10,9 @@ use std::time::Duration;
 use wanix_fs::{File, FileSystem, FileType, FsError, NormalizedPath, OpenOptions};
 
 use crate::{
-    AppErrKind, AppFs, AppFsService, AppOp, AppPublish, AppReceiver, AppReply, AppRequest,
-    AppSender, AppTree, GuestLine, MAX_LINE_LEN, decode_data, encode_data, publish_to_line,
+    AppErrKind, AppFs, AppFsService, AppHello, AppOp, AppPublish, AppReceiver, AppReply,
+    AppRequest, AppSender, AppTree, GuestLine, MAX_LINE_LEN, PROTO_VERSION, READ_CHUNK_LEN,
+    decode_data, encode_data, hello_to_line, publish_to_line,
 };
 
 /// A scripted guest: each adapter request is answered by a handler that
@@ -93,13 +94,32 @@ impl AppReceiver for ScriptedReceiver {
     }
 }
 
+/// A bare v0.2 hello line declaring no tree (the host-declared tree wins).
+fn hello_line() -> Vec<u8> {
+    hello_to_line(&AppHello {
+        proto: PROTO_VERSION,
+        files: None,
+        streams: None,
+    })
+    .unwrap()
+}
+
 fn scripted(
+    handler: impl FnMut(&AppRequest) -> Vec<Vec<u8>> + Send + 'static,
+) -> (Box<dyn AppSender>, Box<dyn AppReceiver>, Arc<ScriptState>) {
+    scripted_with_first_line(hello_line(), handler)
+}
+
+/// A scripted guest whose first (pre-queued) output line is `first` — the
+/// handshake seam: tests pick the hello (or a non-hello) the guest opens with.
+fn scripted_with_first_line(
+    first: Vec<u8>,
     handler: impl FnMut(&AppRequest) -> Vec<Vec<u8>> + Send + 'static,
 ) -> (Box<dyn AppSender>, Box<dyn AppReceiver>, Arc<ScriptState>) {
     let state = Arc::new(ScriptState {
         inner: Mutex::new(ScriptInner {
             handler: Box::new(handler),
-            queue: VecDeque::new(),
+            queue: VecDeque::from([first]),
             in_flight: false,
             overlap: false,
             sent: Vec::new(),
@@ -125,7 +145,10 @@ fn chat_service(
     handler: impl FnMut(&AppRequest) -> Vec<Vec<u8>> + Send + 'static,
 ) -> (AppFsService, Arc<ScriptState>) {
     let (sender, receiver, state) = scripted(handler);
-    (AppFsService::new(chat_tree(), sender, receiver), state)
+    (
+        AppFsService::new(chat_tree(), sender, receiver).unwrap(),
+        state,
+    )
 }
 
 fn ok_line(id: u64, ok: serde_json::Value) -> Vec<u8> {
@@ -190,23 +213,31 @@ fn request_line_shape_is_pinned() {
         id: 7,
         op: AppOp::Write,
         path: "post".to_owned(),
-        principal: "abcd".to_owned(),
+        principal: "iroh:abcd".to_owned(),
+        at_ms: 1700000000000,
         data: Some(encode_data(b"hi")),
+        offset: None,
+        len: None,
     };
     assert_eq!(
         request.to_line().unwrap(),
-        b"{\"id\":7,\"op\":\"write\",\"path\":\"post\",\"principal\":\"abcd\",\"data\":\"aGk=\"}\n"
+        b"{\"id\":7,\"op\":\"write\",\"path\":\"post\",\"principal\":\"iroh:abcd\",\
+          \"at_ms\":1700000000000,\"data\":\"aGk=\"}\n"
     );
     let read = AppRequest {
         id: 1,
         op: AppOp::Read,
         path: "latest".to_owned(),
         principal: "p".to_owned(),
+        at_ms: 5,
         data: None,
+        offset: Some(0),
+        len: Some(262144),
     };
     assert_eq!(
         read.to_line().unwrap(),
-        b"{\"id\":1,\"op\":\"read\",\"path\":\"latest\",\"principal\":\"p\"}\n"
+        b"{\"id\":1,\"op\":\"read\",\"path\":\"latest\",\"principal\":\"p\",\"at_ms\":5,\
+          \"offset\":0,\"len\":262144}\n"
     );
     for (op, name) in [
         (AppOp::Read, "\"read\""),
@@ -216,6 +247,27 @@ fn request_line_shape_is_pinned() {
     ] {
         assert_eq!(serde_json::to_string(&op).unwrap(), name);
     }
+}
+
+#[test]
+fn hello_line_shape_is_pinned() {
+    let bare = hello_line();
+    assert_eq!(bare, b"{\"hello\":{\"proto\":1}}\n");
+    let GuestLine::Hello(hello) = GuestLine::parse(&bare).unwrap() else {
+        panic!("expected hello");
+    };
+    assert_eq!(hello.proto, PROTO_VERSION);
+    assert!(hello.files.is_none() && hello.streams.is_none());
+
+    let declared =
+        GuestLine::parse(b"{\"hello\":{\"proto\":1,\"files\":[\"post\"],\"streams\":[\"s\"]}}\n")
+            .unwrap();
+    let GuestLine::Hello(hello) = declared else {
+        panic!("expected hello");
+    };
+    assert_eq!(hello.files.as_deref(), Some(&["post".to_owned()][..]));
+    assert_eq!(hello.streams.as_deref(), Some(&["s".to_owned()][..]));
+    assert!(GuestLine::parse(b"{\"hello\":{\"proto\":1,\"oops\":2}}").is_err());
 }
 
 #[test]
@@ -245,8 +297,15 @@ fn reply_shapes_are_pinned() {
         panic!("expected reply");
     };
     let ok = reply.into_result().unwrap();
-    assert!(ok.data.is_none() && ok.entries.is_none());
+    assert!(ok.data.is_none() && ok.entries.is_none() && ok.size.is_none());
     assert_eq!(ok.data_bytes().unwrap(), b"");
+
+    // A stat reply may declare the file's size (v0.2).
+    let GuestLine::Reply(reply) = GuestLine::parse(b"{\"id\":6,\"ok\":{\"size\":42}}").unwrap()
+    else {
+        panic!("expected reply");
+    };
+    assert_eq!(reply.into_result().unwrap().size, Some(42));
 
     assert!(GuestLine::parse(b"{\"id\":1,\"ok\":{},\"oops\":1}").is_err());
     let both = AppReply {
@@ -323,7 +382,10 @@ fn oversized_lines_are_rejected_in_both_directions() {
         op: AppOp::Write,
         path: "post".to_owned(),
         principal: "p".to_owned(),
+        at_ms: 0,
         data: Some(encode_data(&vec![0_u8; MAX_LINE_LEN])),
+        offset: None,
+        len: None,
     };
     assert!(request.to_line().is_err());
 }
@@ -343,11 +405,42 @@ fn read_routes_to_guest_with_principal_and_serves_by_offset() {
     assert_eq!(read_to_end(file.as_mut()), b"hello world");
 
     let sent = state.sent();
-    assert_eq!(sent.len(), 1, "one snapshot fetch for many small reads");
+    assert_eq!(sent.len(), 1, "one chunk fetch for many small reads");
     assert_eq!(sent[0].op, AppOp::Read);
     assert_eq!(sent[0].path, "latest");
     assert_eq!(sent[0].principal, "peer-a");
     assert_eq!(sent[0].data, None);
+    assert_eq!(sent[0].offset, Some(0));
+    assert_eq!(sent[0].len, Some(READ_CHUNK_LEN));
+    assert!(sent[0].at_ms > 0, "requests carry host wall-clock time");
+}
+
+/// Ranged reads (v0.2): a file larger than one chunk is fetched as a
+/// sequence of `READ_CHUNK_LEN` ranges, so the 1 MiB line ceiling no longer
+/// caps app file size.
+#[test]
+fn large_files_are_read_in_chunks_beyond_the_line_ceiling() {
+    let chunk = usize::try_from(READ_CHUNK_LEN).unwrap();
+    let content: Vec<u8> = (0..chunk * 2 + 17).map(|i| (i % 251) as u8).collect();
+    let served = content.clone();
+    let (service, state) = chat_service(move |request| {
+        let offset = usize::try_from(request.offset.unwrap()).unwrap();
+        let len = usize::try_from(request.len.unwrap()).unwrap();
+        let end = (offset + len).min(served.len());
+        let range = &served[offset.min(served.len())..end];
+        vec![ok_line(
+            request.id,
+            serde_json::json!({ "data": encode_data(range) }),
+        )]
+    });
+    let fs = service.open_view("peer-big");
+    let mut file = open(&fs, "latest", OpenOptions::read());
+    assert_eq!(read_to_end(file.as_mut()), content);
+
+    let sent = state.sent();
+    assert_eq!(sent.len(), 3, "two full chunks plus the short tail");
+    assert_eq!(sent[1].offset, Some(READ_CHUNK_LEN));
+    assert_eq!(sent[2].offset, Some(READ_CHUNK_LEN * 2));
 }
 
 #[test]
@@ -390,12 +483,19 @@ fn readdir_routes_to_guest() {
 fn stat_routes_to_guest_and_maps_errors() {
     let (service, state) = chat_service(|request| match request.path.as_str() {
         "post" => vec![ok_line(request.id, serde_json::json!({}))],
+        "history" => vec![ok_line(request.id, serde_json::json!({ "size": 42 }))],
         _ => vec![err_line(request.id, "not_found", "gone")],
     });
     let fs = service.open_view("peer-s");
     let meta = fs.metadata(&path("post")).unwrap();
     assert_eq!(meta.file_type(), FileType::File);
+    assert_eq!(meta.len(), 0, "no declared size reads honestly as 0");
     assert_eq!(state.sent()[0].op, AppOp::Stat);
+    // A guest-declared stat size becomes the reported metadata length
+    // (v0.2): the adapter stops lying `len 0` when the guest provides it.
+    assert_eq!(fs.metadata(&path("history")).unwrap().len(), 42);
+    let file = open(&fs, "history", OpenOptions::read());
+    assert_eq!(file.metadata().unwrap().len(), 42);
     assert_eq!(fs.metadata(&path("latest")).unwrap_err(), FsError::NotFound);
 }
 
@@ -428,18 +528,156 @@ fn broken_channel_maps_to_unreachable() {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "guest exited"))
         }
     }
+    /// Speaks a clean hello, then the channel breaks.
+    struct HelloThenBroken(bool);
+    impl AppReceiver for HelloThenBroken {
+        fn recv_line(&mut self) -> io::Result<Vec<u8>> {
+            if !self.0 {
+                self.0 = true;
+                return Ok(hello_line());
+            }
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "guest exited"))
+        }
+    }
+    // A channel already broken at handshake time fails construction.
     impl AppReceiver for BrokenHalf {
         fn recv_line(&mut self) -> io::Result<Vec<u8>> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "guest exited"))
         }
     }
-    let service = AppFsService::new(chat_tree(), Box::new(BrokenHalf), Box::new(BrokenHalf));
+    assert!(matches!(
+        AppFsService::new(chat_tree(), Box::new(BrokenHalf), Box::new(BrokenHalf))
+            .map(|_| ())
+            .unwrap_err(),
+        FsError::Unreachable(_)
+    ));
+    // A channel that breaks after the handshake unreaches discrete ops.
+    let service = AppFsService::new(
+        chat_tree(),
+        Box::new(BrokenHalf),
+        Box::new(HelloThenBroken(false)),
+    )
+    .unwrap();
     let fs = service.open_view("p");
     let mut file = open(&fs, "post", write_only());
     assert!(matches!(
         file.write(b"x").unwrap_err(),
         FsError::Unreachable(_)
     ));
+}
+
+// --- v0.2 handshake, op-fatal errors, deadlines ----------------------------
+
+#[test]
+fn hello_is_the_tree_authority_and_proto_mismatch_is_refused() {
+    // A hello that declares files/streams overrides the host-declared tree.
+    let declared = hello_to_line(&AppHello {
+        proto: PROTO_VERSION,
+        files: Some(vec!["notes".to_owned()]),
+        streams: Some(vec!["feed".to_owned()]),
+    })
+    .unwrap();
+    let (sender, receiver, _state) = scripted_with_first_line(declared, |request| {
+        vec![ok_line(request.id, serde_json::json!({}))]
+    });
+    let service = AppFsService::new(chat_tree(), sender, receiver).unwrap();
+    let fs = service.open_view("p");
+    let names: Vec<String> = fs
+        .read_dir(&path("."))
+        .unwrap()
+        .iter()
+        .map(|entry| entry.name().to_owned())
+        .collect();
+    assert_eq!(names, ["feed", "notes", "who"]);
+    assert_eq!(
+        fs.metadata(&path("post")).unwrap_err(),
+        FsError::NotFound,
+        "the manifest-declared tree is demoted to documentation"
+    );
+
+    // A proto the host does not speak is a construction-time error.
+    let (sender, receiver, _state) =
+        scripted_with_first_line(b"{\"hello\":{\"proto\":2}}\n".to_vec(), |_| Vec::new());
+    let error = AppFsService::new(chat_tree(), sender, receiver)
+        .map(|_| ())
+        .unwrap_err();
+    assert!(matches!(error, FsError::Other(message) if message.contains("proto")));
+
+    // A first line that is not a hello is a construction-time error.
+    let (sender, receiver, _state) =
+        scripted_with_first_line(ok_line(1, serde_json::json!({})), |_| Vec::new());
+    let error = AppFsService::new(chat_tree(), sender, receiver)
+        .map(|_| ())
+        .unwrap_err();
+    assert!(matches!(error, FsError::Other(message) if message.contains("hello")));
+}
+
+/// Op-fatal vs channel-fatal (v0.2): a complete, newline-framed line the
+/// host cannot honor as a single reply — oversized or malformed — fails the
+/// in-flight op with the specific error, but the channel stays up: framing
+/// is line-based, so nothing desynchronized.
+#[test]
+fn oversized_or_malformed_reply_fails_the_op_but_not_the_channel() {
+    let mut bad_lines = VecDeque::from([
+        {
+            let mut huge = vec![b'x'; MAX_LINE_LEN + 1];
+            huge.push(b'\n');
+            huge
+        },
+        b"this is not json\n".to_vec(),
+    ]);
+    let (service, state) = chat_service(move |request| match bad_lines.pop_front() {
+        Some(line) => vec![line],
+        None => vec![ok_line(request.id, serde_json::json!({}))],
+    });
+    let fs = service.open_view("p");
+
+    let mut file = open(&fs, "post", write_only());
+    assert!(matches!(
+        file.write(b"a").unwrap_err(),
+        FsError::Other(message) if message.contains("exceeds")
+    ));
+    let mut file = open(&fs, "post", write_only());
+    assert!(matches!(
+        file.write(b"b").unwrap_err(),
+        FsError::Other(message) if message.contains("invalid app guest line")
+    ));
+    // The channel survived both: the next op reaches the guest and succeeds.
+    let mut file = open(&fs, "post", write_only());
+    assert_eq!(file.write(b"c").unwrap(), 1);
+    assert_eq!(state.sent().len(), 3);
+}
+
+/// Per-request deadline (v0.2): a guest that never answers fails the op as
+/// `Unreachable` naming the op and deadline, latches the channel down, and
+/// closes the stream surface — an unresponsive guest is a dead guest.
+#[test]
+fn unanswered_op_expires_at_the_deadline_and_latches_down() {
+    let (sender, receiver, state) = scripted(|_| Vec::new());
+    let service =
+        AppFsService::with_op_deadline(chat_tree(), sender, receiver, Duration::from_millis(200))
+            .unwrap();
+    let fs = service.open_view("p");
+
+    let mut file = open(&fs, "post", write_only());
+    match file.write(b"x").unwrap_err() {
+        FsError::Unreachable(message) => {
+            assert!(message.contains("did not reply to write"), "{message}");
+            assert!(message.contains("200ms"), "{message}");
+        }
+        other => panic!("expected Unreachable, got {other:?}"),
+    }
+    // Latched: the next op fails without reaching the guest.
+    let mut file = open(&fs, "post", write_only());
+    assert!(matches!(
+        file.write(b"y").unwrap_err(),
+        FsError::Unreachable(_)
+    ));
+    assert_eq!(state.sent().len(), 1, "the downed channel must not be used");
+    // The stream surface is torn down: a fresh subscription reads EOF.
+    let mut late = open(&fs, "stream", OpenOptions::read());
+    let mut buf = [0_u8; 8];
+    assert_eq!(late.read(&mut buf).unwrap(), 0);
 }
 
 // --- streams, publishes, presence ---------------------------------------

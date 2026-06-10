@@ -18,6 +18,7 @@ use crate::CliError;
 use crate::volume::wanix_dir;
 
 mod guest;
+mod restart;
 mod serve;
 mod stdio;
 

@@ -13,21 +13,28 @@
 //!   a guest parked writing a large publish burst into a bounded pipe always
 //!   makes progress, which in turn keeps the guest reading its input — a
 //!   large request line can never deadlock against an undrained backlog.
-//! - **Protocol errors are terminal, not desynchronizing.** A guest line the
-//!   host cannot honor (parse failure, undeclared-stream publish, a reply
-//!   matching no in-flight request) fails the in-flight op with the specific
-//!   error and latches the channel down: every later discrete op fails as
-//!   [`FsError::Unreachable`] instead of misreading the abandoned reply, and
+//! - **Op-fatal vs channel-fatal.** A complete, newline-framed line the host
+//!   cannot parse (malformed JSON, or a line over the size ceiling) does not
+//!   desynchronize the channel — framing is line-based — so it is *op-fatal*:
+//!   it is taken as the failed reply to the in-flight op, which fails with
+//!   the specific error while the channel stays up. Only errors that
+//!   genuinely break the channel are *channel-fatal* and latch it down: a
+//!   broken/EOF'd receive half, an unparseable line with no op in flight to
+//!   attribute it to, and post-framing protocol violations (an undeclared-
+//!   stream publish, a reply matching no in-flight id, a second hello). Once
+//!   latched, every later discrete op fails as [`FsError::Unreachable`] and
 //!   the stream surface closes (the guest can never publish through this
-//!   channel again).
+//!   channel again). A reply that never arrives is bounded separately by the
+//!   per-request deadline on [`ReplySlot::wait`], whose expiry also latches
+//!   down — an unresponsive guest is a dead guest.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wanix_fs::{FsError, FsResult};
 
 use crate::channel::AppReceiver;
-use crate::protocol::{AppOk, AppReply, GuestLine};
+use crate::protocol::{AppOk, AppOp, AppReply, GuestLine};
 use crate::service::channel_down;
 use crate::streams::StreamTable;
 use crate::tree::AppTree;
@@ -79,8 +86,15 @@ impl ReplySlot {
         }
     }
 
-    /// Blocks until the pump routes the in-flight outcome or latches down.
-    pub(crate) fn wait(&self) -> FsResult<AppOk> {
+    /// Blocks until the pump routes the in-flight outcome, the channel
+    /// latches down, or `deadline` expires.
+    ///
+    /// Deadline expiry latches the channel down: a guest that did not answer
+    /// within the (generous) per-request deadline is unresponsive, and later
+    /// ops must fail honestly as [`FsError::Unreachable`] instead of queueing
+    /// behind a wedged actor.
+    pub(crate) fn wait(&self, op: AppOp, deadline: Duration) -> FsResult<AppOk> {
+        let start = Instant::now();
         let mut inner = self.lock()?;
         loop {
             if let Some(outcome) = inner.outcome.take() {
@@ -92,12 +106,47 @@ impl ReplySlot {
                 inner.waiting = None;
                 return Err(down);
             }
+            let elapsed = start.elapsed();
+            if elapsed >= deadline {
+                let down = FsError::Unreachable(format!(
+                    "app guest did not reply to {} within {deadline:?}",
+                    op.name()
+                ));
+                inner.waiting = None;
+                inner.down = Some(down.clone());
+                drop(inner);
+                self.signal.notify_all();
+                return Err(down);
+            }
             let (next, _timed_out) = self
                 .signal
-                .wait_timeout(inner, WAIT_RECHECK_INTERVAL)
+                .wait_timeout(inner, WAIT_RECHECK_INTERVAL.min(deadline - elapsed))
                 .map_err(|_| FsError::Other("app reply slot wait poisoned".to_owned()))?;
             inner = next;
         }
+    }
+
+    /// Whether the channel has latched down (used by the service to tear the
+    /// stream surface down after a deadline expiry observed in `wait`).
+    pub(crate) fn is_down(&self) -> bool {
+        self.inner.lock().is_ok_and(|inner| inner.down.is_some())
+    }
+
+    /// Fails the in-flight op with `err` without touching the channel state.
+    ///
+    /// Returns `false` when no op is awaiting an outcome — the caller then
+    /// has nothing to attribute the error to and must treat it as terminal.
+    fn fail_in_flight(&self, err: FsError) -> bool {
+        let Ok(mut inner) = self.inner.lock() else {
+            return false;
+        };
+        if inner.waiting.is_none() || inner.outcome.is_some() {
+            return false;
+        }
+        inner.outcome = Some(Err(err));
+        drop(inner);
+        self.signal.notify_all();
+        true
     }
 
     /// Routes one guest reply to the in-flight request.
@@ -164,9 +213,21 @@ fn run(
         };
         let line = match GuestLine::parse(&raw) {
             Ok(line) => line,
-            Err(err) => break err,
+            // Op-fatal: the line is complete (newline-framed), so the channel
+            // is still in sync; an oversized or malformed line is taken as
+            // the failed reply to the in-flight op. With no op in flight
+            // there is nothing to attribute the garbage to — terminal.
+            Err(err) => {
+                if slot.fail_in_flight(err.clone()) {
+                    continue;
+                }
+                break err;
+            }
         };
         let handled = match line {
+            GuestLine::Hello(_) => Err(FsError::Other(
+                "app guest sent a hello after the handshake".to_owned(),
+            )),
             GuestLine::Publish(publish) => streams.fan_out(tree, &publish),
             GuestLine::Reply(reply) => slot.route(reply),
         };

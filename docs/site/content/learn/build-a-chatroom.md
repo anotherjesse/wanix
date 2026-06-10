@@ -30,11 +30,11 @@ prerequisites:
   - learn/js-outside-chrome
 usedInFlows: []
 honestLimits:
-  - "Message timestamps are engine-pinned: Date.now() inside the served qjs guest returns a fixed epoch (observed at=1700000000000 on every message), so ordering is log order, not wall clock."
+  - "Message timestamps are the host-stamped at_ms carried on every request (wire v0.2); Date.now() inside the served qjs guest is still engine-pinned (a fixed epoch) and should not be used for time."
   - "No shipped CLI verb streams the never-EOF stream file incrementally yet: mount-cat and the shell's cat are collected (they print at EOF), so a parked stream read shows nothing until killed. Bound it with timeout; the live view today is a host-side tail of the --state log."
   - "who is sessions, not heartbeats: a hard-killed subscriber lingers in who until the transport declares its connection dead (observed ~30 s on loopback)."
   - "Stopping the serve is abrupt process death: a fresh op fails unreachable in ~5 s, but an already-parked stream reader blocks until QUIC liveness fires (~35 s observed) and then gets a transport error, losing its collected bytes. Stream readers are released with EOF only when the guest exits while the serve lives."
-  - "Every ticket holder may attach (an open room with unforgeable attribution); allow-list rooms are ADR 0007 Layer 2 follow-up. No auto-restart in v0: a dead guest fails ops Unreachable."
+  - "Every ticket holder may attach (an open room with unforgeable attribution); allow-list rooms are ADR 0007 Layer 2 follow-up. Auto-restart is opt-in (app serve --restart on-failure); by default a dead guest fails ops Unreachable."
 canonicalCaveatFor: [engine-pinned-guest-clock]
 ---
 
@@ -64,25 +64,32 @@ The whole chatroom is `examples/chatroom/` — a manifest and one script. The ma
 }
 ```
 
-`files` are routed to the guest as discrete events; `stream` is host-owned and never-EOF; `who` exists implicitly. And `main.js` is a resident loop you can read in one sitting — this is its entire decision core:
+`files`/`streams` here are documentation: on the wire (v0.2) the *guest* is the tree authority — its first output line is a hello declaring its protocol version and tree. And `main.js` is a resident loop you can read in one sitting — this is its entire decision core:
 
 ```js
 // One discrete operation -> one ok payload (or a thrown {kind, message}).
 function handle(request) {
-  const { op, path, principal } = request;
-  if (op === "stat") return {};
+  const { op, path } = request;
+  if (op === "stat") {
+    if (path === "latest") return { size: textBytes(latestText()).length };
+    if (path === "status") return { size: textBytes(statusText()).length };
+    return {};
+  }
   if (op === "readdir") fail("not_supported", path + " is a file, not a directory");
   if (op === "write") {
-    if (path === "post") return post(principal, decodeText(request.data || ""));
+    if (path === "post") return post(request, decodeText(request.data || ""));
     fail("not_supported", path + " is read-only; write to post");
   }
   if (op === "read") {
-    if (path === "latest") return latest();
-    if (path === "status") return status();
+    if (path === "latest") return rangeReply(latestText(), request);  // honors offset/len
+    if (path === "status") return rangeReply(statusText(), request);
     fail("not_supported", "post is write-only; read latest instead");
   }
   fail("not_found", "unknown path " + path);
 }
+
+// Wire v0.2 handshake: declare the protocol version and the tree first.
+reply({ hello: { proto: 1, files: ["post", "latest", "status"], streams: ["stream"] } });
 
 // The resident loop: one request in flight at a time (the adapter
 // guarantees it), blocking in getline between events. stdin EOF means the
@@ -97,18 +104,19 @@ while ((line = std.in.getline()) !== null) {
 }
 ```
 
-That is the file2chan split (`crates/wanix-appfs`): every read or write on a guest file arrives as one JSON line on stdin, the guest answers one line on stdout, and the adapter guarantees one request in flight at a time — the guest is a single actor and concurrency is never its problem. Note what is *absent*: no sockets, no QUIC, no identity handling, no subscriber bookkeeping, no backpressure. The wire never touches this program.
+That is the file2chan split (`crates/wanix-appfs`): every read or write on a guest file arrives as one JSON line on stdin, the guest answers one line on stdout, and the adapter guarantees one request in flight at a time — the guest is a single actor and concurrency is never its problem. Reads arrive as byte ranges (`offset`/`len`), so a big file is just a sequence of chunked replies. Note what is *absent*: no sockets, no QUIC, no identity handling, no subscriber bookkeeping, no backpressure. The wire never touches this program.
 
 And `post()` makes one decision worth reading twice:
 
 ```js
 // post: one write is one message. Attribution is NEVER client-claimed: the
-// author is the transport-verified principal stamped into the request event
-// by the host. If the body arrives as JSON carrying its own `from`/author,
-// only its `body` text is kept and the claimed author is discarded.
-function post(principal, bodyText) {
+// author is the transport-verified principal ("iroh:<hex>") stamped into the
+// request event by the host, and the timestamp is the host-stamped at_ms. If
+// the body arrives as JSON carrying its own `from`/author, only its `body`
+// text is kept and the claimed author is discarded.
+function post(request, bodyText) {
   // ...extract body, discard any claimed author...
-  const line = JSON.stringify({ at: Date.now(), from: principal, body });
+  const line = JSON.stringify({ at: request.at_ms, from: request.principal, body });
   messages.push(line);
   appendLog(line);                       // durable: /state/log, not guest RAM
   reply({ publish: { stream: "stream", data: encodeText(line + "\n") } });
@@ -144,12 +152,12 @@ wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-{"at":1700000000000,"from":"36469a42...","body":"morning! mounted the room over the mesh"}
+{"at":1765000000000,"from":"iroh:36469a42...","body":"morning! mounted the room over the mesh"}
 ```
 
-You never typed a name, yet the message is attributed. `from` is the hex of your persisted dialer key (`~/.wanix/dialer.key`, `crates/wanix-cli/src/mesh/ticket.rs`): the serve edge binds each connection's *verified* QUIC peer identity into a principal-scoped view (`AppAttachPolicy`, `crates/wanix-cli/src/app/serve.rs`), and the adapter stamps that principal into every event the guest sees. Identity rides the transport; the payload carries body only.
+You never typed a name, yet the message is attributed. `from` is your persisted dialer key as the scheme-prefixed principal `iroh:<hex>` (`~/.wanix/dialer.key`, `crates/wanix-cli/src/mesh/ticket.rs`): the serve edge binds each connection's *verified* QUIC peer identity into a principal-scoped view (`AppAttachPolicy`, `crates/wanix-cli/src/app/serve.rs`), and the adapter stamps that principal into every event the guest sees. Identity rides the transport; the payload carries body only.
 
-One honest oddity to notice now: `at` is always `1700000000000`. `Date.now()` inside the served guest is engine-pinned, so timestamps are deterministic — message order is log order, not wall clock.
+One honest detail to notice now: `at` is the host-stamped `at_ms` carried on every request (wire v0.2) — the guest never trusts its own clock, which inside the served qjs engine is pinned to a fixed epoch.
 
 ## 4. Simulating your friend on one machine
 
@@ -161,8 +169,8 @@ HOME=/tmp/bob wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-{"at":1700000000000,"from":"36469a42...","body":"morning! mounted the room over the mesh"}
-{"at":1700000000000,"from":"04bd5311...","body":"hey A — same room, different key"}
+{"at":1765000000000,"from":"iroh:36469a42...","body":"morning! mounted the room over the mesh"}
+{"at":1765000000113,"from":"iroh:04bd5311...","body":"hey A — same room, different key"}
 ```
 
 First contact mints `/tmp/bob/.wanix/dialer.key`; B is `04bd5311...` from then on, durably. Two people, zero accounts, zero configuration — the handshake is the login.
@@ -174,7 +182,7 @@ First contact mints `/tmp/bob/.wanix/dialer.key`; B is `04bd5311...` from then o
 ```sh
 HOME=/tmp/bob timeout 12 wanix-rust mount-cat "$T" stream &
 wanix-rust mount-cat "$T" who
-# 04bd5311...
+# iroh:04bd5311...
 ```
 
 Presence here is not a heartbeat the app implements — it is the host's own session table made readable. The flip side is honest too: kill that subscriber hard and `who` keeps listing it until the transport declares the connection dead (~30 s of silence on loopback in our run).
@@ -194,7 +202,7 @@ HOME=/tmp/bob wanix-rust mount-write "$T" post 'this line should show up live'
 ```
 
 ```text
-{"at":1700000000000,"from":"04bd5311...","body":"this line should show up live"}
+{"at":1765000000291,"from":"iroh:04bd5311...","body":"this line should show up live"}
 ```
 
 ...and the line lands in the tail within a beat of the write returning: post → guest appends to `/state/log` → guest publishes → host fans out. A resident streaming client (the same `getline` loop the room itself runs, pointed at `stream`) is the named next step; today no CLI verb prints the stream incrementally.
@@ -210,7 +218,7 @@ wanix-rust mount-cat "$T" latest | tail -1
 ```
 
 ```text
-{"at":1700000000000,"from":"04bd5311...","body":"hi, this is definitely A"}
+{"at":1765000000404,"from":"iroh:04bd5311...","body":"hi, this is definitely A"}
 ```
 
 Still B. The guest extracts `body` and discards the claimed author (`post()` above), and it *could not* honor the claim even if it wanted to — the principal in every event comes from the host, which took it from the QUIC handshake. There is no API for lying about who you are. The lesson generalizes: `post` carries body only; identity rides the transport.

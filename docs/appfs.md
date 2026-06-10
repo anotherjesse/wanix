@@ -6,21 +6,52 @@ HTTP and filesystem surfaces. It is a sibling to
 [ToolFS](toolfs.md), and builds on the resource/catalog direction in
 [ADR 0007](adrs/0007-resources-catalogs-and-pairing.md).
 
-**Status update (2026-06): v0 shipped.** The filesystem surface and the
-file2chan adapter live at `crates/wanix-appfs` (discrete ops as newline-JSON
-events to the guest, a host pump thread for guest output, host-owned never-EOF
-stream files, `open_view(principal)`), and `wanix-rust app serve`
-(`crates/wanix-cli/src/app/`) runs the bundled `examples/chatroom` qjs guest as
-a mesh-served AppResource — the Chatroom Proof below, pinned by
+**Status update (2026-06): v0 shipped; wire v0.2 shipped.** The filesystem
+surface and the file2chan adapter live at `crates/wanix-appfs` (discrete ops
+as newline-JSON events to the guest, a host pump thread for guest output,
+host-owned never-EOF stream files, `open_view(principal)`), and `wanix-rust
+app serve` (`crates/wanix-cli/src/app/`) runs the bundled `examples/chatroom`
+qjs guest as a mesh-served AppResource — the Chatroom Proof below, pinned by
 `crates/wanix-cli/src/app/serve/tests.rs` and walked through in
-`docs/site/content/recipes/07-chatroom-over-the-mesh.md`. What v0 does **not**
-cover from this design: the HTTP surface and gateway principals (§HTTP
-Surface), the turn-based execution model with a host handle table and stream
-splicing (§Execution Model — the v0 guest is an ADR 0010 tier-2 resident qjs
-loop over blocking stdin, not tier-1 turns), CAS-pinned code provenance
-(§Provenance), any restart policy (a dead guest stays `Unreachable`), the
-rust-wasm adapter, and a request deadline on the adapter's single-in-flight
-channel lock.
+`docs/site/content/recipes/07-chatroom-over-the-mesh.md`.
+
+The **v0.2 wire** (pinned field-by-field in `crates/wanix-appfs/src/tests.rs`)
+adds, on top of the v0 line protocol:
+
+- **Guest hello.** The guest's first line is
+  `{"hello":{"proto":1,"files":[...],"streams":[...]}}`; the guest is the tree
+  authority (manifest `files`/`streams` are documentation and the fallback
+  when the hello declares no tree), and a proto mismatch or missing hello is a
+  clear serve-time error.
+- **Ranged reads.** `read` requests carry `offset`/`len` (the host asks in
+  256 KiB chunks); a reply shorter than `len` means EOF, so the 1 MiB line
+  ceiling no longer caps app file size while a small file still costs one
+  fetch.
+- **Host-stamped time.** Every request carries `at_ms` (host wall-clock
+  milliseconds) — the guest's one trusted time source.
+- **Optional stat size.** A stat reply may declare `{"size":N}`; the adapter
+  reports it as the file's metadata length instead of lying `0`.
+- **Principal scheme.** The serve attach policy presents verified mesh peers
+  as `iroh:<hex>`; principals stay opaque to the adapter and guest, and the
+  scheme keeps future gateway principals collision-free.
+- **Op-fatal vs channel-fatal errors.** An oversized or malformed (but
+  newline-framed) guest line fails only the in-flight op with the specific
+  error; only genuine desync (broken pipe, unattributable garbage, undeclared-
+  stream publish, mismatched reply id) latches the channel down.
+- **Per-request deadline.** Every reply wait is bounded (default 30 s,
+  configurable via `AppFsService::with_op_deadline`); expiry fails the op as
+  `Unreachable` naming the op and deadline and latches the channel down.
+- **Auto-restart.** `app serve --restart on-failure` supervises the guest with
+  capped exponential backoff, swapping each fresh generation's service through
+  a `ServiceSlot` read per attach — ticket and endpoint unchanged, old
+  connections keep their honestly-dead view, new connections get the live
+  service (default remains no restart).
+
+What this still does **not** cover from this design: the HTTP surface and
+gateway principals (§HTTP Surface), the turn-based execution model with a host
+handle table and stream splicing (§Execution Model — the guest is an ADR 0010
+tier-2 resident qjs loop over blocking stdin, not tier-1 turns), CAS-pinned
+code provenance (§Provenance), and the rust-wasm adapter.
 
 ## Motivation
 

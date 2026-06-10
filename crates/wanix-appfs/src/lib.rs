@@ -1,4 +1,4 @@
-//! AppFS v0 — the file2chan adapter: a guest-defined `FileSystem`.
+//! AppFS — the file2chan adapter: a guest-defined `FileSystem` (wire v0.2).
 //!
 //! This crate is the filesystem surface of an AppResource (`docs/appfs.md`):
 //! a mounted [`wanix_fs::FileSystem`] whose *discrete* operations — `read`,
@@ -7,13 +7,22 @@
 //! Inferno's `file2chan` (filesystem requests arrive as messages to a
 //! process). The guest decides; the host moves bytes:
 //!
+//! - **The guest opens with a hello.** Its first line must be
+//!   `{"hello":{"proto":1,...}}` ([`AppHello`]), validated during
+//!   [`AppFsService`] construction; a hello that declares `files`/`streams`
+//!   is the tree authority (the host-declared manifest tree is documentation
+//!   and fallback), and a proto mismatch is a clear construction-time error.
 //! - **Discrete ops go to the guest, one at a time.** The adapter serializes
 //!   requests over the [`AppSender`] under one actor lock — the guest is a
-//!   single actor and never sees concurrent events. The guest→host direction
-//!   is owned by a dedicated pump thread (the [`AppReceiver`]'s single
-//!   reader), so guest output is always drained: publishes deliver on
+//!   single actor and never sees concurrent events. Every request is stamped
+//!   with host wall-clock time (`at_ms`); reads carry a byte range so the
+//!   line ceiling no longer caps app file size; every reply wait is bounded
+//!   by a per-request deadline ([`DEFAULT_OP_DEADLINE`]). The guest→host
+//!   direction is owned by a dedicated pump thread (the [`AppReceiver`]'s
+//!   single reader), so guest output is always drained: publishes deliver on
 //!   arrival, a bounded stdio pipe cannot deadlock against a large request,
-//!   and a guest protocol violation latches the channel down
+//!   an oversized or malformed (but newline-framed) guest line fails only the
+//!   in-flight op, and a genuine protocol violation latches the channel down
 //!   ([`wanix_fs::FsError::Unreachable`] thereafter) instead of
 //!   desynchronizing the reply stream.
 //! - **Stream files never touch the guest.** Paths declared as streams in the
@@ -60,10 +69,11 @@ pub use buffer::LineBuffer;
 pub use channel::{AppReceiver, AppSender};
 pub use fs::AppFs;
 pub use protocol::{
-    AppDirEntry, AppErr, AppErrKind, AppOk, AppOp, AppPublish, AppReply, AppRequest, GuestLine,
-    MAX_LINE_LEN, decode_data, encode_data, publish_to_line,
+    AppDirEntry, AppErr, AppErrKind, AppHello, AppOk, AppOp, AppPublish, AppReply, AppRequest,
+    GuestLine, MAX_LINE_LEN, PROTO_VERSION, READ_CHUNK_LEN, decode_data, encode_data,
+    hello_to_line, publish_to_line,
 };
-pub use service::{AppFsService, AppStreamCloser};
+pub use service::{AppFsService, AppStreamCloser, DEFAULT_OP_DEADLINE};
 pub use tree::{AppTree, WHO_FILE};
 
 #[cfg(test)]

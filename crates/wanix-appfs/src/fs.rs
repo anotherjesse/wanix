@@ -95,9 +95,10 @@ impl FileSystem for AppFs {
             )),
             AppPath::Stream(_) => Ok(file_metadata(0, modes::STREAM_FILE)),
             AppPath::Guest(name) => {
-                self.shared
-                    .transact(AppOp::Stat, name, &self.principal, None)?;
-                Ok(file_metadata(0, modes::GUEST_FILE))
+                let ok = self
+                    .shared
+                    .transact(AppOp::Stat, name, &self.principal, None, None)?;
+                Ok(file_metadata(ok.size.unwrap_or(0), modes::GUEST_FILE))
             }
         }
     }
@@ -121,7 +122,7 @@ impl FileSystem for AppFs {
             AppPath::Guest(name) => {
                 let ok = self
                     .shared
-                    .transact(AppOp::Readdir, name, &self.principal, None)?;
+                    .transact(AppOp::Readdir, name, &self.principal, None, None)?;
                 let entries = ok.entries.unwrap_or_default();
                 Ok(entries
                     .into_iter()

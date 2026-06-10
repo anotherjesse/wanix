@@ -57,22 +57,49 @@ impl AppReceiver for PipeReceiver {
                 return Ok(self.pending.drain(..=position).collect());
             }
             if self.pending.len() > MAX_LINE_LEN {
-                return Err(io::Error::other(format!(
-                    "app guest emitted over {MAX_LINE_LEN} bytes without a newline"
-                )));
+                // The line is over the ceiling but framing is intact: return
+                // an oversized witness (bounding host memory) and discard the
+                // rest of the line. The adapter pump then fails the in-flight
+                // op with the specific oversize error while the channel stays
+                // up (v0.2 op-fatal vs channel-fatal).
+                return self.take_oversized_line();
             }
-            let mut buf = [0u8; 4096];
-            let count = self
-                .guest_stdout
-                .read(&mut buf)
-                .map_err(|err| guest_down(&err))?;
-            if count == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "app guest exited (its stdout pipe closed)",
-                ));
+            let fresh = self.fill()?;
+            self.pending.extend_from_slice(&fresh);
+        }
+    }
+}
+
+impl PipeReceiver {
+    /// Reads one chunk of guest output, mapping EOF to the guest-exit error.
+    fn fill(&mut self) -> io::Result<Vec<u8>> {
+        let mut buf = [0u8; 4096];
+        let count = self
+            .guest_stdout
+            .read(&mut buf)
+            .map_err(|err| guest_down(&err))?;
+        if count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "app guest exited (its stdout pipe closed)",
+            ));
+        }
+        Ok(buf[..count].to_vec())
+    }
+
+    /// Returns the over-ceiling line truncated to an oversized witness
+    /// (still over [`MAX_LINE_LEN`], newline-terminated) and discards the
+    /// rest of the line; bytes after its newline stay buffered.
+    fn take_oversized_line(&mut self) -> io::Result<Vec<u8>> {
+        let mut line: Vec<u8> = self.pending.drain(..).collect();
+        line.truncate(MAX_LINE_LEN + 1);
+        loop {
+            let fresh = self.fill()?;
+            if let Some(position) = fresh.iter().position(|&byte| byte == b'\n') {
+                self.pending.extend_from_slice(&fresh[position + 1..]);
+                line.push(b'\n');
+                return Ok(line);
             }
-            self.pending.extend_from_slice(&buf[..count]);
         }
     }
 }

@@ -1,10 +1,14 @@
 //! The open-file handles an AppFS view hands out.
 //!
-//! [`GuestFile`] routes discrete reads/writes to the guest (a read fetches
-//! one whole-content snapshot lazily and serves it slice-by-slice; each write
-//! is one event). [`StreamFile`] is host-owned: it drains its subscription's
-//! bounded lossy [`LineBuffer`] and never consults the guest, so a wedged
-//! guest cannot block it. [`BytesFile`] serves a fixed snapshot (`who`).
+//! [`GuestFile`] routes discrete reads/writes to the guest. Reads are ranged
+//! (v0.2): each guest fetch asks for one [`READ_CHUNK_LEN`] chunk at the
+//! current offset and serves it slice-by-slice, so app files are not capped
+//! by the wire's line ceiling — and a file smaller than one chunk still costs
+//! exactly one guest fetch (the whole-snapshot path). A reply shorter than
+//! the requested length marks end-of-file. Each write is one event.
+//! [`StreamFile`] is host-owned: it drains its subscription's bounded lossy
+//! [`LineBuffer`] and never consults the guest, so a wedged guest cannot
+//! block it. [`BytesFile`] serves a fixed snapshot (`who`).
 
 use std::sync::Arc;
 
@@ -12,7 +16,7 @@ use wanix_fs::{File, FsError, FsResult, Metadata, OpenOptions};
 
 use crate::buffer::LineBuffer;
 use crate::fs::{file_metadata, modes};
-use crate::protocol::{AppOp, encode_data};
+use crate::protocol::{AppOp, READ_CHUNK_LEN, encode_data};
 use crate::service::Shared;
 
 /// Rejects any open that is not strictly read-only.
@@ -64,9 +68,14 @@ pub(crate) struct GuestFile {
     path: String,
     principal: String,
     options: OpenOptions,
-    /// Whole-content snapshot fetched on first read, then served by offset.
-    content: Option<Vec<u8>>,
-    offset: usize,
+    /// The last fetched chunk, serving bytes `[chunk_start, chunk_start +
+    /// chunk.len())`.
+    chunk: Vec<u8>,
+    chunk_start: u64,
+    /// The byte position of the next read.
+    offset: u64,
+    /// The file length once a short chunk reply has revealed end-of-file.
+    eof_at: Option<u64>,
 }
 
 impl GuestFile {
@@ -81,9 +90,24 @@ impl GuestFile {
             path,
             principal,
             options,
-            content: None,
+            chunk: Vec::new(),
+            chunk_start: 0,
             offset: 0,
+            eof_at: None,
         }
+    }
+
+    /// Serves `buf` from the cached chunk when it covers the current offset.
+    fn read_cached(&mut self, buf: &mut [u8]) -> Option<usize> {
+        let into_chunk = self.offset.checked_sub(self.chunk_start)?;
+        let into_chunk = usize::try_from(into_chunk).ok()?;
+        if into_chunk >= self.chunk.len() {
+            return None;
+        }
+        let len = (self.chunk.len() - into_chunk).min(buf.len());
+        buf[..len].copy_from_slice(&self.chunk[into_chunk..into_chunk + len]);
+        self.offset += len as u64;
+        Some(len)
     }
 }
 
@@ -92,14 +116,35 @@ impl File for GuestFile {
         if !self.options.read {
             return Err(FsError::PermissionDenied);
         }
-        if self.content.is_none() {
-            let ok = self
-                .shared
-                .transact(AppOp::Read, &self.path, &self.principal, None)?;
-            self.content = Some(ok.data_bytes()?);
+        if buf.is_empty() {
+            return Ok(0);
         }
-        let content = self.content.as_deref().unwrap_or_default();
-        Ok(read_slice(content, &mut self.offset, buf))
+        if let Some(len) = self.read_cached(buf) {
+            return Ok(len);
+        }
+        if self.eof_at.is_some_and(|eof| self.offset >= eof) {
+            return Ok(0);
+        }
+        let ok = self.shared.transact(
+            AppOp::Read,
+            &self.path,
+            &self.principal,
+            None,
+            Some((self.offset, READ_CHUNK_LEN)),
+        )?;
+        let bytes = ok.data_bytes()?;
+        if bytes.len() as u64 > READ_CHUNK_LEN {
+            return Err(FsError::Other(format!(
+                "app guest replied {} bytes to a {READ_CHUNK_LEN}-byte ranged read",
+                bytes.len()
+            )));
+        }
+        if (bytes.len() as u64) < READ_CHUNK_LEN {
+            self.eof_at = Some(self.offset + bytes.len() as u64);
+        }
+        self.chunk_start = self.offset;
+        self.chunk = bytes;
+        Ok(self.read_cached(buf).unwrap_or(0))
     }
 
     fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
@@ -113,12 +158,18 @@ impl File for GuestFile {
             &self.path,
             &self.principal,
             Some(encode_data(buf)),
+            None,
         )?;
         Ok(buf.len())
     }
 
     fn metadata(&self) -> FsResult<Metadata> {
-        Ok(file_metadata(0, modes::GUEST_FILE))
+        // One stat event: the guest may declare the file's size (v0.2);
+        // without a declaration the size is honestly unknown and reads 0.
+        let ok = self
+            .shared
+            .transact(AppOp::Stat, &self.path, &self.principal, None, None)?;
+        Ok(file_metadata(ok.size.unwrap_or(0), modes::GUEST_FILE))
     }
 }
 

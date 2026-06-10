@@ -19,6 +19,7 @@ use wanix_vfs::{BindOptions, Namespace};
 use super::{bind_app_endpoint, parse_app_serve_command};
 use crate::app::guest::start_app_guest;
 use crate::app::load_app_manifest;
+use crate::app::restart::{RestartPolicy, ServiceSlot, spawn_restart_supervisor};
 use crate::mesh::resource::ServedEndpoint;
 
 /// Every blocking wait in these tests is bounded by this deadline.
@@ -69,11 +70,17 @@ fn serve_chatroom(
     let served = bind_app_endpoint(
         "chatroom-test".to_owned(),
         NodeIdentity::from_secret_bytes([secret; 32]),
-        &service,
+        ServiceSlot::new(service.clone()),
         Some(loopback()),
     )
     .unwrap();
     (guest, service, served)
+}
+
+/// The wire principal a dialer identity is presented to apps as (v0.2):
+/// scheme-prefixed verified peer id.
+fn principal_of(identity: &NodeIdentity) -> String {
+    format!("iroh:{}", identity.peer_id().to_hex())
 }
 
 /// Mounts a served app ticket at `x` presenting an explicit dialer identity
@@ -175,6 +182,33 @@ fn parse_requires_app_state_and_endpoint_posture() {
     assert!(
         parse_app_serve_command(&args(&["--app", "a", "--state", "s", "--insecure-open"])).is_ok()
     );
+    // --restart accepts exactly on-failure; the default is Never.
+    assert_eq!(parsed.restart, RestartPolicy::Never);
+    let parsed = parse_app_serve_command(&args(&[
+        "--app",
+        "a",
+        "--state",
+        "s",
+        "--addr",
+        "127.0.0.1:0",
+        "--restart",
+        "on-failure",
+    ]))
+    .unwrap();
+    assert_eq!(parsed.restart, RestartPolicy::OnFailure);
+    assert!(
+        parse_app_serve_command(&args(&[
+            "--app",
+            "a",
+            "--state",
+            "s",
+            "--addr",
+            "127.0.0.1:0",
+            "--restart",
+            "always",
+        ]))
+        .is_err()
+    );
     // Unknown flags are refused.
     assert!(parse_app_serve_command(&args(&["--app", "a", "--state", "s", "--bogus"])).is_err());
 }
@@ -190,8 +224,8 @@ fn two_peers_chat_with_verified_attribution_and_presence() {
 
     let id_a = NodeIdentity::from_secret_bytes([122u8; 32]);
     let id_b = NodeIdentity::from_secret_bytes([123u8; 32]);
-    let hex_a = id_a.peer_id().to_hex();
-    let hex_b = id_b.peer_id().to_hex();
+    let principal_a = principal_of(&id_a);
+    let principal_b = principal_of(&id_b);
     let (ns_a, _mount_a) = mount_as(&id_a, &served[0].ticket_url);
     let (ns_b, _mount_b) = mount_as(&id_b, &served[0].ticket_url);
 
@@ -205,7 +239,7 @@ fn two_peers_chat_with_verified_attribution_and_presence() {
     );
     let lines = message_lines(&latest);
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["from"], Value::String(hex_a.clone()));
+    assert_eq!(lines[0]["from"], Value::String(principal_a.clone()));
     assert_eq!(lines[0]["body"], Value::String("hello from A".to_owned()));
     assert!(lines[0]["at"].is_u64(), "missing timestamp: {latest}");
 
@@ -213,14 +247,14 @@ fn two_peers_chat_with_verified_attribution_and_presence() {
     post(&ns_b, b"hi from B");
     let lines = message_lines(&read_string(&ns_a, "x/latest"));
     assert_eq!(lines.len(), 2);
-    assert_eq!(lines[1]["from"], Value::String(hex_b.clone()));
+    assert_eq!(lines[1]["from"], Value::String(principal_b.clone()));
     assert_eq!(lines[1]["body"], Value::String("hi from B".to_owned()));
 
     // who = the principals currently holding open stream subscriptions
     // (sorted, one per line) — a foreign principal is just another member.
     let stream_a = ns_a.open(&np("x/stream"), OpenOptions::read()).unwrap();
     let stream_b = ns_b.open(&np("x/stream"), OpenOptions::read()).unwrap();
-    let mut expected: Vec<&str> = vec![&hex_a, &hex_b];
+    let mut expected: Vec<&str> = vec![&principal_a, &principal_b];
     expected.sort_unstable();
     assert_eq!(
         read_string(&ns_b, "x/who"),
@@ -249,7 +283,7 @@ fn parked_stream_read_receives_a_post_from_another_connection() {
         &served[0].ticket_url,
     );
     let id_b = NodeIdentity::from_secret_bytes([126u8; 32]);
-    let hex_b = id_b.peer_id().to_hex();
+    let principal_b = principal_of(&id_b);
     let (ns_b, _mount_b) = mount_as(&id_b, &served[0].ticket_url);
 
     // A parks a blocking read on the never-EOF stream file.
@@ -268,7 +302,7 @@ fn parked_stream_read_receives_a_post_from_another_connection() {
         .recv_timeout(TEST_DEADLINE)
         .expect("parked stream read never received the posted message");
     let message: Value = serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
-    assert_eq!(message["from"], Value::String(hex_b));
+    assert_eq!(message["from"], Value::String(principal_b));
     assert_eq!(
         message["body"],
         Value::String("ping across the mesh".to_owned())
@@ -336,6 +370,8 @@ fn guest_exit_unreaches_discrete_ops_and_closes_streams() {
     std::fs::write(
         app_dir.join("main.js"),
         "import * as std from \"qjs:std\";\n\
+         std.out.puts(JSON.stringify({ hello: { proto: 1 } }) + \"\\n\");\n\
+         std.out.flush();\n\
          const line = std.in.getline();\n\
          if (line !== null) {\n\
            const req = JSON.parse(line);\n\
@@ -402,6 +438,8 @@ fn large_publish_backlog_and_large_write_do_not_deadlock() {
     std::fs::write(
         app_dir.join("main.js"),
         "import * as std from \"qjs:std\";\n\
+         std.out.puts(JSON.stringify({ hello: { proto: 1 } }) + \"\\n\");\n\
+         std.out.flush();\n\
          const big = \"x\".repeat(120 * 1024);\n\
          let line;\n\
          while ((line = std.in.getline()) !== null) {\n\
@@ -461,6 +499,127 @@ fn large_publish_backlog_and_large_write_do_not_deadlock() {
         assert_eq!(file.write(&body).unwrap(), body.len());
     });
 
+    std::fs::remove_dir_all(app_dir).ok();
+    std::fs::remove_dir_all(state).ok();
+}
+
+/// Reads a mesh-mounted file without panicking on a dead generation.
+fn try_read_to_string(namespace: &Namespace, path: &str) -> Result<String, wanix_fs::FsError> {
+    let mut file = namespace.open(&np(path), OpenOptions::read())?;
+    let mut out = Vec::new();
+    let mut buf = [0u8; 256];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n]);
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// The restart proof (`--restart on-failure`): the supervisor re-runs an
+/// exited guest and swaps the fresh service through the [`ServiceSlot`], so
+/// the same ticket keeps working and `/state` history survives — while the
+/// connection bound to the exited generation keeps its honestly-dead view.
+/// The guest is a counter app whose hello (not its manifest) declares the
+/// tree, that bumps `/state/count` at boot, and that exits after serving one
+/// read — a crash stand-in.
+#[test]
+fn restart_on_failure_swaps_a_fresh_service_behind_the_same_ticket() {
+    let app_dir = temp_dir("restart-app");
+    std::fs::write(
+        app_dir.join("app.wanix.json"),
+        "{\"wanix.resource\":\"v0\",\"kind\":\"app\",\"name\":\"counter\",\
+         \"runtime\":{\"kind\":\"qjs\",\"main\":\"main.js\"}}",
+    )
+    .unwrap();
+    std::fs::write(
+        app_dir.join("main.js"),
+        "import * as std from \"qjs:std\";\n\
+         std.out.puts(JSON.stringify({ hello: { proto: 1, files: [\"count\"] } }) + \"\\n\");\n\
+         std.out.flush();\n\
+         const mine = parseInt(std.loadFile(\"/state/count\") || \"0\", 10) + 1;\n\
+         const f = std.open(\"/state/count\", \"w\");\n\
+         f.puts(String(mine));\n\
+         f.close();\n\
+         let line;\n\
+         while ((line = std.in.getline()) !== null) {\n\
+           if (!line) continue;\n\
+           const req = JSON.parse(line);\n\
+           let ok = {};\n\
+           if (req.op === \"read\") {\n\
+             const bytes = String(mine) + \"\\n\";\n\
+             const offset = req.offset || 0;\n\
+             ok = { data: btoa(bytes.slice(offset, offset + req.len)) };\n\
+           }\n\
+           std.out.puts(JSON.stringify({ id: req.id, ok }) + \"\\n\");\n\
+           std.out.flush();\n\
+           if (req.op === \"read\") break;\n\
+         }\n",
+    )
+    .unwrap();
+    let state = temp_dir("restart-state");
+
+    let manifest = load_app_manifest(&app_dir).unwrap();
+    let (guest, service) = start_app_guest(&app_dir, &state, &manifest).unwrap();
+    let slot = ServiceSlot::new(service);
+    let served = bind_app_endpoint(
+        "restart-test".to_owned(),
+        NodeIdentity::from_secret_bytes([140u8; 32]),
+        slot.clone(),
+        Some(loopback()),
+    )
+    .unwrap();
+    spawn_restart_supervisor(guest, slot, app_dir.clone(), state.clone(), manifest);
+
+    // Generation 1 serves one read (its hello, not the empty manifest,
+    // declared `count`), then exits.
+    let (ns, _mount) = mount_as(
+        &NodeIdentity::from_secret_bytes([141u8; 32]),
+        &served[0].ticket_url,
+    );
+    assert_eq!(read_string(&ns, "x/count"), "1\n");
+
+    // The connection bound to generation 1 keeps its honestly-dead view:
+    // reads fail (Unreachable through the wire), they never hang.
+    within_deadline("dead generation-1 view", {
+        let ns = Arc::clone(&ns);
+        move || {
+            while try_read_to_string(&ns, "x/count").is_ok() {
+                thread::sleep(Duration::from_millis(200));
+            }
+        }
+    });
+
+    // A fresh connection on the SAME ticket reaches the restarted guest, and
+    // /state survived: the boot counter moved past generation 1.
+    let ticket = served[0].ticket_url.clone();
+    let count = within_deadline("fresh connection after restart", move || {
+        loop {
+            // Mid-restart the slot is empty: the dial or the first use of
+            // the mount is refused. Keep retrying until a generation is live.
+            if let Ok(mount) = crate::mesh::dial_iroh_remote_as(
+                &NodeIdentity::from_secret_bytes([142u8; 32]),
+                &ticket,
+                "",
+            ) {
+                let mut namespace = Namespace::new();
+                if namespace
+                    .bind(mount.remote.clone(), ".", "x", BindOptions::default())
+                    .is_ok()
+                    && let Ok(text) = try_read_to_string(&namespace, "x/count")
+                {
+                    return text;
+                }
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
+    let count: u32 = count.trim().parse().unwrap();
+    assert!(count >= 2, "state did not survive the restart: {count}");
+
+    drop(served);
     std::fs::remove_dir_all(app_dir).ok();
     std::fs::remove_dir_all(state).ok();
 }

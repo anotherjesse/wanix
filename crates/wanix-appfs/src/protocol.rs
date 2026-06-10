@@ -1,10 +1,15 @@
-//! The newline-JSON file2chan wire protocol between adapter and guest.
+//! The newline-JSON file2chan wire protocol between adapter and guest (v0.2).
 //!
-//! One JSON object per line. The adapter sends [`AppRequest`] lines; the
-//! guest answers with [`AppReply`] lines and may interleave guest-initiated
-//! [`AppPublish`] lines (`{"publish":{...}}`) between replies. Arbitrary
-//! bytes ride as base64 strings. Error kinds map onto [`FsError`] vocabulary
-//! — this is filesystem-error vocabulary, not the ADR 0009 job taxonomy; see
+//! One JSON object per line. The guest's **first** line must be an
+//! [`AppHello`] (`{"hello":{"proto":1,...}}`) declaring its protocol version
+//! and, optionally, its tree — the guest is the tree authority. After the
+//! hello, the adapter sends [`AppRequest`] lines; the guest answers with
+//! [`AppReply`] lines and may interleave guest-initiated [`AppPublish`] lines
+//! (`{"publish":{...}}`) between replies. Arbitrary bytes ride as base64
+//! strings. Every request carries the host's wall clock (`at_ms`); reads
+//! carry a byte range (`offset`/`len`) so app files are no longer capped by
+//! the line ceiling. Error kinds map onto [`FsError`] vocabulary — this is
+//! filesystem-error vocabulary, not the ADR 0009 job taxonomy; see
 //! [`AppErr::to_fs_error`] for the one mapping that trades variant for
 //! message. Every field is pinned by tests in `src/tests.rs`.
 
@@ -13,12 +18,23 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use wanix_fs::{FsError, FsResult};
 
+/// The wire protocol version this adapter speaks; the guest's hello must
+/// declare exactly this `proto`.
+pub const PROTO_VERSION: u32 = 1;
+
 /// Hard ceiling on one encoded protocol line, enforced on both directions.
 ///
 /// Bounds the allocation a guest (or a client write routed to the guest) can
 /// force through the channel. Matches the per-subscriber stream buffer
 /// ceiling so one publish can at most fill one subscriber buffer.
 pub const MAX_LINE_LEN: usize = 1024 * 1024;
+
+/// The byte length the host requests per ranged guest read.
+///
+/// Sized so one reply line (base64 expands 3 bytes to 4, plus envelope)
+/// stays comfortably under [`MAX_LINE_LEN`]; larger app files are read as a
+/// sequence of these chunks, so the line ceiling no longer caps file size.
+pub const READ_CHUNK_LEN: u64 = 256 * 1024;
 
 /// Encodes arbitrary bytes as the protocol's base64 `data` string.
 #[must_use]
@@ -41,14 +57,28 @@ pub fn decode_data(data: &str) -> FsResult<Vec<u8>> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AppOp {
-    /// Read the whole content of a guest-handled file.
+    /// Read one byte range of a guest-handled file (`offset`/`len` carry the
+    /// range; a reply shorter than `len` means end-of-file at that point).
     Read,
     /// Write one message/body to a guest-handled file (`data` is base64).
     Write,
     /// List the entries of a guest-handled path.
     Readdir,
-    /// Confirm a guest-handled path exists.
+    /// Confirm a guest-handled path exists (the reply may declare `size`).
     Stat,
+}
+
+impl AppOp {
+    /// The wire name of the op (the lowercase serde rename), for diagnostics.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Readdir => "readdir",
+            Self::Stat => "stat",
+        }
+    }
 }
 
 /// One adapter→guest operation event.
@@ -64,9 +94,19 @@ pub struct AppRequest {
     /// The verified acting principal (opaque to this crate; comes from the
     /// transport/attach layer, never from a client payload).
     pub principal: String,
+    /// Host wall-clock milliseconds since the Unix epoch, stamped when the
+    /// request is sent — the guest's one trusted time source.
+    pub at_ms: u64,
     /// Base64-encoded payload bytes; present only for `write`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
+    /// Byte offset of the requested range; present only for `read`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u64>,
+    /// Byte length of the requested range; present only for `read`. The
+    /// guest must reply with at most this many bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub len: Option<u64>,
 }
 
 impl AppRequest {
@@ -111,6 +151,10 @@ pub struct AppOk {
     /// Directory entries (for `readdir`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entries: Option<Vec<AppDirEntry>>,
+    /// Declared file size in bytes (for `stat`); when present, the adapter
+    /// reports it as the file's metadata length instead of `0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
 }
 
 impl AppOk {
@@ -232,9 +276,37 @@ struct PublishLine {
     publish: AppPublish,
 }
 
-/// One parsed guest→adapter line: a reply or a publish.
+/// The guest's opening line: `{"hello":{"proto":1,...}}`.
+///
+/// Sent once, before anything else. Declares the wire protocol version (must
+/// be [`PROTO_VERSION`]) and, optionally, the guest's tree — when `files` or
+/// `streams` is present the hello is the tree authority and the host-declared
+/// (manifest) tree is demoted to documentation; when both are absent the
+/// host-declared tree is used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppHello {
+    /// The wire protocol version the guest speaks.
+    pub proto: u32,
+    /// Guest-handled file names (discrete ops routed to the guest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<String>>,
+    /// Host-owned never-EOF stream file names (fed by guest publishes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streams: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelloLine {
+    hello: AppHello,
+}
+
+/// One parsed guest→adapter line: a hello, a reply, or a publish.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuestLine {
+    /// The guest's opening handshake line (legal only as the first line).
+    Hello(AppHello),
     /// A reply to an in-flight request.
     Reply(AppReply),
     /// A guest-initiated stream publish.
@@ -244,6 +316,7 @@ pub enum GuestLine {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum RawGuestLine {
+    Hello(HelloLine),
     Publish(PublishLine),
     Reply(AppReply),
 }
@@ -254,7 +327,7 @@ impl GuestLine {
     /// # Errors
     ///
     /// Returns [`FsError::Other`] when the line exceeds [`MAX_LINE_LEN`] or
-    /// is not exactly one reply or publish object.
+    /// is not exactly one hello, reply, or publish object.
     pub fn parse(line: &[u8]) -> FsResult<Self> {
         if line.len() > MAX_LINE_LEN {
             return Err(FsError::Other(format!(
@@ -264,11 +337,26 @@ impl GuestLine {
         }
         let trimmed = line.strip_suffix(b"\n").unwrap_or(line);
         match serde_json::from_slice(trimmed) {
+            Ok(RawGuestLine::Hello(line)) => Ok(Self::Hello(line.hello)),
             Ok(RawGuestLine::Publish(line)) => Ok(Self::Publish(line.publish)),
             Ok(RawGuestLine::Reply(reply)) => Ok(Self::Reply(reply)),
             Err(err) => Err(FsError::Other(format!("invalid app guest line: {err}"))),
         }
     }
+}
+
+/// Serializes a hello to its wire line (used by guest-side helpers/tests).
+///
+/// # Errors
+///
+/// Returns [`FsError::Other`] when encoding fails.
+pub fn hello_to_line(hello: &AppHello) -> FsResult<Vec<u8>> {
+    let mut line = serde_json::to_vec(&HelloLine {
+        hello: hello.clone(),
+    })
+    .map_err(|err| FsError::Other(format!("failed to encode app hello: {err}")))?;
+    line.push(b'\n');
+    Ok(line)
 }
 
 /// Serializes a publish to its wire line (used by guest-side helpers/tests).
