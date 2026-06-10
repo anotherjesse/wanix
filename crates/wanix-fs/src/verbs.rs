@@ -236,4 +236,3 @@ mod tests {
         assert_eq!(file.read(&mut buf).unwrap(), 0, "EOF inside the cap");
     }
 }
-

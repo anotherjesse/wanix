@@ -17,11 +17,14 @@ use std::sync::Arc;
 
 use wanix_fs::{LocalFs, MemFs, NormalizedPath};
 use wanix_pipe::PipeDevice;
+use wanix_qjs::QuickJsTaskDriver;
 use wanix_task::{Task, TaskTable};
 use wanix_vfs::{BindOptions, Namespace};
 use wanix_wasm::WasmTaskDriver;
 
 mod args;
+#[cfg(test)]
+mod both_kinds_tests;
 #[cfg(unix)]
 mod session;
 
@@ -32,7 +35,7 @@ pub(crate) use session::run_sh_session;
 use crate::mesh::IrohMount;
 use crate::{
     CliError, CliOutput, attach_task_stdio, bind_mesh_mounts_into, configure_qjs_task,
-    finish_cli_task_output,
+    finish_cli_task_output, quickjs_runner,
 };
 
 /// Where the bundled shell lives in the session namespace: inside the command
@@ -99,12 +102,14 @@ fn sh_bin() -> Result<Arc<MemFs>, CliError> {
     Ok(bin)
 }
 
-/// Allocates the shell task on its own single-task table with the real wasm
-/// driver registered (`#task` is bound by the table, so the shell can launch
-/// child commands).
+/// Allocates the shell task on its own single-task table with both real task
+/// drivers registered (`#task` is bound by the table, so the shell can launch
+/// `.wasm` and `.js` child commands alike — ADR 0002's both-first-class
+/// contract, dispatched by extension through the table's `auto` kind).
 fn allocate_sh_task(namespace: Namespace) -> Result<(TaskTable, Task), CliError> {
     let table = TaskTable::new();
     table.register_driver("wasm", Arc::new(WasmTaskDriver::new()))?;
+    table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(quickjs_runner()?)))?;
     let task = table.allocate_root_with_namespace("auto", namespace)?;
     Ok((table, task))
 }

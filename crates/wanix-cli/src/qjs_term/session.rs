@@ -7,6 +7,7 @@ use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver, QuickJsTaskRuntime};
 use wanix_task::{Task, TaskTable};
 use wanix_term::TermDevice;
 use wanix_vfs::BindOptions;
+use wanix_wasm::WasmTaskDriver;
 
 use super::pump::{
     TermResize, drain_terminal_output_bytes, feed_terminal_after_eval,
@@ -154,6 +155,10 @@ fn prepare_shell_task(runner: &Arc<QuickJsRunner>, root_path: &Path) -> Result<T
 fn allocate_shell_task(runner: &Arc<QuickJsRunner>) -> Result<Task, CliError> {
     let table = TaskTable::new();
     table.register_driver("qjs", Arc::new(QuickJsTaskDriver::new(Arc::clone(runner))))?;
+    // Both task kinds are first-class from inside the shell (ADR 0002): the
+    // guest launcher allocates `#task/new/auto`, so a `.wasm` program needs the
+    // wasm driver on this table to be claimable.
+    table.register_driver("wasm", Arc::new(WasmTaskDriver::new()))?;
     Ok(table.allocate_root("qjs")?)
 }
 

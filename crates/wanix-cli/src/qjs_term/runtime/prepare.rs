@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use wanix_qjs::{QuickJsRunner, QuickJsTaskDriver};
 use wanix_task::{Task, TaskTable};
+use wanix_wasm::WasmTaskDriver;
 
 use super::super::program_spec::{
     PreparedQjsTermProgram, QjsTermProgram, prepare_qjs_term_namespace, read_qjs_term_program,
@@ -73,6 +74,9 @@ fn allocate_qjs_term_task(
         driver = driver.with_memory_limit_bytes(bytes);
     }
     table.register_driver("qjs", Arc::new(driver))?;
+    // A terminal-backed `.js` task spawning a `.wasm` child via `#task/new/auto`
+    // needs the wasm driver registered too (ADR 0002: both kinds first-class).
+    table.register_driver("wasm", Arc::new(WasmTaskDriver::new()))?;
     Ok(table.allocate_root("qjs")?)
 }
 

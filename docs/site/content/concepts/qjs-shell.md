@@ -22,7 +22,7 @@ prerequisites:
 usedInFlows: []
 honestLimits:
   - No pipes and no job control: a line runs one command, not a pipeline.
-  - The only external program the shell launches is a child qjs task (#task/new/qjs); there is no general exec.
+  - The only external program launch is a synchronous child task (#task/new/auto — a .js or .wasm program, dispatched by extension); there is no general exec, and a .wasm child gets launch + wait + exit status but no interactive terminal handoff.
   - cd cannot enter a #-device path; service paths are not navigable directories.
   - Bounded event-loop pumping around a session is host lifecycle policy, not a Wanix scheduler, signal, or cancellation model.
 ---
@@ -31,7 +31,7 @@ honestLimits:
 
 The bundled interactive shell is JavaScript inside a Wanix task driving `#term` and `#task` service files — not a separate process model.
 
-Run `wanix-rust qjs-shell` and you get a `$ ` prompt, `ls`, `cd`, `cat`, and the ability to launch other programs. It looks like a tiny `bash`. It is not. The whole thing is a single QuickJS script — `examples/qjs-term-shell-demo.js` — running as one ordinary Wanix `qjs` task. Every "shell feature" you see is that script opening, reading, and writing files: the terminal it talks through is `#term/<id>/data`, its current directory is `#task/self/dir`, and the children it spawns are allocated from `#task/new/qjs`. There is no shell runtime in Rust. There is a guest program and the same service devices every other task can reach.
+Run `wanix-rust qjs-shell` and you get a `$ ` prompt, `ls`, `cd`, `cat`, and the ability to launch other programs. It looks like a tiny `bash`. It is not. The whole thing is a single QuickJS script — `examples/qjs-term-shell-demo.js` — running as one ordinary Wanix `qjs` task. Every "shell feature" you see is that script opening, reading, and writing files: the terminal it talks through is `#term/<id>/data`, its current directory is `#task/self/dir`, and the children it spawns are allocated from `#task/new/auto`. There is no shell runtime in Rust. There is a guest program and the same service devices every other task can reach.
 
 ## Show: the prompt is a script reading its own files
 
@@ -60,9 +60,9 @@ Type a command and the script splits it into words, then dispatches on the first
 
 A guardrail falls out of the file model: `cd`, `write`, `rm`, `mv`, and the rest refuse a `#`-prefixed argument with a message like "service paths are not directories" (`examples/qjs-term-shell-demo.js:398-399`). The devices are reachable by their own command-specific helpers, not by generic shell mutation.
 
-## Launching a child: #task/new/qjs, then bind and start
+## Launching a child: #task/new/auto, then bind and start
 
-The one command that runs another program is `qjs`. It does not fork or exec — it drives the task device by hand (`examples/qjs-term-shell-demo.js:659-722`). Reading `#task/new/qjs` allocates a fresh task id; the shell then writes the child's `cmd`, copies its own `env`, sets the child's `dir`, and binds fds 0/1/2 before writing `start`:
+The one command that runs another program is `qjs`. It does not fork or exec — it drives the task device by hand (`examples/qjs-term-shell-demo.js:659-722`). Reading `#task/new/auto` allocates a fresh task id (the host task table picks the driver from the program extension, so a `.js` and a `.wasm` child launch the same way — ADR 0002's both-first-class contract); the shell then writes the child's `cmd`, copies its own `env`, sets the child's `dir`, and binds fds 0/1/2 before writing `start`:
 
 ```sh
 $ qjs child.js alpha 'two words' < input.txt > out.txt 2> err.txt
@@ -91,6 +91,6 @@ The lifecycle boundary matters: when the session is dropped or closed it writes 
 The bundled shell is deliberately small, and its boundaries are file-model boundaries, not missing polish:
 
 - **No pipes, no job control.** A line dispatches exactly one command; there is no `|`, no `&`, and no background-job table. Redirection is the only composition primitive, and only for the `qjs` builtin (`examples/qjs-term-shell-demo.js:202-239`).
-- **The only external program is a child qjs task.** `qjs SCRIPT` is the whole exec story; there is no general program execution beyond allocating a child through `#task/new/qjs` (`examples/qjs-term-shell-demo.js:659-722`). A `#`-device path is rejected as "not an executable script."
+- **The only external program is a synchronous child task.** `qjs PROGRAM(.js|.wasm)` is the whole exec story; there is no general program execution beyond allocating a child through `#task/new/auto` (`examples/qjs-term-shell-demo.js:659-722`). A `#`-device path is rejected as "not an executable script," and a `.wasm` child gets launch + wait + exit status only — no interactive terminal handoff (redirect its stdin, or don't read it).
 - **Service paths are not navigable.** `cd` into a `#`-prefixed path fails by design; the devices are reachable by name through their own helpers, not as directories (`examples/qjs-term-shell-demo.js:398-417`).
 - **Pumping is host policy, not a kernel.** The bounded ready-IO turns and idle event-loop budget around a `QjsShellSession` are lifecycle policy for an already-evaluated runtime (`crates/wanix-cli/src/qjs_term/session.rs:87-97`). They are not a Wanix scheduler, signal system, or cancellation model — Ctrl-C clears the input line and Ctrl-D exits the shell, but neither signals a running child (`examples/qjs-term-shell-demo.js:871-894`).

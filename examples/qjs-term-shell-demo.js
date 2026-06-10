@@ -689,7 +689,7 @@ function runStatCommand(words, followFinalSymlink) {
 
 function runQjs(words) {
   if (words.length < 2) {
-    std.out.puts("qjs: usage: qjs SCRIPT [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]\n");
+    std.out.puts("qjs: usage: qjs PROGRAM(.js|.wasm) [ARGS...] [< STDIN] [> STDOUT] [2> STDERR]\n");
     prompt();
     return;
   }
@@ -709,8 +709,10 @@ function runQjs(words) {
   const scriptName = namespaceBase(scriptPath);
   const command = [scriptName].concat(launch.args).map(quoteCommandWord).join(" ") + "\n";
   try {
+    // `auto`: the host task table picks the driver from the program extension
+    // (`.js` -> qjs, `.wasm` -> wasm), so both kinds launch from this shell.
     const parent = readServiceText("#task/self/id").trim();
-    const child = readServiceText("#task/new/qjs").trim();
+    const child = readServiceText("#task/new/auto").trim();
     const taskPath = "#task/" + child;
     writeRequiredServiceText(taskPath + "/cmd", command);
     writeRequiredServiceText(taskPath + "/env", readServiceText("#task/self/env"));

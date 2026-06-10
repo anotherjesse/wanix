@@ -258,8 +258,11 @@ tests.
   successful jobs — failed/aborted/timed-out runs stay retained for
   inspection — and exits with the job's recorded exit code)
   and the `cd`/`export`/`unset` special builtins (single-stage), and
-  external command launch resolved from a `bin` dir (so `jaq` is just a command —
-  `echo '[1,2,3]' | jaq 'map(.+1)'` works) with exported env propagated to
+  external command launch resolved from a `bin` dir trying `<name>.wasm`, then
+  `<name>.js`, then the exact name (so `jaq` is just a command —
+  `echo '[1,2,3]' | jaq 'map(.+1)'` works — and `.js` and `.wasm` externals are
+  both first-class per ADR 0002, including mixed-kind pipelines; the CLI `sh`
+  table registers both task drivers) with exported env propagated to
   children. cwd is shell-local (children run at root). BinVerbs (ADR 0007
   §Confinement contract): a mounted resource ships executable verbs in a
   host-served read-only size-capped `bin/` (`app serve` exposes
@@ -304,7 +307,9 @@ tests.
   `rm`, `rmdir`, `mv`, `cp`, `ln -s`, `readlink`, `stat`, and `lstat`),
   `env`/`setenv`/
   `unsetenv` task-environment commands, `ps` task-table inspection, and
-  synchronous child `qjs` task launches with inherited env, direct terminal
+  synchronous child task launches (`.js` or `.wasm`, dispatched by extension
+  through `#task/new/auto`; a `.wasm` child gets launch + wait + exit status,
+  no interactive terminal handoff) with inherited env, direct terminal
   stdio including buffered foreground stdin handoff, namespace stdio
   redirection, queued resize tracking from `#term/<id>/winch`, and observable
   child exit status for demos. Served shell sessions release their owned

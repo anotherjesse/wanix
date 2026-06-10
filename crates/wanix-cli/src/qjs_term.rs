@@ -574,6 +574,42 @@ std.exit(7);
     }
 
     #[test]
+    fn qjs_shell_session_starts_child_wasm_task() {
+        // BothShells (ADR 0002): the qjs-shell's synchronous launcher allocates
+        // `#task/new/auto`, so a compiled `.wasm` program is claimed by the
+        // wasm driver registered on the session table — launch + wait + exit
+        // status, no terminal handoff (stdio is redirected or unused).
+        const RUST_GUEST: &[u8] = include_bytes!("../../wanix-wasm/fixtures/rust-guest.wasm");
+        let root = temp_dir("wanix-qjs-shell-session-wasm-child");
+        fs::write(root.join("guest.wasm"), RUST_GUEST).unwrap();
+        fs::write(root.join("in.txt"), "wasm child input").unwrap();
+        let (mut session, initial_output) = QjsShellSession::start(&root).unwrap();
+
+        assert_eq!(initial_output, b"shell task: 1\r\n$ ");
+        let output = session
+            .input(b"qjs guest.wasm /in.txt /out.txt\nstatus\ncat out.txt\nps\nexit\n")
+            .unwrap();
+        let output = String::from_utf8(output).unwrap();
+
+        // The child's stdout (inherited fd 1) reaches the terminal…
+        assert!(output.contains("rust-wasm: read 16 bytes"), "{output}");
+        // …its exit is observable through the synchronous wait…
+        assert!(output.contains("status 0"), "{output}");
+        // …its file write landed in the shared root…
+        assert!(
+            output.contains("rust-wasm saw: wasm child input"),
+            "{output}"
+        );
+        // …and the auto task resolved to the wasm driver.
+        assert!(output.contains("2 wasm 0 . guest.wasm"), "{output}");
+        assert!(session.is_finished());
+        assert_eq!(
+            fs::read_to_string(root.join("out.txt")).unwrap(),
+            "rust-wasm saw: wasm child input"
+        );
+    }
+
+    #[test]
     fn qjs_shell_session_navigates_and_edits_served_files() {
         let root = temp_dir("wanix-qjs-shell-session-files");
         fs::write(root.join("visible.txt"), "served root\n").unwrap();

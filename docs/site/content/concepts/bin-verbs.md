@@ -22,7 +22,7 @@ prerequisites:
   - concepts/guest-defined-resources
   - concepts/wanix-sh
 honestLimits:
-  - "The CLI shell registers only the wasm task driver today, so `.js` verbs (like the chatroom's bin/post.js) resolve but cannot launch from `wanix-rust sh` yet; the confined-child seam itself is driver-agnostic and is proven end to end with `.wasm` verbs."
+  - "The confined-child seam is driver-agnostic and both verb kinds launch from `wanix-rust sh` (the CLI shell registers the wasm and qjs task drivers; `.js` and `.wasm` verbs are both proven end to end)."
   - "Widening — granting a verb anything beyond its own resource — is deliberately unimplemented; the future shape is an explicit `--allow`-style flag, never a default."
   - "Verbs must be self-contained: a confined namespace contains only /res, so a .js verb cannot import shared libraries from outside the resource."
 ---

@@ -744,6 +744,21 @@ mod tests {
     }
 
     #[test]
+    fn resolve_finds_js_in_bin() {
+        let mut ns = FakeNs::default();
+        ns.seed_file("bin/gen.js");
+        assert_eq!(resolve("gen", &ns), "bin/gen.js");
+    }
+
+    #[test]
+    fn resolve_prefers_wasm_over_js() {
+        let mut ns = FakeNs::default();
+        ns.seed_file("bin/tool.js");
+        ns.seed_file("bin/tool.wasm");
+        assert_eq!(resolve("tool", &ns), "bin/tool.wasm");
+    }
+
+    #[test]
     fn resolve_searches_usr_bin() {
         let mut ns = FakeNs::default();
         ns.seed_file("usr/bin/thing.wasm");

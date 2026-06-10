@@ -2,7 +2,7 @@
 title: Shell command resolution and the command package
 slug: concepts/shell-command-resolution
 pageType: concept
-oneLiner: A bare command name resolves to a program in a bin directory (preferring <name>.wasm); installable commands are checked-in wasm fixtures assembled by command_bin() — so jq is just a command, not a shell builtin.
+oneLiner: A bare command name resolves to a program in a bin directory (trying <name>.wasm, then <name>.js, then the exact name); installable commands are checked-in wasm fixtures assembled by command_bin() — so jq is just a command, not a shell builtin.
 audience: [developer]
 tags: [shell, commands, wasm, fixtures]
 sourceRefs:
@@ -20,7 +20,7 @@ prerequisites:
 usedInFlows: []
 honestLimits:
   - "The search path is the hardcoded relative list `bin`, `usr/bin` (no `$PATH` yet). Paths are Wanix-relative — `bin/jaq.wasm`, never `/bin/...`."
-  - "Resolution prefers `<name>.wasm` because the wasm task driver only claims programs ending in `.wasm`; a bare hit is the fallback."
+  - "Resolution prefers `<name>.wasm`, then `<name>.js` (the extensions the task drivers claim); a bare hit is the fallback."
   - "Checked-in `.wasm` artifacts add repo size (jaq.wasm is ~1.5 MB); a growing command set may warrant git-lfs for fixtures/commands/*.wasm."
 ---
 
@@ -36,7 +36,7 @@ The [shell](wanix-sh) decided early that `jq` would **not** be special-cased. On
 
 1. A builtin name is handled by the executor before resolution is reached.
 2. A name containing `/` is taken literally (relative to the namespace root).
-3. A bare name is searched across `bin`, then `usr/bin`: for each, try `<dir>/<name>.wasm`, then `<dir>/<name>`. The `.wasm` form is preferred because [`WasmTaskDriver::check`](compiled-wasm-task-driver) only claims `.wasm` programs.
+3. A bare name is searched across `bin`, then `usr/bin`: for each, try `<dir>/<name>.wasm`, then `<dir>/<name>.js`, then `<dir>/<name>`. The extension forms come first because the task drivers claim programs by extension ([`WasmTaskDriver::check`](compiled-wasm-task-driver) claims `.wasm`, the qjs driver claims `.js` — ADR 0002 makes both first-class).
 4. No match returns the bare name, so the spawn step reports an honest "not found" (status 127).
 
 Resolution is cwd-independent: the search dirs are relative to the real namespace root, and the shell's logical cwd never moves the guest's process cwd.

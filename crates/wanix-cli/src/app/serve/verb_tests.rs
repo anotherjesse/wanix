@@ -5,9 +5,10 @@
 //! stdio and argv/env.
 //!
 //! These tests use a scratch room app shipping the *wasm* verb fixtures
-//! (`wanix_wasm::VERB_POST_WASM`/`VERB_PROBE_WASM`): the CLI `sh` path
-//! registers only the wasm task driver today, so the chatroom's `.js` verbs
-//! become runnable end to end when qjs joins the shell's driver table.
+//! (`wanix_wasm::VERB_POST_WASM`/`VERB_PROBE_WASM`); the CLI `sh` path
+//! registers both task drivers, and the `.js` half of the verb contract is
+//! proven in `crate::sh::both_kinds_tests` (a `.js` post verb runs confined
+//! with argv and piped stdin).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
