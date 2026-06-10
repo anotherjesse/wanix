@@ -58,6 +58,10 @@ impl File for ControlFile {
                 }
                 self.data.clear();
             }
+            ControlCommand::Confine { source } => {
+                self.task.confine_to(source)?;
+                self.data.clear();
+            }
         }
         Ok(buf.len())
     }
@@ -81,6 +85,11 @@ enum ControlCommand {
         source: String,
         fd: Fd,
         options: Option<OpenOptions>,
+    },
+    /// `confine <source>`: seal the namespace to the named subtree at `res`
+    /// before start (the BinVerbs confinement seam, [`Task::confine_to`]).
+    Confine {
+        source: String,
     },
 }
 
@@ -141,6 +150,13 @@ fn parse_complete_control_command(task: &Task, parts: &[String]) -> FsResult<Con
             options,
         });
     }
+    if let [command, source] = parts
+        && command == "confine"
+    {
+        return Ok(ControlCommand::Confine {
+            source: source.to_owned(),
+        });
+    }
     Err(FsError::NotSupported)
 }
 
@@ -158,7 +174,9 @@ fn parse_bind_options(mode: &str) -> FsResult<OpenOptions> {
 }
 
 fn control_parts_are_pending(parts: &[String]) -> bool {
-    parts.is_empty() || ("bind".starts_with(parts[0].as_str()) && parts.len() < 3)
+    parts.is_empty()
+        || ("bind".starts_with(parts[0].as_str()) && parts.len() < 3)
+        || ("confine".starts_with(parts[0].as_str()) && parts.len() < 2)
 }
 
 fn bind_command_parts(parts: &[String]) -> Option<(&str, &str, Option<&str>)> {
@@ -175,7 +193,7 @@ fn command_may_be_bind(command: &str) -> bool {
     command
         .split_whitespace()
         .next()
-        .is_some_and(|word| "bind".starts_with(word))
+        .is_some_and(|word| "bind".starts_with(word) || "confine".starts_with(word))
 }
 
 fn control_fd_destination(task: &Task, destination: &str) -> FsResult<Fd> {

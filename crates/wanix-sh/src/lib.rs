@@ -17,9 +17,12 @@
 //! `|` pipelines (sequential, `#pipe`-backed), the `echo`, `cat`, `pwd`, `env`,
 //! `true`, `false`, `:`, `exit`, `cd`, `export`, and `unset` builtins, the
 //! pipeable `tool PATH [PARAMS_JSON]` one-shot job-protocol client (sugar over
-//! a mounted ToolFS's visible files, `docs/toolfs.md`), and external command
+//! a mounted ToolFS's visible files, `docs/toolfs.md`), external command
 //! launch (child tasks via the `#task` device, resolved from a `bin`
-//! directory, inheriting the shell's exported env). Redirections, `&&`/`||`,
+//! directory, inheriting the shell's exported env), and resource-qualified
+//! verbs (`NAME:CMD` runs `bin/CMD.{js,wasm}` shipped by the mounted resource
+//! `NAME`, confined to that resource — see the `verbs` module docs; never
+//! `$PATH`-merged). Redirections, `&&`/`||`,
 //! control flow, and expansion are recognized by the parser but reported as
 //! [`ShellError::Unsupported`] until their executor support lands.
 //!
@@ -46,6 +49,7 @@ mod state;
 mod stream;
 mod syntax;
 mod tool;
+mod verbs;
 
 pub use error::{ShellError, ShellResult};
 pub use ns::{

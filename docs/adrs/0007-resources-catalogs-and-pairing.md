@@ -339,6 +339,49 @@ auth-server model; we just need to name it so it does not surprise us later.
 
 ---
 
+## Confinement contract: BinVerbs (accepted, shipped)
+
+Resources ship their vocabulary: a served resource may expose executable verbs
+as plain files in a `bin/` directory beside its tree, and a client that mounts
+the resource gains those verbs — confined by default. This subsection is the
+pinned contract (the rest of this ADR remains a draft).
+
+**Serving.** `bin/` is HOST-served, never guest-routed: `app serve` exposes
+`<app-dir>/bin/*` when the directory exists, and `tool serve --config` takes an
+optional per-tool `bin` directory key. The surface is read-only, flat (one
+level of plain files), and size-capped (`wanix_fs::VerbBinFs`,
+`MAX_VERB_FILE_BYTES`); an over-cap file is refused at open with an honest
+error, never streamed. The resource's own root listing shows `bin/`.
+
+**Invocation.** The shell form is `NAME:CMD [args]`: `NAME` must be a current
+mount (`/n/NAME` or `/vol/NAME`, tried in that order) and `CMD` must resolve to
+exactly one of `bin/CMD.js` or `bin/CMD.wasm` under it (none and both are
+honest 127s). There is deliberately **no `$PATH` merging** of mounted `bin/`
+directories: a verb only ever runs qualified by the resource it came from, so a
+hostile mount can never squat an unqualified command name.
+
+**Confined execution.** A verb runs as an ordinary tier-2 child task
+(ADR 0010, driver auto-selected by extension) whose namespace contains
+EXACTLY: the resource bound at `res`, the stdio fds the launcher bound, and
+the argv/env it passed explicitly. No `#task`, no `#pipe`, no other mounts, no
+host directories. The seam is the `#task` ctl verb `confine <mount-path>`
+(`Task::confine_to`): the launcher binds fds (resolved against the inherited
+namespace), then confines, then starts; a started task can never be confined.
+The verb's bytes are read through the mount itself — the program and the
+authority it gets arrive together, and that authority is exactly its source.
+Widening (granting a verb anything beyond its own resource) is a future
+explicit, visible act — an `--allow`-shaped flag — never a default; it is
+deliberately unimplemented today.
+
+Proofs: `crates/wanix-wasm/src/driver.rs` (BinVerbs tests: post/probe verbs,
+pipeline composition, the confinement probe, squatting safety) and
+`crates/wanix-cli/src/app/serve/verb_tests.rs` (a live loopback room: verbs
+invoked over a mesh mount, the served `bin/` surface, the size cap on the
+wire). Concept walkthrough:
+[docs/site/content/concepts/bin-verbs.md](../site/content/concepts/bin-verbs.md).
+
+---
+
 ## Worked example: a chatroom
 
 *Implemented:* this example now runs — `wanix-rust app serve` exports

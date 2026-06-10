@@ -184,6 +184,13 @@ impl NamespaceOps for WasiNamespace {
         bind_fd(&base, 1, &output_bind(&spec.stdout, &self_id))?;
         // stderr is always inherited.
         bind_fd(&base, 2, &(format!("#task/{self_id}/fd/2"), None))?;
+        // A resource verb runs confined: AFTER the fd binds (they resolve
+        // against the inherited namespace) and BEFORE start, seal the child's
+        // namespace to exactly the resource subtree at `res`. The program
+        // path in `cmd` is already res-relative (the shell resolved it).
+        if let Some(root) = &spec.confine {
+            write_service(&format!("{base}/ctl"), &format!("confine {}", quote(root)))?;
+        }
         // Detached start: the child runs on its own host thread (ADR 0010
         // tier 2), so pipeline stages launched back to back run concurrently.
         // Must be a single write — a write of exactly `start` starts inline.

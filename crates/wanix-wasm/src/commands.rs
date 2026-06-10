@@ -28,6 +28,18 @@ pub const COMMANDS: &[(&str, &[u8])] = &[("jaq", include_bytes!("../fixtures/com
 /// [`crate::WasmTaskDriver`]; `-c LINE` runs one line, no `-c` starts the REPL.
 pub const SHELL_WASM: &[u8] = include_bytes!("../fixtures/shell.wasm");
 
+/// BinVerbs proof fixture (`crates/wanix-wasm/fixtures/verbs-src`), compiled
+/// to `wasm32-wasip1`: argv joined as the message body (stdin when no argv),
+/// written to `/res/post` — the chatroom posting convention. Seed it into a
+/// resource's `bin/` and the shell's `NAME:CMD` form runs it confined to that
+/// resource.
+pub const VERB_POST_WASM: &[u8] = include_bytes!("../fixtures/verbs/post.wasm");
+
+/// BinVerbs proof fixture: reads the path in argv\[1\] and reports
+/// `ok N bytes`, or exits 1 with the error on stderr — the confinement
+/// proof's instrument.
+pub const VERB_PROBE_WASM: &[u8] = include_bytes!("../fixtures/verbs/probe.wasm");
+
 /// Builds an in-memory `bin` filesystem holding every command as `<name>.wasm`.
 ///
 /// Bind the returned filesystem at `bin` in a task's namespace; children inherit

@@ -769,6 +769,90 @@ fn ctl_bind_can_wire_child_fd_to_explicit_parent_fd() {
 }
 
 #[test]
+fn ctl_confine_seals_the_namespace_to_the_resource_subtree() {
+    // The BinVerbs confinement seam: after `confine n/room` the child's
+    // namespace contains exactly the resource at `res` — the wider root, the
+    // child's own `#task`, and everything else are unreachable.
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let root = Arc::new(MemFs::new());
+    root.create_dir(&NormalizedPath::new("n").unwrap()).unwrap();
+    root.create_dir(&NormalizedPath::new("n/room").unwrap())
+        .unwrap();
+    root.write_file("n/room/inside.txt", b"resource bytes")
+        .unwrap();
+    root.write_file("secret.txt", b"outside the resource")
+        .unwrap();
+    task.bind(root.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    write_file(&taskfs, "self/ctl", b"confine n/room\n");
+
+    let namespace = task.namespace();
+    assert_eq!(read_file(&namespace, "res/inside.txt"), "resource bytes");
+    for outside in ["secret.txt", "n/room/inside.txt", "#task/self/id"] {
+        assert!(
+            matches!(
+                namespace.metadata(&NormalizedPath::new(outside).unwrap()),
+                Err(FsError::NotFound)
+            ),
+            "{outside} must be unreachable after confine"
+        );
+    }
+    // Exactly one binding: the resource view at `res`.
+    assert_eq!(namespace.binding_count(), 1);
+    assert_eq!(
+        namespace.bindings()[0].destination().as_str(),
+        crate::CONFINED_RESOURCE_PATH
+    );
+}
+
+#[test]
+fn ctl_confine_keeps_already_bound_fds_alive() {
+    // Stdio fds are bound before confine; the fd table holds open files, so
+    // sealing the namespace must not revoke them.
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let root = Arc::new(MemFs::new());
+    root.create_dir(&NormalizedPath::new("res-src").unwrap())
+        .unwrap();
+    root.write_file("stdout", b"").unwrap();
+    task.bind(root.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+    let taskfs = table.filesystem_for(task.id());
+
+    write_file(&taskfs, "self/ctl", b"bind stdout fd/1 w\n");
+    write_file(&taskfs, "self/ctl", b"confine res-src\n");
+
+    write_file(&taskfs, "self/fd/1", b"still wired");
+    assert_eq!(root.read_file("stdout").unwrap(), b"still wired");
+}
+
+#[test]
+fn confine_refuses_the_root_a_missing_subtree_and_a_started_task() {
+    let table = TaskTable::new();
+    table.register_noop_driver("qjs").unwrap();
+    let task = table.allocate_root("qjs").unwrap();
+    let root = Arc::new(MemFs::new());
+    root.create_dir(&NormalizedPath::new("ok").unwrap())
+        .unwrap();
+    task.bind(root.clone(), ".", ".", BindOptions::default())
+        .unwrap();
+
+    // Confining to everything is not confinement.
+    assert!(matches!(task.confine_to("."), Err(FsError::InvalidPath(_))));
+    // A subtree that does not exist is an honest bind error, not a silent
+    // empty namespace.
+    assert_eq!(task.confine_to("missing"), Err(FsError::NotFound));
+    // A started task's namespace must never be swapped mid-run.
+    table.start(task.id()).unwrap();
+    assert!(matches!(task.confine_to("ok"), Err(FsError::Other(_))));
+}
+
+#[test]
 fn split_writes_accumulate_for_fields_and_ctl() {
     let table = TaskTable::new();
     let driver = Arc::new(CountingDriver::new());

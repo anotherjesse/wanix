@@ -9,7 +9,7 @@
 //! `tempfile` mapping.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use wanix_tool::{ToolService, ToolSpec, ToolVisibility};
@@ -24,6 +24,10 @@ use crate::CliError;
 pub(crate) struct ToolConfigFile {
     #[serde(default)]
     tools: BTreeMap<String, ProcToolConfig>,
+    /// The directory the config file was loaded from; relative per-tool `bin`
+    /// directories resolve against it. Never part of the TOML shape.
+    #[serde(skip)]
+    base_dir: PathBuf,
 }
 
 impl ToolConfigFile {
@@ -35,6 +39,18 @@ impl ToolConfigFile {
     /// The config for one tool name, when the file defines it.
     pub(crate) fn get(&self, name: &str) -> Option<&ProcToolConfig> {
         self.tools.get(name)
+    }
+
+    /// The configured BinVerbs directory for one tool, resolved against the
+    /// config file's own directory when relative.
+    pub(crate) fn verb_bin_dir(&self, name: &str) -> Option<PathBuf> {
+        let bin = self.tools.get(name)?.bin.as_deref()?;
+        let path = Path::new(bin);
+        Some(if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.base_dir.join(path)
+        })
     }
 
     fn validate(&self) -> Result<(), CliError> {
@@ -67,6 +83,11 @@ pub(crate) struct ProcToolConfig {
     output: ProcOutputMode,
     #[serde(default = "default_visibility")]
     visibility: ToolVisibility,
+    /// Optional BinVerbs directory: verb files served read-only at `bin/`
+    /// beside the tool's job tree (relative paths resolve against the config
+    /// file's directory).
+    #[serde(default)]
+    bin: Option<String>,
     #[serde(default)]
     limits: ConfigLimits,
     #[serde(default)]
@@ -204,6 +225,9 @@ impl ProcToolConfig {
                 self.visibility.as_str()
             ));
         }
+        if self.bin.as_deref() == Some("") {
+            return reject("bin must be a directory path when given".to_owned());
+        }
         self.validate_placeholder("{input}", self.input == ProcInputMode::Tempfile, "input")?;
         self.validate_placeholder(
             "{output}",
@@ -286,9 +310,10 @@ pub(crate) fn load_tool_config(path: &Path) -> Result<ToolConfigFile, CliError> 
     let text = std::fs::read_to_string(path).map_err(|error| {
         CliError::usage(format!("tool serve --config {}: {error}", path.display()))
     })?;
-    let file: ToolConfigFile = toml::from_str(&text).map_err(|error| {
+    let mut file: ToolConfigFile = toml::from_str(&text).map_err(|error| {
         CliError::usage(format!("tool serve --config {}: {error}", path.display()))
     })?;
+    file.base_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     file.validate()?;
     Ok(file)
 }

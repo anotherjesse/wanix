@@ -269,8 +269,9 @@ fn external_spec(
             unreachable!("memory/empty wiring is builtin-only")
         }
     };
+    let target = crate::verbs::resolve_spawn_target(&plan.argv[0], ns)?;
     Ok(SpawnSpec {
-        program: crate::resolve::resolve_command(&plan.argv[0], ns)?,
+        program: target.program,
         args: plan.argv[1..].to_vec(),
         env: state
             .env_iter()
@@ -278,6 +279,7 @@ fn external_spec(
             .collect(),
         stdin,
         stdout,
+        confine: target.confine,
     })
 }
 

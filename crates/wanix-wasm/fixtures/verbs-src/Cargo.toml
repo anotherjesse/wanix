@@ -1,0 +1,22 @@
+# BinVerbs test fixtures compiled to wasm32-wasip1; their own workspace so the
+# parent Wanix workspace does not try to build them for the host target.
+# Build: cargo build --release --target wasm32-wasip1
+# then copy target/wasm32-wasip1/release/{post,probe}.wasm to ../verbs/
+[package]
+name = "verbs"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "post"
+path = "src/post.rs"
+
+[[bin]]
+name = "probe"
+path = "src/probe.rs"
+
+[profile.release]
+opt-level = "s"
+strip = true
+
+[workspace]

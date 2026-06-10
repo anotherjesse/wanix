@@ -25,6 +25,7 @@ use crate::mesh::resource::{
     ServedEndpoint, bind_endpoints, register_endpoints, reject_fixed_port_multi,
     serve_record_example_line, serve_record_line,
 };
+use crate::verb_bin::{compose_with_verb_bin, load_verb_bin};
 use crate::{CliError, write_process_output};
 
 /// A parsed `tool serve` invocation.
@@ -222,10 +223,31 @@ pub(crate) fn bind_tool_endpoints(
     let mut resources = Vec::with_capacity(tools.len());
     for (name, identity) in tools {
         let service = build_named_tool_service(&name, config)?;
-        let policy = Arc::new(ToolAttachPolicy { service });
+        let bin = tool_verb_bin(&name, config)?;
+        let policy = Arc::new(ToolAttachPolicy { service, bin });
         resources.push((name, identity, NativeServeConfig::per_peer(policy)));
     }
     bind_endpoints("tool", resources, local_addr)
+}
+
+/// Loads a configured tool's BinVerbs directory (the optional per-tool `bin`
+/// key). A configured directory that does not exist is an honest serve-time
+/// error — never a silently verb-less tool.
+fn tool_verb_bin(
+    name: &str,
+    config: Option<&ToolConfigFile>,
+) -> Result<Option<Arc<dyn wanix_fs::FileSystem>>, CliError> {
+    let Some(dir) = config.and_then(|file| file.verb_bin_dir(name)) else {
+        return Ok(None);
+    };
+    let loaded = load_verb_bin(&dir, "tool serve")?;
+    if loaded.is_none() {
+        return Err(CliError::usage(format!(
+            "tool serve: {name}: configured bin directory {} does not exist",
+            dir.display()
+        )));
+    }
+    Ok(loaded)
 }
 
 /// The ToolFS attach seam: binds each connection's verified peer id to a
@@ -239,12 +261,15 @@ pub(crate) fn bind_tool_endpoints(
 /// ToolFS job privacy crossing the mesh.
 struct ToolAttachPolicy {
     service: ToolService,
+    /// The tool's host-served verb `bin/` (BinVerbs), when configured.
+    bin: Option<Arc<dyn wanix_fs::FileSystem>>,
 }
 
 impl AttachPolicy for ToolAttachPolicy {
     fn evaluate(&self, peer: PeerId, _aname: &str) -> Option<Authorization> {
         let view = self.service.open_view(ToolPrincipal::node(peer.to_hex()));
-        Some(Authorization::new(Arc::new(view), Rights::read_write()))
+        let fs = compose_with_verb_bin(Arc::new(view), self.bin.as_ref()).ok()?;
+        Some(Authorization::new(fs, Rights::read_write()))
     }
 }
 

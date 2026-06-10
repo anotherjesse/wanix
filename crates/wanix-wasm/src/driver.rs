@@ -412,6 +412,118 @@ mod tests {
         );
     }
 
+    // ---- BinVerbs: resource-qualified verbs run confined -------------------
+
+    /// Runs one shell line against a namespace where the `room` resource
+    /// (shipping `bin/post.wasm` and `bin/probe.wasm`) is mounted at `n/room`
+    /// and a `secret.txt` exists OUTSIDE the resource. Returns the resource
+    /// plus the shell's stdout/stderr; asserts the shell itself exits 0.
+    fn run_verb_shell(line: &str) -> (Arc<MemFs>, String, String) {
+        let fs = Arc::new(MemFs::new());
+        fs.write_file("shell.wasm", SHELL_GUEST)
+            .expect("seed shell");
+        fs.write_file("secret.txt", b"outside the resource")
+            .expect("seed secret");
+        let resource = Arc::new(MemFs::new());
+        resource.create_dir_all("bin").expect("make bin");
+        resource
+            .write_file("bin/post.wasm", crate::VERB_POST_WASM)
+            .expect("seed post verb");
+        resource
+            .write_file("bin/probe.wasm", crate::VERB_PROBE_WASM)
+            .expect("seed probe verb");
+        resource.write_file("post", b"").expect("seed post file");
+        resource
+            .write_file("data.txt", b"resource bytes")
+            .expect("seed resource data");
+        let mut ns = namespace_with_pipe(&fs);
+        ns.bind(resource.clone(), ".", "n/room", BindOptions::default())
+            .expect("mount the resource at n/room");
+
+        let table = TaskTable::new();
+        table
+            .register_driver("wasm", Arc::new(WasmTaskDriver::new()))
+            .expect("register wasm driver");
+        let shell = table
+            .allocate_root_with_namespace("auto", ns)
+            .expect("allocate shell");
+        shell
+            .set_cmd(format!("shell.wasm -c \"{line}\""))
+            .expect("set cmd");
+        let cap = wire_shell_stdio(&shell);
+        table.start(shell.id()).expect("run shell");
+        let out = String::from_utf8(cap.read_file("out").expect("read out")).expect("utf8");
+        let err = String::from_utf8_lossy(&cap.read_file("err").expect("read err")).into_owned();
+        assert_eq!(shell.exit(), "0", "shell should exit 0; stderr={err:?}");
+        (resource, out, err)
+    }
+
+    #[test]
+    fn verb_posts_argv_into_the_resource_it_came_from() {
+        // `room:post hello world`: the verb's bytes come from the mounted
+        // resource and its write lands back on that same resource — the
+        // program and its authority arrive together.
+        let (resource, _out, err) = run_verb_shell("room:post hello world");
+        assert_eq!(
+            resource.read_file("post").expect("read post"),
+            b"hello world",
+            "stderr={err:?}"
+        );
+    }
+
+    #[test]
+    fn verb_composes_in_a_pipeline_reading_stdin() {
+        // The documented input convention: with no argv the verb posts its
+        // stdin, so `echo hi | room:post` is an ordinary pipeline stage.
+        let (resource, _out, err) = run_verb_shell("echo hi | room:post");
+        assert_eq!(
+            resource.read_file("post").expect("read post"),
+            b"hi\n",
+            "stderr={err:?}"
+        );
+    }
+
+    #[test]
+    fn confined_verb_reads_its_resource_and_nothing_else() {
+        // The confinement IS the test: the same `secret.txt` the shell reads
+        // freely does not exist in the verb's namespace — the verb sees
+        // exactly the resource at /res, stdio, and argv.
+        let (_resource, out, err) = run_verb_shell(
+            "cat secret.txt; room:probe /res/data.txt; room:probe /secret.txt; echo status=$?",
+        );
+        assert!(
+            out.contains("outside the resource"),
+            "the shell itself reads the secret: {out:?}"
+        );
+        assert!(
+            out.contains("ok 14 bytes"),
+            "the verb reads its own resource through /res: {out:?}"
+        );
+        assert!(
+            out.contains("status=1"),
+            "the out-of-resource probe must fail: {out:?}"
+        );
+        assert!(
+            err.contains("/secret.txt"),
+            "the refused path is named on stderr: {err:?}"
+        );
+    }
+
+    #[test]
+    fn unqualified_verb_names_never_resolve_from_resource_bins() {
+        // Squatting safety: there is no PATH merging — `post` alone is not a
+        // command even though the mounted room ships bin/post.wasm.
+        let (resource, out, err) = run_verb_shell("post hi; echo status=$?");
+        // 127: no driver claims a bare `post` (the detached start records it
+        // through the wait file, so there is no shell-side launch error).
+        assert!(out.contains("status=127"), "out={out:?} err={err:?}");
+        assert_eq!(
+            resource.read_file("post").expect("read post"),
+            b"",
+            "nothing may have posted"
+        );
+    }
+
     /// Runs `cmd` as a detached shell task and returns (stdout, stderr, exit),
     /// panicking if the shell does not finish within a generous deadline —
     /// the regression mode here is an eternal hang, which must fail the test

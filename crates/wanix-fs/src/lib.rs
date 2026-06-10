@@ -11,6 +11,7 @@ mod memfs;
 mod metadata;
 mod path;
 mod traits;
+mod verbs;
 
 pub use buffer::{DEFAULT_MAX_BUFFERED_BYTES, LineBuffer};
 pub use content_hash::{CONTENT_HASH_HEX_LEN, CONTENT_HASH_LEN, ContentHash};
@@ -20,6 +21,7 @@ pub use memfs::MemFs;
 pub use metadata::{DirEntry, FileType, Metadata, MetadataTimes};
 pub use path::NormalizedPath;
 pub use traits::{File, FileSeekFrom, FileSystem, MetadataLookup, OpenOptions};
+pub use verbs::{MAX_VERB_FILE_BYTES, VerbBinFs};
 
 /// Threshold in bytes above which a CAS-aware client should fetch a file's
 /// bytes from the content-addressed data plane instead of looping `Tread` over

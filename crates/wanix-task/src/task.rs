@@ -6,11 +6,13 @@ use wanix_vfs::{BindOptions, Namespace};
 
 use crate::cmd::parse_cmd_argv;
 
+mod confine;
 mod fd_ops;
 mod kill;
 mod state;
 mod types;
 
+pub use confine::CONFINED_RESOURCE_PATH;
 pub use kill::{InterruptHook, KILLED_EXIT};
 use state::TaskState;
 pub use types::{TaskId, TaskSpec};

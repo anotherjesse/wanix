@@ -31,6 +31,7 @@ mod terminal_mode;
 mod tool;
 #[cfg(unix)]
 mod unix_fd;
+mod verb_bin;
 mod volume;
 mod wasm;
 mod wasm_args;

@@ -60,7 +60,9 @@ pub(crate) fn run_sh(
     let (namespace, _mesh_mounts) = sh_namespace(&command)?;
     let (table, task) = allocate_sh_task(namespace)?;
     configure_sh_task(&task, Some(&line), &command.env)?;
-    let (stdout, stderr) = attach_task_stdio(&task, None)?;
+    // Empty stdin (immediate EOF), installed explicitly so a child command's
+    // `bind #task/<shell>/fd/0 fd/0` inherit has a real fd to proxy.
+    let (stdout, stderr) = attach_task_stdio(&task, Some(Vec::new()))?;
     let result = table.start(task.id()).map_err(CliError::from);
     finish_cli_task_output("sh", result, &task, &stdout, &stderr)
 }

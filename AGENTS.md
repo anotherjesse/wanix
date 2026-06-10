@@ -260,7 +260,17 @@ tests.
   and the `cd`/`export`/`unset` special builtins (single-stage), and
   external command launch resolved from a `bin` dir (so `jaq` is just a command —
   `echo '[1,2,3]' | jaq 'map(.+1)'` works) with exported env propagated to
-  children. cwd is shell-local (children run at root). Without `-c` the shell
+  children. cwd is shell-local (children run at root). BinVerbs (ADR 0007
+  §Confinement contract): a mounted resource ships executable verbs in a
+  host-served read-only size-capped `bin/` (`app serve` exposes
+  `<app-dir>/bin`, `tool serve --config` takes a per-tool `bin` key), and
+  `NAME:CMD args` runs `bin/CMD.{js,wasm}` from the `/n/NAME` or `/vol/NAME`
+  mount as a child confined via the `#task` ctl `confine` verb to EXACTLY that
+  resource at `/res` + stdio + argv/env — no PATH merging, squatting-safe;
+  proofs in `wanix-wasm` driver tests and
+  `wanix-cli/src/app/serve/verb_tests.rs`, concept doc
+  [docs/site/content/concepts/bin-verbs.md](docs/site/content/concepts/bin-verbs.md).
+  Without `-c` the shell
   is an interactive REPL: a `render_prompt` prompt (`$PS1`, `[code]` prefix on
   non-zero `$?`) over blocking byte-wise stdin reads, with guest-owned cooked-
   line editing per ADR 0003 (echo, backspace, Ctrl-C line cancel, Ctrl-D exit) —

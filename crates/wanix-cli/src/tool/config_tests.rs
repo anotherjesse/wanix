@@ -172,3 +172,32 @@ fn rejects_an_empty_config_unknown_keys_and_a_missing_file() {
     assert!(error.to_string().contains("shell"), "{error}");
     assert!(load_tool_config(std::path::Path::new("/nonexistent/tools.toml")).is_err());
 }
+
+#[test]
+fn bin_key_resolves_relative_to_the_config_directory() {
+    // The BinVerbs key: a per-tool verb directory served read-only at bin/.
+    let file = parse("[tools.t]\ndescription = \"x\"\ncommand = \"/bin/cat\"\nbin = \"verbs/t\"\n")
+        .unwrap();
+    let dir = file.verb_bin_dir("t").unwrap();
+    assert!(
+        dir.ends_with("verbs/t") && dir != std::path::Path::new("verbs/t"),
+        "relative bin dirs resolve against the config file's directory: {dir:?}"
+    );
+    assert_eq!(
+        file.verb_bin_dir("missing"),
+        None,
+        "only configured tools have a verb dir"
+    );
+
+    let absolute =
+        parse("[tools.t]\ndescription = \"x\"\ncommand = \"/bin/cat\"\nbin = \"/srv/verbs\"\n")
+            .unwrap();
+    assert_eq!(
+        absolute.verb_bin_dir("t").unwrap(),
+        std::path::PathBuf::from("/srv/verbs")
+    );
+
+    let error =
+        parse("[tools.t]\ndescription = \"x\"\ncommand = \"/bin/cat\"\nbin = \"\"\n").unwrap_err();
+    assert!(error.to_string().contains("bin"), "{error}");
+}

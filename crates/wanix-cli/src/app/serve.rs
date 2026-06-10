@@ -17,6 +17,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use wanix_fs::FileSystem;
 use wanix_id::{AttachPolicy, Authorization, NodeIdentity, PeerId};
 use wanix_mesh::NativeServeConfig;
 use wanix_vfs::Rights;
@@ -28,6 +29,7 @@ use crate::mesh::resource::{
     ServedEndpoint, bind_endpoints, load_identity_at, register_endpoints,
     serve_record_example_line, serve_record_line,
 };
+use crate::verb_bin::{compose_with_verb_bin, load_verb_bin};
 use crate::{CliError, write_process_output};
 
 /// A parsed `app serve` invocation.
@@ -179,7 +181,10 @@ pub(crate) fn run_app_serve_streaming(
     let (guest, service) = start_app_guest(&command.app_dir, &command.state_dir, &manifest)?;
     let identity = load_identity_at(&app_identity_path(&name)?)?;
     let slot = ServiceSlot::new(service);
-    let served = bind_app_endpoint(name, identity, slot.clone(), command.local_addr)?;
+    // BinVerbs: an app that ships a `bin/` directory exposes it host-served
+    // beside its tree (read-only, size-capped) — its mounted vocabulary.
+    let bin = load_verb_bin(&command.app_dir.join("bin"), "app serve")?;
+    let served = bind_app_endpoint(name, identity, slot.clone(), bin, command.local_addr)?;
     for endpoint in &served {
         write_process_output(
             process_stderr,
@@ -222,9 +227,10 @@ pub(crate) fn bind_app_endpoint(
     name: String,
     identity: NodeIdentity,
     slot: ServiceSlot,
+    bin: Option<Arc<dyn FileSystem>>,
     local_addr: Option<SocketAddr>,
 ) -> Result<Vec<ServedEndpoint>, CliError> {
-    let policy = Arc::new(AppAttachPolicy { slot });
+    let policy = Arc::new(AppAttachPolicy { slot, bin });
     let config = NativeServeConfig::per_peer(policy);
     bind_endpoints("app", vec![(name, identity, config)], local_addr)
 }
@@ -245,15 +251,20 @@ pub(crate) fn bind_app_endpoint(
 /// restart) the slot is empty and the attach is refused.
 struct AppAttachPolicy {
     slot: ServiceSlot,
+    /// The app's host-served verb `bin/` (BinVerbs), when it ships one.
+    bin: Option<Arc<dyn FileSystem>>,
 }
 
 impl AttachPolicy for AppAttachPolicy {
     fn evaluate(&self, peer: PeerId, _aname: &str) -> Option<Authorization> {
         let service = self.slot.current()?;
         let view = service.open_view(format!("iroh:{}", peer.to_hex()));
-        Some(Authorization::new(Arc::new(view), Rights::read_write()))
+        let fs = compose_with_verb_bin(Arc::new(view), self.bin.as_ref()).ok()?;
+        Some(Authorization::new(fs, Rights::read_write()))
     }
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod verb_tests;

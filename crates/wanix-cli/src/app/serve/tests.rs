@@ -71,6 +71,7 @@ fn serve_chatroom(
         "chatroom-test".to_owned(),
         NodeIdentity::from_secret_bytes([secret; 32]),
         ServiceSlot::new(service.clone()),
+        crate::verb_bin::load_verb_bin(&app_dir.join("bin"), "app serve").unwrap(),
         Some(loopback()),
     )
     .unwrap();
@@ -718,6 +719,7 @@ fn restart_on_failure_swaps_a_fresh_service_behind_the_same_ticket() {
         "restart-test".to_owned(),
         NodeIdentity::from_secret_bytes([140u8; 32]),
         slot.clone(),
+        None,
         Some(loopback()),
     )
     .unwrap();

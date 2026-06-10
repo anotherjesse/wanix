@@ -95,7 +95,9 @@ pub enum SourceWait {
 /// inherited), and runs it to completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnSpec {
-    /// The program to run (`argv[0]`).
+    /// The program to run (`argv[0]`), as the *child* resolves it: for a
+    /// confined resource verb this is `res/bin/CMD.{js,wasm}`; otherwise the
+    /// child shares the shell's namespace and the path is shell-relative.
     pub program: String,
     /// The arguments following the program name.
     pub args: Vec<String>,
@@ -105,6 +107,12 @@ pub struct SpawnSpec {
     pub stdin: InputSource,
     /// Where the child writes standard output.
     pub stdout: OutputSink,
+    /// When set, the child runs *confined*: after its stdio fds are bound the
+    /// launcher seals the child's namespace to exactly this subtree of the
+    /// shell's namespace, bound at `res` (the `#task` `confine` ctl verb).
+    /// The verb's code and the authority it gets arrive together — it can
+    /// reach the resource it came from, its stdio, argv/env, and nothing else.
+    pub confine: Option<String>,
 }
 
 /// The host operations the shell needs to run a command line.

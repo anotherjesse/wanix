@@ -214,9 +214,17 @@ fn run_external(
             "'>>' append to a file for an external command".into(),
         ));
     }
-    let program = crate::resolve::resolve_command(&argv[0], &*ns)?;
+    // Resolution failure (an unmounted resource, a missing or ambiguous
+    // verb) is command-not-found, reported honestly like a failed launch.
+    let target = match crate::verbs::resolve_spawn_target(&argv[0], &*ns) {
+        Ok(target) => target,
+        Err(err) => {
+            ns.write_stderr(format!("wsh: {}: {err}\n", argv[0]).as_bytes())?;
+            return Ok(COMMAND_NOT_FOUND_STATUS);
+        }
+    };
     let spec = SpawnSpec {
-        program,
+        program: target.program,
         args: argv[1..].to_vec(),
         env: state
             .env_iter()
@@ -224,6 +232,7 @@ fn run_external(
             .collect(),
         stdin,
         stdout,
+        confine: target.confine,
     };
     // At the interactive REPL the foreground wait watches stdin so Ctrl-C
     // kills the child (`#task/<id>/ctl kill`) instead of buffering as input.
@@ -756,6 +765,116 @@ mod tests {
         });
         assert_eq!(run_on("lister a b", &mut ns), 0);
         assert_eq!(String::from_utf8(ns.out).unwrap(), "ran a,b\n");
+    }
+
+    // ---- resource verbs (NAME:CMD) ----------------------------------------
+
+    /// A fake with the `room` resource mounted at `n/room` shipping one wasm
+    /// verb `bin/post.wasm` that records `args@input` into the room.
+    fn ns_with_room_verb() -> FakeNs {
+        let mut ns = FakeNs::default();
+        ns.seed_file("n/room");
+        ns.seed_file("n/room/bin/post.wasm");
+        // The child resolves its program inside the confined namespace.
+        ns.register("res/bin/post.wasm", |input, args| {
+            (
+                format!("{}@{}", args.join(" "), String::from_utf8_lossy(input)).into_bytes(),
+                0,
+            )
+        });
+        ns
+    }
+
+    #[test]
+    fn verb_runs_confined_with_child_visible_program_path() {
+        let mut ns = ns_with_room_verb();
+        assert_eq!(run_on("room:post hello world", &mut ns), 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "hello world@");
+        let spec = ns.spawns.last().unwrap();
+        assert_eq!(spec.program, "res/bin/post.wasm");
+        assert_eq!(spec.args, ["hello", "world"]);
+        assert_eq!(
+            spec.confine.as_deref(),
+            Some("n/room"),
+            "the verb must launch through the confined-child seam"
+        );
+    }
+
+    #[test]
+    fn verb_resolves_vol_mounts_and_js_form() {
+        let mut ns = FakeNs::default();
+        ns.seed_file("vol/notes");
+        ns.seed_file("vol/notes/bin/grep.js");
+        ns.register("res/bin/grep.js", |_in, _args| (b"found\n".to_vec(), 0));
+        assert_eq!(run_on("notes:grep x", &mut ns), 0);
+        assert_eq!(
+            ns.spawns.last().unwrap().confine.as_deref(),
+            Some("vol/notes")
+        );
+        assert_eq!(ns.spawns.last().unwrap().program, "res/bin/grep.js");
+    }
+
+    #[test]
+    fn verb_in_pipeline_reads_stdin_and_sets_status() {
+        // `echo hi | room:post` — the verb is wired like any external stage
+        // (input convention: a verb with no argv reads its body from stdin).
+        let mut ns = ns_with_room_verb();
+        assert_eq!(run_on("echo hi | room:post", &mut ns), 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "@hi\n");
+        assert_eq!(ns.spawns.last().unwrap().confine.as_deref(), Some("n/room"));
+        // $? reflects the verb's exit like any external.
+        let mut ns = ns_with_room_verb();
+        ns.register("res/bin/post.wasm", |_in, _args| (Vec::new(), 3));
+        run_on("room:post; echo status=$?", &mut ns);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "status=3\n");
+    }
+
+    #[test]
+    fn verb_against_unmounted_resource_is_127_and_names_the_mount_roots() {
+        let mut ns = FakeNs::default();
+        assert_eq!(run_on("ghost:post hi", &mut ns), 127);
+        let err = String::from_utf8(ns.err).unwrap();
+        assert!(err.contains("not a mounted resource"), "{err}");
+        assert!(err.contains("/n/ghost"), "{err}");
+        assert!(ns.spawns.is_empty(), "nothing must launch");
+    }
+
+    #[test]
+    fn missing_verb_is_127_and_names_both_candidate_forms() {
+        let mut ns = FakeNs::default();
+        ns.seed_file("n/room");
+        assert_eq!(run_on("room:nope", &mut ns), 127);
+        let err = String::from_utf8(ns.err).unwrap();
+        assert!(err.contains("bin/nope.js"), "{err}");
+        assert!(err.contains("bin/nope.wasm"), "{err}");
+    }
+
+    #[test]
+    fn ambiguous_verb_is_refused() {
+        let mut ns = FakeNs::default();
+        ns.seed_file("n/room");
+        ns.seed_file("n/room/bin/post.js");
+        ns.seed_file("n/room/bin/post.wasm");
+        assert_eq!(run_on("room:post", &mut ns), 127);
+        assert!(
+            String::from_utf8(ns.err)
+                .unwrap()
+                .contains("ambiguous verb"),
+            "both forms existing must be refused, not silently picked"
+        );
+    }
+
+    #[test]
+    fn non_verb_spellings_fall_through_to_plain_resolution() {
+        // A word with a scheme/dot/path is never a verb: it resolves (and
+        // honestly fails) as a plain command, with no confinement.
+        let mut ns = FakeNs::default();
+        assert_eq!(run_on("Room:post", &mut ns), 127);
+        assert!(
+            String::from_utf8(ns.err)
+                .unwrap()
+                .contains("Room:post: command not found"),
+        );
     }
 
     // ---- shell state + builtins -----------------------------------------
