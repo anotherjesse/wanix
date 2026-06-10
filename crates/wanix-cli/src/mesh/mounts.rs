@@ -277,4 +277,42 @@ mod tests {
         drop(notes_server);
         drop(photos_server);
     }
+
+    /// Mount-by-name end to end (the Names phase): a live loopback serve is
+    /// registered in a catalog by the `--register` machinery, then mounted by
+    /// its bare catalog NAME through the exact `--mount-mesh` spec parser the
+    /// `sh`/`wasm`/`qjs-shell` flags call — no pasted hex anywhere. The parsed
+    /// spec already carries the resolved address (launch-time naming), so the
+    /// bind path is byte-identical to a ticket mount.
+    #[test]
+    fn mesh_mount_by_catalog_name_reads_a_registered_live_serve() {
+        use wanix_vfs::Namespace;
+
+        use crate::catalog::register_served;
+        use crate::qjs_args::parse_mesh_mount_in;
+
+        let host = Arc::new(MemFs::new());
+        host.write_file("seed.txt", b"served-by-name").unwrap();
+        let (server, url) = serve_native(host.clone() as Arc<dyn FileSystem>, 7);
+
+        let catalog =
+            std::env::temp_dir().join(format!("wanix-mount-by-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&catalog);
+        register_served(&catalog, "seeds", "volume", &[("seeds".to_owned(), url)]).unwrap();
+
+        let spec = parse_mesh_mount_in(&catalog, "seeds", "sh --mount-mesh").unwrap();
+        assert_eq!(spec.guest_path.as_str(), "n/seeds");
+        let mut namespace = Namespace::new();
+        let keepalives =
+            bind_mesh_mounts_into(&mut namespace, std::slice::from_ref(&spec)).unwrap();
+        assert_eq!(
+            read_through(&namespace, "n/seeds/seed.txt"),
+            b"served-by-name"
+        );
+
+        drop(namespace);
+        drop(keepalives);
+        drop(server);
+        let _ = std::fs::remove_dir_all(&catalog);
+    }
 }

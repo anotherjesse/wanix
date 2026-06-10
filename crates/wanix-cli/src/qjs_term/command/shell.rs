@@ -32,9 +32,9 @@ pub(crate) fn parse_qjs_shell_command(args: &[OsString]) -> Result<QjsShellComma
             raw = true;
             index += 1;
         } else if arg == "--mount-mesh" {
-            let value = args
-                .get(index + 1)
-                .ok_or_else(|| CliError::usage("qjs-shell --mount-mesh expects IROH_URL=GUEST"))?;
+            let value = args.get(index + 1).ok_or_else(|| {
+                CliError::usage("qjs-shell --mount-mesh expects IROH_URL=GUEST or NAME[=GUEST]")
+            })?;
             let value = os_arg_to_string(value, "qjs-shell --mount-mesh")?;
             mesh_mounts.push(parse_mesh_mount(&value, "qjs-shell --mount-mesh")?);
             index += 2;

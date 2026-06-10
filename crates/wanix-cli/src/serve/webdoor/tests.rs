@@ -259,8 +259,18 @@ fn bind_parse_qualifies_bare_names_and_detects_tickets() {
         WebBindSource::Dir(PathBuf::from("/srv/chat-web"))
     );
 
+    // A source spelled like a catalog name resolves at startup: catalog entry
+    // first, relative directory fallback.
     let qualified = WebBind::parse("chat.localhost=web").unwrap();
     assert_eq!(qualified.host, host("chat.localhost"));
+    assert_eq!(qualified.source, WebBindSource::NameOrDir("web".to_owned()));
+
+    // `./web` forces the directory reading of the same spelling.
+    let forced_dir = WebBind::parse("chat=./web").unwrap();
+    assert_eq!(
+        forced_dir.source,
+        WebBindSource::Dir(PathBuf::from("./web"))
+    );
 
     let peer_hex = NodeIdentity::from_secret_bytes([7u8; 32])
         .peer_id()
@@ -286,6 +296,88 @@ fn bind_parse_rejects_malformed_specs() {
     ] {
         assert!(WebBind::parse(raw).is_err(), "{raw:?} must be rejected");
     }
+}
+
+/// `--bind NAME=CATALOG_NAME`: a catalog entry wins (the gateway dials the
+/// registered live serve and the origin reads the served bytes); the same
+/// spelling with no entry falls back to a relative directory.
+#[test]
+fn bind_name_sources_resolve_through_the_catalog_with_dir_fallback() {
+    use crate::catalog::{CatalogEntry, write_entry};
+    use crate::mesh::mounts::test_support::serve_native;
+
+    fn read_through(fs: &Arc<dyn FileSystem>, path: &str) -> Vec<u8> {
+        let mut file = fs
+            .open(&NormalizedPath::new(path).unwrap(), OpenOptions::read())
+            .unwrap();
+        let mut bytes = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let read = file.read(&mut chunk).unwrap();
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        bytes
+    }
+
+    let served = MemFs::new();
+    served.write_file("index.html", b"served room").unwrap();
+    let (server, url) = serve_native(Arc::new(served) as Arc<dyn FileSystem>, 11);
+    let catalog = temp_root("name-catalog");
+    write_entry(
+        &catalog,
+        &CatalogEntry {
+            name: "room".to_owned(),
+            description: None,
+            tags: Vec::new(),
+            address: url,
+        },
+        false,
+    )
+    .unwrap();
+
+    let binds = [WebBind {
+        host: host("chat.localhost"),
+        source: WebBindSource::NameOrDir("room".to_owned()),
+    }];
+    let door = WebDoor::build_in(Some(&catalog), &binds).unwrap();
+    let origin = door.resolve(&host("chat.localhost")).unwrap();
+    assert_eq!(read_through(&origin, "index.html"), b"served room");
+    drop(door);
+    drop(server);
+
+    // No catalog entry: the same spelling is a relative directory.
+    let fallback_dir = format!("wanix-webdoor-fallback-{}", std::process::id());
+    let _ = fs::remove_dir_all(&fallback_dir);
+    fs::create_dir_all(&fallback_dir).unwrap();
+    fs::write(format!("{fallback_dir}/index.html"), b"plain dir").unwrap();
+    let binds = [WebBind {
+        host: host("chat.localhost"),
+        source: WebBindSource::NameOrDir(fallback_dir.clone()),
+    }];
+    let door = WebDoor::build_in(Some(&catalog), &binds).unwrap();
+    let origin = door.resolve(&host("chat.localhost")).unwrap();
+    assert_eq!(read_through(&origin, "index.html"), b"plain dir");
+
+    // Neither an entry nor a directory: the error names both readings.
+    let binds = [WebBind {
+        host: host("chat.localhost"),
+        source: WebBindSource::NameOrDir("absent".to_owned()),
+    }];
+    let Err(error) = WebDoor::build_in(Some(&catalog), &binds) else {
+        panic!("a bind that is neither entry nor directory must fail");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("neither a catalog entry nor an openable directory"),
+        "{error}"
+    );
+
+    let _ = fs::remove_dir_all(&fallback_dir);
+    let _ = fs::remove_dir_all(&catalog);
 }
 
 // ---------------------------------------------------------------------------

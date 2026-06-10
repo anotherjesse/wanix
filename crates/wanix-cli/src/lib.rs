@@ -23,6 +23,7 @@ mod qjs_args;
 mod qjs_restore;
 mod qjs_support;
 mod qjs_term;
+mod recipe;
 mod rootfs;
 mod serve;
 mod sh;

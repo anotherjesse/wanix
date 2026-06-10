@@ -314,7 +314,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("wasm --mount-mesh address must be an iroh://")
+                .contains("wasm --mount-mesh target must be an iroh://")
         );
     }
 

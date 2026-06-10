@@ -91,7 +91,7 @@ fn parse_write(rest: &[OsString]) -> Result<MountCommand, CliError> {
     let text = rest
         .get(2)
         .ok_or_else(|| {
-            CliError::usage("mount-write requires (tcp://HOST:PORT | iroh://PEER) PATH TEXT")
+            CliError::usage("mount-write requires (tcp://HOST:PORT | iroh://PEER | NAME) PATH TEXT")
         })?
         .to_str()
         .ok_or_else(|| CliError::usage("mount-write TEXT must be valid UTF-8"))?
@@ -100,16 +100,20 @@ fn parse_write(rest: &[OsString]) -> Result<MountCommand, CliError> {
 }
 
 fn mount_addr(arg: Option<&OsString>, verb: &str) -> Result<String, CliError> {
-    arg.ok_or_else(|| CliError::usage(format!("{verb} requires (tcp://HOST:PORT | iroh://PEER)")))?
-        .to_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| CliError::usage(format!("{verb} address must be valid UTF-8")))
+    arg.ok_or_else(|| {
+        CliError::usage(format!(
+            "{verb} requires (tcp://HOST:PORT | iroh://PEER | NAME)"
+        ))
+    })?
+    .to_str()
+    .map(ToOwned::to_owned)
+    .ok_or_else(|| CliError::usage(format!("{verb} address must be valid UTF-8")))
 }
 
 fn required_path_arg(arg: Option<&OsString>, verb: &str) -> Result<String, CliError> {
     optional_path_arg(arg, verb)?.ok_or_else(|| {
         CliError::usage(format!(
-            "{verb} requires (tcp://HOST:PORT | iroh://PEER) PATH"
+            "{verb} requires (tcp://HOST:PORT | iroh://PEER | NAME) PATH"
         ))
     })
 }
@@ -194,18 +198,34 @@ struct MountSession {
 }
 
 /// Dials `addr` and binds the imported remote at `/n/remote`, choosing the
-/// transport (and wire) by scheme.
+/// transport (and wire) by spelling.
 ///
-/// `iroh://<peer>[?addr=...]` dials the peer over the QUIC mesh and imports it
-/// over the **native** `wanix-mesh-wire` plane (typed `FsError`s, one bidi
-/// stream per op / per open file); `tcp://HOST:PORT` opens a raw TCP **9P**
-/// stream at the foreign edge. Both imports are `FileSystem`s, so the `mount-*`
-/// verbs run identically over either, and the bind is type-transparent.
+/// A bare catalog NAME (no scheme, no slash) resolves through `~/.wanix/catalog`
+/// at invocation time — launch-time naming per ADR 0007 §2, so the operation
+/// runs against the resolved address, never the name. `iroh://<peer>[?addr=...]`
+/// dials the peer over the QUIC mesh and imports it over the **native**
+/// `wanix-mesh-wire` plane (typed `FsError`s, one bidi stream per op / per open
+/// file); `tcp://HOST:PORT` opens a raw TCP **9P** stream at the foreign edge.
+/// Both imports are `FileSystem`s, so the `mount-*` verbs run identically over
+/// either, and the bind is type-transparent.
 ///
 /// The `iroh://` arm returns its dialer node (inside [`crate::mesh::IrohMount`])
 /// as a keepalive: it owns the runtime the native import runs every op on, so
 /// the caller must hold it until the operation completes.
 fn mount_namespace(addr: &str) -> Result<MountSession, CliError> {
+    dial_mount(&crate::catalog::resolve_mount_target(addr)?)
+}
+
+/// [`mount_namespace`] resolving names through an explicit catalog directory,
+/// so tests can prove the mount-by-name path without the user's catalog.
+#[cfg(test)]
+fn mount_namespace_in(catalog: &std::path::Path, addr: &str) -> Result<MountSession, CliError> {
+    dial_mount(&crate::catalog::resolve_mount_target_in(catalog, addr)?)
+}
+
+/// The transport-dispatch half of [`mount_namespace`]: `addr` is already a
+/// resolved address, never a name.
+fn dial_mount(addr: &str) -> Result<MountSession, CliError> {
     if addr.starts_with(crate::mesh::IROH_SCHEME) {
         // Wanix↔Wanix mesh import: the native wire over QUIC.
         let mount = crate::mesh::dial_iroh_remote(addr, "")?;
@@ -241,7 +261,7 @@ fn bind_mount(
 fn dial_tcp_remote(addr: &str) -> Result<std::sync::Arc<RemoteFs>, CliError> {
     let host_port = addr.strip_prefix("tcp://").ok_or_else(|| {
         CliError::usage(format!(
-            "mount address must be tcp://HOST:PORT or iroh://<peer>: {addr}"
+            "mount address must be tcp://HOST:PORT, iroh://<peer>, or a catalog NAME: {addr}"
         ))
     })?;
     let stream = TcpStream::connect(host_port).map_err(|error| {

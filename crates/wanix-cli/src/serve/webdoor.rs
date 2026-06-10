@@ -70,23 +70,30 @@ pub(super) enum WebBindSource {
     /// mounted for the serve's whole lifetime (the gateway holds the
     /// keepalive).
     Mesh(String),
+    /// A source spelled like a catalog name (no scheme, no slash, no dot).
+    /// Resolved at gateway startup — a catalog entry wins and is dialed like a
+    /// `Mesh` ticket; otherwise it falls back to a relative directory of the
+    /// same spelling (spell it `./NAME` to force the directory).
+    NameOrDir(String),
 }
 
 impl WebBind {
-    /// Parses `NAME=DIR` or `NAME=iroh://PEER[?addr=...]`. A NAME without a
-    /// dot gets `.localhost` appended, so `--bind chat=DIR` and
-    /// `--bind chat.localhost=DIR` name the same origin.
+    /// Parses `NAME=DIR`, `NAME=iroh://PEER[?addr=...]`, or
+    /// `NAME=CATALOG_NAME`. A NAME without a dot gets `.localhost` appended,
+    /// so `--bind chat=DIR` and `--bind chat.localhost=DIR` name the same
+    /// origin.
     pub(crate) fn parse(raw: &str) -> Result<Self, CliError> {
         let Some((name, source)) = raw.split_once('=') else {
             return Err(CliError::usage(format!(
-                "serve --bind expects NAME=DIR or NAME=iroh://PEER, got {raw:?}"
+                "serve --bind expects NAME=DIR, NAME=iroh://PEER, or NAME=CATALOG_NAME, got {raw:?}"
             )));
         };
         let host = parse_bind_name(name)?;
         let source = source.trim();
         if source.is_empty() {
             return Err(CliError::usage(format!(
-                "serve --bind {name} names an empty source; pass a directory or an iroh:// ticket"
+                "serve --bind {name} names an empty source; pass a directory, an iroh:// ticket, \
+                 or a catalog name"
             )));
         }
         if source.starts_with(IROH_SCHEME) {
@@ -96,6 +103,12 @@ impl WebBind {
             return Ok(Self {
                 host,
                 source: WebBindSource::Mesh(source.to_owned()),
+            });
+        }
+        if crate::catalog::is_name_spelling(source) {
+            return Ok(Self {
+                host,
+                source: WebBindSource::NameOrDir(source.to_owned()),
             });
         }
         Ok(Self {
@@ -160,11 +173,18 @@ impl WebDoor {
     /// fails — a gateway origin with a silently missing member would be a
     /// confusing half-site, so startup fails loudly instead.
     pub(super) fn build(binds: &[WebBind]) -> Result<Self, CliError> {
+        Self::build_in(None, binds)
+    }
+
+    /// [`Self::build`] resolving catalog-name sources against an explicit
+    /// catalog directory (`None` is the default `~/.wanix/catalog`, resolved
+    /// lazily so directory-only binds never require a home directory).
+    fn build_in(catalog: Option<&std::path::Path>, binds: &[WebBind]) -> Result<Self, CliError> {
         let mut door = Self::empty();
         let mut composed: BTreeMap<Host, Namespace> = BTreeMap::new();
         for bind in binds {
             let namespace = composed.entry(bind.host.clone()).or_default();
-            let fs = door.open_source(&bind.source)?;
+            let fs = door.open_source(catalog, &bind.source)?;
             namespace
                 .bind(fs, ".", ".", bind_last())
                 .map_err(CliError::from)?;
@@ -175,7 +195,11 @@ impl WebDoor {
         Ok(door)
     }
 
-    fn open_source(&mut self, source: &WebBindSource) -> Result<Arc<dyn FileSystem>, CliError> {
+    fn open_source(
+        &mut self,
+        catalog: Option<&std::path::Path>,
+        source: &WebBindSource,
+    ) -> Result<Arc<dyn FileSystem>, CliError> {
         match source {
             WebBindSource::Dir(path) => Ok(Arc::new(LocalFs::new(path).map_err(|error| {
                 CliError::new(
@@ -183,13 +207,38 @@ impl WebDoor {
                     1,
                 )
             })?)),
-            WebBindSource::Mesh(ticket) => {
-                let mount = dial_iroh_remote(ticket, "")?;
-                let remote = mount.remote.clone();
-                self._keepalives.push(mount);
-                Ok(remote)
+            WebBindSource::Mesh(ticket) => self.dial_mesh_source(ticket),
+            WebBindSource::NameOrDir(value) => {
+                // Launch-time naming (ADR 0007 §2): an existing catalog entry
+                // wins; otherwise the spelling is a relative directory.
+                let resolved = match catalog {
+                    Some(dir) => crate::catalog::try_resolve_name_in(dir, value)?,
+                    None => crate::catalog::try_resolve_name(value)?,
+                };
+                match resolved {
+                    Some(address) => {
+                        eprintln!("{}", crate::catalog::resolution_log_line(value, &address));
+                        self.dial_mesh_source(&address)
+                    }
+                    None => Ok(Arc::new(LocalFs::new(value).map_err(|error| {
+                        CliError::new(
+                            format!(
+                                "serve --bind: {value} is neither a catalog entry nor an \
+                                 openable directory: {error}"
+                            ),
+                            1,
+                        )
+                    })?)),
+                }
             }
         }
+    }
+
+    fn dial_mesh_source(&mut self, ticket: &str) -> Result<Arc<dyn FileSystem>, CliError> {
+        let mount = dial_iroh_remote(ticket, "")?;
+        let remote = mount.remote.clone();
+        self._keepalives.push(mount);
+        Ok(remote)
     }
 
     /// Registers an already-built filesystem as an origin (tests; in-process

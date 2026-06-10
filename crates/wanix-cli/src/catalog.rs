@@ -9,11 +9,13 @@
 //! `[a-z0-9-]`, no dots, no slashes, no scheme — so every resolution point can
 //! tell "a name" from "an address" by spelling alone, forever.
 //!
-//! Resolution is a launch-time operation: [`resolve_name`] turns a name into
-//! the bound address once, when a mount is created, so running tasks hold
-//! resolved addresses and a catalog rebind affects the next launch, never a
-//! live namespace. Authorization (who may dial what) is the ADR 0007 Layer 2/3
-//! work; the catalog only answers "what does this name dial".
+//! Resolution is a launch-time operation: [`resolve_mount_target`] turns a
+//! name into the bound address once, when a mount is created, so running tasks
+//! hold resolved addresses and a catalog rebind affects the next launch, never
+//! a live namespace. Every resolution point routes through it: `--mount-mesh`
+//! specs, the `mount-*` verbs, `serve --bind` sources, and recipes.
+//! Authorization (who may dial what) is the ADR 0007 Layer 2/3 work; the
+//! catalog only answers "what does this name dial".
 
 mod command;
 #[cfg(test)]
@@ -52,6 +54,20 @@ pub(crate) fn default_catalog_dir() -> Result<PathBuf, CliError> {
     Ok(crate::volume::wanix_dir()?.join("catalog"))
 }
 
+/// True when `value` is spelled like a catalog name: lowercase `[a-z0-9-]`,
+/// no scheme, no slash, no dot. The single spelling rule every resolution
+/// point routes on — a value that fits is a NAME (resolve it), anything else
+/// (ticket, `tcp://` address, path) is used directly.
+pub(crate) fn is_name_spelling(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && bytes[0] != b'-'
+        && bytes[bytes.len() - 1] != b'-'
+}
+
 /// Validates a catalog name: non-empty lowercase `[a-z0-9-]` with alphanumeric
 /// first and last characters.
 ///
@@ -64,14 +80,7 @@ pub(crate) fn default_catalog_dir() -> Result<PathBuf, CliError> {
 ///
 /// Returns a usage error naming the grammar when the name does not fit it.
 pub(crate) fn validate_catalog_name(name: &str) -> Result<(), CliError> {
-    let bytes = name.as_bytes();
-    let ok = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && bytes[0] != b'-'
-        && bytes[bytes.len() - 1] != b'-';
-    if !ok {
+    if !is_name_spelling(name) {
         return Err(CliError::usage(format!(
             "invalid catalog name {name:?}: use lowercase letters, digits, and - (no dots, \
              slashes, spaces, or uppercase; must start and end with a letter or digit) so a \
@@ -153,27 +162,43 @@ pub(crate) fn write_entry(
 /// # Errors
 ///
 /// Returns a CLI error when the entry does not exist (pointing at `catalog
-/// add`) or its file cannot be read or parsed.
+/// add` and `--register`, and naming the catalog) or its file cannot be read
+/// or parsed.
 pub(crate) fn read_entry(dir: &Path, name: &str) -> Result<CatalogEntry, CliError> {
+    try_read_entry(dir, name)?.ok_or_else(|| {
+        CliError::new(
+            format!(
+                "no catalog entry {name:?} (catalog {}); add one with `wanix-rust catalog add \
+                 {name} IROH_URL` or serve the resource with `--register {name}`",
+                dir.display()
+            ),
+            1,
+        )
+    })
+}
+
+/// [`read_entry`] with absence as `Ok(None)`, for resolution points that fall
+/// back to another interpretation of the spelling (e.g. `serve --bind` falls
+/// back to a relative directory).
+///
+/// # Errors
+///
+/// Returns a CLI error when the name is malformed or an existing entry file
+/// cannot be read or parsed.
+pub(crate) fn try_read_entry(dir: &Path, name: &str) -> Result<Option<CatalogEntry>, CliError> {
     validate_catalog_name(name)?;
     let path = entry_path(dir, name);
-    let bytes = std::fs::read(&path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            CliError::new(
-                format!(
-                    "no catalog entry {name:?}; add one with `wanix-rust catalog add {name} \
-                     IROH_URL`"
-                ),
-                1,
-            )
-        } else {
-            CliError::new(
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(CliError::new(
                 format!("failed to read catalog entry {}: {error}", path.display()),
                 1,
-            )
+            ));
         }
-    })?;
-    serde_json::from_slice(&bytes).map_err(|error| {
+    };
+    serde_json::from_slice(&bytes).map(Some).map_err(|error| {
         CliError::new(
             format!("failed to parse catalog entry {}: {error}", path.display()),
             1,
@@ -238,29 +263,71 @@ pub(crate) fn list_entries(dir: &Path) -> Result<Vec<CatalogEntry>, CliError> {
 }
 
 /// Resolves a catalog NAME to the address it is bound to — the single Layer-1
-/// naming seam the Names phase consumes (ADR 0007 §2: names resolve at launch
-/// time; running tasks hold resolved addresses).
-///
-/// Nothing routes through this yet by design: the next phase points
-/// `--mount-mesh NAME=GUEST` and the `mount-*` verbs here when an argument has
-/// no scheme and no slash.
+/// naming seam (ADR 0007 §2: names resolve at launch time; running tasks hold
+/// resolved addresses). `--mount-mesh`, the `mount-*` verbs, `serve --bind`,
+/// and recipes all route here when an argument is spelled like a name.
 ///
 /// # Errors
 ///
 /// Returns a usage error when `name` does not fit the name grammar (a ticket
 /// or path is never a name) and a CLI error when no entry exists.
-#[allow(dead_code)] // the Names-phase seam; consumed by tests only so far
-pub(crate) fn resolve_name(name: &str) -> Result<String, CliError> {
-    resolve_name_in(&default_catalog_dir()?, name)
+pub(crate) fn resolve_name_in(dir: &Path, name: &str) -> Result<String, CliError> {
+    Ok(read_entry(dir, name)?.address)
 }
 
-/// [`resolve_name`] against an explicit catalog directory.
+/// [`resolve_name_in`] with absence as `Ok(None)`.
 ///
 /// # Errors
 ///
-/// See [`resolve_name`].
-pub(crate) fn resolve_name_in(dir: &Path, name: &str) -> Result<String, CliError> {
-    Ok(read_entry(dir, name)?.address)
+/// See [`try_read_entry`].
+pub(crate) fn try_resolve_name_in(dir: &Path, name: &str) -> Result<Option<String>, CliError> {
+    Ok(try_read_entry(dir, name)?.map(|entry| entry.address))
+}
+
+/// [`try_resolve_name_in`] against the default `~/.wanix/catalog`.
+///
+/// # Errors
+///
+/// See [`try_read_entry`], plus a CLI error when no home directory is known.
+pub(crate) fn try_resolve_name(name: &str) -> Result<Option<String>, CliError> {
+    try_resolve_name_in(&default_catalog_dir()?, name)
+}
+
+/// The launch-time mount-target seam: a value spelled like a catalog name
+/// resolves through the catalog at `dir` (logging the resolution once, for the
+/// audit trail — names are for humans, the dialed capability is the address);
+/// any other spelling (an `iroh://` ticket, a `tcp://` address, a path) passes
+/// through untouched.
+///
+/// # Errors
+///
+/// Returns a CLI error when the value is a name with no catalog entry.
+pub(crate) fn resolve_mount_target_in(dir: &Path, value: &str) -> Result<String, CliError> {
+    if !is_name_spelling(value) {
+        return Ok(value.to_owned());
+    }
+    let address = resolve_name_in(dir, value)?;
+    eprintln!("{}", resolution_log_line(value, &address));
+    Ok(address)
+}
+
+/// [`resolve_mount_target_in`] against the default `~/.wanix/catalog`. The
+/// catalog directory is only resolved when the value is actually a name, so
+/// ticket/address spellings never require a home directory.
+///
+/// # Errors
+///
+/// See [`resolve_mount_target_in`].
+pub(crate) fn resolve_mount_target(value: &str) -> Result<String, CliError> {
+    if !is_name_spelling(value) {
+        return Ok(value.to_owned());
+    }
+    resolve_mount_target_in(&default_catalog_dir()?, value)
+}
+
+/// The one audit line a name resolution emits (on stderr, once, at launch).
+pub(crate) fn resolution_log_line(name: &str, address: &str) -> String {
+    format!("wanix-rust: name '{name}' -> {address} (resolved through the catalog at launch)")
 }
 
 /// Writes/updates catalog entries for served endpoints at announce time

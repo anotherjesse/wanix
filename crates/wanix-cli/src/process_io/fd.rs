@@ -64,9 +64,11 @@ enum QjsShellInput {
     },
 }
 
-/// What the fd-aware entry runs: the two live terminal sessions (`qjs-shell`
-/// and interactive `sh`), or the ordinary process-IO path for everything else
-/// (including `sh -c`, which is a captured one-line run).
+/// What the fd-aware entry runs: the live terminal sessions (`qjs-shell`,
+/// interactive `sh`, and `recipe run` of a run-less recipe, which is an
+/// interactive `sh` over the recipe's mounts), or the ordinary process-IO path
+/// for everything else (including `sh -c` and `recipe run` with a run line,
+/// which are captured runs).
 #[cfg(unix)]
 enum TerminalSessionRoute {
     Passthrough,
@@ -109,6 +111,11 @@ fn terminal_session_route(args: &[OsString]) -> Result<TerminalSessionRoute, Cli
         if parsed.line.is_none() {
             return Ok(TerminalSessionRoute::Sh(parsed));
         }
+    }
+    if command == "recipe"
+        && let Some(session) = crate::recipe::interactive_recipe_session(rest)?
+    {
+        return Ok(TerminalSessionRoute::Sh(session));
     }
     Ok(TerminalSessionRoute::Passthrough)
 }

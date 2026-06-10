@@ -5,7 +5,7 @@ use crate::wasm_args::parse_wasm_command;
 use crate::{
     CliError, CliOutput, agent, agent_exec_server, app, capsule, catalog, cpu, mesh, mount, new,
     p9_stdio, parse_qjs_command, parse_qjs_snapshot_file_command, qemu, qjs, qjs_restore, qjs_term,
-    rootfs, serve, sh, tool, volume, wasm,
+    recipe, rootfs, serve, sh, tool, volume, wasm,
 };
 
 pub(super) fn run_collected_command(
@@ -36,6 +36,11 @@ pub(super) fn run_collected_command(
         ),
         Some("new") => new::run_new_command(new::parse_new_command(rest)?),
         Some("catalog") => catalog::run_catalog_command(catalog::parse_catalog_command(rest)?),
+        // `recipe run` of a run-less recipe is an interactive shell session and
+        // is refused inside run_recipe_command; everything else runs collected.
+        Some("recipe") => {
+            recipe::run_recipe_command(recipe::parse_recipe_command(rest)?, process_stdin)
+        }
         Some("volume") => run_volume_collected_command(rest),
         Some("tool") => run_tool_collected_command(rest),
         Some("app") => run_app_collected_command(rest),

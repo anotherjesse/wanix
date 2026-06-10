@@ -139,30 +139,78 @@ fn parse_host_mount(value: &str, label: &str) -> Result<HostMount, CliError> {
     })
 }
 
-/// Parses a `--mount-mesh IROH_URL=GUEST` value.
+/// Parses a `--mount-mesh (IROH_URL=GUEST | NAME[=GUEST])` value against the
+/// default `~/.wanix/catalog`.
 ///
 /// The iroh URL carries its own `=` inside the `?addr=IP:PORT` query, so the
-/// address/guest boundary is the **last** `=`, not the first. The address must
-/// be an `iroh://` URL; the guest must be a non-`.` relative path (same rule as
-/// host mounts).
+/// target/guest boundary is the **last** `=`, not the first. The target is an
+/// `iroh://` URL or a catalog NAME (resolved at launch time, never stored as a
+/// name — the spec always carries the resolved address); the guest must be a
+/// non-`.` relative path (same rule as host mounts). A bare NAME with no `=`
+/// mounts at `n/NAME`.
 pub(crate) fn parse_mesh_mount(value: &str, label: &str) -> Result<MeshMountSpec, CliError> {
-    let Some((addr, guest)) = value.rsplit_once('=') else {
-        return Err(CliError::usage(format!("{label} expects IROH_URL=GUEST")));
-    };
-    if addr.is_empty() || guest.is_empty() {
-        return Err(CliError::usage(format!("{label} expects IROH_URL=GUEST")));
+    parse_mesh_mount_resolving(value, label, crate::catalog::resolve_mount_target)
+}
+
+/// [`parse_mesh_mount`] against an explicit catalog directory (tests).
+#[cfg(test)]
+pub(crate) fn parse_mesh_mount_in(
+    catalog: &std::path::Path,
+    value: &str,
+    label: &str,
+) -> Result<MeshMountSpec, CliError> {
+    parse_mesh_mount_resolving(value, label, |target| {
+        crate::catalog::resolve_mount_target_in(catalog, target)
+    })
+}
+
+fn parse_mesh_mount_resolving(
+    value: &str,
+    label: &str,
+    resolve: impl Fn(&str) -> Result<String, CliError>,
+) -> Result<MeshMountSpec, CliError> {
+    // A bare catalog NAME (no `=` anywhere) mounts at the conventional n/NAME.
+    if !value.contains('=') && crate::catalog::is_name_spelling(value) {
+        return Ok(MeshMountSpec {
+            addr: resolve(value)?,
+            guest_path: NormalizedPath::new(format!("n/{value}"))?,
+        });
     }
-    if !addr.starts_with(crate::mesh::IROH_SCHEME) {
+    let Some((target, guest)) = value.rsplit_once('=') else {
+        return Err(mesh_mount_usage(label));
+    };
+    if target.is_empty() || guest.is_empty() {
+        return Err(mesh_mount_usage(label));
+    }
+    let addr = if crate::catalog::is_name_spelling(target) {
+        resolve(target)?
+    } else if target.starts_with(crate::mesh::IROH_SCHEME) {
+        target.to_owned()
+    } else {
         return Err(CliError::usage(format!(
-            "{label} address must be an {}URL",
+            "{label} target must be an {}URL or a catalog NAME",
             crate::mesh::IROH_SCHEME
         )));
-    }
-    // Accept an absolute-looking guest (`/vol`) like the one-shot `mount-*` verbs:
-    // the namespace is rooted, so `/vol` and `vol` name the same bind point.
+    };
+    Ok(MeshMountSpec {
+        addr,
+        guest_path: mesh_guest_path(guest, label)?,
+    })
+}
+
+fn mesh_mount_usage(label: &str) -> CliError {
+    CliError::usage(format!(
+        "{label} expects IROH_URL=GUEST or NAME[=GUEST] (a catalog name)"
+    ))
+}
+
+/// Normalizes a mesh-mount guest path. Accepts an absolute-looking guest
+/// (`/vol`) like the one-shot `mount-*` verbs: the namespace is rooted, so
+/// `/vol` and `vol` name the same bind point.
+pub(crate) fn mesh_guest_path(guest: &str, label: &str) -> Result<NormalizedPath, CliError> {
     let guest = guest.trim_start_matches('/');
     if guest.is_empty() {
-        return Err(CliError::usage(format!("{label} expects IROH_URL=GUEST")));
+        return Err(mesh_mount_usage(label));
     }
     let guest_path = NormalizedPath::new(guest)?;
     if guest_path.as_str() == "." {
@@ -170,10 +218,7 @@ pub(crate) fn parse_mesh_mount(value: &str, label: &str) -> Result<MeshMountSpec
             "{label} guest path must not be . in this demo"
         )));
     }
-    Ok(MeshMountSpec {
-        addr: addr.to_owned(),
-        guest_path,
-    })
+    Ok(guest_path)
 }
 
 pub(crate) fn os_arg_to_string(arg: &OsString, label: &str) -> Result<String, CliError> {
@@ -289,8 +334,8 @@ mod tests {
 
     #[test]
     fn mesh_mount_parser_rejects_boundary_errors() {
-        // No `=` separator, empty address, empty guest, non-iroh scheme, and a `.`
-        // guest path are all rejected.
+        // A bare non-name (a ticket needs =GUEST), empty address, empty guest,
+        // non-iroh scheme, and a `.` guest path are all rejected.
         for value in [
             "iroh://abcnoequals",
             "=/vol",
@@ -305,6 +350,55 @@ mod tests {
                 "value {value:?} should be a usage error"
             );
         }
+    }
+
+    #[test]
+    fn mesh_mount_specs_resolve_catalog_names_at_parse_time() {
+        use crate::catalog::{CatalogEntry, write_entry};
+
+        let dir =
+            std::env::temp_dir().join(format!("wanix-mesh-mount-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let address = format!(
+            "iroh://{}?addr=127.0.0.1:1",
+            wanix_id::NodeIdentity::from_secret_bytes([21u8; 32])
+                .peer_id()
+                .to_hex()
+        );
+        write_entry(
+            &dir,
+            &CatalogEntry {
+                name: "front-door".to_owned(),
+                description: None,
+                tags: Vec::new(),
+                address: address.clone(),
+            },
+            false,
+        )
+        .unwrap();
+
+        // A bare NAME resolves and mounts at the conventional n/NAME; the spec
+        // carries the resolved ADDRESS (launch-time naming), never the name.
+        let bare = super::parse_mesh_mount_in(&dir, "front-door", "sh --mount-mesh").unwrap();
+        assert_eq!(bare.addr, address);
+        assert_eq!(bare.guest_path.as_str(), "n/front-door");
+
+        // NAME=GUEST picks the mount point explicitly.
+        let placed =
+            super::parse_mesh_mount_in(&dir, "front-door=/vol/door", "wasm --mount-mesh").unwrap();
+        assert_eq!(placed.addr, address);
+        assert_eq!(placed.guest_path.as_str(), "vol/door");
+
+        // An unknown name is a clear error naming the catalog and catalog add.
+        let unknown =
+            super::parse_mesh_mount_in(&dir, "absent=/vol", "sh --mount-mesh").unwrap_err();
+        let message = unknown.to_string();
+        assert!(message.contains("no catalog entry \"absent\""), "{message}");
+        assert!(message.contains("catalog add absent"), "{message}");
+        assert!(message.contains(&dir.display().to_string()), "{message}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
