@@ -36,7 +36,11 @@ use tokio::runtime::Handle;
 /// The timeout is constructed *inside* the future driven by `block_on`, so the
 /// runtime's time driver is already entered when the `Timeout` is created;
 /// building it outside the runtime context panics with "no reactor running".
-fn block_on_deadline<F, T>(handle: &Handle, deadline: Option<Duration>, future: F) -> io::Result<T>
+pub(crate) fn block_on_deadline<F, T>(
+    handle: &Handle,
+    deadline: Option<Duration>,
+    future: F,
+) -> io::Result<T>
 where
     F: std::future::Future<Output = io::Result<T>>,
 {

@@ -16,6 +16,7 @@ use crate::runner::RunOutcome;
 
 impl ToolService {
     /// Appends bytes to a job's `in`. Sealed once `ctl run` is accepted.
+    /// Growth is bounded by the table-wide byte cap as the bytes arrive.
     pub(crate) fn append_input(
         &self,
         principal: &ToolPrincipal,
@@ -23,6 +24,7 @@ impl ToolService {
         bytes: &[u8],
     ) -> FsResult<usize> {
         let mut table = self.locked(self.now())?;
+        self.ensure_total_bytes_headroom(table.total_bytes(), bytes.len())?;
         let job = table.get_mut(principal, id)?;
         ensure_receiving(job, id)?;
         job.input.extend_from_slice(bytes);
@@ -39,6 +41,7 @@ impl ToolService {
         bytes: &[u8],
     ) -> FsResult<usize> {
         let mut table = self.locked(self.now())?;
+        self.ensure_total_bytes_headroom(table.total_bytes(), bytes.len())?;
         let job = table.get_mut(principal, id)?;
         ensure_receiving(job, id)?;
         let mut tentative = job.params_raw.clone();
@@ -150,6 +153,20 @@ impl ToolService {
             return Err(FsError::Other(format!("job {id} not finished")));
         }
         table.remove(id);
+        Ok(())
+    }
+
+    /// Rejects an append that would push the table-wide stored-byte total over
+    /// [`crate::spec::ToolLimits::max_total_bytes`]. This is the aggregate
+    /// memory guardrail: per-principal quotas reset with every fresh dialer
+    /// identity, so only a table-wide bound actually limits served memory.
+    fn ensure_total_bytes_headroom(&self, total_bytes: u64, incoming: usize) -> FsResult<()> {
+        let cap = self.inner.spec.limits.max_total_bytes;
+        if total_bytes.saturating_add(incoming as u64) > cap {
+            return Err(FsError::Other(format!(
+                "quota_exceeded: tool already stores its byte cap ({cap} bytes) across all callers"
+            )));
+        }
         Ok(())
     }
 

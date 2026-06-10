@@ -4,7 +4,7 @@
 //! - **Pipeable** builtins are pure of effects on the shell: `(argv, stdin,
 //!   &ShellState) -> (stdout, status)`. They may *read* state (`pwd`, `env`) but
 //!   not mutate it, so they compose inside pipelines.
-//! - **Namespace** builtins (`tool`) are pipeable too, but additionally talk to
+//! - **Namespace** builtins (`cat`, `tool`) are pipeable too, but additionally talk to
 //!   the [`NamespaceOps`] surface — they read/write namespace files and report
 //!   their own errors on stderr, while still never mutating shell state.
 //! - **Special** builtins (`cd`, `export`, `unset`) mutate `&mut ShellState` and
@@ -28,7 +28,6 @@ pub type SpecialBuiltin = fn(&[String], &mut ShellState) -> i32;
 pub fn builtin(name: &str) -> Option<Builtin> {
     match name {
         "echo" => Some(echo),
-        "cat" => Some(cat),
         "pwd" => Some(pwd),
         "env" => Some(env),
         "true" | ":" => Some(|_, _, _| (Vec::new(), 0)),
@@ -40,6 +39,7 @@ pub fn builtin(name: &str) -> Option<Builtin> {
 /// Looks up a pipeable namespace builtin by name.
 pub fn ns_builtin(name: &str) -> Option<NsBuiltin> {
     match name {
+        "cat" => Some(cat),
         "tool" => Some(crate::tool::tool),
         _ => None,
     }
@@ -84,8 +84,35 @@ fn echo(argv: &[String], _stdin: &[u8], _state: &ShellState) -> (Vec<u8>, i32) {
     (out, 0)
 }
 
-fn cat(_argv: &[String], stdin: &[u8], _state: &ShellState) -> (Vec<u8>, i32) {
-    (stdin.to_vec(), 0)
+/// `cat [FILE...]`: with no operands copies stdin; with operands concatenates
+/// the named files (`-` is stdin) through the namespace. A file that cannot be
+/// read is reported on stderr and the status is non-zero — never a silent
+/// empty success (a silent `cat FILE > OUT` would truncate `OUT` to nothing).
+fn cat(
+    argv: &[String],
+    stdin: &[u8],
+    _state: &ShellState,
+    ns: &mut dyn NamespaceOps,
+) -> (Vec<u8>, i32) {
+    if argv.len() == 1 {
+        return (stdin.to_vec(), 0);
+    }
+    let mut out = Vec::new();
+    let mut status = 0;
+    for path in &argv[1..] {
+        if path == "-" {
+            out.extend_from_slice(stdin);
+            continue;
+        }
+        match ns.read_file(path) {
+            Ok(bytes) => out.extend_from_slice(&bytes),
+            Err(err) => {
+                let _ = ns.write_stderr(format!("cat: {err}\n").as_bytes());
+                status = 1;
+            }
+        }
+    }
+    (out, status)
 }
 
 fn pwd(_argv: &[String], _stdin: &[u8], state: &ShellState) -> (Vec<u8>, i32) {

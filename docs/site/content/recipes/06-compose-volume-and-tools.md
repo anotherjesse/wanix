@@ -10,8 +10,8 @@ sourceRefs:
   - crates/wanix-cli/src/tool/serve.rs:96-110
   - crates/wanix-cli/src/tool/serve.rs:186
   - crates/wanix-cli/src/sh.rs:73-101
-  - crates/wanix-cli/src/mesh/ticket.rs:156-201
-  - crates/wanix-cli/src/qjs_args/mod.rs:144-148
+  - crates/wanix-cli/src/mesh/ticket.rs:156-260
+  - crates/wanix-cli/src/qjs_args/mod.rs:148-152
   - crates/wanix-sh/src/tool.rs:1-21
 seeAlso:
   - learn/compose-volumes-and-tools
@@ -25,7 +25,7 @@ prerequisites:
 usedInFlows:
   - {flow: compose-volumes-and-tools, step: 4}
 honestLimits:
-  - "A remount is a new principal: the dialer identity is ephemeral per dial, so jobs allocated in one sh invocation read as NotFound from the next. Keep multi-step job interactions in one session."
+  - "The dialer principal is the persisted ~/.wanix/dialer.key: every invocation by one user is one principal, so anyone who can read that key file can present it. Distinct users/machines remain distinct principals."
   - "tool serve admits any ticket holder (no allow-list yet); each is confined to its own private jobs/ view."
   - "Only the model/sha256/upper built-in runners are servable; volume state is plain host files, but tool job state lives only while tool serve runs."
 canonicalCaveatFor: []
@@ -107,7 +107,7 @@ VOL='iroh://6e8a49fe...?addr=127.0.0.1:38119'
 UP='iroh://2bcb5813...?addr=127.0.0.1:52164'
 SHA='iroh://ae985229...?addr=127.0.0.1:46571'
 
-wanix-rust sh -c 'cat < /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt' \
+wanix-rust sh -c 'cat /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt' \
   --mount-mesh "$VOL=/vol/notes" --mount-mesh "$UP=/n/upper" --mount-mesh "$SHA=/n/sha256"
 # (no output; exit 0)
 ```
@@ -125,7 +125,7 @@ WANIX MAKES THE MESH FEEL LOCAL
 Hash the new file with the third resource, and cross-check with a host tool:
 
 ```sh
-wanix-rust sh -c 'cat < /vol/notes/HELLO.txt | tool /n/sha256' \
+wanix-rust sh -c 'cat /vol/notes/HELLO.txt | tool /n/sha256' \
   --mount-mesh "$VOL=/vol/notes" --mount-mesh "$SHA=/n/sha256"
 ```
 
@@ -140,7 +140,7 @@ sha256sum ~/.wanix/volumes/demo-notes/HELLO.txt
 
 ## 5. The raw job protocol (no `tool` sugar)
 
-The `tool` builtin is convenience over visible files. Drive one job by hand in the interactive REPL (`wanix-rust sh` with no `-c` — the same `--mount-mesh` flags). It must be one session: a new invocation is a new principal and would not see this job.
+The `tool` builtin is convenience over visible files. Drive one job by hand in the interactive REPL (`wanix-rust sh` with no `-c` — the same `--mount-mesh` flags). One session is convenient, not required: the CLI dials every mount with your persisted dialer identity, so a later invocation is the same principal and still sees this job (step 6).
 
 ```text
 / $ cat < /n/upper/new
@@ -159,31 +159,30 @@ RAW PROTOCOL, NO SUGAR
 
 `new` allocates, `in` receives bytes, `ctl run` is synchronous (terminal on return), `out` and `result.json` are the answer, `close` releases retention early. See [jobs are files](/concepts/jobs-are-files).
 
-## 6. Two shells are two principals
+## 6. Your invocations are one principal; strangers stay strangers
 
-Identity comes from the QUIC handshake, never from a payload — and the CLI dials each mount with a fresh ephemeral key, so even your own next invocation is a stranger:
+Identity comes from the QUIC handshake, never from a payload. The CLI dials every mount with one persisted key (`~/.wanix/dialer.key`, created on first dial), so a job allocated in one invocation is still yours from the next:
 
 ```sh
 wanix-rust sh -c 'cat < /n/upper/new' --mount-mesh "$UP=/n/upper"
-# jc883d86da5693426
-wanix-rust sh -c 'cat < /n/upper/jobs/jc883d86da5693426/status' --mount-mesh "$UP=/n/upper"
+# j31770e20a12797a3
+wanix-rust sh -c 'cat /n/upper/jobs/j31770e20a12797a3/status' --mount-mesh "$UP=/n/upper"
 ```
 
 ```text
-wsh: /n/upper/jobs/jc883d86da5693426/status: No such file or directory (os error 44)
+{"state":"allocated","createdAt":1781053502736,"startedAt":null,"finishedAt":null,"expiresAt":null,"inputBytes":0,"outputBytes":0}
 ```
 
-Foreign job ids read as `NotFound` — the per-principal `jobs/` confinement working as designed, and the reason step 5 stayed inside one session.
+That durability is what makes a retained job a real audit/recovery record (ADR 0009's "survives caller death") instead of state orphaned behind a throwaway key. The privacy boundary is unchanged: a *different* dialer key is a different principal, its `jobs/` view is disjoint, and a guessed foreign job id reads as `NotFound` — never `PermissionDenied` (pinned by `two_peers_see_disjoint_jobs` and `same_identity_redial_resumes_jobs` in `crates/wanix-cli/src/tool/serve/tests.rs`).
 
 ## Troubleshooting (friction actually hit while testing)
 
 - **`resource unreachable: peer 6e8a49fe... did not answer within 5s`** — the serve behind that ticket is down (or the route hint is stale). The full message says it plainly: "the provider is offline or not discoverable from here, and the mount will work again when it returns (a bare iroh://PEER is found by mDNS on the LAN; pass ?addr=IP:PORT as a direct route hint)". Restart the serve and re-copy the ticket — the peer id stays the same, but `--addr 127.0.0.1:0` picks a new port each run.
-- **`cat /vol/notes/hello.txt` prints nothing and exits 0.** The shell's `cat` builtin reads stdin only and ignores operands. Use a redirect: `cat < /vol/notes/hello.txt`.
 - **Mount flag parses the wrong path.** `--mount-mesh` splits on the *last* `=`, so an unquoted ticket lets your host shell or the parser carve it at `?addr=`. Always quote the whole `TICKET=/guest/path` argument.
-- **A job id from a previous invocation reads as `No such file or directory`.** Not a bug — see step 6. Keep allocate → write → run → read inside one `sh` session (the `tool` builtin does all five steps in one line for exactly this reason).
+- **A job id reads as `No such file or directory` from another machine or user.** Not a bug — see step 6: `jobs/` is per-principal, and the principal is your `~/.wanix/dialer.key`. A different key (different user, different machine, a deleted key file) is a stranger to your jobs.
 - **`tool serve` / `volume serve` refuses to start without `--addr`.** Default-deny: serving on the public endpoint hands the resource to anyone with the ticket, so it demands either `--addr IP:PORT` or an explicit `--insecure-open`.
 - **`tool serve --tool a --tool b --addr 127.0.0.1:5700` is rejected.** A fixed nonzero port cannot back multiple endpoints; use port `0` when serving more than one tool (or volume).
 
 ## Cleanup
 
-Ctrl-C both serves; the volume's files stay under `~/.wanix/volumes/demo-notes/`, the identities under `~/.wanix/volume-identities/` and `~/.wanix/tool-identities/`. Tool job state is gone with the serve process.
+Ctrl-C both serves; the volume's files stay under `~/.wanix/volumes/demo-notes/`, the identities under `~/.wanix/volume-identities/` and `~/.wanix/tool-identities/`, and your dialer principal at `~/.wanix/dialer.key`. Tool job state is gone with the serve process.

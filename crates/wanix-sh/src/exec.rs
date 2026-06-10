@@ -853,6 +853,58 @@ mod tests {
     }
 
     #[test]
+    fn cat_reads_operand_files_in_order() {
+        let mut ns = FakeNs::default();
+        ns.write_file("a.txt", b"alpha ", false).unwrap();
+        ns.write_file("b.txt", b"beta", false).unwrap();
+        let code = run_on("cat a.txt b.txt", &mut ns);
+        assert_eq!(code, 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "alpha beta");
+    }
+
+    #[test]
+    fn cat_missing_operand_is_a_loud_failure_not_a_silent_empty_success() {
+        let (code, ns) = run("cat missing.txt");
+        assert_eq!(code, 1, "a missing operand must not exit 0");
+        assert!(ns.out.is_empty());
+        assert!(
+            String::from_utf8(ns.err).unwrap().contains("missing.txt"),
+            "the failed path is named on stderr"
+        );
+    }
+
+    #[test]
+    fn cat_operand_failure_does_not_truncate_a_redirect_target_silently() {
+        // `cat missing > out.txt` used to print nothing and exit 0, quietly
+        // truncating out.txt. The truncation still happens (bash does the
+        // same: the redirect opens before the command runs), but the status
+        // is non-zero and stderr is honest.
+        let mut ns = FakeNs::default();
+        ns.write_file("out.txt", b"precious", false).unwrap();
+        let code = run_on("cat missing.txt > out.txt", &mut ns);
+        assert_eq!(code, 1);
+        assert!(String::from_utf8(ns.err).unwrap().contains("missing.txt"));
+    }
+
+    #[test]
+    fn cat_operand_into_redirect_copies_the_file() {
+        let mut ns = FakeNs::default();
+        ns.write_file("in.txt", b"copy me", false).unwrap();
+        let code = run_on("cat in.txt > out.txt", &mut ns);
+        assert_eq!(code, 0);
+        assert_eq!(ns.files.get("out.txt").unwrap(), b"copy me");
+    }
+
+    #[test]
+    fn cat_dash_interleaves_stdin_with_operands() {
+        let mut ns = FakeNs::default();
+        ns.write_file("a.txt", b"file|", false).unwrap();
+        let code = run_on("echo -n piped | cat a.txt -", &mut ns);
+        assert_eq!(code, 0);
+        assert_eq!(String::from_utf8(ns.out).unwrap(), "file|piped");
+    }
+
+    #[test]
     fn redirect_overrides_pipe_sink() {
         // `echo hi | cat > out.txt`: cat's stdout goes to the file, not stdout.
         let mut state = ShellState::new();

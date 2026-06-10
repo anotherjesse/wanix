@@ -25,13 +25,29 @@ use crate::proto::{FsRequest, FsResponse, Inbound, OpenRequest, OpenResponse, Re
 /// `BlockingDuplex`. The wire crate only ever sees the sync [`Duplex`], so it
 /// stays iroh/tokio-free.
 pub trait StreamFactory: Send + Sync {
-    /// Opens one fresh bidirectional stream for a single op or open file.
+    /// Opens one fresh bidirectional stream for a single one-shot op.
     ///
     /// # Errors
     ///
     /// Returns a transport I/O error when a new stream cannot be opened (e.g. the
     /// underlying connection is dead).
     fn open_stream(&self) -> std::io::Result<Box<dyn Duplex>>;
+
+    /// Opens the dedicated stream for one open file.
+    ///
+    /// Defaults to [`StreamFactory::open_stream`]. A transport may hand back a
+    /// stream with different reply-wait semantics: after the open reply, an
+    /// open file carries long-blocking replies (a never-EOF device read, a
+    /// synchronous `ctl run` on a job device), so a fixed per-op reply
+    /// deadline that is right for one-shot ops would tear down healthy long
+    /// operations here.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport I/O error when a new stream cannot be opened.
+    fn open_file_stream(&self) -> std::io::Result<Box<dyn Duplex>> {
+        self.open_stream()
+    }
 }
 
 /// A sync [`FileSystem`] backed by the native mesh wire over a [`StreamFactory`].
@@ -74,7 +90,7 @@ pub(crate) fn protocol_mismatch(what: &str) -> FsError {
 
 impl<F: StreamFactory> FileSystem for NativeFs<F> {
     fn open(&self, path: &NormalizedPath, options: OpenOptions) -> FsResult<Box<dyn File>> {
-        let mut stream = self.stream()?;
+        let mut stream = self.factory.open_file_stream().map_err(transport)?;
         let request = OpenRequest {
             path: path.as_str().to_owned(),
             options: options.into(),

@@ -422,6 +422,72 @@ fn job_count_quota_rejects_allocation() {
 }
 
 #[test]
+fn global_job_cap_bounds_allocation_across_principals() {
+    // Per-principal quotas reset with every fresh dialer identity, so only
+    // the table-wide cap actually bounds a served tool's job count.
+    let mut spec = ToolSpec::v0("upper", "Upper.");
+    spec.limits.max_total_jobs = 2;
+    let (service, _) = service_with(spec, Box::new(UpperRunner));
+    let _a = alloc_job(&service.open_view(ToolPrincipal::local("alice")));
+    let _b = alloc_job(&service.open_view(ToolPrincipal::local("bob")));
+
+    // A third, brand-new principal still cannot allocate: the cap is global.
+    let eve = service.open_view(ToolPrincipal::local("eve"));
+    let mut file = eve.open(&np("new"), OpenOptions::read()).unwrap();
+    let mut buf = [0u8; 8];
+    match file.read(&mut buf) {
+        Err(FsError::Other(message)) => {
+            assert!(message.contains("quota_exceeded"), "{message}");
+            assert!(message.contains("all callers"), "{message}");
+        }
+        other => panic!("expected global quota error, got {other:?}"),
+    }
+}
+
+#[test]
+fn global_byte_cap_bounds_buffered_input_across_principals() {
+    let mut spec = ToolSpec::v0("upper", "Upper.");
+    spec.limits.max_total_bytes = 8;
+    let (service, _) = service_with(spec, Box::new(UpperRunner));
+
+    let alice = service.open_view(ToolPrincipal::local("alice"));
+    let first = alloc_job(&alice);
+    write_file(&alice, &format!("jobs/{first}/in"), b"sixby");
+
+    // A different principal's append breaching the aggregate cap is rejected
+    // at write time, before the bytes are stored.
+    let bob = service.open_view(ToolPrincipal::local("bob"));
+    let second = alloc_job(&bob);
+    let mut file = bob
+        .open(&np(&format!("jobs/{second}/in")), write_options())
+        .unwrap();
+    match file.write(b"sixby") {
+        Err(FsError::Other(message)) => {
+            assert!(message.contains("quota_exceeded"), "{message}");
+            assert!(message.contains("all callers"), "{message}");
+        }
+        other => panic!("expected global byte-cap error, got {other:?}"),
+    }
+
+    // Headroom-sized appends still land.
+    write_file(&bob, &format!("jobs/{second}/in"), b"ok");
+}
+
+#[test]
+fn limits_deserialize_without_the_aggregate_fields() {
+    // Older spec JSON (pre-aggregate caps) still parses; the caps default in.
+    let json = r#"{
+        "runTimeoutMs": 5000,
+        "maxConcurrentPerPrincipal": 2,
+        "maxJobsPerPrincipal": 32,
+        "maxBytesPerPrincipal": 16777216
+    }"#;
+    let limits: crate::ToolLimits = serde_json::from_str(json).unwrap();
+    assert_eq!(limits.max_total_jobs, 1_024);
+    assert_eq!(limits.max_total_bytes, 268_435_456);
+}
+
+#[test]
 fn oversize_input_fails_with_input_too_large() {
     let mut spec = ToolSpec::v0("upper", "Upper.");
     spec.input.max_bytes = 4;

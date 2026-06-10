@@ -25,7 +25,7 @@ usedInFlows:
 honestLimits:
   - "Runners are deterministic in-process v0 (model/sha256/upper built-ins); the process runner is a later crate."
   - "ctl run is synchronous in v0 — the job is terminal when the write returns, so 'watch status while it runs' is a contract you exercise across callers, not within one."
-  - "Job views are per-principal and the CLI dialer identity is ephemeral per dial, so a job does not survive a remount today; ADR 0009's caller-death story needs persisted-identity dialing to land fully."
+  - "Job views are per-principal; the CLI presents the persisted ~/.wanix/dialer.key, so a job survives a remount by the same user — but the principal is exactly that key file, and a different key (user, machine) is a stranger."
 canonicalCaveatFor: []
 ---
 
@@ -71,4 +71,4 @@ Because a ToolFS is a plain `FileSystem`, all of this [imports across the mesh f
 
 - v0 runners are deterministic and in-process (`model`/`sha256`/`upper`); the process runner is a later crate, per `docs/toolfs.md` §"Runner Boundary".
 - `ctl run` is synchronous in v0: terminal on return. The async lifecycle ADR 0009 describes (poll `status` mid-run) is the contract's shape, not yet an observable behavior of the built-ins.
-- The "survives caller death" promise currently stops at the principal boundary: the CLI dials mounts with an ephemeral identity, so a remount cannot see the previous mount's jobs. Persisted-identity dialing is the named follow-up.
+- The "survives caller death" promise now crosses invocations: the CLI dials with the persisted `~/.wanix/dialer.key`, so a remount resumes the previous mount's jobs (`same_identity_redial_resumes_jobs`, `crates/wanix-cli/src/tool/serve/tests.rs`). The principal *is* that key file — protect it accordingly.

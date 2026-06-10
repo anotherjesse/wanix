@@ -215,6 +215,10 @@ fn open_file_handle_errors_after_provider_death_but_fresh_open_recovers() {
     drop(provider_v1);
     let started = Instant::now();
     let mut buf = [0_u8; 16];
+    // An open-file reply wait carries no per-op deadline (it may legitimately
+    // block — never-EOF devices, synchronous `ctl run`; ADR 0008). The bound
+    // here is connection liveness: this provider's teardown closes the
+    // connection, so the stale read errors promptly rather than via deadline.
     let error = old_handle
         .read(&mut buf)
         .expect_err("stale open handle must not return EOF or reconnect");

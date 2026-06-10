@@ -46,6 +46,7 @@ mod cpu;
 mod dialer;
 mod duplex;
 mod error;
+mod first_frame;
 mod handler;
 mod identity;
 mod node;

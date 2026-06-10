@@ -134,6 +134,26 @@ pub struct ToolLimits {
     pub max_jobs_per_principal: u64,
     /// Maximum stored bytes (`in` + `out` + `err`) per principal.
     pub max_bytes_per_principal: u64,
+    /// Maximum live (non-expired) jobs across ALL principals.
+    ///
+    /// Per-principal quotas alone do not bound a served tool's memory: an
+    /// open-admission endpoint hands every fresh dialer identity a fresh
+    /// quota, so the job table needs an aggregate guardrail.
+    #[serde(default = "default_max_total_jobs")]
+    pub max_total_jobs: u64,
+    /// Maximum stored bytes (inputs, buffered params, outputs, diagnostics)
+    /// across ALL principals — the aggregate memory bound enforced as input
+    /// and params bytes arrive.
+    #[serde(default = "default_max_total_bytes")]
+    pub max_total_bytes: u64,
+}
+
+fn default_max_total_jobs() -> u64 {
+    1_024
+}
+
+fn default_max_total_bytes() -> u64 {
+    268_435_456 // 256 MiB
 }
 
 impl Default for ToolLimits {
@@ -143,6 +163,8 @@ impl Default for ToolLimits {
             max_concurrent_per_principal: 2,
             max_jobs_per_principal: 32,
             max_bytes_per_principal: 16_777_216,
+            max_total_jobs: default_max_total_jobs(),
+            max_total_bytes: default_max_total_bytes(),
         }
     }
 }

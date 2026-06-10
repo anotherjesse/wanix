@@ -31,9 +31,9 @@ prerequisites:
   - learn/js-outside-chrome
 usedInFlows: []
 honestLimits:
-  - "The dialer identity is ephemeral per dial (crates/wanix-cli/src/mesh/ticket.rs:188-189): every `sh` invocation is a NEW principal to a job-scoped server, so jobs allocated in one invocation are invisible (NotFound) from the next. Job continuity across mounts needs the node's persisted identity on the dial path — unshipped."
+  - "The dialer principal is the persisted ~/.wanix/dialer.key (crates/wanix-cli/src/mesh/ticket.rs): every invocation by one user is one principal, so retained jobs survive a remount — and anyone who can read that key file can present it. Distinct users/machines remain distinct principals."
   - "tool serve has no allow-list yet: any holder of a tool's ticket may attach (each bound to its own private job view). Grant lifecycle is ADR 0007 follow-up work."
-  - "The shell's `cat` builtin reads stdin only; `cat FILE` silently prints nothing (exit 0). Use `cat < FILE`."
+  - "Command substitution is not yet supported in the shell, so a job id cannot be captured into a variable — use the REPL or the `tool` builtin."
   - "Tool runners are deterministic in-process v0 built-ins (model/sha256/upper); the process runner is a later crate."
 canonicalCaveatFor: [ephemeral-dialer-identity]
 ---
@@ -130,7 +130,7 @@ wanix-rust sh -c 'cat < /vol/notes/HELLO.txt | tool /n/sha256' \
 sha256sum ~/.wanix/volumes/demo-notes/HELLO.txt   # same digest
 ```
 
-Two syntax facts that will bite you otherwise: the mount value splits on the **last** `=` (`crates/wanix-cli/src/qjs_args/mod.rs:144-148`), so quote the whole `TICKET=/path` argument — the ticket itself contains `=` in `?addr=`; and the shell's `cat` builtin reads stdin only, so it is always `cat < FILE`, never `cat FILE`.
+One syntax fact that will bite you otherwise: the mount value splits on the **last** `=` (`crates/wanix-cli/src/qjs_args/mod.rs:144-148`), so quote the whole `TICKET=/path` argument — the ticket itself contains `=` in `?addr=`. (`cat FILE` and `cat < FILE` both work; the transcripts use the redirect form.)
 
 ## 5. A tool call is a job directory
 
@@ -154,24 +154,24 @@ Because the call is files rather than a transcript entry, it has a name, a visib
 
 ## 6. Identity rides the transport
 
-One more thing the transcript above proves quietly: who you are is never a field in a message. The tool server binds every connection to a principal derived from the QUIC handshake's verified `remote_id()` (`ToolAttachPolicy`, `crates/wanix-cli/src/tool/serve.rs:186`; `ToolService::open_view`, `crates/wanix-tool/src/service.rs:81`), so two callers get **disjoint** `jobs/` views. And because the CLI dials each mount with a *fresh ephemeral* identity (`crates/wanix-cli/src/mesh/ticket.rs:188-189`), two of your own shell invocations are two different principals. Watch it:
+One more thing the transcript above proves quietly: who you are is never a field in a message. The tool server binds every connection to a principal derived from the QUIC handshake's verified `remote_id()` (`ToolAttachPolicy`, `crates/wanix-cli/src/tool/serve.rs:186`; `ToolService::open_view`, `crates/wanix-tool/src/service.rs:81`), so two distinct callers get **disjoint** `jobs/` views and a guessed foreign job id reads `NotFound`. The CLI presents one *persisted* dialer identity (`~/.wanix/dialer.key`, `crates/wanix-cli/src/mesh/ticket.rs`), so all of your own invocations are one principal — a retained job survives the process that allocated it:
 
 ```sh
-wanix-rust sh -c 'cat < /n/upper/new' --mount-mesh 'iroh://2bcb5813...=/n/upper'
-# jc883d86da5693426
-wanix-rust sh -c 'cat < /n/upper/jobs/jc883d86da5693426/status' --mount-mesh 'iroh://2bcb5813...=/n/upper'
-# wsh: /n/upper/jobs/jc883d86da5693426/status: No such file or directory (os error 44)
+wanix-rust sh -c 'cat < /n/upper/new' --mount-mesh 'iroh://a2887734...=/n/upper'
+# j31770e20a12797a3
+wanix-rust sh -c 'cat /n/upper/jobs/j31770e20a12797a3/status' --mount-mesh 'iroh://a2887734...=/n/upper'
+# {"state":"allocated","createdAt":1781053502736,"startedAt":null,"finishedAt":null,"expiresAt":null,"inputBytes":0,"outputBytes":0}
 ```
 
-That `NotFound` is the trust boundary working: foreign job ids are indistinguishable from nonexistent ones. The flip side is the flow's sharpest current limit — until the dial path can use your node's persisted identity, a remount cannot resume the jobs of the mount before it. Keep multi-step job interactions inside one `sh` session.
+That durability is ADR 0009's "survives caller death" promise actually crossing the mesh; the disjointness for *distinct* keys is pinned by `two_peers_see_disjoint_jobs` and the continuity by `same_identity_redial_resumes_jobs` (`crates/wanix-cli/src/tool/serve/tests.rs`).
 
 ## Where this goes
 
-The full tested transcript — real tickets, real digests, and the failure modes (unreachable peer, the silent `cat FILE`) — is [Recipe 06](/recipes/06-compose-volume-and-tools). The job-directory idea stands alone in [jobs are files](/concepts/jobs-are-files). The catalog/pairing layer that would let you say `notes` instead of pasting a 64-hex ticket is ADR 0007's next slice, not yet shipped.
+The full tested transcript — real tickets, real digests, and the failure modes (unreachable peer, a failed job) — is [Recipe 06](/recipes/06-compose-volume-and-tools). The job-directory idea stands alone in [jobs are files](/concepts/jobs-are-files). The catalog/pairing layer that would let you say `notes` instead of pasting a 64-hex ticket is ADR 0007's next slice, not yet shipped.
 
 ## Status / honest limits
 
-- **Ephemeral dialer identity.** Every `dial_iroh_remote` generates a fresh key (`crates/wanix-cli/src/mesh/ticket.rs:188-189`); a remount is a new principal, so job-scoped servers forget you between invocations. Persisted-identity dialing is the named follow-up.
+- **The dialer principal is a key file.** `dial_iroh_remote` presents the persisted `~/.wanix/dialer.key` (`crates/wanix-cli/src/mesh/ticket.rs`), so a remount resumes your jobs — and whoever can read that file can be you to every job-scoped server. Per-principal grants/allow-lists are ADR 0007 follow-up work.
 - **No allow-list on `tool serve`.** Any ticket holder attaches (each confined to its own job view); grant lifecycle is ADR 0007 follow-up work.
 - **Built-in runners only.** `tool serve` accepts `model`, `sha256`, `upper` — deterministic in-process v0 runners. The process runner is a later crate.
-- **Shell subset.** `cat` is stdin-only (`cat < FILE`); no command substitution, so capturing a job id into a variable is not yet expressible — use the REPL or the `tool` builtin.
+- **Shell subset.** No command substitution, so capturing a job id into a variable is not yet expressible — use the REPL or the `tool` builtin.

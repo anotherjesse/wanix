@@ -8,7 +8,7 @@ use wanix_fs::{FsError, FsResult};
 use wanix_job::{JobState, JobStatus};
 
 use crate::principal::ToolPrincipal;
-use crate::spec::ToolLifecycle;
+use crate::spec::{ToolLifecycle, ToolLimits};
 
 /// One job's full record: lifecycle, timestamps, stored bytes, and result.
 #[derive(Debug)]
@@ -106,22 +106,42 @@ impl JobTable {
         });
     }
 
-    /// Allocates a job for `principal`, enforcing the per-principal job cap.
+    /// Allocates a job for `principal`, enforcing the per-principal job cap
+    /// and the table-wide [`ToolLimits::max_total_jobs`] cap (per-principal
+    /// quotas alone are non-limiting when every dialer can mint a fresh
+    /// identity).
     pub(crate) fn alloc(
         &mut self,
         principal: &ToolPrincipal,
         now: u64,
-        max_jobs_per_principal: u64,
+        limits: &ToolLimits,
     ) -> FsResult<String> {
-        if self.job_count(principal) >= max_jobs_per_principal {
+        if self.jobs.len() as u64 >= limits.max_total_jobs {
             return Err(FsError::Other(format!(
-                "quota_exceeded: principal already holds {max_jobs_per_principal} jobs"
+                "quota_exceeded: tool already holds {} live jobs across all callers",
+                limits.max_total_jobs
+            )));
+        }
+        if self.job_count(principal) >= limits.max_jobs_per_principal {
+            return Err(FsError::Other(format!(
+                "quota_exceeded: principal already holds {} jobs",
+                limits.max_jobs_per_principal
             )));
         }
         let id = self.next_id(principal);
         self.jobs
             .insert(id.clone(), JobRecord::new(principal.clone(), now));
         Ok(id)
+    }
+
+    /// Total stored bytes across ALL principals, counting buffered params too:
+    /// every retained byte counts against the aggregate memory bound, whatever
+    /// the per-principal accounting reports.
+    pub(crate) fn total_bytes(&self) -> u64 {
+        self.jobs
+            .values()
+            .map(|job| job.stored_bytes() + job.params_raw.len() as u64)
+            .sum()
     }
 
     /// Looks up `id` for `principal`. A foreign or missing job id is

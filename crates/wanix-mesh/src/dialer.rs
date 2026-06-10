@@ -256,19 +256,42 @@ impl IrohStreamFactory {
         Ok(connection)
     }
 
-    /// Opens a fresh bidi stream on `connection` and wraps it as a [`Duplex`].
-    fn open_bi_on(&self, connection: &Connection) -> std::io::Result<Box<dyn Duplex>> {
+    /// Opens a fresh bidi stream on `connection`, returning the raw halves.
+    fn open_bi_on(
+        &self,
+        connection: &Connection,
+    ) -> std::io::Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
         let connection = connection.clone();
         // Open the bidi stream on the held runtime. The first byte the wire crate
         // writes (its request frame) is what makes the peer's `accept_bi`
         // resolve, exactly as the 9P `Tversion` write does today.
-        let (send, recv) =
-            block_on_deadline(&self.handle, self.deadline, "native open_bi", async move {
-                connection.open_bi().await
-            })
-            .map_err(|err| std::io::Error::other(format!("native dial open_bi failed: {err}")))?;
-        // The client keeps the deadline on both halves: its read always follows a
-        // request write, so the per-op deadline is a sane response timeout.
+        block_on_deadline(&self.handle, self.deadline, "native open_bi", async move {
+            connection.open_bi().await
+        })
+        .map_err(|err| std::io::Error::other(format!("native dial open_bi failed: {err}")))
+    }
+
+    /// Opens a fresh bidi stream on the cached connection, re-dialing the peer
+    /// once if that connection died (peer restart / link reset); the next op
+    /// self-heals again if the peer is still down.
+    fn open_bi(&self) -> std::io::Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+        let (connection, generation) = self.snapshot();
+        match self.open_bi_on(&connection) {
+            Ok(halves) => Ok(halves),
+            Err(_) => {
+                let fresh = self.reconnect(generation)?;
+                self.open_bi_on(&fresh)
+            }
+        }
+    }
+}
+
+impl StreamFactory for IrohStreamFactory {
+    fn open_stream(&self) -> std::io::Result<Box<dyn Duplex>> {
+        let (send, recv) = self.open_bi()?;
+        // A one-shot op keeps the deadline on both halves: its single reply
+        // follows the request immediately on a healthy provider, so the per-op
+        // deadline is a sane response timeout.
         Ok(Box::new(BlockingDuplex::new(
             send,
             recv,
@@ -276,21 +299,21 @@ impl IrohStreamFactory {
             self.deadline,
         )))
     }
-}
 
-impl StreamFactory for IrohStreamFactory {
-    fn open_stream(&self) -> std::io::Result<Box<dyn Duplex>> {
-        let (connection, generation) = self.snapshot();
-        match self.open_bi_on(&connection) {
-            Ok(duplex) => Ok(duplex),
-            // The cached connection likely died (peer restart / link reset).
-            // Re-dial once and retry the stream on the fresh connection; the next
-            // op self-heals again if the peer is still down.
-            Err(_) => {
-                let fresh = self.reconnect(generation)?;
-                self.open_bi_on(&fresh)
-            }
-        }
+    fn open_file_stream(&self) -> std::io::Result<Box<dyn Duplex>> {
+        let (send, recv) = self.open_bi()?;
+        // An open file is different: only its FIRST reply (the open response)
+        // answers immediately. Later replies may block legitimately for any
+        // length of time — a never-EOF device read, a synchronous `ctl run`
+        // running a long job before its write reply — so the read deadline
+        // applies only until the first reply frame completes, and QUIC
+        // connection liveness bounds a dead peer after that (ADR 0008).
+        Ok(Box::new(crate::first_frame::OpenFileDuplex::new(
+            send,
+            recv,
+            self.handle.clone(),
+            self.deadline,
+        )))
     }
 }
 

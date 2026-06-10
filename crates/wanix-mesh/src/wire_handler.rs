@@ -24,7 +24,13 @@
 //!   permit is held per live stream (one open file == one pinned thread).
 //! - **No deadline on the idle open-file read.** The asymmetric [`BlockingDuplex`]
 //!   carries the per-op deadline on writes only; the server's read of the next
-//!   `FileOp` is the idle wait of a live subscription and is never timed.
+//!   `FileOp` is the idle wait of a live subscription and is never timed. The
+//!   one exception is the **first frame**: it is read under a deadline before
+//!   the untimed loop starts ([`crate::first_frame`]), because the session
+//!   permit and blocking-pool thread are already held — a peer stalling
+//!   mid-first-frame on enough streams would otherwise pin all
+//!   [`crate::node::MAX_CONCURRENT_SESSIONS`] permits forever and wedge the
+//!   endpoint for every other peer.
 
 use std::fmt;
 use std::sync::Arc;
@@ -38,6 +44,7 @@ use wanix_fs::FileSystem;
 use wanix_id::{AttachPolicy, PeerId};
 
 use crate::duplex::BlockingDuplex;
+use crate::first_frame::{ReplayDuplex, first_frame_deadline, read_first_frame};
 use crate::identity::peer_id_for;
 use crate::node::MAX_CONCURRENT_SESSIONS;
 
@@ -215,15 +222,22 @@ impl ProtocolHandler for NativeFsHandler {
 fn serve_one_stream(
     root: &Arc<dyn FileSystem>,
     send: iroh::endpoint::SendStream,
-    recv: iroh::endpoint::RecvStream,
+    mut recv: iroh::endpoint::RecvStream,
     handle: Handle,
     deadline: Option<Duration>,
 ) {
+    // Bound the FIRST frame: the session permit and this blocking-pool thread
+    // are already held, so a stream that never completes its request frame
+    // must not pin them forever (see the module docs). Timeout/EOF/fault here
+    // is the same silent teardown serve_one applies to a bad first frame.
+    let Some(first) = read_first_frame(&mut recv, &handle, first_frame_deadline(deadline)) else {
+        return;
+    };
     let duplex = BlockingDuplex::with_deadlines(send, recv, handle, None, deadline);
     // serve_one's own `deadline` argument is advisory: the transport (the
     // asymmetric BlockingDuplex above) is what actually bounds the in-flight
     // write. Pass it through for symmetry with the documented contract.
-    wanix_mesh_wire::serve_one(root, duplex, deadline);
+    wanix_mesh_wire::serve_one(root, ReplayDuplex::new(first, duplex), deadline);
 }
 
 #[cfg(test)]

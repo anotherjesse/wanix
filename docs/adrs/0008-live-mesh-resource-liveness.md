@@ -44,6 +44,25 @@ Current numbers:
 - tests may override nodes to shorter deadlines, e.g. **250 ms**, to exercise
   the contract without making the suite wait.
 
+### Deadlines bound dials, one-shots, and the open reply — not open-file replies
+
+The deadline applies where a healthy provider answers immediately: connect,
+stream open, one-shot ops (stat/readdir/…), in-flight frame writes, and the
+FIRST reply of an open-file stream (the open response). Every LATER reply on
+an open file may legitimately take arbitrarily long — a never-EOF device read
+(`#plumb/<topic>/recv`, `#agent/events`) parks until data exists, and a
+synchronous `ctl run` on a job device (ADR 0009) replies only when the job
+finishes — so those waits carry **no fixed deadline**. A fixed reply deadline
+there tore down healthy long jobs: any mesh-mounted tool job longer than the
+5s CLI mount deadline failed client-side as "resource unreachable" while the
+job kept running server-side. Dead-peer detection on those waits is owned by
+QUIC connection liveness instead (iroh keep-alives every ~5s; path idle
+timeout ~15s; a gracefully closed provider propagates immediately), so the
+failure stays bounded, just transport-bounded rather than deadline-bounded.
+This is the client mirror of the server's idle-read-vs-in-flight-write
+asymmetry (`crates/wanix-mesh/src/first_frame.rs`,
+`crates/wanix-mesh/tests/mesh_native_long_ops.rs`).
+
 ### The mount survives; operations fail
 
 A mounted `NativeFs` stays bound across outages. A fresh filesystem operation
@@ -75,10 +94,12 @@ a write may have reached the provider even if the reply did not. The correct
 surface is a transport error and caller policy.
 
 Open file handles are not resurrected. If a provider dies while a file handle is
-open, reads and writes on that old handle return a mesh transport error within
-the operation deadline. They must not return EOF to hide the failure, and they
-must not silently reconnect to a new provider process. The recovery move is to
-close the stale handle and open the path again.
+open, reads and writes on that old handle return a mesh transport error once the
+transport declares the connection dead (immediately on a graceful close; within
+the QUIC keep-alive/idle-timeout window for a vanished peer). They must not
+return EOF to hide the failure, and they must not silently reconnect to a new
+provider process. The recovery move is to close the stale handle and open the
+path again.
 
 ### Flaky providers need backoff state
 

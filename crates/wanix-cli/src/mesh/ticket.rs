@@ -155,10 +155,14 @@ pub(crate) struct IrohMount {
 
 /// Dials an `iroh://` ticket and returns a connected mount over the native wire.
 ///
-/// A fresh dialer-only [`MeshNode`] is bound from an ephemeral identity (the
-/// importer's stable identity is not required to dial out), then the ticket is
-/// dialed over [`wanix_mesh::WANIX_FS_ALPN`] — the Wanix↔Wanix mesh path, not
-/// 9P. `aname` is threaded for symmetry with a future scoped-attach path; the
+/// A dialer-only [`MeshNode`] is bound from the **persisted dialer identity**
+/// (see [`dialer_identity`]), then the ticket is dialed over
+/// [`wanix_mesh::WANIX_FS_ALPN`] — the Wanix↔Wanix mesh path, not 9P. The
+/// persisted key is what makes the dialing principal durable: job-protocol
+/// servers key `jobs/` privacy and retention to the verified dialer key, so
+/// a job allocated in one CLI invocation is still reachable from the next,
+/// and every `--mount-mesh` of one task presents the same principal.
+/// `aname` is threaded for symmetry with a future scoped-attach path; the
 /// v1 native wire resolves the connection root from the verified `remote_id()`
 /// alone and does not yet carry the attach name on the wire (so a default-deny
 /// rejection surfaces lazily as a per-op transport fault, not at dial time).
@@ -170,24 +174,48 @@ pub(crate) struct IrohMount {
 ///
 /// # Errors
 ///
-/// Returns a CLI error when the node cannot bind, the ticket cannot be parsed,
-/// or the QUIC dial fails.
+/// Returns a CLI error when the dialer identity cannot be loaded, the node
+/// cannot bind, the ticket cannot be parsed, or the QUIC dial fails.
 pub(crate) fn dial_iroh_remote(addr: &str, aname: &str) -> Result<IrohMount, CliError> {
-    dial_iroh_remote_with_deadline(addr, aname, CLI_MESH_MOUNT_DEADLINE)
+    dial_iroh_remote_with(&dialer_identity()?, addr, aname, CLI_MESH_MOUNT_DEADLINE)
 }
 
-/// [`dial_iroh_remote`] with an explicit dial deadline, so tests can prove the
-/// unreachable-peer behavior (bounded failure, humane message) without waiting
-/// out the interactive default.
-fn dial_iroh_remote_with_deadline(
+/// [`dial_iroh_remote`] presenting an explicit identity, so tests can prove
+/// the principal-scoping contracts (disjoint views for distinct keys, job
+/// continuity for one key) without touching the user's persisted key.
+#[cfg(test)]
+pub(crate) fn dial_iroh_remote_as(
+    identity: &NodeIdentity,
+    addr: &str,
+    aname: &str,
+) -> Result<IrohMount, CliError> {
+    dial_iroh_remote_with(identity, addr, aname, CLI_MESH_MOUNT_DEADLINE)
+}
+
+/// The persisted CLI dialer identity, `~/.wanix/dialer.key` (created on first
+/// dial, owner-private).
+///
+/// One durable principal for every `iroh://` mount this user dials. It is
+/// deliberately a *separate* key from the mesh-serve `node.key`: dial-out
+/// endpoints serve nothing, and several may be bound concurrently (one per
+/// mount/invocation), so reusing the serving identity here would publish
+/// extra discovery routes for the node id peers actually dial.
+fn dialer_identity() -> Result<NodeIdentity, CliError> {
+    let path = crate::volume::wanix_dir()?.join("dialer.key");
+    crate::mesh::resource::load_identity_at(&path)
+}
+
+/// The dial body with an explicit identity and deadline, so tests can prove
+/// the unreachable-peer behavior (bounded failure, humane message) without
+/// waiting out the interactive default.
+fn dial_iroh_remote_with(
+    identity: &NodeIdentity,
     addr: &str,
     aname: &str,
     deadline: Duration,
 ) -> Result<IrohMount, CliError> {
     let ticket = MeshTicket::parse(addr)?;
-    // Dialing out only needs an endpoint; a fresh identity is fine.
-    let identity = NodeIdentity::generate().map_err(|error| CliError::new(error.to_string(), 1))?;
-    let node = MeshNode::bind(&identity)
+    let node = MeshNode::bind(identity)
         .map_err(|error| CliError::new(format!("failed to bind mesh endpoint: {error}"), 1))?;
     let node = node.with_deadline(deadline);
     let remote = node
@@ -306,8 +334,9 @@ mod tests {
         // hint so the dial does not depend on outside-network behavior.
         let hex = valid_peer_hex();
         let url = format!("{IROH_SCHEME}{hex}?addr=127.0.0.1:1");
+        let identity = NodeIdentity::generate().unwrap();
         let started = Instant::now();
-        let error = match dial_iroh_remote_with_deadline(&url, "", Duration::from_millis(300)) {
+        let error = match dial_iroh_remote_with(&identity, &url, "", Duration::from_millis(300)) {
             Ok(_) => panic!("dialing an unserved peer id must fail"),
             Err(error) => error,
         };

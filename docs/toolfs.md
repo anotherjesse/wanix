@@ -240,7 +240,9 @@ Sketch:
     "runTimeoutMs": 5000,
     "maxConcurrentPerPrincipal": 2,
     "maxJobsPerPrincipal": 32,
-    "maxBytesPerPrincipal": 16777216
+    "maxBytesPerPrincipal": 16777216,
+    "maxTotalJobs": 1024,
+    "maxTotalBytes": 268435456
   },
   "lifecycle": {
     "allocatedTtlMs": 300000,
@@ -581,7 +583,9 @@ lifecycle
   allocated jobs expire, completed jobs retain then expire, close deletes
 
 quotas
-  input byte limit, job count, byte count, and concurrency limits hold
+  input byte limit, job count, byte count, and concurrency limits hold;
+  aggregate caps (maxTotalJobs/maxTotalBytes) bound the table across ALL
+  principals, since fresh dialer identities mint fresh per-principal quotas
 
 mesh
   one tool served as one native resource ticket and mounted by address

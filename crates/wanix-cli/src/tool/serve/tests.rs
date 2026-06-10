@@ -23,7 +23,15 @@ fn np(path: &str) -> NormalizedPath {
 
 /// Mounts a served tool ticket through the production native client at `x`.
 fn mount(ticket_url: &str) -> (Namespace, crate::mesh::IrohMount) {
-    let mount = crate::mesh::dial_iroh_remote(ticket_url, "").unwrap();
+    bind_at_x(crate::mesh::dial_iroh_remote(ticket_url, "").unwrap())
+}
+
+/// [`mount`] presenting an explicit dialer identity (a distinct principal).
+fn mount_as(identity: &NodeIdentity, ticket_url: &str) -> (Namespace, crate::mesh::IrohMount) {
+    bind_at_x(crate::mesh::dial_iroh_remote_as(identity, ticket_url, "").unwrap())
+}
+
+fn bind_at_x(mount: crate::mesh::IrohMount) -> (Namespace, crate::mesh::IrohMount) {
     let mut namespace = Namespace::new();
     namespace
         .bind(mount.remote.clone(), ".", "x", BindOptions::default())
@@ -219,10 +227,18 @@ fn two_peers_see_disjoint_jobs() {
     )];
     let served = bind_tool_endpoints(tools, Some(loopback())).unwrap();
 
-    // Each dial binds a fresh dialer identity, so these are two distinct
-    // verified principals against one served tool.
-    let (ns_a, _mount_a) = mount(&served[0].ticket_url);
-    let (ns_b, _mount_b) = mount(&served[0].ticket_url);
+    // Two distinct dialer identities are two distinct verified principals
+    // against one served tool. (The production dial path presents ONE
+    // persisted identity per user, so two invocations of one user are one
+    // principal — see same_identity_redial_resumes_jobs below.)
+    let (ns_a, _mount_a) = mount_as(
+        &NodeIdentity::from_secret_bytes([105u8; 32]),
+        &served[0].ticket_url,
+    );
+    let (ns_b, _mount_b) = mount_as(
+        &NodeIdentity::from_secret_bytes([106u8; 32]),
+        &served[0].ticket_url,
+    );
 
     let (id_a, out, _result) = run_job(&ns_a, b"private");
     assert_eq!(out, "PRIVATE");
@@ -237,6 +253,35 @@ fn two_peers_see_disjoint_jobs() {
         Err(other) => panic!("expected NotFound for a foreign job id, got {other:?}"),
         Ok(_) => panic!("expected NotFound for a foreign job id, got an open file"),
     }
+
+    drop(served);
+}
+
+/// The durable-principal proof (ADR 0009 "survives caller death"): one
+/// persisted dialer identity re-dialing the same tool — as two successive CLI
+/// invocations of one user do — resumes the SAME `jobs/` view, so a retained
+/// job outlives the process that allocated it instead of being orphaned
+/// behind a throwaway key until TTL expiry.
+#[test]
+fn same_identity_redial_resumes_jobs() {
+    let tools = vec![(
+        "upper".to_owned(),
+        NodeIdentity::from_secret_bytes([107u8; 32]),
+    )];
+    let served = bind_tool_endpoints(tools, Some(loopback())).unwrap();
+    let dialer = NodeIdentity::from_secret_bytes([108u8; 32]);
+
+    let (ns_a, mount_a) = mount_as(&dialer, &served[0].ticket_url);
+    let (id, out, _result) = run_job(&ns_a, b"durable");
+    assert_eq!(out, "DURABLE");
+    // First "invocation" exits: its mount (endpoint + runtime) is gone.
+    drop(ns_a);
+    drop(mount_a);
+
+    // The next invocation presents the same persisted key and resumes.
+    let (ns_b, _mount_b) = mount_as(&dialer, &served[0].ticket_url);
+    assert_eq!(job_ids(&ns_b), vec![id.clone()]);
+    assert_eq!(read_string(&ns_b, &format!("x/jobs/{id}/out")), "DURABLE");
 
     drop(served);
 }

@@ -124,11 +124,8 @@ impl ToolService {
 
     pub(crate) fn alloc(&self, principal: &ToolPrincipal) -> FsResult<String> {
         let now = self.now();
-        self.locked(now)?.alloc(
-            principal,
-            now,
-            self.inner.spec.limits.max_jobs_per_principal,
-        )
+        self.locked(now)?
+            .alloc(principal, now, &self.inner.spec.limits)
     }
 
     pub(crate) fn job_ids(&self, principal: &ToolPrincipal) -> FsResult<Vec<String>> {
