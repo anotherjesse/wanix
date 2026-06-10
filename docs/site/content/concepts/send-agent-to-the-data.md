@@ -61,7 +61,7 @@ cargo build --locked --package wanix-cli
 alias wanix-rust='./target/debug/wanix-rust'
 
 # Run a qjs job on the data node; reverse-export the local cwd read-only.
-# (Designed shape — dial-only today: no CLI serve mode binds the CpuAcceptor yet.)
+# (The data node serves the exec plane with `mesh-serve --cpu`.)
 wanix-rust cpu --node iroh://A -- qjs build.js
 ```
 

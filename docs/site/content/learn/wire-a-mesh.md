@@ -28,7 +28,6 @@ prerequisites:
 usedInFlows: []
 honestLimits:
   - The shipped CLI mount binds a single slot /n/remote (crates/wanix-cli/src/mount.rs:26); per-peer /n/<peer-id> is designed but unshipped.
-  - "#cpu is dial-only in the shipped CLI: wanix-rust cpu exists, but no serve mode binds the acceptor yet, so a cross-node cpu job has no server side to dial."
   - Exec devices (#task/#agent/#cpu) are local-trust only; not exposed to untrusted public peers, and there are no hard CPU/memory limits yet.
   - The WS-served 9P door handles one frame at a time per connection, so there a blocking cross-node #plumb recv cannot interleave with a write on the same connection; the native mesh wire gives every open file its own stream and does not have this constraint.
 canonicalCaveatFor: []
@@ -38,7 +37,7 @@ canonicalCaveatFor: []
 
 Mount a peer over iroh QUIC, read its devices for free, send compute to its data, then reason about the trust boundary.
 
-This flow takes two machines — call them A and B — and joins them so A can list B's files and read B's `#kv` keys as ordinary file operations (with the `#cpu` "run a job on B" half shown honestly as designed-but-dial-only). Nothing here is RPC or a special remote API. A remote namespace mounts as local files; that is the whole trick, and it is the half of 9P Wanix finally ships. You should already be able to run a `qjs` task — finish [JavaScript outside Chrome](/learn/js-outside-chrome) first. Two terminals, about twenty minutes.
+This flow takes two machines — call them A and B — and joins them so A can list B's files, read B's `#kv` keys as ordinary file operations, and run a `#cpu` job on B against A's own reverse-exported files. Nothing here is RPC or a special remote API. A remote namespace mounts as local files; that is the whole trick, and it is the half of 9P Wanix finally ships. You should already be able to run a `qjs` task — finish [JavaScript outside Chrome](/learn/js-outside-chrome) first. Two terminals, about twenty minutes.
 
 ```sh
 cargo build --locked --package wanix-cli       # see /reference/build-and-install
@@ -94,13 +93,34 @@ wanix-rust mount-cat   "$NODE_B" '#kv/config'   # -> set from node A — B's key
 
 This is what [devices import for free](/concepts/devices-import-for-free) means: `#kv`, `#cas`, `#plumb`, and `#agent` all cross nodes the instant they are bound, because the mesh carries the one `FileSystem` contract (the native wire here) and they are all just filesystems. (Keep in mind `#kv` is in-memory — see [the `#kv` device](/devices/kv).)
 
-## Send compute to the data with `#cpu` (designed; dial-only today)
+## Send compute to the data with `#cpu`
 
-Importing files is half of cpu(1); the other half is moving the *computation*. The designed shape: `wanix-rust cpu` dials B's exec plane, reverse-exports A's working directory as a scoped namespace, and asks B to run a task whose world *is* that reverse export — the job runs on B's CPU, against B's local files.
+Importing files is half of cpu(1); the other half is moving the *computation*. Add `--cpu` to B's serve command (restart Terminal 1 with it):
 
-**Be straight about what ships:** the CLI carries the dial verb (`wanix-rust cpu --node "$NODE_B" -- qjs /work/build.js`), and the acceptor machinery is real and tested in `wanix-mesh`, but **no CLI serve mode binds the `#cpu` acceptor yet** — `mesh-serve` does not serve the cpu plane, so dialing it today fails with `peer doesn't support any known protocol`. Wiring the acceptor into a serve mode is queued work, not a missing idea.
+```sh
+wanix-rust mesh-serve --root "$ROOT_B" --key "$NODE_B_KEY" \
+    --addr 127.0.0.1:5680 --wanix-services --cpu
+```
 
-When it lands, the contract is already fixed: the reverse export is **read-only by default** (`--write` opts a subtree into read-write), paths outside the subtree are denied, output arrives as a **batch after the task finishes**, and there is **no remote cancel**. This is [send the agent to the data](/concepts/send-agent-to-the-data); the device page is [`#cpu`](/devices/cpu).
+B now also announces the exec plane, naming the hazard out loud:
+
+```
+wanix-rust mesh-serve: serving the #cpu exec plane (remote code execution for admitted peers); run a job with: wanix-rust cpu --node 'iroh://829f…f986?addr=127.0.0.1:5680' -- qjs PROGRAM
+```
+
+From A, `wanix-rust cpu` dials B's exec plane, reverse-exports A's working directory as a scoped namespace, and asks B to run a task whose world *is* that reverse export — the job runs on B's CPU, against A's files (Plan 9 cpu exactly: your namespace, their processor). Executed transcript:
+
+```sh
+# Terminal 2 (node A): build.js is in A's cwd; it never existed on B.
+cat > build.js <<'JS'
+import * as std from "qjs:std";
+std.out.puts("ran on B against A's reverse export\n");
+JS
+wanix-rust cpu --node "$NODE_B" -- qjs build.js
+# -> ran on B against A's reverse export
+```
+
+The contract: the reverse export is **read-only by default** (`--write` opts the subtree into read-write), paths outside the subtree are denied, output arrives as a **batch after the task finishes**, and there is **no remote cancel**. This is [send the agent to the data](/concepts/send-agent-to-the-data); the device page is [`#cpu`](/devices/cpu).
 
 ## The trust boundary, flatly
 
@@ -111,6 +131,7 @@ The CLI enforces this at parse time:
 - The public endpoint is **refused** without an explicit opt-in: no `--addr`, no `--peer`/`--grant`, no `--insecure-open` is rejected (`crates/wanix-cli/src/mesh/serve.rs:112`).
 - `--insecure-open` exports the whole root read-write to the open internet — and grants **no exec**.
 - `--wanix-services` is **refused on a public endpoint entirely**, even with `--peer`/`--grant` or `--insecure-open`, because `#task`/`#agent` are remote code execution (`crates/wanix-cli/src/mesh/serve.rs:130-137`).
+- `--cpu` follows the same rule, stated even more sharply: it is refused on a public endpoint regardless of grants, and on the local `--addr` endpoint `--peer HEX` scopes exec to that one verified identity (`crates/wanix-cli/src/mesh/serve_cpu.rs`).
 
 State the boundary plainly: the exec devices are **local-trust only**. Wanix gives cheap, scalable isolation, not a sandbox safe for arbitrary untrusted code, and there are no hard CPU or memory limits yet.
 
@@ -144,7 +165,7 @@ The [browser cockpit](/concepts/browser-cockpit) inspects the served devices ove
 ## Status / honest limits
 
 - **One mount slot, not per-peer.** The shipped `mount-*` verbs always bind the remote at `/n/remote` (`crates/wanix-cli/src/mount.rs:26`). The per-peer `/n/<peer-id>` shape is designed but unshipped; treat `/n/<peer>` only as a labelled convention for "the ticket I dialed."
-- **Exec is local-trust only.** `#task`/`#agent`/`#cpu` are not exposed to untrusted public peers — `--wanix-services` is refused on a public endpoint (`crates/wanix-cli/src/mesh/serve.rs:130-137`). Isolation is cheap and scalable, not a sandbox for arbitrary untrusted code; there are no hard CPU/memory limits yet.
-- **`#cpu` is dial-only in the shipped CLI.** `wanix-rust cpu` and the `wanix-mesh` acceptor exist, but no CLI serve mode binds the acceptor yet — dialing `mesh-serve` fails with `peer doesn't support any known protocol`. When wired: output is batched after the task finishes, and there is no remote cancel.
+- **Exec is local-trust only.** `#task`/`#agent`/`#cpu` are not exposed to untrusted public peers — `--wanix-services` and `--cpu` are refused on a public endpoint (`crates/wanix-cli/src/mesh/serve.rs:130-137`). Isolation is cheap and scalable, not a sandbox for arbitrary untrusted code; there are no hard CPU/memory limits yet.
+- **`#cpu` output is batched, with no remote cancel.** Both halves ship (`mesh-serve --cpu` serves, `wanix-rust cpu` dials), but stdout/stderr/exit arrive as one batch after the task finishes, and `CpuEvent::Cancel` stops the caller draining, not the remote computation.
 - **Single frame per connection (WS-served 9P only).** The WebSocket-served 9P door processes one frame at a time per connection, so there a blocking `#plumb recv` cannot interleave with a write on the same connection — use a second connection for live pub/sub. The **native mesh wire does not have this constraint**: every open file rides its own QUIC stream.
 - **The served `#agent` is a deterministic `FakeEngine`,** not a live LLM. Real codex is the local-trust `wanix agent` CLI path only.

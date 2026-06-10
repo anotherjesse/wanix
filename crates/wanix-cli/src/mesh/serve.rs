@@ -54,11 +54,17 @@ pub(crate) struct MeshServeCommand {
     /// the Slice 4 demo path: `/n/A/#kv/<key>` imports for free because `#kv` is a
     /// `FileSystem` bound into the served namespace.
     wanix_services: bool,
+    /// Serve the `#cpu` exec plane (ALPN `wanix/cpu/1`) beside the namespace:
+    /// an admitted peer runs a `qjs`/`wasm` task ON THIS HOST against its own
+    /// reverse-exported namespace. Remote code execution, so it follows the
+    /// exec-device rule: refused on the public endpoint entirely, and scoped to
+    /// the `--peer` identity when one is named.
+    cpu: bool,
 }
 
 /// Parses `mesh-serve (--root DIR | --volume NAME) [--key FILE] [--addr IP:PORT]
 /// [--peer HEX] [--grant ANAME:PREFIX:RIGHTS]... [--insecure-open]
-/// [--wanix-services]`.
+/// [--wanix-services] [--cpu]`.
 ///
 /// # Errors
 ///
@@ -77,6 +83,7 @@ pub(crate) fn parse_mesh_serve_command(
     let mut grants = Vec::new();
     let mut insecure_open = false;
     let mut wanix_services = false;
+    let mut cpu = false;
     let mut index = 0;
     while index < args.len() {
         let flag = args[index].to_string_lossy().into_owned();
@@ -93,6 +100,11 @@ pub(crate) fn parse_mesh_serve_command(
             }
             "--wanix-services" => {
                 wanix_services = true;
+                index += 1;
+                continue;
+            }
+            "--cpu" => {
+                cpu = true;
                 index += 1;
                 continue;
             }
@@ -156,6 +168,22 @@ pub(crate) fn parse_mesh_serve_command(
              --wanix-services to export only the host directory",
         ));
     }
+    // `--cpu` binds the cpu exec plane (ALPN `wanix/cpu/1`): an admitted peer
+    // runs arbitrary task code ON THIS HOST. That is the sharpest capability on
+    // the mesh — sharper than `--wanix-services`, which at least confines the
+    // peer to this node's service files — so it follows the same exec-device
+    // rule: local-trust only, refused on the public endpoint (reachable by any
+    // NodeID with the ticket) regardless of --peer/--grant or --insecure-open.
+    if cpu && public {
+        return Err(CliError::usage(
+            "mesh-serve --cpu binds the #cpu exec plane (remote code execution on this \
+             host); the blueprint keeps exec export local-trust only, so it is refused on \
+             the public endpoint (reachable by any NodeID with the ticket) even with \
+             --peer/--grant or --insecure-open. Pass --addr IP:PORT to serve a local \
+             direct-address-only endpoint (add --peer HEX to admit only that identity), \
+             or drop --cpu",
+        ));
+    }
     // Default-deny on the global transport: serving the public endpoint with no
     // grant gate exports the whole root read-write to anyone holding the ticket.
     // Refuse it unless the operator explicitly opts in, or pins to a local
@@ -177,6 +205,7 @@ pub(crate) fn parse_mesh_serve_command(
         grants,
         insecure_open,
         wanix_services,
+        cpu,
     })
 }
 
@@ -209,6 +238,10 @@ pub(crate) fn run_mesh_serve_streaming(
 /// [`crate::mesh::dial_iroh_remote`] client without the park-forever loop. The
 /// `node.serve_native` call is type-locked to [`build_config`]'s
 /// [`NativeServeConfig`]: reverting to the 9P `node.serve` would not compile.
+///
+/// With `--cpu` the exec acceptor registers beside the namespace plane on one
+/// router (`serve_native_with_cpu`); the parser has already refused the public
+/// endpoint, and the acceptor's allowlist is the `--peer` identity when named.
 fn build_and_serve(
     command: &MeshServeCommand,
     identity: &NodeIdentity,
@@ -216,7 +249,17 @@ fn build_and_serve(
 ) -> Result<MeshNode, CliError> {
     let mut node = bind_node(command, identity)?;
     let config = build_config(command, root)?;
-    node.serve_native(config);
+    if command.cpu {
+        let peer = command
+            .peer_hex
+            .as_deref()
+            .map(parse_peer_hex)
+            .transpose()?;
+        let acceptor = super::serve_cpu::cpu_acceptor_for(&node, peer)?;
+        node.serve_native_with_cpu(config, acceptor);
+    } else {
+        node.serve_native(config);
+    }
     Ok(node)
 }
 
@@ -309,20 +352,30 @@ fn announce(
         format!("?{}", direct.join("&"))
     };
     let insecure_public = command.insecure_open && command.local_addr.is_none();
-    let message = announce_message(&peer.to_hex(), &query, insecure_public);
+    let message = announce_message(&peer.to_hex(), &query, insecure_public, command.cpu);
     write_process_output(process_stderr, "stderr", message.as_bytes())
 }
 
 /// Builds the announce text: the node id, the dialable ticket, and a directly
 /// copy-pasteable client command (whatever a server prints should paste into
 /// the matching mount command, not just be a bare ticket).
-fn announce_message(peer_hex: &str, query: &str, insecure_public: bool) -> String {
+fn announce_message(peer_hex: &str, query: &str, insecure_public: bool, cpu: bool) -> String {
     let ticket_url = format!("iroh://{peer_hex}{query}");
     let mut message = format!(
         "wanix-rust mesh-serve: node {peer_hex}\n\
          wanix-rust mesh-serve: ticket {ticket_url}\n\
          wanix-rust mesh-serve: mount with: wanix-rust mount-ls '{ticket_url}'\n"
     );
+    if cpu {
+        // Name the hazard and the matching client command: serving #cpu means an
+        // admitted peer runs task code on this host against its own reverse
+        // export.
+        message.push_str(&format!(
+            "wanix-rust mesh-serve: serving the #cpu exec plane (remote code execution \
+             for admitted peers); run a job with: wanix-rust cpu --node '{ticket_url}' \
+             -- qjs PROGRAM\n"
+        ));
+    }
     if insecure_public {
         // Loud about the default-deny inversion the operator opted into. The
         // parser refuses --wanix-services on this public endpoint, so this
@@ -518,7 +571,7 @@ mod tests {
 
     #[test]
     fn announce_prints_a_copy_pasteable_mount_command() {
-        let message = announce_message("ab12", "?addr=127.0.0.1:5610", false);
+        let message = announce_message("ab12", "?addr=127.0.0.1:5610", false, false);
         assert!(message.contains("node ab12\n"), "{message}");
         assert!(
             message.contains("ticket iroh://ab12?addr=127.0.0.1:5610\n"),
@@ -530,12 +583,25 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains("WARNING"), "{message}");
+        assert!(!message.contains("#cpu"), "{message}");
     }
 
     #[test]
     fn announce_warns_about_insecure_public_export() {
-        let message = announce_message("ab12", "", true);
+        let message = announce_message("ab12", "", true, false);
         assert!(message.contains("WARNING --insecure-open"), "{message}");
+    }
+
+    #[test]
+    fn announce_names_the_cpu_exec_plane_and_its_client_command() {
+        // Serving #cpu is remote code execution; the operator must hear it, and
+        // the printed line must paste into the matching dial verb.
+        let message = announce_message("ab12", "?addr=127.0.0.1:5610", false, true);
+        assert!(message.contains("remote code execution"), "{message}");
+        assert!(
+            message.contains("wanix-rust cpu --node 'iroh://ab12?addr=127.0.0.1:5610'"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -731,6 +797,212 @@ mod tests {
         .unwrap();
         assert!(command.wanix_services);
         assert_eq!(command.local_addr, Some("127.0.0.1:0".parse().unwrap()));
+    }
+
+    /// The serve half the docs called "dial-only" until now: `mesh-serve --cpu`
+    /// binds the [`wanix_mesh::CpuAcceptor`] beside the namespace plane on one
+    /// router, and the REAL CLI dial verb (`wanix-rust cpu`) runs a qjs job on
+    /// this node against the caller's reverse-exported cwd — output and exit
+    /// observable on the caller's process streams, with the namespace plane
+    /// still mountable on the same ticket.
+    #[test]
+    fn mesh_serve_cpu_runs_a_dialed_job_against_the_callers_reverse_export() {
+        use wanix_fs::{MemFs, NormalizedPath};
+
+        use crate::mesh::IROH_SCHEME;
+
+        let command = parse_mesh_serve_command(&args(&[
+            "--root",
+            "/unused",
+            "--addr",
+            "127.0.0.1:0",
+            "--cpu",
+        ]))
+        .unwrap();
+        let identity = NodeIdentity::from_secret_bytes([61u8; 32]);
+        let host = Arc::new(MemFs::new());
+        host.write_file("hello.txt", b"fs plane lives").unwrap();
+        let root: Arc<dyn FileSystem> = host.clone();
+        let server = build_and_serve(&command, &identity, &root).unwrap();
+
+        // The caller's working directory holds the program; the job reads it
+        // through the caller's reverse export, never the served root.
+        let cwd = std::env::temp_dir().join(format!("wanix-cpu-serve-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(
+            cwd.join("build.js"),
+            "import * as std from 'qjs:std';\nstd.out.puts('ran over mesh-serve --cpu\\n');\n",
+        )
+        .unwrap();
+
+        let addrs: Vec<String> = server
+            .ticket()
+            .ip_addrs()
+            .map(|addr| format!("addr={addr}"))
+            .collect();
+        let url = format!("{IROH_SCHEME}{}?{}", server.peer_id(), addrs.join("&"));
+
+        // The real dial verb, parsed by the real grammar.
+        let cpu_command = crate::cpu::parse_cpu_command(&args(&[
+            "--node",
+            &url,
+            "--cwd",
+            cwd.to_str().unwrap(),
+            "--",
+            "qjs",
+            "build.js",
+        ]))
+        .unwrap();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let exit = crate::cpu::run_cpu_streaming(cpu_command, &mut out, &mut err).unwrap();
+        assert_eq!(exit, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert_eq!(
+            String::from_utf8_lossy(&out).trim(),
+            "ran over mesh-serve --cpu"
+        );
+
+        // One router, two planes: the namespace plane still answers on the same
+        // ticket beside the exec plane.
+        let mount = crate::mesh::dial_iroh_remote(&url, "").unwrap();
+        assert!(
+            mount
+                .remote
+                .metadata(&NormalizedPath::new("hello.txt").unwrap())
+                .is_ok(),
+            "the FS plane must keep serving beside #cpu"
+        );
+
+        drop(mount);
+        drop(server);
+        std::fs::remove_dir_all(&cwd).ok();
+    }
+
+    /// `--cpu --peer HEX` scopes exec to that one verified identity: a dialer
+    /// with any other key is closed without running code (default-deny exec).
+    #[test]
+    fn mesh_serve_cpu_with_peer_refuses_other_identities() {
+        use wanix_fs::MemFs;
+
+        use crate::mesh::IROH_SCHEME;
+
+        let granted = NodeIdentity::from_secret_bytes([62u8; 32]);
+        let command = parse_mesh_serve_command(&args(&[
+            "--root",
+            "/unused",
+            "--addr",
+            "127.0.0.1:0",
+            "--cpu",
+            "--peer",
+            &granted.peer_id().to_hex(),
+            "--grant",
+            "wanix:.:ro",
+        ]))
+        .unwrap();
+        let identity = NodeIdentity::from_secret_bytes([63u8; 32]);
+        let root: Arc<dyn FileSystem> = Arc::new(MemFs::new());
+        let server = build_and_serve(&command, &identity, &root).unwrap();
+
+        let cwd = std::env::temp_dir().join(format!("wanix-cpu-deny-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(cwd.join("build.js"), "std.out.puts('must not run');").unwrap();
+
+        let addrs: Vec<String> = server
+            .ticket()
+            .ip_addrs()
+            .map(|addr| format!("addr={addr}"))
+            .collect();
+        let url = format!("{IROH_SCHEME}{}?{}", server.peer_id(), addrs.join("&"));
+        let cpu_command = crate::cpu::parse_cpu_command(&args(&[
+            "--node",
+            &url,
+            "--cwd",
+            cwd.to_str().unwrap(),
+            "--",
+            "qjs",
+            "build.js",
+        ]))
+        .unwrap();
+        // The CLI dial verb binds an ephemeral identity, which is not the
+        // granted peer, so the acceptor must close without running the job.
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let result = crate::cpu::run_cpu_streaming(cpu_command, &mut out, &mut err);
+        assert!(
+            result.is_err(),
+            "an unallowlisted identity must not run code, got stdout {:?}",
+            String::from_utf8_lossy(&out)
+        );
+
+        drop(server);
+        std::fs::remove_dir_all(&cwd).ok();
+    }
+
+    #[test]
+    fn parse_reads_cpu_flag_on_local_endpoint() {
+        let command = parse_mesh_serve_command(&args(&[
+            "--root",
+            "/tmp/x",
+            "--addr",
+            "127.0.0.1:0",
+            "--cpu",
+        ]))
+        .unwrap();
+        assert!(command.cpu);
+    }
+
+    #[test]
+    fn parse_defaults_cpu_off() {
+        let command =
+            parse_mesh_serve_command(&args(&["--root", "/tmp/x", "--addr", "127.0.0.1:0"]))
+                .unwrap();
+        assert!(!command.cpu);
+    }
+
+    #[test]
+    fn parse_refuses_cpu_on_public_endpoint() {
+        // SECURITY: --cpu binds the exec plane — an admitted peer runs arbitrary
+        // task code on this host. Like --wanix-services it is refused on the
+        // public endpoint entirely, with the hazard named.
+        let error = parse_mesh_serve_command(&args(&["--root", "/tmp/x", "--cpu"])).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("remote code execution") && message.contains("--addr"),
+            "public --cpu must be refused naming the exec hazard, got {message:?}"
+        );
+    }
+
+    #[test]
+    fn parse_refuses_cpu_with_insecure_open() {
+        // --insecure-open opts into open FILE export; it must not be a backdoor
+        // to exec export.
+        let error =
+            parse_mesh_serve_command(&args(&["--root", "/tmp/x", "--cpu", "--insecure-open"]))
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("remote code execution"),
+            "--cpu --insecure-open must be refused naming the exec hazard"
+        );
+    }
+
+    #[test]
+    fn parse_refuses_cpu_with_public_grant() {
+        // Even a grant-gated public serve keeps exec off the public endpoint,
+        // mirroring the --wanix-services rule.
+        let error = parse_mesh_serve_command(&args(&[
+            "--root",
+            "/tmp/x",
+            "--peer",
+            &"ab".repeat(32),
+            "--grant",
+            "docs:docs:ro",
+            "--cpu",
+        ]))
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("remote code execution"),
+            "grant-gated public --cpu must still be refused"
+        );
     }
 
     #[test]

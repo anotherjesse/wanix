@@ -201,7 +201,7 @@ It is the exact mirror of `serve_stream`: where the server decodes T-messages an
 > | 3 — iroh transport | **COMPLETE, then superseded in part** — `wanix-mesh` ships, but the Wanix↔Wanix plane is now the native `wanix-mesh-wire` (see the update note at the top); 9P stays the foreign edge |
 > | 4 — `#kv` over the mesh | **COMPLETE** — `wanix-kv`, imports across the mesh |
 > | 5 — CAS data plane + capsules | **COMPLETE** — `wanix-cas` (`LocalCasStore`, `#cas`), `IrohCasStore` in `wanix-mesh`, `wanix capsule` |
-> | 6 — `#cpu` exec plane | **PARTIAL** — `wanix-cpu` + `CpuAcceptor`/`CpuDialer` in `wanix-mesh` + the `wanix-rust cpu` dial verb exist and are tested, but **no CLI serve mode binds the acceptor yet** (dial-only) |
+> | 6 — `#cpu` exec plane | **COMPLETE** — `wanix-cpu` + `CpuAcceptor`/`CpuDialer` in `wanix-mesh`, the `wanix-rust cpu` dial verb, and `mesh-serve --cpu` serving the acceptor behind the exec gate (refused on the public endpoint; `--peer`-scoped on the local one) |
 > | 7 — plumber + agents on the mesh | **COMPLETE** — `wanix-plumb` + `GossipPlumbPort`, the `#agent` device with `RouterEngine`/`RemoteEngine` |
 
 Each slice is a substantial, externally-visible capability that ends in a runnable demo. The ordering follows the verdicts' unanimous advice: **prove the sync control plane locally first; introduce async/iroh once; defer cpu-exec and agent-export until streaming-output plumbing and a grant/jail layer exist.**

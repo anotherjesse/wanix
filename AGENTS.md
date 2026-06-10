@@ -408,7 +408,12 @@ tests.
   `crates/wanix-mesh/tests/mesh_native*.rs`.
 - `#cpu` exec plane: a `wanix-cpu` acceptor runs a task against the caller's
   reverse-exported namespace, so a node can run compute on a peer that operates
-  on the caller's files — Plan 9 cpu(1) over the mesh.
+  on the caller's files — Plan 9 cpu(1) over the mesh. Both CLI halves ship:
+  `mesh-serve --cpu` serves the acceptor behind the exec gate (refused on the
+  public endpoint entirely; `--peer`-scoped on the local `--addr` endpoint) and
+  `wanix-rust cpu --node TICKET -- KIND PROGRAM` dials and runs the job
+  (`crates/wanix-cli/src/mesh/serve_cpu.rs`, proof in
+  `mesh_serve_cpu_runs_a_dialed_job_against_the_callers_reverse_export`).
 - `#agent` device: an LLM session as files (`new`/`prompt`/`events`/`pending`/
   `ctl`/`reply`/`status`), with approvals as files. The CLI `wanix agent` path
   uses the codex app-server engine against a confined Wanix world; the served

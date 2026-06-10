@@ -92,7 +92,7 @@ wanix-rust mount-ls "$NODE_B" work
 wanix-rust mount-cat "$NODE_B" work/dataset.txt
 ```
 
-The peer's address *is* its ed25519 public key — no DNS, no IP-as-identity. Attach is default-deny and capability-gated. Three honest caveats the recipe owns: `--wanix-services` is refused on the public endpoint (it is remote code execution); today the mount lands at `/n/remote`, not yet the per-peer `/n/<peer-id>` the design promises; and the [`#cpu`](../devices/cpu) "run a job where the data lives" half is dial-only right now — `wanix-rust cpu` ships, but no CLI serve mode binds the `#cpu` acceptor yet, so there is no shipped server side to dial.
+The peer's address *is* its ed25519 public key — no DNS, no IP-as-identity. Attach is default-deny and capability-gated. Three honest caveats the recipe owns: `--wanix-services` and `--cpu` are refused on the public endpoint (they are remote code execution); today the mount lands at `/n/remote`, not yet the per-peer `/n/<peer-id>` the design promises; and the [`#cpu`](../devices/cpu) job delivers its output as one batch after the task finishes, with no remote cancel.
 
 ---
 
@@ -210,7 +210,7 @@ Each flow links the concept and recipe pages that own its caveats in full; this 
 - **The serve 9P WebSocket is single-frame-at-a-time.** A blocking read (e.g. `#plumb/<topic>/recv`) cannot be interleaved with a write on the same connection; live pub/sub needs a second connection.
 - **`#cpu` exec and `--wanix-services` are local-trust-only.** `--wanix-services` is remote code execution and is refused on the public mesh endpoint. Treat the mesh and cpu flows as trusted-peer demos, not multi-user auth.
 - **The mesh mounts at `/n/remote`.** Today an imported peer lands at `/n/remote`, not yet the per-peer `/n/<peer-id>` the design describes.
-- **`#cpu` is dial-only in the shipped CLI.** `wanix-rust cpu` exists and the acceptor is proven in `wanix-mesh` tests, but no CLI serve mode binds the `#cpu` acceptor yet — there is no shipped server side for a cross-node cpu job to dial.
+- **`#cpu` ships both halves, batched.** `mesh-serve --cpu` serves the acceptor (refused on the public endpoint; `--peer`-scoped on the local one) and `wanix-rust cpu` dials it; output is one batch after the task finishes, with no remote cancel.
 
 ## See also / next
 

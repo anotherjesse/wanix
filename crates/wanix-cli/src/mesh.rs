@@ -14,6 +14,7 @@ mod grant;
 pub(crate) mod mounts;
 pub(crate) mod resource;
 mod serve;
+mod serve_cpu;
 mod ticket;
 
 pub(crate) use mounts::{bind_mesh_mounts, bind_mesh_mounts_into};

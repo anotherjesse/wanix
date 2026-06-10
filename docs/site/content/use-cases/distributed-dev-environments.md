@@ -45,14 +45,14 @@ Two nodes. Node B holds the source under `work/` (a `build.js` and a `dataset.tx
 cargo build --locked --package wanix-cli
 alias wanix-rust='./target/debug/wanix-rust'
 
-cd "$ROOT_A"                                   # empty is fine — the job runs against B's files
-wanix-rust cpu --node "$NODE_B" -- qjs /work/build.js
-# -> built on node B with B's local files
+cd "$ROOT_A"                                   # holds build.js — the job's world is A's cwd, reverse-exported
+wanix-rust cpu --node "$NODE_B" -- qjs build.js
+# -> ran on node B against A's reverse-exported namespace
 ```
 
-(One honest gate: this is the designed shape, dial-only today — no CLI serve mode binds the `CpuAcceptor` yet, so the dial fails until that queued wiring lands. The acceptor is real and tested in `wanix-mesh`.)
+(B serves the exec plane with `mesh-serve --cpu`, which is refused on the public endpoint and `--peer`-scopable on the local one — serving cpu is remote code execution on B.)
 
-That line of stdout was produced by a `qjs` task that ran on B, reading `$ROOT_B/work/build.js` from B's own disk; the bytes came back to A on the cpu control stream and the process exited 0 (`docs/recipes/02-mount-remote-peer.md:180-187`). Nothing of B's tree was copied to A first. This is the named effect: **the computation traveled to the data**, not the other way around.
+That line of stdout was produced by a `qjs` task that ran on B; every file the job opened — including `build.js` itself — resolved through the reverse session back to A's working directory, and the bytes came back to A on the cpu control stream with exit 0 (`docs/recipes/02-mount-remote-peer.md`). This is Plan 9 cpu's split: **the caller's namespace, the server's processor** — the computation traveled to the machine, the namespace stayed yours.
 
 ## Reverse-export your cwd — read-only by default
 

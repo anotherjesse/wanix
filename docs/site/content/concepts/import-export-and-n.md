@@ -74,7 +74,7 @@ That is the exact call the CLI makes (`crates/wanix-cli/src/mount.rs:149-160`). 
 
 Here is where one client becomes load-bearing. Because every Wanix capability is already a plain `FileSystem`, importing a peer imports *all* of them at once — its files *and* its `#`-named devices. A peer's key/value store is `/n/A/#kv/<key>`; its agent is `/n/A/#agent/...`; its task table, terminal, and plumber ride the same import (`AGENTS.md:220-226`). Nobody taught `#kv` how to be remote. You wrote a 9P client once, and every file-shaped service any node exports became reachable (`docs/mesh-the-missing-half-of-9p.md:81-89`). The mesh design names this directly: services as files plus a single bind primitive is what makes "everything is a file" load-bearing rather than cute. See [devices import for free](/concepts/devices-import-for-free).
 
-Pair this with the exec plane and you can also send the computation to the data: `wanix-rust cpu --node "$NODE_B" -- qjs /work/build.js` is designed to run a task *on B*, against B's local files, returning the bytes on the cpu control stream — dial-only today, since no CLI serve mode binds the `CpuAcceptor` yet. That is Plan 9 cpu(1) over the mesh — see [send the agent to the data](/concepts/send-agent-to-the-data).
+Pair this with the exec plane and you can also send the computation across: `wanix-rust cpu --node "$NODE_B" -- qjs build.js` runs a task *on B* against the caller's reverse-exported working directory, returning the bytes on the cpu control stream (B serves the plane with `mesh-serve --cpu`). That is Plan 9 cpu(1) over the mesh — see [send the agent to the data](/concepts/send-agent-to-the-data).
 
 ## Honest caveat: the shipped mount binds one slot
 

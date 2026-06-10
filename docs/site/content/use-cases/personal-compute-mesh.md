@@ -109,7 +109,7 @@ This is real and runnable today, but it is early. Be precise about the edges:
 - **No public multi-user auth.** `mesh-serve` refuses to serve the public endpoint without a grant gate, and `--wanix-services` (which exports `#task`/`#agent` — remote code execution) is **local-trust only**: the parser rejects it on the public endpoint. The trust model is your own keys and explicit per-peer grants, not accounts. Public multi-user auth, Ethernet/vnet, and grant lifecycle are explicitly unimplemented trust-boundary work.
 - **Live pub/sub needs care.** The serve 9P WebSocket handles one frame at a time per connection, so a blocking `#plumb/<topic>/recv` can't interleave with a write on the same connection — live cross-mesh pub/sub wants a second connection.
 
-None of these undercut the core claim. What ships *today* is: two verified nodes, a NAT-crossing QUIC transport keyed on ed25519 identity, default-deny capability grants, file import that round-trips ls/cat/write (and persists on the server host), and devices that import for free. The `#cpu` half is dial-only: the verb and the tested acceptor exist, but no CLI serve mode binds the acceptor yet, so the cross-node job is design-intent rather than runnable.
+None of these undercut the core claim. What ships *today* is: two verified nodes, a NAT-crossing QUIC transport keyed on ed25519 identity, default-deny capability grants, file import that round-trips ls/cat/write (and persists on the server host), devices that import for free, and the `#cpu` exec plane end to end — `mesh-serve --cpu` serves the acceptor behind the exec gate and `wanix-rust cpu` runs a cross-node job against the caller's reverse export.
 
 ## Runnable recipe
 

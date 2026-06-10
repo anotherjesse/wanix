@@ -352,6 +352,32 @@ impl MeshNode {
         self.router = Some(router);
     }
 
+    /// Starts serving the **native** control plane (`config`) on
+    /// [`crate::WANIX_FS_ALPN`] *and* the cpu exec plane (`acceptor`) on
+    /// [`crate::WANIX_CPU_ALPN`] from one shared [`Router`].
+    ///
+    /// The serve-side shape for a node that exports both its namespace and the
+    /// exec plane: each `serve_*` call replaces the node's one router, so the
+    /// two planes must register on a single router rather than via sequential
+    /// [`Self::serve_native`] + [`Self::serve_cpu`] calls (the second would drop
+    /// the first). The same local-trust posture as [`Self::serve_cpu`] applies:
+    /// cpu is remote code execution, gated by the acceptor's allowlist and kept
+    /// off the public endpoint by callers.
+    pub fn serve_native_with_cpu(
+        &mut self,
+        config: NativeServeConfig,
+        acceptor: crate::CpuAcceptor,
+    ) {
+        let handler = self.native_handler(config);
+        let router = self.runtime.block_on(async {
+            Router::builder(self.endpoint.clone())
+                .accept(crate::WANIX_FS_ALPN, handler)
+                .accept(crate::WANIX_CPU_ALPN, acceptor)
+                .spawn()
+        });
+        self.router = Some(router);
+    }
+
     /// Builds a [`crate::CpuAcceptor`] over this node's runtime handle.
     ///
     /// `table_factory` produces a fresh driver-registered task table per job;
