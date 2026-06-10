@@ -28,7 +28,7 @@ Freeze a directory the agent (or you) just built onto the content-addressed plan
 Build a directory we will treat as one frozen world — a qjs program plus the data it reads:
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli       # see /reference/build-and-install
 alias wanix-rust='./target/debug/wanix-rust'
 
 mkdir -p /tmp/world-A/scripts /tmp/world-A/state
@@ -38,7 +38,9 @@ std.out.puts(std.loadFile("state/greeting.txt") || "hello\n");
 JS
 echo "hello, capsule" > /tmp/world-A/state/greeting.txt
 
-wanix-rust qjs --cwd /tmp/world-A scripts/hello.js   # -> hello, capsule
+# --cwd is a namespace path, so bind the host dir in with --mount first:
+wanix-rust qjs --mount /tmp/world-A=world --cwd world \
+  /tmp/world-A/scripts/hello.js                      # -> hello, capsule
 ```
 
 If your state lives in `#kv` rather than on disk, it is *not* in this tree yet. `#kv` is a [service device](/devices/kv), not a directory under the world root, so a capsule does not see it. Materialize the keys you care about as files first — capsules freeze *file content*, not live device state. That line is deliberate: a capsule is a deterministic on-disk view of a world; live mesh state stays out of scope (section 5).

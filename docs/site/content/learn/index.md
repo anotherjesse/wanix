@@ -39,22 +39,24 @@ honestLimits:
   - The serve 9P WebSocket handles one frame at a time per connection, so a blocking read cannot interleave with a write on the same connection.
   - "#cpu exec and --wanix-services are local-trust-only; --wanix-services is refused on the public mesh endpoint because it is remote code execution."
   - Mesh imports currently land at /n/remote, not yet the per-peer /n/<peer-id> the design promises.
-  - The per-request GET /apps/<name> HTTP route is not yet wired on the cpu branch; the recipe drives the same handler through the qjs CLI instead.
+  - The `wanix-rust cpu` dial verb ships, but no CLI serve mode binds the #cpu acceptor yet, so a cross-node cpu job has no shipped server side to dial.
 ---
 
 # Learn Wanix — Guided Flows
 
-Wanix is a Rust-native Plan 9 for one machine *and* many: everything is a file, every process gets its own namespace, and a mesh imports remote namespaces as local files over 9P. That is a lot of surface area to meet all at once. **Flows** are the antidote — each one picks a single goal, names a reader it is written for, and walks the canonical concept, device, and recipe pages in the right order so you finish with something working instead of a pile of tabs.
+Wanix is a Rust-native Plan 9 for one machine *and* many: everything is a file, every process gets its own namespace, and a mesh imports remote namespaces as local files — over the native FileSystem-over-iroh wire between Wanix nodes, with 9P as the foreign edge. That is a lot of surface area to meet all at once. **Flows** are the antidote — each one picks a single goal, names a reader it is written for, and walks the canonical concept, device, and recipe pages in the right order so you finish with something working instead of a pile of tabs.
 
 ## Flows vs. concepts: a sequence, not a reference
 
-A **concept** page (`everything-is-a-file`, `per-process-namespaces`, `missing-half-of-9p`) and a **device** page (`#kv`, `#agent`, `#cpu`) are canonical: they explain one idea completely, and they are where facts live. A **flow** is the opposite shape — it is a hand-held *sequence* that visits those canonical pages in an order chosen for a goal, stops to run real commands, and is honest about where the `cpu` branch's reality stops short of the design. Concepts are the map; flows are a route across it. When a flow needs a fact, it links the concept rather than restating it, so the truth stays in exactly one place.
+A **concept** page (`everything-is-a-file`, `per-process-namespaces`, `missing-half-of-9p`) and a **device** page (`#kv`, `#agent`, `#cpu`) are canonical: they explain one idea completely, and they are where facts live. A **flow** is the opposite shape — it is a hand-held *sequence* that visits those canonical pages in an order chosen for a goal, stops to run real commands, and is honest about where the shipped reality stops short of the design. Concepts are the map; flows are a route across it. When a flow needs a fact, it links the concept rather than restating it, so the truth stays in exactly one place.
 
-Every flow below starts from the same native entry point. Build once, then follow your route:
+Every flow below starts from the same native entry point. Build once (full story: [build & install](../reference/build-and-install)), alias the binary, and run the hero:
 
 ```sh
-# From the workspace root. `wanix-rust` is `cargo run --package wanix-cli --`.
-cargo run --locked --package wanix-cli -- qjs examples/qjs-demo.js
+# From the workspace root. The first build takes a few minutes.
+cargo build --locked --package wanix-cli
+alias wanix-rust='./target/debug/wanix-rust'
+wanix-rust qjs examples/qjs-demo.js
 ```
 
 ---
@@ -77,19 +79,20 @@ Newcomer note: guest JavaScript uses `qjs:std`, `qjs:os`, `scriptArgs`, and serv
 
 ## Flow: Wire two machines into a mesh — *for Devraj*
 
-**Goal:** give two nodes ed25519 identities, dial one from the other over iroh QUIC, mount the remote namespace as local files, then run a job *where the data lives*. **Route:** [the missing half of 9P](../concepts/missing-half-of-9p) → [per-process namespaces](../concepts/per-process-namespaces) → `#cpu` → recipe [Mount a remote peer](../recipes/02-mount-remote-peer).
+**Goal:** give two nodes ed25519 identities, dial one from the other over iroh QUIC, and mount the remote namespace as local files. **Route:** [the missing half of 9P](../concepts/missing-half-of-9p) → [per-process namespaces](../concepts/per-process-namespaces) → recipe [Mount a remote peer](../recipes/02-mount-remote-peer).
 
 ```sh
-# Node B exports a directory as 9P over QUIC and prints its verified address.
+# Node B exports a directory over iroh QUIC (the native wire) and prints
+# its verified address as an iroh:// ticket.
 wanix-rust mesh-serve --root "$ROOT_B" --key "$NODE_B_KEY" \
     --addr 127.0.0.1:5680 --wanix-services
 
-# Node A imports B's namespace and runs a job on B against B's files.
+# Node A imports B's namespace as local files.
 wanix-rust mount-ls "$NODE_B" work
-wanix-rust cpu --node "$NODE_B" -- qjs /work/build.js
+wanix-rust mount-cat "$NODE_B" work/dataset.txt
 ```
 
-The peer's address *is* its ed25519 public key — no DNS, no IP-as-identity. Attach is default-deny and capability-gated. Two honest caveats the recipe owns: `--wanix-services` is refused on the public endpoint (it is remote code execution), and today the mount lands at `/n/remote`, not yet the per-peer `/n/<peer-id>` the design promises.
+The peer's address *is* its ed25519 public key — no DNS, no IP-as-identity. Attach is default-deny and capability-gated. Three honest caveats the recipe owns: `--wanix-services` is refused on the public endpoint (it is remote code execution); today the mount lands at `/n/remote`, not yet the per-peer `/n/<peer-id>` the design promises; and the [`#cpu`](../devices/cpu) "run a job where the data lives" half is dial-only right now — `wanix-rust cpu` ships, but no CLI serve mode binds the `#cpu` acceptor yet, so there is no shipped server side to dial.
 
 ---
 
@@ -97,14 +100,16 @@ The peer's address *is* its ed25519 public key — no DNS, no IP-as-identity. At
 
 **Goal:** a one-file qjs handler whose state lives in `#kv`, not in the handler. **Route:** [everything-is-a-file](../concepts/everything-is-a-file) → `#kv` → recipe [A tiny HTTP app with #kv](../recipes/04-tiny-http-app-with-kv).
 
-The handler reads `#kv/counter`, increments, writes it back. Nothing about the state lives in code:
+The handler reads `#kv/http-counter`, increments, writes it back. Nothing about the state lives in code:
 
 ```sh
+mkdir -p project-root/apps        # the handler lives under the served root
+# ...write the recipe's handler to project-root/apps/counter.js...
 wanix-rust serve --wanix-services --listen 127.0.0.1:7654 ./project-root
-wanix-rust qjs ./project-root/apps/counter.js   # counter 1, then 2, then 3 ...
+curl -s http://127.0.0.1:7654/.wanix/app/counter   # counter=1, then 2, then 3 ...
 ```
 
-State survives between calls because the `KvDevice` lives in the serve process. Honest scope: the per-request `GET /apps/<name>` route is *not yet* wired on the `cpu` branch — the recipe drives the same handler through the qjs CLI and explains exactly which thin Rust file would complete it. `#kv` is an in-memory tier; for durability across restarts, freeze it into a capsule.
+Each request spawns a fresh qjs task; the count climbs anyway because the `KvDevice` lives in the serve process. The route is loopback-only and requires `--wanix-services`. `#kv` is an in-memory tier; for durability across restarts, freeze it into a capsule.
 
 ---
 
@@ -152,7 +157,7 @@ echo "Rename foo() to bar() across the project. Plan first." > "#agent/$A/prompt
 cat "#agent/$A/events"      # watch it think; approvals appear under pending
 ```
 
-Approvals are files; `ctl` takes `approve`/`deny`/`close`; one agent delegates to another by blocking on its `reply`. The served `#agent` uses a deterministic `FakeEngine` — real codex is local-trust only.
+(`#agent/...` are paths *inside a served Wanix namespace*, not your host shell — drive them with `wanix-rust mount-cat`/`mount-write` as the flow shows.) Approvals are files; `ctl` takes `approve`/`deny`/`close`; one agent delegates to another by blocking on its `reply`. The served `#agent` uses a deterministic `FakeEngine` — real codex is local-trust only.
 
 ---
 
@@ -182,7 +187,7 @@ Each flow header carries a badge so you can pick by appetite:
 
 | Flow | Prereqs | Est. time |
 | --- | --- | --- |
-| JS outside Chrome | Rust toolchain | ~10 min |
+| JS outside Chrome | Rust toolchain (optional cockpit step needs Go) | ~10 min |
 | Wire a mesh | one flow done; two terminals | ~20 min |
 | HTTP app with #kv | JS-outside-Chrome flow | ~15 min |
 | Compose volumes & tools | JS-outside-Chrome flow; two terminals | ~15 min |
@@ -204,7 +209,8 @@ Each flow links the concept and recipe pages that own its caveats in full; this 
 - **`#kv` is in-memory.** State persists only while the serve process is alive. The HTTP-app flow's counter survives between calls because `KvDevice` lives in that process — not across restarts. Freeze a world into a capsule for durability.
 - **The serve 9P WebSocket is single-frame-at-a-time.** A blocking read (e.g. `#plumb/<topic>/recv`) cannot be interleaved with a write on the same connection; live pub/sub needs a second connection.
 - **`#cpu` exec and `--wanix-services` are local-trust-only.** `--wanix-services` is remote code execution and is refused on the public mesh endpoint. Treat the mesh and cpu flows as trusted-peer demos, not multi-user auth.
-- **The mesh mounts at `/n/remote`.** Today an imported peer lands at `/n/remote`, not yet the per-peer `/n/<peer-id>` the design describes; the per-request `GET /apps/<name>` HTTP route is likewise not yet wired on the `cpu` branch.
+- **The mesh mounts at `/n/remote`.** Today an imported peer lands at `/n/remote`, not yet the per-peer `/n/<peer-id>` the design describes.
+- **`#cpu` is dial-only in the shipped CLI.** `wanix-rust cpu` exists and the acceptor is proven in `wanix-mesh` tests, but no CLI serve mode binds the `#cpu` acceptor yet — there is no shipped server side for a cross-node cpu job to dial.
 
 ## See also / next
 

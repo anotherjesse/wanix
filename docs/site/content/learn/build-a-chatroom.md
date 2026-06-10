@@ -12,7 +12,7 @@ sourceRefs:
   - examples/chatroom/app.wanix.json
   - crates/wanix-appfs/src/lib.rs:1-40
   - crates/wanix-appfs/src/service.rs:63-99
-  - crates/wanix-appfs/src/buffer.rs:18-25
+  - crates/wanix-fs/src/buffer.rs:27-30
   - crates/wanix-cli/src/app/serve.rs:185-202
   - crates/wanix-cli/src/app/guest.rs:11-18
   - crates/wanix-cli/src/mesh/ticket.rs:195-206
@@ -47,7 +47,7 @@ Serve a small qjs program as a mesh-mounted chatroom, post from two identities, 
 This flow is the [guest-defined resources](/concepts/guest-defined-resources) idea run end to end. Volumes made *data* a resource; tools made *one operation* a resource ([jobs are files](/concepts/jobs-are-files)). Here a running *program* is the resource: `wanix-rust app serve` turns a small JavaScript file into a mounted filesystem named by one `iroh://` ticket, and everything social about a chatroom — who said what, who is here, what arrives live — falls out of machinery the host already had. One machine, two terminals, about fifteen minutes. The tested transcript with real outputs is [Recipe 07](/recipes/07-chatroom-over-the-mesh).
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli       # see /reference/build-and-install
 alias wanix-rust='./target/debug/wanix-rust'
 ```
 

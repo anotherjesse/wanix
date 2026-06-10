@@ -11,7 +11,7 @@ sourceRefs:
   - crates/wanix-cli/src/app/serve.rs:185-202
   - crates/wanix-cli/src/app/guest.rs:11-18
   - crates/wanix-appfs/src/service.rs:162-175
-  - crates/wanix-appfs/src/buffer.rs:18-25
+  - crates/wanix-fs/src/buffer.rs:27-30
   - crates/wanix-cli/src/mesh/ticket.rs:195-206
   - crates/wanix-id/src/identity.rs:90-93
 seeAlso:
@@ -42,8 +42,9 @@ canonicalCaveatFor: []
 ## 0. Build the binary
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli       # see /reference/build-and-install
 alias wanix-rust='./target/debug/wanix-rust'
+ls examples/chatroom/main.js examples/chatroom/app.wanix.json   # the room ships in-tree
 ```
 
 ## 1. Serve the room (terminal 1)
@@ -64,7 +65,7 @@ chatroom	iroh://71b44428...?addr=127.0.0.1:48171
 ## 2. Person A: mount, post, read
 
 ```sh
-T='iroh://71b44428...?addr=127.0.0.1:48171'
+T='iroh://71b44428...?addr=127.0.0.1:48171'   # <- replace with the full iroh:// ticket YOUR terminal 1 printed
 wanix-rust mount-ls "$T"
 ```
 

@@ -9,7 +9,7 @@ sourceRefs:
   - crates/wanix-kv/src/lib.rs:1-177
   - crates/wanix-cli/src/serve/http/app.rs:22-156
   - crates/wanix-cli/src/serve/http/routes.rs:9-22
-  - crates/wanix-cli/src/serve/roots.rs:120-138
+  - crates/wanix-cli/src/serve/roots.rs:185-212
   - workbench/src/web/http-app-demo.ts:9-135
 seeAlso:
   - devices/kv
@@ -38,7 +38,7 @@ A single-file qjs handler at `apps/counter.js` increments a per-request counter 
 
 ## The handler: read, increment, write
 
-Drop this in `apps/counter.js` under your project root. It reads `#kv/http-counter` (an empty or missing key counts as `0`), increments, writes it back, and prints the new value as the response body. The route's runner sets `WANIX_HTTP_TARGET` in the task environment (`crates/wanix-cli/src/serve/http/app.rs:123`), so the handler can see the request path.
+Create a project root with an `apps/` directory inside it (`mkdir -p project-root/apps` — the serve step below points at `./project-root`, which must exist) and write this to `project-root/apps/counter.js`. It reads `#kv/http-counter` (an empty or missing key counts as `0`), increments, writes it back, and prints the new value as the response body. The route's runner sets `WANIX_HTTP_TARGET` in the task environment (`crates/wanix-cli/src/serve/http/app.rs:123`), so the handler can see the request path.
 
 ```js
 import * as std from "qjs:std";
@@ -70,13 +70,13 @@ Two things to notice. First, the handler is *stateless* between invocations — 
 ## Run serve with #kv bound
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli       # see /reference/build-and-install
 alias wanix-rust='./target/debug/wanix-rust'
 
 wanix-rust serve --wanix-services --listen 127.0.0.1:7654 ./project-root
 ```
 
-`--wanix-services` is the single flag that turns the device set on. Without it, the services namespace path never runs, and `#kv` is not bound. With it, `roots.rs:136` runs `namespace.bind(Arc::new(KvDevice::new()), ".", "#kv", ...)`, and the served root advertises the inspectable device set `#task`, `#term`, `#kv`, `#pipe`, `#plumb`, `#cas`, `#agent` (`crates/wanix-cli/src/serve/roots.rs:120`). The positional `./project-root` becomes the `.` of the served namespace, so `./project-root/apps/counter.js` shows up at `apps/counter.js` and `#kv/http-counter` sits next to it under the same root.
+`--wanix-services` is the single flag that turns the device set on. Without it, the services namespace path never runs, and `#kv` is not bound. With it, `roots.rs:206-211` runs `namespace.bind(Arc::new(KvDevice::new()), ".", "#kv", ...)`, and the served root advertises the inspectable device set `#task`, `#term`, `#kv`, `#pipe`, `#plumb`, `#cas`, `#agent`, `#sites` (`crates/wanix-cli/src/serve/roots.rs:187`). The positional `./project-root` becomes the `.` of the served namespace, so `./project-root/apps/counter.js` shows up at `apps/counter.js` and `#kv/http-counter` sits next to it under the same root.
 
 There is one served namespace and many adapters bind against it: direct 9P, WebSocket 9P, the HTTP app route, and `POST /agent` all share the same filesystem. There is no per-route filesystem.
 
@@ -97,7 +97,7 @@ curl -sS http://127.0.0.1:7654/.wanix/app/counter
 # counter=3
 ```
 
-The number climbs because every request reads and writes the *same* `KvDevice` singleton living inside the serve process — the bind at `roots.rs:136` keeps that map alive for the lifetime of `serve`. Each request also returns trace headers (`X-Wanix-Task-Id`, `X-Wanix-Stdout-Path`, `X-Wanix-Stderr-Path`, see `app.rs:158-167`) pointing at `.wanix/http/<task-id>.out` so you can read exactly what the handler printed.
+The number climbs because every request reads and writes the *same* `KvDevice` singleton living inside the serve process — the bind at `roots.rs:206-211` keeps that map alive for the lifetime of `serve`. Each request also returns trace headers (`X-Wanix-Task-Id`, `X-Wanix-Stdout-Path`, `X-Wanix-Stderr-Path`, see `app.rs:158-167`) pointing at `.wanix/http/<task-id>.out` so you can read exactly what the handler printed.
 
 Two access boundaries are enforced in the route, not by convention. The handler refuses without services: a request to the route without `--wanix-services` returns `404 wanix app routes require --wanix-services` (`app.rs:55-59`). And it is loopback-only: any non-loopback peer gets `403` (`app.rs:61-66`). The route advertises itself in discovery with `"scope":"loopback"` (`app.rs:35-47`).
 

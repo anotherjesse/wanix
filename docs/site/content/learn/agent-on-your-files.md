@@ -36,7 +36,7 @@ Drive an LLM session as files, gate it with file-based approvals, and reach it a
 An agent in Wanix is not a chat box bolted onto an editor. It is an operator that reads and writes the same files you do, parked behind a `ctl` gate you control. This flow takes you from a one-session repair to two agents collaborating across the mesh — and is flat about where the served engine stops being a real model. Build once, then follow the route:
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli       # see /reference/build-and-install
 alias wanix-rust='./target/debug/wanix-rust'
 ```
 
@@ -46,22 +46,28 @@ The thesis: if everything is a file and every process composes its own namespace
 
 ## #agent as files; approvals as files
 
-Start a serve with the cockpit bundle and the service devices bound in:
+Start a serve with the cockpit bundle, the service devices bound in, and a loopback raw-9P door (`--p9`) so the host-side `mount-*` verbs below have something to dial — `#agent/...` paths live *inside the served namespace*, not in your host shell:
 
 ```sh
-wanix-rust serve --root /tmp/repair-demo --addr 127.0.0.1:7654 \
-  --bundle workbench-fs9p --wanix-services
+mkdir -p /tmp/repair-demo
+wanix-rust serve --root /tmp/repair-demo --listen 127.0.0.1:7654 \
+  --p9 127.0.0.1:7664 --bundle workbench-fs9p --wanix-services
 ```
 
-Now drive a repair by hand against the `#agent` files. Allocate a session, submit a prompt, watch it think, then resolve the approval it parks:
+Now drive a repair by hand against the `#agent` files, through the 9P door. Allocate a session, submit a prompt, read the parked approval, then resolve it:
 
 ```sh
-A=$(cat '#agent/new')
-echo "approve: edit broken.js to declare missingValue" > "#agent/$A/prompt"
-cat "#agent/$A/events"          # turn.started, then approval.needed
-cat "#agent/$A/pending"         # [{"id":"req-1","action":"edit broken.js ..."}]
-echo "approve req-1" > "#agent/$A/ctl"
+B=tcp://127.0.0.1:7664
+A=$(wanix-rust mount-cat $B '#agent/new' | tr -d '\n')
+wanix-rust mount-write $B "#agent/$A/prompt" \
+  "approve: edit broken.js to declare missingValue"
+wanix-rust mount-cat   $B "#agent/$A/pending"
+# [{"action":"edit broken.js to declare missingValue","id":"req-1"}]
+wanix-rust mount-write $B "#agent/$A/ctl" "approve req-1"
+wanix-rust mount-cat   $B "#agent/$A/status"     # fake idle turns=1
 ```
+
+(`<id>/events` is the live JSONL stream of the same turn — but it is a *stream*, and a collected `mount-cat` of it blocks until the session closes; the `pending` snapshot is the non-blocking way to see the parked request. Inside a Wanix shell, plain `cat`/`echo` on these paths work directly.)
 
 Nothing touches your file until you write `approve req-1`. That is the whole trust handoff, and it lives in code, not in a prompt: `AgentDevice::resolve` (`crates/wanix-agent/src/lib.rs:116-118`) is the only path from a pending request to an executed action. The Plan 9 term is the same idea you already know — a control file (`ctl`) accepting verbs (`approve`, `deny`, `close`). See [approvals as files](/concepts/approvals-as-files).
 
@@ -69,9 +75,9 @@ The cockpit's "Run Agent Repair Demo" is the one-click proof of this gate: it po
 
 ## Reach the agent across the mesh
 
-Because `#agent` is a filesystem and the mesh carries 9P over QUIC, an agent on a peer is reachable as files from here. The pattern is "run there, namespace from here": [`#cpu`](/devices/cpu) runs a task against your reverse-exported namespace, so the compute sits next to the data while the agent still edits *your* files. [`#plumb`](/devices/plumb) carries the coordination envelopes between sessions. See [send the agent to the data](/concepts/send-agent-to-the-data).
+Mesh setup is its own flow — do [wire a mesh](/learn/wire-a-mesh) first; and note up front that the shipped CLI mounts a peer at the single slot `/n/remote`, so read any `/n/<peer>` spelling below as a labelled convention, not a path you can type today. Because `#agent` is a filesystem and the mesh carries the one `FileSystem` contract over QUIC, an agent on a peer is reachable as files from here. The pattern is "run there, namespace from here": [`#cpu`](/devices/cpu) runs a task against your reverse-exported namespace, so the compute sits next to the data while the agent still edits *your* files. [`#plumb`](/devices/plumb) carries the coordination envelopes between sessions. See [send the agent to the data](/concepts/send-agent-to-the-data).
 
-[Recipe 05](/recipes/05-two-agents-collaborate) shows two agents on one refactor: agent A renames `foo()` to `bar()`, wants a second opinion, opens `#agent/new` a second time, hands agent B a narrow sub-goal, then blocks on B's `reply`:
+[Recipe 05](/recipes/05-two-agents-collaborate) shows two agents on one refactor: agent A renames `foo()` to `bar()`, wants a second opinion, opens `#agent/new` a second time, hands agent B a narrow sub-goal, then blocks on B's `reply` (namespace paths again — agent A runs *inside* the node, so for it these are plain file reads and writes):
 
 ```sh
 B=$(cat '#agent/new')

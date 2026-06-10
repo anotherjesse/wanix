@@ -42,13 +42,15 @@ honestLimits:
 Two nodes. Node B holds the source under `work/` (a `build.js` and a `dataset.txt`); node A is where you sit, and its working directory can be empty. From A you run one command and the build happens on B, against B's files, with B's CPU:
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli
 alias wanix-rust='./target/debug/wanix-rust'
 
 cd "$ROOT_A"                                   # empty is fine — the job runs against B's files
 wanix-rust cpu --node "$NODE_B" -- qjs /work/build.js
 # -> built on node B with B's local files
 ```
+
+(One honest gate: this is the designed shape, dial-only today — no CLI serve mode binds the `CpuAcceptor` yet, so the dial fails until that queued wiring lands. The acceptor is real and tested in `wanix-mesh`.)
 
 That line of stdout was produced by a `qjs` task that ran on B, reading `$ROOT_B/work/build.js` from B's own disk; the bytes came back to A on the cpu control stream and the process exited 0 (`docs/recipes/02-mount-remote-peer.md:180-187`). Nothing of B's tree was copied to A first. This is the named effect: **the computation traveled to the data**, not the other way around.
 

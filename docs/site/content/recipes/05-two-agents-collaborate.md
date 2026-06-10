@@ -38,12 +38,18 @@ Agent A drives a rename refactor, spawns a second session B with a sub-goal, blo
 
 ## The setup: two sessions behind one device
 
-Build the CLI, then start a node that serves the agent device. The first build step of any flow:
+Build the CLI, then start a node that serves the agent device — `--wanix-services` binds `#agent`, and the `--p9` door gives host-side 9P clients something to dial:
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli       # see /reference/build-and-install
 alias wanix-rust='./target/debug/wanix-rust'
+
+mkdir -p /tmp/two-agents
+wanix-rust serve --root /tmp/two-agents --listen 127.0.0.1:7654 \
+  --p9 127.0.0.1:7664 --wanix-services
 ```
+
+One framing note before the transcript: the `cat`/`echo` lines below are **namespace operations** — they read as a shell *inside* the Wanix world (which is exactly how an agent, itself a task in that world, drives a sibling session). From your host shell, each `cat FILE` is `wanix-rust mount-cat tcp://127.0.0.1:7664 FILE` and each `echo TEXT > FILE` is `wanix-rust mount-write tcp://127.0.0.1:7664 FILE "TEXT"` — [recipe 01 §4](/recipes/01-repair-broken-qjs) shows that form end to end.
 
 Both agents run on one node behind one `AgentDevice` mounted at `#agent`. Each session is allocated lazily — the first read of `#agent/new` hands back a numeric id and creates the session. The file tree per session is:
 

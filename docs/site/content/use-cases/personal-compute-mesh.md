@@ -64,10 +64,12 @@ wanix-rust mesh-serve \
     --addr 127.0.0.1:5680 --wanix-services
 ```
 
-It prints its verified address on stderr — copy the `iroh://…` line:
+It prints its verified address on stderr — copy the `ticket` line (yours will differ):
 
 ```
-wanix-rust mesh-serve: mount iroh://829fbb…f986?addr=127.0.0.1:5680
+wanix-rust mesh-serve: node 829fbb…f986
+wanix-rust mesh-serve: ticket iroh://829fbb…f986?addr=127.0.0.1:5680
+wanix-rust mesh-serve: mount with: wanix-rust mount-ls 'iroh://829fbb…f986?addr=127.0.0.1:5680'
 ```
 
 From node A — which doesn't even need to run `mesh-serve` to *import* — mount and read across the wire:
@@ -107,7 +109,7 @@ This is real and runnable today, but it is early. Be precise about the edges:
 - **No public multi-user auth.** `mesh-serve` refuses to serve the public endpoint without a grant gate, and `--wanix-services` (which exports `#task`/`#agent` — remote code execution) is **local-trust only**: the parser rejects it on the public endpoint. The trust model is your own keys and explicit per-peer grants, not accounts. Public multi-user auth, Ethernet/vnet, and grant lifecycle are explicitly unimplemented trust-boundary work.
 - **Live pub/sub needs care.** The serve 9P WebSocket handles one frame at a time per connection, so a blocking `#plumb/<topic>/recv` can't interleave with a write on the same connection — live cross-mesh pub/sub wants a second connection.
 
-None of these undercut the core claim. What ships *today* is: two verified nodes, a NAT-crossing QUIC transport keyed on ed25519 identity, default-deny capability grants, file import that round-trips ls/cat/write (and persists on the server host), devices that import for free, and `#cpu` that runs compute on a peer against its own data.
+None of these undercut the core claim. What ships *today* is: two verified nodes, a NAT-crossing QUIC transport keyed on ed25519 identity, default-deny capability grants, file import that round-trips ls/cat/write (and persists on the server host), and devices that import for free. The `#cpu` half is dial-only: the verb and the tested acceptor exist, but no CLI serve mode binds the acceptor yet, so the cross-node job is design-intent rather than runnable.
 
 ## Runnable recipe
 

@@ -6,7 +6,7 @@ oneLiner: Flat specs, contracts, and indices — the expert's fast path to a pre
 audience: [developer, visionary]
 tags: [reference, cli]
 sourceRefs: []
-seeAlso: [reference/adr-index, reference/attach-and-capability-contract, reference/cli-command-index, reference/cli-rootfs-qemu-v86, reference/contributor-landing, reference/crate-map-and-layering, reference/extension-points, reference/filesystem-trait, reference/guest-sdk, reference/performance, reference/quality-gates, reference/queued-follow-ups, reference/serve-and-discovery]
+seeAlso: [reference/adr-index, reference/attach-and-capability-contract, reference/build-and-install, reference/cli-command-index, reference/cli-rootfs-qemu-v86, reference/contributor-landing, reference/crate-map-and-layering, reference/extension-points, reference/filesystem-trait, reference/guest-sdk, reference/performance, reference/quality-gates, reference/queued-follow-ups, reference/serve-and-discovery]
 prerequisites: []
 usedInFlows: []
 honestLimits: []
@@ -23,6 +23,7 @@ The reference section is the no-narrative layer: signatures, defaults, contracts
 
 - [**ADR Index & Workflow**](/reference/adr-index) — The active ADRs 0001-0005 plus the ADR-vs-commit-message workflow — review the related ADRs before you touch any boundary.
 - [**Attach & capability contract**](/reference/attach-and-capability-contract) — The flat spec for how a peer attaches and what a capability grant authorizes.
+- [**Build & install the CLI**](/reference/build-and-install) — The one canonical build page: rustup, `cargo build --locked --package wanix-cli`, the alias, and the optional `wasm32-wasip1` target.
 - [**CLI Command Index**](/reference/cli-command-index) — Every wanix-rust subcommand at a glance — qjs, qjs-term/-shell/-snapshot/-resume/-restore, wasm, p9-*, serve, rootfs, qemu, mesh-serve, mount-*, cpu, agent, capsule — each linked to its dedicated reference or recipe page.
 - [**CLI: rootfs, qemu, direct-v86 (VM Handoffs)**](/reference/cli-rootfs-qemu-v86) — rootfs prepares and validates a guest root, qemu emits a wanix-qemu-virtio9p.v1 argv handoff, and direct-v86 generates a browser emulator page — launch contracts, not a VM supervisor.
 - [**Contributor Landing — This Is the Rust Port**](/reference/contributor-landing) — Orient: this is the Rust port, not the Go tree — ignore the Go Makefile/CONTRIBUTING, build with cargo, and gate with just check.

@@ -44,16 +44,18 @@ Wanix has two clean extension seams, and they sit at opposite ends of the same c
 Build once, then follow either branch:
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli       # see /reference/build-and-install
 alias wanix-rust='./target/debug/wanix-rust'
 ```
 
 ## Branch A: a task driver is `check` + `start`
 
-Watch the effect first. A `.wasm` cmd auto-starts as a task and reports an exit:
+Watch the effect first. A `.wasm` cmd auto-starts as a task and reports an exit (the fixture guest lists a directory in its namespace — `/` maps to your working directory here):
 
 ```sh
-wanix-rust wasm examples/rust-guest.wasm --list /dir
+wanix-rust wasm crates/wanix-wasm/fixtures/rust-guest.wasm --list /
+# rust-wasm: / has 48 entries
+# ...
 ```
 
 The whole driver contract is two methods. From `crates/wanix-task/src/driver.rs:6-18`:

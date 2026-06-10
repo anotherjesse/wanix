@@ -57,10 +57,11 @@ That is *import*: the data moves to you. It works, and for small reads it is the
 The cpu plane runs the inverse. Dial the node that holds the data and hand it a job; the job runs *there*, against that node's fast local namespace, and your own files are reverse-exported back to it over the same connection so the run can read inputs and write outputs through the wire (`docs/mesh-the-missing-half-of-9p.md:1828-1833`):
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli
 alias wanix-rust='./target/debug/wanix-rust'
 
 # Run a qjs job on the data node; reverse-export the local cwd read-only.
+# (Designed shape — dial-only today: no CLI serve mode binds the CpuAcceptor yet.)
 wanix-rust cpu --node iroh://A -- qjs build.js
 ```
 

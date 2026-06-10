@@ -26,7 +26,7 @@ prerequisites:
 usedInFlows: []
 honestLimits:
   - "Each item here is queued with a reason, not abandoned; the reason is usually a missing prerequisite, not lack of value."
-  - "The line counts below drift: AGENTS.md records a snapshot (307/283/273) that the source has already grown past (377/342/301 today). Run just module-lines for the live numbers."
+  - "Line counts here are the gate's NON-TEST counts (307/283/273 today, matching AGENTS.md); raw wc -l reads higher because it includes test code. Run just module-lines for the live numbers."
   - "The serve connection cap can't land before a shutdown signal exists; doing the cap alone would leak JoinHandles forever."
   - "Live #plumb recv over a single serve connection deadlocks; this is the single-frame-at-a-time caveat, not a bug to patch in place."
 ---
@@ -41,7 +41,7 @@ This page is the curated to-do list a new contributor should read before picking
 
 The guardrail is 250 lines (warn) / 350 lines (hard) of non-test code per module, checked by `just module-lines` ([Quality gates](/reference/quality-gates)). `AGENTS.md:354-356` flags three files: `wanix-agent/src/codex.rs`, `wanix-agent/src/exec_server.rs`, and `wanix-cli/src/serve/http/app.rs` — the last one restored from the cockpit work.
 
-Note the drift before you start: the AGENTS.md snapshot reads ~307/~283/~273, but the live files measure **377 / 342 / 301**. The first two have crossed the *hard* 350-line limit since that note was written, so they are no longer "above warn" — they are over budget and `tools/module-line-baseline.txt` (the grandfather registry) is empty, so nothing exempts them. Always run `just module-lines` for the current number rather than trusting the prose. This is a good first cleanup precisely because it is mechanical: split a cohesive helper out of `codex.rs` into a sibling module, keep the public surface identical, and watch the gate go green.
+One counting note before you start: the gate measures **non-test** lines, and today reads **307 / 283 / 273** for these three — above the 250 warn limit, under the 350 hard limit, gate green. (A raw `wc -l` reads higher because it includes `#[cfg(test)]` code; never quote that number against the gate.) Always run `just module-lines` for the current figures. This is a good first cleanup precisely because it is mechanical: split a cohesive helper out of `codex.rs` into a sibling module, keep the public surface identical, and watch the warnings disappear.
 
 ## Cockpit follow-ups
 
@@ -86,7 +86,7 @@ Lowest-friction first change: split one over-limit module (no behaviour change, 
 
 Every item on this list is queued with a reason, not abandoned, and the reason is usually a missing prerequisite rather than missing value:
 
-- **The line counts drift.** AGENTS.md records 307/283/273; the live source measures 377/342/301. Two of the three have crossed the hard 350-line limit since the note was written. Run `just module-lines` for ground truth; never quote the prose figure.
+- **Quote the gate's numbers, not `wc -l`.** The module-line gate counts non-test lines (307/283/273 for the three modules above, all under the 350 hard limit); raw `wc -l` includes test code and reads higher. `just module-lines` is ground truth.
 - **The serve cap cannot precede the shutdown signal.** With no shutdown path in `serve/`, a connection cap is untestable and unconditional `JoinHandle` retention leaks handles. Land the signal and the cap as one cycle.
 - **Live `#plumb` recv genuinely deadlocks** on a single serve connection because `serve` processes one 9P frame at a time. The cockpit probe checking only the publish path is correct given that constraint; the resolution is a second connection or concurrent frame handling, not a code patch to the recv site.
 - **The namespace seam is half-shipped.** `aname`-scoped attach already gates the mesh; `uname` is still discarded and roots are per-session. A `NamespaceProvider` trait should not be added as a no-op seam — it needs per-fid storage and a first consumer or it is dead code.

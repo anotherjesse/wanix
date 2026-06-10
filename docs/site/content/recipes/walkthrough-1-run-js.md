@@ -29,13 +29,15 @@ canonicalCaveatFor: []
 
 ## 1. Build the CLI once
 
-From the workspace root, build the native demo binary and stash its path:
+From the workspace root (wherever you cloned the repo), build the native demo binary and stash its path:
 
 ```sh
-cd /Users/jesse/lw/wanix
+cd <workspace-root>
 cargo build --locked --package wanix-cli
 WANIX=./target/debug/wanix-rust
 ```
+
+(The canonical build page, including the optional wasm target and the host-path vs namespace-path convention every walkthrough leans on, is [build & install](/reference/build-and-install).)
 
 `wanix-cli` is intentionally thin — it is composition and demo plumbing over the real crates (`wanix-task`, `wanix-vfs`, `wanix-wasi`, `wanix-qjs`). The binary is named `wanix-rust`. You only build once; the rest of this walkthrough (and the others) reuse `$WANIX`.
 

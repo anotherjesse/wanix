@@ -36,7 +36,7 @@ Generate a JS or Rust Wanix project with the guest SDK wired in.
 ## Generate a JavaScript project
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli       # see /reference/build-and-install
 alias wanix-rust='./target/debug/wanix-rust'
 
 wanix-rust new --js counter
@@ -86,10 +86,14 @@ wanix-rust qjs ./counter/main.js
 
 # Rust: build to wasm first, then run the module as a task
 cd ./upper && cargo build --release --target wasm32-wasip1
+echo "make me loud" > in.txt
 wanix-rust wasm target/wasm32-wasip1/release/upper.wasm /in.txt /out.txt
+# wrote /in.txt -> /out.txt
+cat out.txt
+# MAKE ME LOUD
 ```
 
-If the wasm target is missing, `rustup target add wasm32-wasip1` (the generated README says so too, `new.rs:65-70`). Both paths run as a Wanix task: a `.js` file becomes a [qjs task](/concepts/qjs-task), a `.wasm` file runs through the [compiled-wasm task driver](/concepts/compiled-wasm-task-driver) — two tiers on one substrate.
+Two things worth knowing about that run. The wasm task's namespace root maps to your **host working directory**, so `/in.txt` and `/out.txt` are `./in.txt` and `./out.txt` next to you — that is where the output lands. And the arguments are optional: with no `in.txt` (or no args at all) the starter silently falls back to transforming the built-in `"hello world\n"`, which is why it prints `wrote /in.txt -> /out.txt` even when no input file exists. If the wasm target is missing, `rustup target add wasm32-wasip1` (the generated README says so too, `new.rs:65-70`). Both paths run as a Wanix task: a `.js` file becomes a [qjs task](/concepts/qjs-task), a `.wasm` file runs through the [compiled-wasm task driver](/concepts/compiled-wasm-task-driver) — two tiers on one substrate.
 
 ## Next: serve it via /.wanix/app/&lt;name&gt;
 

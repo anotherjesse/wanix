@@ -10,8 +10,8 @@ sourceRefs:
   - crates/wanix-kv/src/files.rs:70
   - crates/wanix-pipe/src/lib.rs
   - crates/wanix-pipe/src/channel.rs:75
-  - crates/wanix-cli/src/serve/roots.rs:119
-  - crates/wanix-cli/src/serve/roots.rs:135
+  - crates/wanix-cli/src/serve/roots.rs:187
+  - crates/wanix-cli/src/serve/roots.rs:207
   - crates/wanix-fs/src/traits.rs:153
 seeAlso:
   - concepts/service-devices
@@ -46,8 +46,9 @@ The contract is the `FileSystem` trait in `crates/wanix-fs/src/traits.rs:153`. A
 `#kv` is the worked minimum. The whole device is about 177 non-test lines in `crates/wanix-kv/src/lib.rs`, backed by an `Arc<RwLock<BTreeMap<String, Vec<u8>>>>`. Run it and the shape is obvious before the trait is:
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli       # see /reference/build-and-install
 alias wanix-rust='./target/debug/wanix-rust'
+mkdir -p project-root                          # serve needs an existing root
 wanix-rust serve --wanix-services --listen 127.0.0.1:7654 ./project-root
 # in the cockpit or any 9P client: write #kv/greeting=hello, then read it back
 ```
@@ -70,13 +71,13 @@ The rule is the EOF contract in `crates/wanix-pipe/src/channel.rs:75`. A blockin
 
 ## Bind it into the served namespace
 
-A device that no one binds is invisible. Two edits in `crates/wanix-cli/src/serve/roots.rs` make it real. First, `bind_host_and_terminal` binds the device at its `#name` (line 135 shows `#kv`):
+A device that no one binds is invisible. Two edits in `crates/wanix-cli/src/serve/roots.rs` make it real. First, `bind_host_and_terminal` binds the device at its `#name` (line 207 shows `#kv`):
 
 ```rust
 namespace.bind(Arc::new(KvDevice::new()), ".", "#kv", BindOptions::default())?;
 ```
 
-Second, add the name to `INSPECTABLE_SERVICE_DEVICES` at `crates/wanix-cli/src/serve/roots.rs:119` — the single source of truth for which devices discovery advertises and the cockpit lists. The comment there is binding: this set must stay in sync with the actual binds, and the `serve_wanix_services_*` tests exercise each entry over 9P. Adding a name without a bind, or a bind without the name, is the bug those tests catch.
+Second, add the name to `INSPECTABLE_SERVICE_DEVICES` at `crates/wanix-cli/src/serve/roots.rs:187` — the single source of truth for which devices discovery advertises and the cockpit lists. The comment there is binding: this set must stay in sync with the actual binds, and the `serve_wanix_services_*` tests exercise each entry over 9P. Adding a name without a bind, or a bind without the name, is the bug those tests catch.
 
 ## The payoff: three surfaces, zero extra code
 

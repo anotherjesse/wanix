@@ -9,7 +9,7 @@ sourceRefs:
   - docs/appfs.md
   - crates/wanix-appfs/src/lib.rs:1-40
   - crates/wanix-appfs/src/service.rs:63-99
-  - crates/wanix-appfs/src/buffer.rs:18-25
+  - crates/wanix-fs/src/buffer.rs:27-30
   - crates/wanix-cli/src/app/serve.rs:185-202
   - examples/chatroom/main.js
   - examples/chatroom/app.wanix.json

@@ -27,7 +27,6 @@ honestLimits:
   - The route is loopback-only and gated behind serve --wanix-services; remote peers get 403/404.
   - A request runs a brand-new #task per call and reads its exit synchronously; there is no streaming response and no per-task CPU/memory limit.
   - #kv is the only thing that survives between requests, and #kv is in-memory; persistence requires freezing to a capsule.
-  - On the cpu branch this route may lag the agent endpoint; POST /agent is the structurally-identical shipped sibling.
 canonicalCaveatFor: []
 ---
 
@@ -126,4 +125,4 @@ Two guards run before anything executes (`app_response`, `app.rs:49-66`). If `se
 - **Loopback-only, services-gated.** The route requires `serve --wanix-services` and refuses any non-loopback peer (`app.rs:55-66`). It is not an internet-facing app server.
 - **One task per request, read synchronously.** Each call allocates a fresh `#task`, starts it, and blocks on its `exit` file (`app.rs:104-156`). There is no streaming response and no per-task CPU/memory limit; this is cheap isolation, not a sandbox safe for arbitrary untrusted code.
 - **Only `#kv` persists across requests, and `#kv` is in-memory.** State survives between calls only because it lives in the `#kv` device, whose contents last only as long as the serve process. To keep state, freeze the world to a [capsule](/concepts/wanix-capsule).
-- **Branch drift.** On the cpu integration branch this route may lag; `POST /agent` (`agent.rs:14-44`) is the shipped sibling that follows the same allocate-drive-read shape if you need a reference.
+- **A shipped sibling, if you need a reference.** `POST /agent` (`agent.rs:14-44`) follows the same allocate-drive-read shape as this route.

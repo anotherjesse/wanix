@@ -43,10 +43,10 @@ This flow is for someone who has a change in hand and wants it to pass review on
 
 ## Step 1 — You are in the Rust port, not the Go tree
 
-Build the binary once and alias it, exactly as every other flow does:
+Build the binary once and alias it, exactly as every other flow does ([build & install](/reference/build-and-install)):
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli
 alias wanix-rust='./target/debug/wanix-rust'
 ```
 

@@ -25,7 +25,7 @@ seeAlso:
 prerequisites: []
 usedInFlows: []
 honestLimits:
-  - "The cockpit needs a one-time vscode-web build (needs Go); the CLI fallback reaches the same payoff."
+  - "The cockpit needs a one-time vscode-web build (needs Go); the CLI fallback shows the same #agent event contract, but the fake engine only echoes — the repair payoff is cockpit-only."
   - "The served #agent is a deterministic FakeEngine, not a live LLM."
   - "#kv is in-memory: counter state lives only as long as the serve process."
 canonicalCaveatFor: []
@@ -39,10 +39,10 @@ Wanix was born in the browser, but the Rust-native port runs the same ideas on a
 
 ## Build once
 
-Everything below uses the native CLI. Build it from the workspace root, then alias the binary so the commands read cleanly:
+Everything below uses the native CLI. Build it from the workspace root, then alias the binary so the commands read cleanly (the canonical build page is [build & install](/reference/build-and-install)):
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli
 alias wanix-rust='./target/debug/wanix-rust'
 ```
 
@@ -86,7 +86,7 @@ wanix-rust qjs \
   -- alpha "two words"
 ```
 
-Inside the script, `scriptArgs` carries the argv, `std.getenv("MODE")` reads the environment, `os.read(0, ...)` reads the stdin string, and `std.loadFile("#task/self/id")` reads its task id. None of this is a `globalThis.Wanix` helper — that browser-era bridge is retired. Guest code uses ordinary `qjs:std`, `qjs:os`, `scriptArgs`, and service files (`rust-walkthrough.md:136-139`).
+One trap to defuse early: `--cwd app` is a **namespace** path (inside the task's Wanix world), not a host directory — host directories enter the namespace only through an explicit `--mount HOST_DIR=NAME` bind, shown two sections down. Inside the script, `scriptArgs` carries the argv, `std.getenv("MODE")` reads the environment, `os.read(0, ...)` reads the stdin string, and `std.loadFile("#task/self/id")` reads its task id. None of this is a `globalThis.Wanix` helper — that browser-era bridge is retired. Guest code uses ordinary `qjs:std`, `qjs:os`, `scriptArgs`, and service files (`rust-walkthrough.md:136-139`).
 
 ## A short shell step: files all the way down
 
@@ -137,13 +137,22 @@ wanix-rust serve --wanix-services --bundle workbench-fs9p --listen 127.0.0.1:765
 # open http://127.0.0.1:7654/?bundle=workbench-fs9p
 ```
 
-No Go handy? Skip the cockpit. The CLI fallback reaches the same payoff — the cockpit is a thin client, not the runtime:
+No Go handy? Skip the cockpit — it is a thin client, not the runtime. The CLI shows the same `#agent` file shape, with one honest caveat: `--fake` is the deterministic demo engine, and it only **echoes the prompt back** — nothing is repaired. The actual repair payoff is cockpit-only (or the real-codex `wanix agent` path):
 
 ```sh
 wanix-rust agent --fake "Repair broken.js so it writes out/result.txt"
 ```
 
-`--wanix-services` binds the service devices (`#task`, `#term`, `#kv`, `#agent`, and friends) into the served namespace (`docs/recipes/01-repair-broken-qjs.md:57-91`).
+```text
+{"t":"turn.started","turn":1}
+{"t":"message.delta","text":"you said:"}
+{"t":"message.delta","text":" Repair broken.js so it writes out/result.txt"}
+{"t":"message","text":"you said: Repair broken.js so it writes out/result.txt"}
+{"input":1,"output":1,"t":"tokens","total":1}
+{"status":"completed","t":"turn.completed","turn":1}
+```
+
+What that proves is the contract, not the intelligence: a full agent turn — start, streamed deltas, final message, completion — as a JSONL event stream you could have read off `#agent/<id>/events`. `--wanix-services` binds the service devices (`#task`, `#term`, `#kv`, `#agent`, and friends) into the served namespace (`docs/recipes/01-repair-broken-qjs.md:57-91`).
 
 ## Click-through, with the file-ops reveal
 
@@ -156,7 +165,7 @@ Each cockpit action is just reads and writes on service files:
 
 ## Write your own app
 
-Drop a one-file handler at `apps/counter.js` that reads `#kv/http-counter`, increments, and writes it back — no state lives in the code (`docs/recipes/04-tiny-http-app-with-kv.md:36-99`). Run it repeatedly against a running `serve --wanix-services` and watch the counter climb. The full build is the [HTTP-app-with-kv flow](/learn/http-app-with-kv) and [recipe 04](/recipes/04-tiny-http-app-with-kv).
+Create an `apps/` directory *inside the root you serve* (`mkdir -p apps` if you served `.`) and drop a one-file handler at `apps/counter.js` that reads `#kv/http-counter`, increments, and writes it back — no state lives in the code (`docs/recipes/04-tiny-http-app-with-kv.md:36-99`). `curl` `/.wanix/app/counter` repeatedly against a running `serve --wanix-services` and watch the counter climb. The full build is the [HTTP-app-with-kv flow](/learn/http-app-with-kv) and [recipe 04](/recipes/04-tiny-http-app-with-kv).
 
 ## Where next
 
@@ -170,7 +179,7 @@ You have run JavaScript as a real Wanix task with live WASI, context, and an exp
 
 ## Status / honest limits
 
-- The cockpit requires a one-time vscode-web build with Go on PATH (`workbench/Makefile:1-25`). The CLI fallback reaches the same outcome; the cockpit is a 9P client, not the runtime.
+- The cockpit requires a one-time vscode-web build with Go on PATH (`workbench/Makefile:1-25`). The CLI fallback demonstrates the same `#agent` event contract (the fake engine echoes the prompt; it repairs nothing); the cockpit is a 9P client, not the runtime.
 - The served `#agent` uses a deterministic `FakeEngine`, not a live LLM (`docs/recipes/01-repair-broken-qjs.md:88-91`). The real codex engine is the local-trust `wanix agent` CLI path only.
 - `#kv` is an in-memory tier: the counter survives between calls only while the serve process is alive (`docs/recipes/04-tiny-http-app-with-kv.md:86-99`). Freeze a world to a capsule for durability.
 - The HTTP-app route at `/.wanix/app/<name>` is loopback-only and requires `--wanix-services` (`crates/wanix-cli/src/serve/http/app.rs:34-44`).

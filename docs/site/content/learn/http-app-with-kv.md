@@ -9,10 +9,9 @@ sourceRefs:
   - crates/wanix-cli/src/serve/http/app.rs:22-101
   - crates/wanix-cli/src/serve/http/app.rs:104-156
   - crates/wanix-cli/src/serve/http/routes.rs:14-25
-  - crates/wanix-cli/src/serve/roots.rs:135-140
+  - crates/wanix-cli/src/serve/roots.rs:185-212
   - crates/wanix-kv/src/lib.rs:1-21
   - crates/wanix-cli/src/new.rs:101-176
-  - data/apps/counter.js
 seeAlso:
   - concepts/http-app-route
   - devices/kv
@@ -37,10 +36,10 @@ You already ran JavaScript outside Chrome as a `qjs` task. This flow keeps the s
 
 ## Step 0 — build once, scaffold a project
 
-If you have not built the CLI yet:
+If you have not built the CLI yet ([build & install](/reference/build-and-install)):
 
 ```sh
-cargo build --package wanix-cli
+cargo build --locked --package wanix-cli
 alias wanix-rust='./target/debug/wanix-rust'
 ```
 
@@ -50,7 +49,7 @@ Scaffold a starter project. `wanix new --js counter` writes a `counter/` directo
 wanix-rust new --js counter
 ```
 
-Now drop a handler at `counter/apps/counter.js`. The route looks for the program under `apps/<name>.js` (`crates/wanix-cli/src/serve/http/app.rs:253`), so the file name is the route name.
+Now create the `apps/` directory inside the project (`mkdir -p counter/apps`) and write the handler below to `counter/apps/counter.js`. The route looks for the program under `apps/<name>.js` relative to the served root, so the file name is the route name.
 
 ```js
 import * as std from "qjs:std";
@@ -74,7 +73,7 @@ std.out.puts("counter=" + count + "\n");
 std.out.puts("target=" + target + "\n");
 ```
 
-This is the shipped fixture verbatim (`data/apps/counter.js`). Note the key: `#kv/http-counter`. `#kv` is addressed as `#kv/<key>` from the namespace root, not from the task's cwd, so the handler reaches the device no matter where it runs.
+Note the key: `#kv/http-counter`. `#kv` is addressed as `#kv/<key>` from the namespace root, not from the task's cwd, so the handler reaches the device no matter where it runs.
 
 ## Step 1 — serve it with the device set bound
 
@@ -82,7 +81,7 @@ This is the shipped fixture verbatim (`data/apps/counter.js`). Note the key: `#k
 wanix-rust serve --wanix-services --listen 127.0.0.1:7654 ./counter
 ```
 
-`--wanix-services` is the switch that binds the device set — `#task`, `#term`, `#kv`, `#pipe`, `#plumb`, `#cas`, `#agent` — into the served namespace (`crates/wanix-cli/src/serve/roots.rs:135` binds `KvDevice` at `#kv`). Without it, `#kv` does not exist and the app route refuses the request (`crates/wanix-cli/src/serve/http/app.rs:55`). The positional `./counter` becomes the `.` of the served namespace, so `apps/counter.js` and `#kv/http-counter` sit under the same root.
+`--wanix-services` is the switch that binds the device set — `#task`, `#term`, `#kv`, `#pipe`, `#plumb`, `#cas`, `#agent`, `#sites` — into the served namespace (`crates/wanix-cli/src/serve/roots.rs:207` binds `KvDevice` at `#kv`). Without it, `#kv` does not exist and the app route refuses the request (`crates/wanix-cli/src/serve/http/app.rs:55`). The positional `./counter` becomes the `.` of the served namespace, so `apps/counter.js` and `#kv/http-counter` sit under the same root.
 
 ## Step 2 — drive the counter through the running serve
 
