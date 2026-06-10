@@ -117,6 +117,17 @@ Service-device and mesh crates (the distributed layer; each device is a plain
   `ToolFs`, so identity comes from the attach seam, never a payload field.
   Runners are in-process v0 (deterministic fakes plus `ModelRunner` over a
   `ModelEngine` seam); the process runner is a later crate.
+- `wanix-appfs`: AppFS v0, the file2chan adapter (`docs/appfs.md`) — a
+  `FileSystem` whose discrete ops on guest-declared paths become newline-JSON
+  request events to a guest app over the sync `AppSender`/`AppReceiver` seam
+  (one request in flight under the channel lock; a host pump thread owns guest
+  output, fanning `publish` lines out on arrival and latching the channel down
+  on any protocol violation, after which ops fail `Unreachable`). Declared
+  stream files are host-owned never-EOF subscriptions on the bounded
+  drop-oldest `LineBuffer` discipline; `open_view(principal)` binds a
+  transport-verified principal (the ToolFS pattern) and `who` lists principals
+  holding open stream subscriptions. The CLI wires the channel to a resident
+  guest task's pipe ends; the crate itself has no task or engine coupling.
 - `wanix-mesh`: the network edge and the only async crate. Binds one
   `iroh::Endpoint` per node from the `wanix-id` secret key and exports/imports a
   namespace over QUIC on two ALPNs: the native wire `WANIX_FS_ALPN`
@@ -168,6 +179,9 @@ wanix-id  -> wanix-fs + wanix-vfs
 wanix-job  -> serde   (vocabulary only; NO I/O, NO wanix-fs)
 wanix-tool -> wanix-fs + wanix-job
 
+# guest-defined resources: the file2chan adapter
+wanix-appfs -> wanix-fs + serde/serde_json + base64   (NO task/engine deps; guest channel is a sync trait seam)
+
 # native mesh wire (transport-agnostic, async-free) + 9P import half + mesh
 wanix-mesh-wire -> wanix-fs + wanix-vfs + serde + postcard   (NO iroh/tokio/irpc)
 wanix-9p-client -> wanix-fs + wanix-protocol + wanix-9p + wanix-kv
@@ -195,7 +209,11 @@ tests.
 
 - `wanix-rust qjs main.js`: JavaScript runs outside Chrome as a Wanix `qjs`
   task with live Wanix-backed WASI, namespace access, stdio/fds, env/cwd/cmd,
-  observable exit status, and `#task` service files.
+  observable exit status, and `#task` service files. Tier-2 blocking reads
+  (ADR 0010) cover the qjs layer too: `fd_read` on a stdio device fd parks the
+  host thread until bytes or EOF (`wanix_wasi::wait`, the one home shared with
+  `wanix-wasi-host`), so a resident qjs stdin loop is a working task shape;
+  dynamic guest-opened fds stay nonblocking for drain-until-0 device loops.
 - `wanix-rust wasm FILE.wasm [args]`: the compiled-`wasm32-wasi` task runtime
   (the `wanix-wasm` `WasiRunner` path) and second WASI task driver alongside
   `qjs`. `.wasm` is a first-class Wanix task kind: a `.wasm` cmd auto-starts via
@@ -359,22 +377,26 @@ tests.
   (`crates/wanix-cli/src/mesh/mounts.rs`) carried by `qjs-shell`, `wasm`, and
   `sh`. Walkthrough: `docs/site/content/learn/compose-volumes-and-tools.md` and
   recipe 06 (tested transcript).
-- Guest-defined AppResources (`docs/appfs.md`): `wanix-rust app serve --app DIR
-  --state DIR --addr IP:PORT` runs a manifest-declared qjs guest
-  (`app.wanix.json`, the shared `"wanix.resource":"v0"` envelope) as a resident
-  task behind the `wanix-appfs` file2chan adapter and exports the resulting
-  `FileSystem` over one native mesh endpoint — one ticket names one running
-  app, identity persisted at `~/.wanix/app-identities/<name>.key`. Discrete
-  ops reach the guest as serialized newline-JSON events stamped with the
-  verified connection principal (`AppAttachPolicy`); declared stream files are
-  host-owned never-EOF subscriptions (bounded lossy `LineBuffer` fan-out fed
-  by guest publishes) with `who` presence from the open-subscription registry;
-  durable state is the explicit `--state` mount, so the bundled
-  `examples/chatroom` app survives guest restart with history intact, and a
-  dead guest fails ops `Unreachable` while blocked stream readers are released
-  with EOF (no auto-restart in v0). Proofs: `crates/wanix-appfs/src/tests.rs`,
-  `crates/wanix-cli/src/app/serve/tests.rs`; walkthrough: recipe 07 +
-  `docs/site/content/learn/build-a-chatroom.md`.
+- Guest-defined AppResources (`docs/appfs.md`; the ADR 0007 chatroom worked
+  example, implemented): `wanix-rust app serve --app DIR --state DIR --addr
+  IP:PORT` runs a manifest-declared qjs guest (`app.wanix.json`, the shared
+  `"wanix.resource":"v0"` envelope) behind the `wanix-appfs` file2chan adapter
+  and exports the resulting `FileSystem` over one native mesh endpoint — one
+  ticket names one running app, identity persisted at
+  `~/.wanix/app-identities/<name>.key`. The v0 guest is honestly tier-2, not
+  tier-1 turns: a detached resident qjs task in a blocking-stdin request loop
+  (the qjs-layer blocking `fd_read` above), one discrete op in flight at a
+  time as newline-JSON stamped with the verified connection principal
+  (`AppAttachPolicy`), with a host pump thread owning guest output. Declared
+  stream files are host-owned never-EOF subscriptions (bounded lossy
+  `LineBuffer` fan-out fed by guest publishes) with `who` presence from the
+  open-subscription registry; durable state is the explicit `--state` mount,
+  so the bundled `examples/chatroom` app survives guest restart with history
+  intact; a dead guest fails ops `Unreachable` while blocked stream readers
+  are released with EOF (no auto-restart in v0; serve death is abrupt — only
+  guest-exit-while-serve-lives gets the clean EOF release). Proofs:
+  `crates/wanix-appfs/src/tests.rs`, `crates/wanix-cli/src/app/serve/tests.rs`;
+  walkthrough: recipe 07 + `docs/site/content/learn/build-a-chatroom.md`.
 - `wanix-rust capsule`: freezes a Wanix world into a portable, CAS-backed
   `.wcap` (via `wanix-cas`) that can be loaded elsewhere; live mesh peers and
   ephemeral handles are not portable.
@@ -559,6 +581,15 @@ more feature work.
   threading to `qjs`/`qjs-term` (the keepalive home, `mesh::mounts`, already
   exists). `#agent`/`#cpu` convergence on the job grammar waits until those
   devices are next touched (ADR 0009 §Adopters).
+- AppResource v0 remainder ([docs/appfs.md](docs/appfs.md) §Build Slices /
+  §Status): the served guest is a tier-2 resident qjs loop, not the tier-1
+  turn model with a host handle table (ADR 0010) — move it when turns land.
+  Also still ahead: a guest restart policy (today a dead guest stays
+  `Unreachable` until the serve restarts), CAS-pinned app manifests (`main` is
+  read from `--app` by path; provenance is a doc note only), the HTTP surface
+  (`fetch` handler, gateway principals, `wanix/http/1`), and a request
+  deadline on the adapter's single-in-flight channel lock so one wedged
+  discrete op cannot park every later caller forever.
 - CLI UX remainder: the hands-on new-user audit behind commit bc05331 landed
   only its top S/M findings (lean usage errors, per-subcommand `--help`,
   ADR 0008 unreachable text, split peer-id parse diagnostics, copy-pasteable

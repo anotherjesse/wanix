@@ -341,6 +341,11 @@ auth-server model; we just need to name it so it does not surprise us later.
 
 ## Worked example: a chatroom
 
+*Implemented:* this example now runs — `wanix-rust app serve` exports
+`examples/chatroom` behind the `crates/wanix-appfs` file2chan adapter with
+transport-verified attribution, `who` presence, and the never-EOF `stream`
+(design: `docs/appfs.md`; proofs: `crates/wanix-cli/src/app/serve/tests.rs`).
+
 A chatroom is the whole trust model in miniature, which is why it is worth
 recording here rather than as a standalone feature. It also makes every abstract
 layer concrete with semantics nobody has to be taught (*who said that*, *who is
@@ -542,7 +547,9 @@ These are the seams we should talk through before committing contracts.
    from the verified iroh `remote_id()`, rather than retrofitting 9P's
    client-claimed `uname`. Open: whether this is modeled as a per-connection
    principal-scoped filesystem wrapper, a device-local session context, or a
-   narrower resource-specific trait.
+   narrower resource-specific trait. (ToolFS and AppFS v0 both shipped the
+   first shape — a per-connection `open_view(principal)` wrapper bound from
+   the verified `remote_id()`; whether that generalizes is still open.)
 
 11. **Where does this become ADRs?** Likely five durable boundaries: the catalog
     format, the resource address model, the host-wrapper service contract, the

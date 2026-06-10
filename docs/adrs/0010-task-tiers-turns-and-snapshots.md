@@ -12,7 +12,10 @@ threads via `ctl` `start &` plus the blocking `#task/<id>/wait` file
 (`crates/wanix-task`), blocking `fd_read` and the minimal `poll_oneoff` subset
 (`crates/wanix-wasi-host`), and concurrent shell pipelines plus the
 interactive REPL (`crates/wanix-sh`), proven end to end in
-`crates/wanix-wasm/src/driver.rs` tests.
+`crates/wanix-wasm/src/driver.rs` tests. Tier-2 blocking now covers the qjs
+layer too: `WasiCtx::fd_read` parks on stdio device fds via the shared
+`wanix_wasi::wait` machinery, proven by a resident QuickJS stdin loop in
+`crates/wanix-qjs`.
 
 ## Context
 
