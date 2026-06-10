@@ -20,8 +20,10 @@ top of them the mesh/agent layer is built out: service devices (`#pipe`, `#kv`,
 (`wanix-mesh-wire`, the default Wanix↔Wanix path) and the 9P client
 (`wanix-9p-client`) that still mounts foreign namespaces, both over iroh QUIC
 with ed25519 identity and default-deny capability binds, the `#cpu` exec plane,
-`wanix capsule` world snapshots, and a browser cockpit (VS Code workbench
-extension) that operates all of it over direct 9P.
+the job protocol (ADR 0009) with ToolFS served per-resource over the mesh
+(`wanix tool serve` + the wanix-sh `tool` builtin), `wanix capsule` world
+snapshots, and a browser cockpit (VS Code workbench extension) that operates
+all of it over direct 9P.
 
 Highest-leverage next work: deepen interactive shells and terminal lifecycle,
 broaden Linux/v86/editor 9P compatibility, finish QEMU/v86 boot workflows,
@@ -350,9 +352,12 @@ tests.
   private per-principal `jobs/` view from the verified `remote_id()`), and
   `wanix-rust sh -c '...' --mount-mesh TICKET=/path ...` composes them: `cat <
   /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt` reads one peer,
-  runs a job on another, and writes back to the first. The dialer identity is
-  ephemeral per dial, so a remount is a new principal to job-scoped servers.
-  Walkthrough: `docs/site/content/learn/compose-volumes-and-tools.md` and
+  runs a job on another, and writes back to the first. The dialer identity
+  persists at `~/.wanix/dialer.key`, so one user is one durable principal
+  across invocations and remounts (retained jobs and `jobs/` privacy survive a
+  remount; distinct keys stay disjoint). `--mount-mesh` is shared task plumbing
+  (`crates/wanix-cli/src/mesh/mounts.rs`) carried by `qjs-shell`, `wasm`, and
+  `sh`. Walkthrough: `docs/site/content/learn/compose-volumes-and-tools.md` and
   recipe 06 (tested transcript).
 - `wanix-rust capsule`: freezes a Wanix world into a portable, CAS-backed
   `.wcap` (via `wanix-cas`) that can be loaded elsewhere; live mesh peers and
@@ -530,6 +535,14 @@ more feature work.
   9P-style `ANAME`-keyed sub-scoping is unreachable; settle it *with* the
   ADR 0006/0007 authorization layer (thread `aname` 1:1 vs a native
   scope-selection shape), not before. (a) and (b) are small cleanup-cycle items.
+- Job protocol / ToolFS remainder ([docs/toolfs.md](docs/toolfs.md) §Build
+  Slices): the fixed-command **process runner** (wraps a real host program;
+  lives outside `wanix-tool` so its dependency set stays
+  wanix-fs+wanix-job+serde), catalog integration (one entry per served tool),
+  and the agent adapter are the slices still ahead. `--mount-mesh` still needs
+  threading to `qjs`/`qjs-term` (the keepalive home, `mesh::mounts`, already
+  exists). `#agent`/`#cpu` convergence on the job grammar waits until those
+  devices are next touched (ADR 0009 §Adopters).
 - CLI UX remainder: the hands-on new-user audit behind commit bc05331 landed
   only its top S/M findings (lean usage errors, per-subcommand `--help`,
   ADR 0008 unreachable text, split peer-id parse diagnostics, copy-pasteable

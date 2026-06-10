@@ -85,12 +85,13 @@ What is missing is mostly a *naming layer* and one *new kind of device*.
   non-root scope entirely by making each ticket address exactly one resource
   root. Native subresource selection is a later optimization/authorization shape,
   not required for the first volume/catalog loop.
-- **Persistent mesh mounts into a task/shell namespace (shipped).** `qjs-shell
-  --mount-mesh iroh://...=/vol` dials a remote namespace over the native wire and
-  binds it into the shell's task namespace, holding the dialer keepalive for the
-  session lifetime. Repeated `--mount-mesh` composes several resources into one
-  namespace. (Open: generalizing the flag to `qjs`/`qjs-term`/`wasm`, which each
-  need a keepalive home.)
+- **Persistent mesh mounts into a task/shell namespace (shipped).**
+  `--mount-mesh iroh://...=/vol` dials a remote namespace over the native wire
+  and binds it into the task namespace, holding the dialer keepalive for the
+  session lifetime; repeated flags compose several resources into one namespace.
+  The keepalive home is the shared `crates/wanix-cli/src/mesh/mounts.rs`
+  plumbing, carried by `qjs-shell`, `wasm`, and `sh`. (Open remainder: threading
+  the flag to `qjs`/`qjs-term`.)
 - **A single-process per-resource volume server (shipped).** `wanix volume
   create` makes persistent volumes under `~/.wanix/volumes`; `wanix volume serve
   (--volume NAME ... | --all)` runs one native mesh endpoint per volume — each
@@ -112,9 +113,13 @@ What is missing is mostly a *naming layer* and one *new kind of device*.
   at `~/.wanix/node.key`, but addresses are pasted by hand as
   `iroh://<64-hex>[?addr=IP:PORT]`. Even `#plumb` admits its topic list is "a
   best-effort directory, not a global registry" (`crates/wanix-plumb/src/lib.rs`).
-- **There is no way to project a single local CLI program onto the mesh
-  safely.** `#cpu` exists, but it runs *arbitrary* caller-supplied job specs —
-  the wrong direction for "expose exactly this one capability of my machine."
+- **Projecting a single local CLI program onto the mesh is half-built.** The
+  device and serving shape exist — ToolFS (ADR 0009) served per-resource by
+  `wanix tool serve`, one fixed capability per endpoint with per-connection
+  principal-scoped `jobs/` views — but its runners are in-process built-ins
+  (`upper`/`sha256`/`model`); wrapping an *actual host program* still needs the
+  fixed-command process runner (docs/toolfs.md §Build Slices). `#cpu` remains
+  the arbitrary-caller-supplied-spec direction, not this.
 - **There is no named "wire these together" artifact** (a recipe) distinct from
   a state snapshot (a capsule).
 
@@ -433,8 +438,14 @@ is solid.
 6. **Make commands register entries and mount by name.** `volume create` /
    `mesh-serve` write catalog entries; `wanix mount <name>` resolves a catalog
    name -> address -> `bind` at `/n/<name>` or `/vol/<name>`.
-7. **The host wrapper** as an `#agent`-shaped device (Whisper is the perfect
-   first target), request/response only.
+7. **The host wrapper (device + serving shipped; process runner ahead).** The
+   wrapper device became ToolFS (ADR 0009, docs/toolfs.md): `wanix tool serve
+   --tool NAME` runs one native endpoint + ticket per tool, every connection
+   bound to a principal-scoped `jobs/` view from the verified `remote_id()`,
+   and the wanix-sh `tool` builtin drives it through the visible files (the
+   composed walkthrough is recipe 06). Remaining: the fixed-command process
+   runner that wraps a real host program (Whisper is the perfect first target),
+   request/response only.
 8. **Recipes.**
 9. **Authorization (Layer 2) and ownership/delegation (Layer 3).** Start with
    per-resource endpoint ACLs. Re-evaluate scoped subresources only if one

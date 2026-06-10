@@ -14,8 +14,11 @@ and the validation path needed before the contract is promoted.
 > principal-scoped `ToolFs` views over the `wanix-job` vocabulary, with the
 > contract, privacy, lifecycle/TTL, quota, and abort rows of the validation
 > matrix pinned by filesystem-surface tests against the fake/manual/model
-> runners. The process runner, mesh serving, catalog entries, and the client
-> helper remain build slices ahead.
+> runners. Mesh serving has landed (`wanix tool serve` — one native endpoint
+> and ticket per tool, per-connection principal-scoped `jobs/` views from the
+> verified `remote_id()`), and so has the client helper, as the pipeable
+> wanix-sh `tool` builtin (`tool /n/upper < in > out`). The process runner,
+> catalog entries, and the agent adapter remain build slices ahead.
 
 ## What
 
@@ -599,22 +602,28 @@ agent projection
 
 ## Build Slices
 
-1. **Contract doc and tests.** Pin filesystem tree, JSON shapes, states, and
-   error taxonomy in `wanix-tool` tests.
-2. **Fake runner.** Implement a deterministic fake runner for `upper`,
+1. **Contract doc and tests (shipped).** Pin filesystem tree, JSON shapes,
+   states, and error taxonomy in `wanix-tool` tests.
+2. **Fake runner (shipped).** Implement a deterministic fake runner for `upper`,
    `json-format`, `sleep-echo`, and `fail` style cases.
-3. **Principal-scoped views.** Add `ToolService::open_view(principal)` and prove
-   private job filtering with two views.
-4. **Lifecycle and quotas.** Add TTL cleanup, explicit `close`, byte/job limits,
-   and concurrency limits.
+3. **Principal-scoped views (shipped).** Add `ToolService::open_view(principal)`
+   and prove private job filtering with two views.
+4. **Lifecycle and quotas (shipped).** Add TTL cleanup, explicit `close`,
+   byte/job limits, and concurrency limits — including the aggregate
+   `maxTotalJobs`/`maxTotalBytes` caps, since per-principal quotas alone do not
+   bound served-tool memory.
 5. **Process runner.** Add fixed-command process execution outside the core
    crate, with stdin/stdout and temp-file mapping.
-6. **Tool server.** Serve one ToolFS as one native endpoint, then serve multiple
-   tools as multiple endpoints in one process.
+6. **Tool server (shipped).** `wanix tool serve --tool NAME [--tool NAME ...]`
+   serves each ToolFS as its own native endpoint (one ticket and one persisted
+   identity per tool) in one process, binding every connection to a
+   principal-scoped view from the verified `remote_id()`.
 7. **Catalog integration.** Register one catalog entry per served tool once the
    volume/catalog side is ready.
-8. **Client helper.** Add `wanix tool call /n/upper < in > out` sugar over the
-   file protocol.
+8. **Client helper (shipped).** Landed as the pipeable wanix-sh `tool` builtin
+   (`tool /n/upper < in > out`, optional `PARAMS_JSON` second argument) — sugar
+   over the visible file protocol inside the shell, rather than a
+   `wanix tool call` host subcommand.
 9. **Agent adapter.** Teach agents to discover ToolFS specs from their namespace
    and call them through files.
 
