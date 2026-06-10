@@ -98,6 +98,9 @@ impl DeviceFs {
             "latest" => Ok(Metadata::new(FileType::File, 11, 0o444)),
             // Zero-length device files: the gateway streams them chunked.
             "post" | "stream" => Ok(Metadata::new(FileType::File, 0, 0o666)),
+            // Declares 4 bytes but produces bytes forever (a misbehaving
+            // origin lying about a never-EOF read).
+            "liar" => Ok(Metadata::new(FileType::File, 4, 0o444)),
             "dead" => Err(FsError::Unreachable("room offline".to_owned())),
             _ => Err(FsError::NotFound),
         }
@@ -121,6 +124,7 @@ impl FileSystem for DeviceFs {
                     .ok_or_else(|| FsError::Other("stream already subscribed".to_owned()))?;
                 Ok(Box::new(StreamFile { receiver }))
             }
+            ("liar", false) => Ok(Box::new(EndlessFile)),
             ("dead", _) => Err(FsError::Unreachable("room offline".to_owned())),
             _ => Err(FsError::NotFound),
         }
@@ -170,6 +174,20 @@ impl File for BytesFile {
             self.bytes.len() as u64,
             0o444,
         ))
+    }
+}
+
+/// Never EOFs and never blocks: every read fills the whole buffer.
+struct EndlessFile;
+
+impl File for EndlessFile {
+    fn read(&mut self, buf: &mut [u8]) -> FsResult<usize> {
+        buf.fill(b'x');
+        Ok(buf.len())
+    }
+
+    fn metadata(&self) -> FsResult<Metadata> {
+        Ok(Metadata::new(FileType::File, 4, 0o444))
     }
 }
 
@@ -339,14 +357,19 @@ fn gateway_round_trips_device_files_beside_static_site_on_one_origin() {
     let addr = spawn_gateway(door, 3, "roundtrip");
 
     // Same-origin static webapp: the composed namespace serves index.html.
+    // Gateway responses carry no CORS grant — the namespace door must not be
+    // readable by other web origins in the operator's browser.
     let page = http(addr, "GET / HTTP/1.1\r\nHost: chat.localhost\r\n\r\n");
     assert!(page.contains("Content-Type: text/html"), "{page}");
     assert!(page.ends_with("<h1>chat</h1>"), "{page}");
+    assert!(!page.contains("Access-Control-Allow-Origin"), "{page}");
 
-    // POST writes the body into the device file.
+    // POST writes the body into the device file (the page's own Origin, as a
+    // browser fetch stamps it, passes).
     let post = http(
         addr,
-        "POST /post HTTP/1.1\r\nHost: chat.localhost\r\nContent-Length: 5\r\n\r\nhi yo",
+        "POST /post HTTP/1.1\r\nHost: chat.localhost\r\n\
+         Origin: http://chat.localhost:8080\r\nContent-Length: 5\r\n\r\nhi yo",
     );
     assert!(post.starts_with("HTTP/1.1 200 OK\r\n"), "{post}");
     assert_eq!(posts.lock().unwrap().as_slice(), &[b"hi yo".to_vec()]);
@@ -355,7 +378,43 @@ fn gateway_round_trips_device_files_beside_static_site_on_one_origin() {
     let latest = http(addr, "GET /latest HTTP/1.1\r\nHost: chat.localhost\r\n\r\n");
     assert!(latest.starts_with("HTTP/1.1 200 OK\r\n"), "{latest}");
     assert!(latest.contains("Content-Length: 11\r\n"), "{latest}");
+    assert!(!latest.contains("Access-Control-Allow-Origin"), "{latest}");
     assert!(latest.ends_with("hello room\n"), "{latest}");
+}
+
+#[test]
+fn gateway_refuses_cross_site_writes_and_caps_lying_sized_reads() {
+    let (device, posts, _feed) = DeviceFs::new();
+    let mut door = WebDoor::empty();
+    door.bind_origin(host("chat.localhost"), composed_origin(device));
+    let addr = spawn_gateway(door, 3, "boundary");
+
+    // A drive-by write from another web page (browsers always stamp the
+    // page's Origin onto a POST) is refused; nothing reaches the device.
+    let drive_by = http(
+        addr,
+        "POST /post HTTP/1.1\r\nHost: chat.localhost\r\n\
+         Origin: http://evil.example\r\nContent-Length: 3\r\n\r\npwn",
+    );
+    assert!(drive_by.starts_with("HTTP/1.1 403"), "{drive_by}");
+    assert!(drive_by.contains("cross-site write refused"), "{drive_by}");
+    assert!(posts.lock().unwrap().is_empty());
+
+    // An opaque "null" Origin (sandboxed iframe, data: page) is refused too.
+    let opaque = http(
+        addr,
+        "POST /post HTTP/1.1\r\nHost: chat.localhost\r\n\
+         Origin: null\r\nContent-Length: 3\r\n\r\npwn",
+    );
+    assert!(opaque.starts_with("HTTP/1.1 403"), "{opaque}");
+
+    // A sized GET buffers at most the declared (stat) size, even when the
+    // file produces bytes forever — a misbehaving mesh origin cannot grow
+    // host memory without bound by lying about its size.
+    let liar = http(addr, "GET /liar HTTP/1.1\r\nHost: chat.localhost\r\n\r\n");
+    assert!(liar.starts_with("HTTP/1.1 200 OK\r\n"), "{liar}");
+    assert!(liar.contains("Content-Length: 4\r\n"), "{liar}");
+    assert!(liar.ends_with("xxxx"), "{liar}");
 }
 
 // ---------------------------------------------------------------------------

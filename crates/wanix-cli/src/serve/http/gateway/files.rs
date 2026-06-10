@@ -10,8 +10,10 @@
 //! - `GET dir` → its `index.html` when one exists (site behavior), otherwise
 //!   a JSON listing.
 //! - Errors map: `NotFound`→404, `PermissionDenied`→403, `NotSupported`→405,
-//!   `Unreachable`→503 with a `Retry-After` hint (the provider is offline,
-//!   not missing — ADR 0008), `Other`→500.
+//!   `InvalidArgument`→400 carrying the origin's own message (guest content
+//!   validation must reach the caller), `Unreachable`→503 with a
+//!   `Retry-After` hint (the provider is offline, not missing — ADR 0008),
+//!   `Other`→500.
 
 use wanix_fs::{File, FileSystem, FileType, FsError, NormalizedPath, OpenOptions};
 
@@ -50,15 +52,29 @@ pub(super) fn get_response(
     // — stream it chunked so a never-EOF read holds the connection live.
     match metadata.len() {
         0 => GatewayResponse::Stream(StreamingResponse::chunked(file)),
-        _ => sized_body_response(file, url_relative).into(),
+        declared => sized_body_response(file, declared, url_relative).into(),
     }
 }
 
-fn sized_body_response(mut file: Box<dyn File>, url_relative: &str) -> StaticResponse {
+/// Buffers a sized file's body, bounded by its declared (stat) length.
+///
+/// The declared size is the trust boundary: for a mesh-mounted origin it is
+/// guest-controlled (AppFS `stat` replies carry the guest's `size`), so an
+/// unbounded drain-to-EOF would let a misbehaving origin declare a tiny size
+/// on a never-EOF stream and grow host memory without bound while parking
+/// this connection forever. Reading stops at the declared length; a file
+/// that EOFs early sends the shorter honest body.
+fn sized_body_response(
+    mut file: Box<dyn File>,
+    declared_len: u64,
+    url_relative: &str,
+) -> StaticResponse {
+    let cap = usize::try_from(declared_len).unwrap_or(usize::MAX);
     let mut body = Vec::new();
     let mut chunk = [0u8; BODY_READ_CHUNK_BYTES];
-    loop {
-        match file.read(&mut chunk) {
+    while body.len() < cap {
+        let want = chunk.len().min(cap - body.len());
+        match file.read(&mut chunk[..want]) {
             Ok(0) => break,
             Ok(read) => body.extend_from_slice(&chunk[..read]),
             Err(error) => return error_response(&error),
@@ -202,6 +218,12 @@ fn error_response(error: &FsError) -> StaticResponse {
         )
         .with_header("Retry-After", "5"),
         FsError::InvalidPath(_) => StaticResponse::plain(HttpStatus::Forbidden, "forbidden"),
+        // Content validation by the origin (e.g. an AppFS guest refusing a
+        // too-long nick): a caller error with guidance, never a bare 403 —
+        // the Display text carries the origin's own message.
+        FsError::InvalidArgument(_) => {
+            StaticResponse::plain(HttpStatus::BadRequest, &error.to_string())
+        }
         FsError::IsDirectory | FsError::NotDirectory | FsError::AlreadyExists => {
             StaticResponse::plain(HttpStatus::Conflict, "conflict")
         }

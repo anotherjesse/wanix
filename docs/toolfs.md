@@ -645,7 +645,10 @@ agent projection
    child stderr lines into the job's `events` file, bounds stdout/stderr
    capture at the spec caps (the child is killed past them, `runner_failed`),
    kills at the `RunContext` deadline (`timeout`) and on `ctl abort`
-   (`aborted`), and always reaps the child. Config tools shadow same-named
+   (`aborted`) — each kill takes the child's whole process group (the child is
+   its own group leader), so a wrapper script's helpers die with it instead of
+   out-living the kill while holding the capture pipes open — and always reaps
+   the child. Config tools shadow same-named
    built-ins; with no `--tool`, every configured tool is served. Proofs:
    `crates/wanix-cli/src/tool/serve/proc_tests.rs` (real subprocesses over the
    mesh) and `crates/wanix-cli/src/tool/process_tests.rs`.

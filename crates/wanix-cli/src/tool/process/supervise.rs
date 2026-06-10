@@ -52,13 +52,31 @@ pub(super) fn supervise(
                 None
             };
             if let Some(trigger) = trigger {
-                let _ = locked.kill();
+                kill_tree(&mut locked);
                 kill = Some(trigger);
             }
         }
         drop(locked);
         std::thread::sleep(POLL_INTERVAL);
     }
+}
+
+/// Kills the child's whole process group, then the child itself.
+///
+/// The child was spawned as its own group leader (`process_group(0)`), so the
+/// group signal reaches every helper it forked: an orphaned helper would
+/// otherwise keep running unbounded *and* hold the inherited stdout/stderr
+/// pipe write ends open, parking the capture threads — and the synchronous
+/// `ctl run` caller behind them — until it exits. Safe against pid reuse: the
+/// supervisor only calls this while `try_wait` reports the leader alive, and
+/// the abort hook only while the run holds the child registered (unreaped).
+pub(super) fn kill_tree(child: &mut Child) {
+    #[cfg(unix)]
+    if let Ok(pid) = i32::try_from(child.id()) {
+        // SAFETY: plain libc call; killpg(pgid, SIGKILL) has no memory effects.
+        unsafe { libc::killpg(pid, libc::SIGKILL) };
+    }
+    let _ = child.kill();
 }
 
 /// The wall clock in Unix-epoch milliseconds — the same clock the service's

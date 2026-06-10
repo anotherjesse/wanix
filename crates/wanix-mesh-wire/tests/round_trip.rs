@@ -433,6 +433,12 @@ impl File for BlockingDevice {
         }
     }
 
+    fn read_ready(&self) -> FsResult<bool> {
+        let (lock, _) = &*self.shared;
+        let state = lock.lock().expect("device lock");
+        Ok(!state.queue.is_empty() || state.closed)
+    }
+
     fn metadata(&self) -> FsResult<Metadata> {
         Ok(Metadata::new_with_links(
             wanix_fs::FileType::File,
@@ -541,4 +547,37 @@ fn never_eof_device_streams_incremental_chunks_then_closes_cleanly() {
     assert_eq!(n3, 0, "clean device close arrives as a 0-byte read");
 
     driver.join().expect("producer thread");
+}
+
+#[test]
+fn read_readiness_crosses_the_wire_honestly() {
+    let device_fs = DeviceFs::new();
+    let producer = device_fs.producer();
+    let native = native_over(Arc::new(device_fs));
+
+    let mut events = native.open(&path("events"), OpenOptions::read()).unwrap();
+
+    // A quiet never-EOF device must poll not-ready through the import — the
+    // always-true trait default would send a cancellable wait straight into a
+    // parked blocking read (Ctrl-C of `cat /n/peer/...stream` on a quiet
+    // stream).
+    assert!(
+        !events.read_ready().unwrap(),
+        "quiet device polls not-ready"
+    );
+
+    push_chunk(&producer, b"line");
+    assert!(events.read_ready().unwrap(), "queued chunk polls ready");
+    let mut buf = [0_u8; 16];
+    assert_eq!(events.read(&mut buf).unwrap(), 4);
+
+    assert!(
+        !events.read_ready().unwrap(),
+        "drained device polls not-ready"
+    );
+
+    // Close is also readable (the 0-byte read must not block).
+    close_device(&producer);
+    assert!(events.read_ready().unwrap(), "closed device polls ready");
+    assert_eq!(events.read(&mut buf).unwrap(), 0);
 }

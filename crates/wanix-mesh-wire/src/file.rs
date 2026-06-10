@@ -76,6 +76,18 @@ impl File for NativeFile {
         }
     }
 
+    fn read_ready(&self) -> FsResult<bool> {
+        // Honest readiness, not the always-true trait default: a never-EOF
+        // device on the far side must poll as not-ready while quiet, so a
+        // cancellable wait (poll_oneoff over {source, stdin}) can keep
+        // watching stdin instead of parking in a blocking Read round trip.
+        match self.round_trip(&FileOp::ReadReady)? {
+            FileReply::Ready(ready) => Ok(ready),
+            FileReply::Err(error) => Err(error.into()),
+            _ => Err(protocol_mismatch("read_ready")),
+        }
+    }
+
     fn write(&mut self, buf: &[u8]) -> FsResult<usize> {
         match self.round_trip(&FileOp::Write(buf.to_vec()))? {
             FileReply::Wrote(written) => {

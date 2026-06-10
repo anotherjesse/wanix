@@ -257,6 +257,13 @@ fn file_loop<S: Read + Write>(stream: &mut S, file: &mut dyn File) {
                 Ok(metadata) => FileReply::Stat(WireMetadata::from(&metadata)),
                 Err(error) => FileReply::Err(error.into()),
             },
+            // Honest readiness crosses the wire so an importer's poll-style
+            // wait (e.g. a cancellable `cat` of a never-EOF device) does not
+            // degenerate into a parked blocking read.
+            FileOp::ReadReady => match file.read_ready() {
+                Ok(ready) => FileReply::Ready(ready),
+                Err(error) => FileReply::Err(error.into()),
+            },
             FileOp::Close => return,
         };
         // The reply is an in-flight write: a transport deadline (applied by the

@@ -70,7 +70,12 @@ pub(super) fn serve_http_connection(
     // verbs, and the streamed never-EOF bodies a StaticResponse cannot carry);
     // everything else keeps the classic single-shot response path.
     match gateway::gateway_response(roots, &request) {
-        Some(gateway::GatewayResponse::Static(response)) => write_static_response(stream, response),
+        // Gateway responses carry no CORS grant (see StaticResponse::
+        // encode_same_origin): the WebDoor serves namespace reads and writes,
+        // and its one-origin-per-name design needs none.
+        Some(gateway::GatewayResponse::Static(response)) => {
+            write_response_bytes(stream, &response.encode_same_origin())
+        }
         Some(gateway::GatewayResponse::Stream(body)) => {
             stream::write_streaming_response(stream, body)
         }
@@ -184,12 +189,14 @@ fn request_body(request: &[u8]) -> &[u8] {
 }
 
 pub(super) fn write_static_response(
-    mut stream: TcpStream,
+    stream: TcpStream,
     response: StaticResponse,
 ) -> Result<(), ServeConnectionError> {
-    stream
-        .write_all(&response.encode())
-        .map_err(ServeConnectionError::Io)?;
+    write_response_bytes(stream, &response.encode())
+}
+
+fn write_response_bytes(mut stream: TcpStream, bytes: &[u8]) -> Result<(), ServeConnectionError> {
+    stream.write_all(bytes).map_err(ServeConnectionError::Io)?;
     stream.flush().map_err(ServeConnectionError::Io)?;
     Ok(())
 }

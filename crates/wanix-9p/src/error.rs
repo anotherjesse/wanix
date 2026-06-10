@@ -51,7 +51,10 @@ impl From<P9Error> for Wanix9pError {
 
 pub(crate) fn errno_for_fs(error: &FsError) -> u32 {
     match error {
-        FsError::InvalidPath(_) | FsError::InvalidOffset | FsError::InvalidTime => EINVAL,
+        FsError::InvalidPath(_)
+        | FsError::InvalidArgument(_)
+        | FsError::InvalidOffset
+        | FsError::InvalidTime => EINVAL,
         FsError::NotFound => 2,
         FsError::NotSupported => EOPNOTSUPP,
         FsError::PermissionDenied => EACCES,
@@ -75,6 +78,7 @@ mod tests {
     fn fs_errors_map_to_stable_9p_errno_values() {
         let cases = [
             (FsError::InvalidPath("..".to_owned()), EINVAL),
+            (FsError::InvalidArgument("bad payload".to_owned()), EINVAL),
             (FsError::InvalidOffset, EINVAL),
             (FsError::InvalidTime, EINVAL),
             (FsError::NotFound, 2),

@@ -209,6 +209,13 @@ pub enum FileOp {
     /// Explicit handle close. Dropping the client `File` half-closes the send
     /// side instead, which the server also observes as teardown.
     Close,
+    /// Non-blocking read-readiness probe; the server replies
+    /// [`FileReply::Ready`] with the file's honest `read_ready()`. This is
+    /// what makes a never-EOF device read *cancellable* through a `poll`-style
+    /// wait on the importing side: without it the client would have to fall
+    /// back to always-ready and park in a blocking `Read` round trip.
+    /// Appended last so existing postcard variant indices stay stable.
+    ReadReady,
 }
 
 /// A server→client reply on an open file's own stream.
@@ -228,6 +235,9 @@ pub enum FileReply {
     Stat(WireMetadata),
     /// A typed application error for the preceding op.
     Err(WireFsError),
+    /// Reply to a [`FileOp::ReadReady`] probe. Appended last so existing
+    /// postcard variant indices stay stable.
+    Ready(bool),
 }
 
 #[cfg(test)]
@@ -342,6 +352,7 @@ mod tests {
             FileOp::SetLen(0),
             FileOp::Stat,
             FileOp::Close,
+            FileOp::ReadReady,
         ] {
             round_trip(&op);
         }
@@ -353,6 +364,7 @@ mod tests {
             FileReply::Seeked(42),
             FileReply::Ok,
             FileReply::Err(WireFsError::NotSupported),
+            FileReply::Ready(false),
         ] {
             round_trip(&reply);
         }

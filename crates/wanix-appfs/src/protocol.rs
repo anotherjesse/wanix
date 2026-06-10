@@ -208,7 +208,10 @@ impl AppErr {
     /// (e.g. "post is write-only; read latest instead") that must reach the
     /// caller — so a message-carrying `not_supported` surfaces as
     /// [`FsError::Other`] with the canonical kind text prefixed instead of
-    /// being silently dropped.
+    /// being silently dropped. `invalid` is guest content validation (the
+    /// path resolved; the *data* was refused), so it maps to
+    /// [`FsError::InvalidArgument`] — never `InvalidPath`, which would dress
+    /// a too-long nick up as a path error.
     #[must_use]
     pub fn to_fs_error(&self) -> FsError {
         match self.kind {
@@ -218,7 +221,7 @@ impl AppErr {
             AppErrKind::NotSupported => {
                 FsError::Other(format!("operation not supported: {}", self.message))
             }
-            AppErrKind::Invalid => FsError::InvalidPath(self.message.clone()),
+            AppErrKind::Invalid => FsError::InvalidArgument(self.message.clone()),
             AppErrKind::Other => FsError::Other(self.message.clone()),
         }
     }

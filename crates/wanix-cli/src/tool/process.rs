@@ -3,11 +3,13 @@
 //! The runner half of `docs/toolfs.md` §"Runner Boundary": the executable,
 //! argv, and input/output mapping are fixed by host config (`tools.toml`),
 //! never by the caller; the child runs with an empty environment in a fresh
-//! private temp workdir (removed afterwards), its stdout/stderr capture is
-//! bounded by the spec caps (the child is killed past them), the
-//! [`RunContext`] deadline and abort flag both kill the child, stderr lines
-//! stream into the job's `events` file as they arrive, and the child is
-//! always reaped.
+//! private temp workdir (removed afterwards) as its own process-group leader,
+//! its stdout/stderr capture is bounded by the spec caps (the child is killed
+//! past them), the [`RunContext`] deadline and abort flag both kill the
+//! child's whole process group (so a wrapper script's helpers die with it
+//! instead of out-living the kill while holding the capture pipes open),
+//! stderr lines stream into the job's `events` file as they arrive, and the
+//! child is always reaped.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +23,7 @@ use wanix_tool::{RunContext, RunOutcome, ToolRunner};
 
 use super::config::{ProcInputMode, ProcOutputMode};
 use io::{Workdir, capture_capped};
-use supervise::{Kill, supervise};
+use supervise::{Kill, kill_tree, supervise};
 
 mod io;
 mod supervise;
@@ -72,7 +74,8 @@ impl ProcRunner {
             "{output}" => output_path.display().to_string(),
             _ => arg.clone(),
         });
-        let mut child = match Command::new(&self.command)
+        let mut command = Command::new(&self.command);
+        command
             .args(argv)
             .env_clear()
             .current_dir(workdir.path())
@@ -81,9 +84,18 @@ impl ProcRunner {
                 ProcInputMode::Tempfile => Stdio::null(),
             })
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
         {
+            // The child leads its own process group so a deadline/abort/cap
+            // kill bounds the whole tree (see supervise::kill_tree): a
+            // wrapper script's helpers would otherwise survive the kill and,
+            // by holding the inherited stdout/stderr write ends, park the
+            // capture threads (and this whole run) until they exit.
+            use std::os::unix::process::CommandExt as _;
+            command.process_group(0);
+        }
+        let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 return fail(
@@ -242,7 +254,7 @@ impl ToolRunner for ProcRunner {
         if let Some(child) = child
             && let Ok(mut child) = child.lock()
         {
-            let _ = child.kill();
+            kill_tree(&mut child);
         }
     }
 }

@@ -43,4 +43,21 @@ pub trait AppReceiver: Send {
     /// exited); the pump then latches the channel down so discrete ops fail
     /// as [`wanix_fs::FsError::Unreachable`] and stream readers observe EOF.
     fn recv_line(&mut self) -> io::Result<Vec<u8>>;
+
+    /// [`Self::recv_line`] bounded by `deadline` — the hello handshake uses
+    /// it so a guest that starts but never speaks cannot wedge service
+    /// construction (and the restart supervisor behind it) forever.
+    ///
+    /// The default ignores the deadline: a transport that cannot probe
+    /// readiness keeps the plain blocking receive. Transports that can (the
+    /// CLI's `#pipe`-backed receiver) must honor it and return a
+    /// [`std::io::ErrorKind::TimedOut`] error on expiry.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::recv_line`], plus `TimedOut` when the deadline expires.
+    fn recv_line_deadline(&mut self, deadline: std::time::Duration) -> io::Result<Vec<u8>> {
+        let _ = deadline;
+        self.recv_line()
+    }
 }

@@ -60,6 +60,7 @@ impl From<&FsError> for Errno {
     fn from(error: &FsError) -> Self {
         match error {
             FsError::InvalidPath(_) => Self::Inval,
+            FsError::InvalidArgument(_) => Self::Inval,
             FsError::NotFound => Self::Noent,
             FsError::NotSupported => Self::Nosys,
             FsError::PermissionDenied => Self::Notcapable,

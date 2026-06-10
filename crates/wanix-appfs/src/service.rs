@@ -124,9 +124,15 @@ fn now_ms() -> u64 {
         .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(0))
 }
 
-/// Reads and validates the guest's opening hello line.
-fn read_hello(receiver: &mut dyn AppReceiver) -> FsResult<AppHello> {
-    let raw = receiver.recv_line().map_err(|err| channel_down(&err))?;
+/// Reads and validates the guest's opening hello line, bounded by the op
+/// deadline: a guest that starts but never writes its hello is unresponsive
+/// (the same "an unresponsive guest is a dead guest" rule as every later op),
+/// and an unbounded wait here would park service construction — and the
+/// restart supervisor calling it — forever.
+fn read_hello(receiver: &mut dyn AppReceiver, deadline: Duration) -> FsResult<AppHello> {
+    let raw = receiver
+        .recv_line_deadline(deadline)
+        .map_err(|err| channel_down(&err))?;
     match GuestLine::parse(&raw)? {
         GuestLine::Hello(hello) if hello.proto == PROTO_VERSION => Ok(hello),
         GuestLine::Hello(hello) => Err(FsError::Other(format!(
@@ -185,20 +191,22 @@ impl AppFsService {
     /// Creates the adapter over a host-declared tree and the two guest
     /// channel halves, performing the blocking hello handshake (the guest's
     /// declaration wins over `declared`) and spawning the host pump that owns
-    /// `receiver`. Every discrete op waits at most `op_deadline` for its
-    /// reply; expiry latches the channel down.
+    /// `receiver`. Every discrete op — and the hello handshake itself —
+    /// waits at most `op_deadline` for its reply; expiry latches the channel
+    /// down (for the hello: fails construction).
     ///
     /// # Errors
     ///
-    /// Returns the handshake error: a broken channel, a first line that is
-    /// not a valid hello, a proto mismatch, or an invalid hello tree.
+    /// Returns the handshake error: a broken channel, a hello that never
+    /// arrived within `op_deadline`, a first line that is not a valid hello,
+    /// a proto mismatch, or an invalid hello tree.
     pub fn with_op_deadline(
         declared: AppTree,
         sender: Box<dyn AppSender>,
         mut receiver: Box<dyn AppReceiver>,
         op_deadline: Duration,
     ) -> FsResult<Self> {
-        let hello = read_hello(receiver.as_mut())?;
+        let hello = read_hello(receiver.as_mut(), op_deadline)?;
         let tree = tree_from_hello(&hello, declared)?;
         let slot = Arc::new(ReplySlot::default());
         let streams = StreamTable::default();
@@ -213,6 +221,16 @@ impl AppFsService {
                 op_deadline,
             }),
         })
+    }
+
+    /// Whether the guest channel has latched down — an op deadline expired
+    /// ("an unresponsive guest is a dead guest") or the channel broke. Once
+    /// down, this adapter can never serve again, even if the guest task is
+    /// still running (a guest wedged in an infinite loop never exits); a
+    /// restart supervisor must treat latch-down as guest death.
+    #[must_use]
+    pub fn is_down(&self) -> bool {
+        self.shared.slot.is_down()
     }
 
     /// Returns the guest-lifecycle teardown handle for this adapter's streams.

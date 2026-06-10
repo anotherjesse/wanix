@@ -30,6 +30,11 @@ where
     };
     let stdin = io::stdin();
     let stdout = io::stdout();
+    // Deliberately NOT `io::stderr().lock()`: a resident command (`serve`,
+    // `app serve`) runs for the life of the process, and a lifetime-held
+    // `StderrLock` deadlocks every `eprintln!` from a background thread (the
+    // restart supervisor, the guest exit watcher) — the reentrant stderr lock
+    // only re-enters on the *same* thread. `Stderr` locks per write instead.
     let stderr = io::stderr();
     #[cfg(unix)]
     {
@@ -38,12 +43,12 @@ where
             stdin.lock(),
             UnixTerminalFds::new(libc::STDIN_FILENO, libc::STDOUT_FILENO),
             stdout.lock(),
-            stderr.lock(),
+            stderr,
         )
     }
     #[cfg(not(unix))]
     {
-        run_with_process_io(args, stdin.lock(), stdout.lock(), stderr.lock())
+        run_with_process_io(args, stdin.lock(), stdout.lock(), stderr)
     }
 }
 

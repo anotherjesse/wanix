@@ -10,6 +10,7 @@
 
 use std::io;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use wanix_appfs::{AppReceiver, AppSender, LineBuffer, MAX_LINE_LEN};
 use wanix_fs::{File, FileType, FsError, FsResult, Metadata};
@@ -52,6 +53,19 @@ impl AppSender for PipeSender {
 
 impl AppReceiver for PipeReceiver {
     fn recv_line(&mut self) -> io::Result<Vec<u8>> {
+        self.recv_line_by(None)
+    }
+
+    fn recv_line_deadline(&mut self, deadline: Duration) -> io::Result<Vec<u8>> {
+        self.recv_line_by(Some(Instant::now() + deadline))
+    }
+}
+
+impl PipeReceiver {
+    /// How often the bounded receive re-probes pipe readiness.
+    const READY_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+    fn recv_line_by(&mut self, deadline: Option<Instant>) -> io::Result<Vec<u8>> {
         loop {
             if let Some(position) = self.pending.iter().position(|&byte| byte == b'\n') {
                 return Ok(self.pending.drain(..=position).collect());
@@ -64,13 +78,35 @@ impl AppReceiver for PipeReceiver {
                 // up (v0.2 op-fatal vs channel-fatal).
                 return self.take_oversized_line();
             }
+            if let Some(by) = deadline {
+                self.wait_ready_until(by)?;
+            }
             let fresh = self.fill()?;
             self.pending.extend_from_slice(&fresh);
         }
     }
-}
 
-impl PipeReceiver {
+    /// Polls the pipe's honest `read_ready` (data buffered, or EOF after the
+    /// last writer dropped) until `by`, so the bounded receive never enters a
+    /// blocking read it cannot come back from.
+    fn wait_ready_until(&self, by: Instant) -> io::Result<()> {
+        loop {
+            if self
+                .guest_stdout
+                .read_ready()
+                .map_err(|err| guest_down(&err))?
+            {
+                return Ok(());
+            }
+            if Instant::now() >= by {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "app guest sent nothing before the handshake deadline",
+                ));
+            }
+            std::thread::sleep(Self::READY_POLL_INTERVAL);
+        }
+    }
     /// Reads one chunk of guest output, mapping EOF to the guest-exit error.
     fn fill(&mut self) -> io::Result<Vec<u8>> {
         let mut buf = [0u8; 4096];
@@ -144,4 +180,62 @@ pub(crate) fn drain_captured(buffer: &LineBuffer) -> String {
         }
     }
     String::from_utf8_lossy(&bytes).trim().to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use wanix_appfs::AppReceiver as _;
+    use wanix_fs::{FileSystem as _, NormalizedPath, OpenOptions};
+    use wanix_pipe::PipeDevice;
+
+    use super::PipeReceiver;
+
+    fn pipe_receiver() -> (PipeReceiver, Box<dyn wanix_fs::File>) {
+        let pipes = PipeDevice::new();
+        let id = pipes.alloc().unwrap();
+        let path = NormalizedPath::new(format!("{id}/data")).unwrap();
+        let read_end = pipes.open(&path, OpenOptions::read()).unwrap();
+        let write_end = pipes
+            .open(
+                &path,
+                OpenOptions {
+                    write: true,
+                    ..OpenOptions::default()
+                },
+            )
+            .unwrap();
+        (
+            PipeReceiver {
+                guest_stdout: read_end,
+                pending: Vec::new(),
+            },
+            write_end,
+        )
+    }
+
+    #[test]
+    fn deadline_receive_times_out_on_a_silent_live_guest() {
+        // The write end stays open (the guest is alive but says nothing), so
+        // only the deadline — never EOF — can end the wait.
+        let (mut receiver, _writer) = pipe_receiver();
+        let started = Instant::now();
+        let error = receiver
+            .recv_line_deadline(Duration::from_millis(100))
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the handshake wait must be bounded"
+        );
+    }
+
+    #[test]
+    fn deadline_receive_delivers_a_line_that_arrives_in_time() {
+        let (mut receiver, mut writer) = pipe_receiver();
+        writer.write(b"{\"hello\":{\"proto\":1}}\n").unwrap();
+        let line = receiver.recv_line_deadline(Duration::from_secs(5)).unwrap();
+        assert_eq!(line, b"{\"hello\":{\"proto\":1}}\n");
+    }
 }

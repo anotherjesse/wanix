@@ -25,7 +25,7 @@ honestLimits:
   - "v0 gateway principals: the gateway dials every mounted room with ITS dialer key (~/.wanix/dialer.key), so the room sees one principal for all web users — every browser post is the gateway's (shorthex), and a web-set nick names that shared principal. Per-user web identity needs delegation certs / gateway principals (docs/appfs.md §Identity And Trust)."
   - "Loopback-only in v0: a non-loopback --listen with --bind is refused at startup; off-loopback gateway auth is recorded follow-up work."
   - "Mesh binds are dialed at serve startup and are hard: an offline room fails serve startup. After startup a dead room maps to 503; the first op right after a hard kill can take up to QUIC liveness (~30 s) before the fast ~5 s deadline path resumes (ADR 0008 residual)."
-  - "Each streaming GET holds one gateway thread for the life of the connection (serve has no connection cap — known queued follow-up)."
+  - "Each streaming GET holds one gateway thread for the life of the connection (serve has no connection cap — known queued follow-up). An abandoned subscriber (closed tab, EventSource reconnect) is detected by a socket probe even on a quiet stream and its thread/upstream mount stream released."
 canonicalCaveatFor: []
 ---
 
@@ -119,9 +119,15 @@ HTTP/1.1 200 OK
 Content-Type: text/plain; charset=utf-8
 Transfer-Encoding: chunked
 Cache-Control: no-store
-Access-Control-Allow-Origin: *
 Connection: close
 ```
+
+No `Access-Control-Allow-Origin` anywhere on a gateway origin — that is the
+point of the one-origin design: the page and its data already share an origin,
+and a CORS grant would hand bound files and live streams to any other web page
+in your browser. The same boundary holds for writes: a POST/PUT whose `Origin`
+header names another origin is refused with 403 (`cross-site write refused`),
+while Origin-less tools like curl pass.
 
 ## 5. The second name is just a static site
 

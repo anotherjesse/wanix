@@ -291,7 +291,7 @@ the 9P-bridged subset.
 | `tell()` | client-tracked | As `RemoteFile::tell` (`file.rs:157`). |
 | `is_seekable()` | from `OpenOk.seekable` | Set at open from the server's file-type probe, carried in the open response (replaces the `Tgetattr` round trip at `remote.rs:211`). |
 | `set_len(len)` | `FileOp::SetLen(len)` → `FileReply::Ok`/`Err` | New (not bridged by `RemoteFile` today). |
-| `read_ready()` / `write_ready()` | optional `FileOp::ReadReady`/`WriteReady` → bool, or default `Ok(true)` | Devices *could* surface real readiness here; default to `Ok(true)` to match `RemoteFile`. |
+| `read_ready()` | `FileOp::ReadReady` → `FileReply::Ready(bool)` | Honest read readiness crosses the wire: a quiet never-EOF device polls not-ready through the import, so a cancellable `poll_oneoff` wait (e.g. Ctrl-C of a streaming `cat` over the mesh) keeps watching stdin instead of parking in a blocking `Read` round trip. `write_ready()` keeps the `Ok(true)` trait default (no consumer yet). |
 | `metadata()` | `FileOp::Stat` → `FileReply::Stat(WireMetadata)` | On the open handle, as `RemoteFile::metadata` (`file.rs:169`). |
 | `Drop` | finish the client send half | Server observes the half-close and releases the reader; replaces `Tclunk`. |
 

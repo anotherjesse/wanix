@@ -223,6 +223,13 @@ impl File for EventsFile {
         self.buffer.read(buf)
     }
 
+    fn read_ready(&self) -> FsResult<bool> {
+        // Honest readiness (data buffered or stream closed), so poll-style
+        // waiters — and mesh importers, which forward readiness over the
+        // native wire — never park in a blocking read on a quiet stream.
+        self.buffer.read_ready()
+    }
+
     fn metadata(&self) -> FsResult<Metadata> {
         Ok(file_metadata(0, modes::READ_FILE))
     }

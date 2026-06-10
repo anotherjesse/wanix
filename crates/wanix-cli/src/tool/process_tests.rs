@@ -117,6 +117,39 @@ fn the_deadline_kills_a_long_running_child() {
 }
 
 #[test]
+fn the_deadline_kill_bounds_a_forking_tool_and_its_grandchild() {
+    if !have("/bin/sh") || !have("/bin/sleep") {
+        return;
+    }
+    // The grandchild backgrounds itself and inherits the stdout pipe write
+    // end. A direct-child-only kill would leave it running and park the
+    // capture-thread joins (and the whole run) until it exits; the group
+    // kill must bound the entire tree at the deadline.
+    let runner = runner(
+        "/bin/sh",
+        &["-c", "sleep 30 & exec sleep 30"],
+        ProcInputMode::Stdin,
+        ProcOutputMode::Stdout,
+    );
+    let deadline = super::supervise::now_ms() + 200;
+    let ctx = RunContext::new(
+        "j4f".to_owned(),
+        Some(deadline),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(LineBuffer::default()),
+    );
+    let started = Instant::now();
+    let outcome = runner.run(b"", None, &ctx);
+    assert_eq!(kind(&outcome), Some(ErrorKind::Timeout));
+    assert!(
+        started.elapsed().as_secs() < 10,
+        "the kill must take the grandchild (and so the pipes) with it, \
+         not wait out its sleep: took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
 fn a_pre_armed_abort_flag_kills_the_child() {
     if !have("/bin/sleep") {
         return;

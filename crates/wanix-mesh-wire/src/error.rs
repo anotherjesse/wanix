@@ -60,12 +60,18 @@ pub enum WireFsError {
     /// Appended after `Other` so existing postcard variant indices stay
     /// stable.
     Unreachable(String),
+    /// The operation's argument or payload was rejected by the file's
+    /// implementation (content validation); the payload is the
+    /// implementation's own guidance. Appended last so existing postcard
+    /// variant indices stay stable.
+    InvalidArgument(String),
 }
 
 impl From<FsError> for WireFsError {
     fn from(error: FsError) -> Self {
         match error {
             FsError::InvalidPath(path) => Self::InvalidPath(path),
+            FsError::InvalidArgument(detail) => Self::InvalidArgument(detail),
             FsError::NotFound => Self::NotFound,
             FsError::NotSupported => Self::NotSupported,
             FsError::PermissionDenied => Self::PermissionDenied,
@@ -86,6 +92,7 @@ impl From<WireFsError> for FsError {
     fn from(error: WireFsError) -> Self {
         match error {
             WireFsError::InvalidPath(path) => Self::InvalidPath(path),
+            WireFsError::InvalidArgument(detail) => Self::InvalidArgument(detail),
             WireFsError::NotFound => Self::NotFound,
             WireFsError::NotSupported => Self::NotSupported,
             WireFsError::PermissionDenied => Self::PermissionDenied,
@@ -112,6 +119,7 @@ mod tests {
     fn all_fs_errors() -> Vec<FsError> {
         vec![
             FsError::InvalidPath("bad/../path".to_owned()),
+            FsError::InvalidArgument("nick too long".to_owned()),
             FsError::NotFound,
             FsError::NotSupported,
             FsError::PermissionDenied,

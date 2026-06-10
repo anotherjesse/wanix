@@ -2184,6 +2184,10 @@ fn path_errors_map_to_wasi_errno() {
 #[test]
 fn errno_mapping_is_pinned_for_filesystem_errors() {
     assert_eq!(Errno::from(FsError::InvalidPath("x".into())), Errno::Inval);
+    assert_eq!(
+        Errno::from(FsError::InvalidArgument("bad payload".into())),
+        Errno::Inval
+    );
     assert_eq!(Errno::from(FsError::NotFound), Errno::Noent);
     assert_eq!(Errno::from(FsError::NotSupported), Errno::Nosys);
     assert_eq!(Errno::from(FsError::PermissionDenied), Errno::Notcapable);

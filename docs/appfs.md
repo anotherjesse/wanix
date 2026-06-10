@@ -45,7 +45,13 @@ adds, on top of the v0 line protocol:
   capped exponential backoff, swapping each fresh generation's service through
   a `ServiceSlot` read per attach — ticket and endpoint unchanged, old
   connections keep their honestly-dead view, new connections get the live
-  service (default remains no restart).
+  service (default remains no restart). Guest death is exit *or* channel
+  latch-down: an unresponsive guest (op deadline expired) is abandoned and
+  replaced the same way, since a wedged qjs loop may never exit (no interrupt
+  seam — the abandoned generation's engine thread is a bounded, logged leak).
+  The hello handshake is bounded by the same op deadline, so a guest that
+  starts but never speaks fails construction instead of parking the
+  supervisor.
 
 What this still does **not** cover from this design: the HTTP surface and
 gateway principals (§HTTP Surface), the turn-based execution model with a host

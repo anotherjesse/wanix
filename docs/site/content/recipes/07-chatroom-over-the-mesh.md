@@ -223,7 +223,7 @@ wanix-rust mount-cat "$T" status      # the OLD ticket — stale port hint — s
 
 The room's memory was never guest RAM (`main.js` reloads `/state/log` *and* `/state/nicks` at boot — the nick rendering survived the restart above), the identity key survives the process, and on loopback/LAN even the stale ticket keeps working: the peer half is the address, mDNS finds the new route, the hint is just a hint. Both a bare `iroh://71b44428...` (no `?addr=` at all) and the old ticket reached the restarted room in this run.
 
-`--restart on-failure` supervises the *guest*: whenever it exits, the supervisor re-runs it with capped backoff and swaps the fresh adapter behind the *same* ticket and endpoint. Connections opened against the dead generation keep failing honestly (`Unreachable`); new connections reach the restarted room. The default stays dead-stays-dead.
+`--restart on-failure` supervises the *guest*: whenever it dies — it exits, or it stops answering past the 30 s op deadline (a wedged handler; the channel latches down and the generation is abandoned) — the supervisor re-runs it with capped backoff and swaps the fresh adapter behind the *same* ticket and endpoint. Connections opened against the dead generation keep failing honestly (`Unreachable`); new connections reach the restarted room. The default stays dead-stays-dead.
 
 ## 8. Put a browser on it
 
@@ -244,7 +244,7 @@ to the room, so every browser user posts as the gateway's key.
 - **First `app serve` seems to hang before printing the ticket.** Cold module cache: the QuickJS engine wasm is being compiled (~25 s in this debug-build run). Subsequent starts are ~1 s.
 - **`app serve` refuses to start without `--addr`.** Default-deny, verbatim: "app serve on the public endpoint exposes the app to anyone with its ticket; pass --addr IP:PORT or --insecure-open to deliberately export to the open internet".
 - **Reading `post` fails with `operation not supported`.** It is write-only by the guest's own rules, and the guidance after the colon is the guest's own `not_supported` message, carried across the wire (verbatim from this run: `mount-cat failed to read: operation not supported: post is write-only; read latest or roster instead`).
-- **A nick is refused with `invalid`.** The guest validates: 32 chars max after trimming, no control characters — a bad nick fails the write and changes nothing (verbatim from this run: `mount-write failed: invalid path: nick longer than 32 characters`; `roster` was untouched).
+- **A nick is refused with `invalid`.** The guest validates: 32 chars max after trimming, no control characters — a bad nick fails the write and changes nothing (verbatim from this run: `mount-write failed: invalid argument: nick longer than 32 characters`; `roster` was untouched).
 - **`resource unreachable: peer ... did not answer within 5s`.** The serve is down. The message says the recovery: the mount works again when the room returns, and the peer id half of the ticket never changes.
 
 ## Cleanup

@@ -9,6 +9,11 @@ pub type FsResult<T> = Result<T, FsError>;
 pub enum FsError {
     /// The path is not a valid normalized Wanix filesystem path.
     InvalidPath(String),
+    /// The operation's argument or payload was rejected by the file's
+    /// implementation (content validation), with the implementation's own
+    /// guidance as the payload. Distinct from [`Self::InvalidPath`]: the path
+    /// resolved fine, the *data* was refused.
+    InvalidArgument(String),
     /// The requested file or directory does not exist.
     NotFound,
     /// The operation is not supported by this file or filesystem.
@@ -42,6 +47,7 @@ impl fmt::Display for FsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidPath(path) => write!(f, "invalid path: {path}"),
+            Self::InvalidArgument(detail) => write!(f, "invalid argument: {detail}"),
             Self::NotFound => f.write_str("file does not exist"),
             Self::NotSupported => f.write_str("operation not supported"),
             Self::PermissionDenied => f.write_str("permission denied"),
@@ -70,6 +76,10 @@ mod tests {
             (
                 FsError::InvalidPath("bad/../path".to_owned()),
                 "invalid path: bad/../path",
+            ),
+            (
+                FsError::InvalidArgument("nick too long".to_owned()),
+                "invalid argument: nick too long",
             ),
             (FsError::NotFound, "file does not exist"),
             (FsError::NotSupported, "operation not supported"),

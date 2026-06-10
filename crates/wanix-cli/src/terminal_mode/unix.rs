@@ -13,11 +13,16 @@ pub struct NativeRawTerminalMode {
 }
 
 impl NativeRawTerminalMode {
-    /// Enters raw-ish terminal mode for native stdin when stdin is a TTY.
+    /// Enters raw terminal mode for native stdin when stdin is a TTY.
     ///
     /// Returns `Ok(None)` when stdin is not a terminal. The mode disables
-    /// canonical input and OS echo but preserves signal generation, so Ctrl-C
-    /// still reaches the host process.
+    /// canonical input, OS echo, and tty signal generation (`ISIG`): the
+    /// guest shell owns Ctrl-C (ADR 0003 — cancel a streaming `cat`, kill the
+    /// foreground task), so the 0x03 byte must reach the guest as input
+    /// instead of the line discipline consuming it and SIGINT killing the
+    /// whole host REPL (which would also skip the restore-on-drop guard,
+    /// leaving the user's terminal raw). Ctrl-D (guest-owned exit) is the
+    /// session's way out.
     ///
     /// # Errors
     ///
@@ -34,7 +39,8 @@ impl NativeRawTerminalMode {
         let original = with_borrowed_fd(fd, |fd| tcgetattr(fd))
             .map_err(|error| termios_error("read native terminal mode", error))?;
         let mut raw = original.clone();
-        raw.local_modes -= LocalModes::ECHO | LocalModes::ICANON | LocalModes::IEXTEN;
+        raw.local_modes -=
+            LocalModes::ECHO | LocalModes::ICANON | LocalModes::IEXTEN | LocalModes::ISIG;
         raw.input_modes -= InputModes::ICRNL | InputModes::IXON;
         raw.output_modes -= OutputModes::OPOST;
         raw.special_codes[SpecialCodeIndex::VMIN] = 1;

@@ -29,6 +29,16 @@
 //! mirroring the `--wanix-services` exec-device rule — `--bind` is refused
 //! whenever the HTTP door is bound to a non-loopback address. Off-loopback
 //! gateway auth is recorded follow-up work, not a flag.
+//!
+//! The loopback rule does not stop the operator's *browser* acting as a
+//! confused deputy (`*.localhost` resolves to loopback from any page), so the
+//! gateway also holds the boundary in-band: gateway responses carry **no**
+//! `Access-Control-Allow-Origin` (the one-origin design needs no CORS, and a
+//! wildcard would hand bound files and live device streams to any web page),
+//! and a POST/PUT whose `Origin` header names anything but the bound gateway
+//! name is refused — a "simple" cross-site POST is sent regardless of CORS,
+//! so the drive-by-write hole needs an explicit check, not just a missing
+//! grant. Origin-less writes (curl, native tools) pass.
 
 use std::collections::BTreeMap;
 use std::io::Write;

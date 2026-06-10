@@ -337,7 +337,10 @@ fn err_kinds_map_onto_fs_error_vocabulary() {
             "not_supported",
             FsError::Other("operation not supported: detail".to_owned()),
         ),
-        ("invalid", FsError::InvalidPath("detail".to_owned())),
+        // Guest content validation is an argument error, not a path error:
+        // the guidance ("nick longer than 32 characters") must read as what
+        // it is on every plane.
+        ("invalid", FsError::InvalidArgument("detail".to_owned())),
         ("other", FsError::Other("detail".to_owned())),
     ];
     for (kind, expected) in cases {

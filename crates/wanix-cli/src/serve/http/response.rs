@@ -25,7 +25,23 @@ impl StaticResponse {
         self
     }
 
+    /// Encodes the classic-door response, including the pre-existing
+    /// `Access-Control-Allow-Origin: *` that bundle assets and discovery rely
+    /// on. Gateway (WebDoor) responses use [`Self::encode_same_origin`].
     pub(in crate::serve) fn encode(&self) -> Vec<u8> {
+        self.encode_with(true)
+    }
+
+    /// Encodes a WebDoor gateway response: **no** CORS grant. The gateway is
+    /// an unauthenticated read/write namespace door whose design is one
+    /// origin per bound name ("no CORS"); a wildcard here would let any web
+    /// page the operator's browser visits read bound files and live device
+    /// streams cross-origin (see the `webdoor` trust-boundary docs).
+    pub(in crate::serve) fn encode_same_origin(&self) -> Vec<u8> {
+        self.encode_with(false)
+    }
+
+    fn encode_with(&self, cors_wildcard: bool) -> Vec<u8> {
         let mut response = format!(
             "HTTP/1.1 {}\r\n\
              Content-Length: {}\r\n\
@@ -43,11 +59,12 @@ impl StaticResponse {
         }
         response.extend_from_slice(
             b"Cross-Origin-Opener-Policy: same-origin\r\n\
-              Cross-Origin-Embedder-Policy: require-corp\r\n\
-              Access-Control-Allow-Origin: *\r\n\
-              Connection: close\r\n\
-              \r\n",
+              Cross-Origin-Embedder-Policy: require-corp\r\n",
         );
+        if cors_wildcard {
+            response.extend_from_slice(b"Access-Control-Allow-Origin: *\r\n");
+        }
+        response.extend_from_slice(b"Connection: close\r\n\r\n");
         response.extend_from_slice(&self.body);
         response
     }
