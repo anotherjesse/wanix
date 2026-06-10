@@ -21,9 +21,11 @@ top of them the mesh/agent layer is built out: service devices (`#pipe`, `#kv`,
 (`wanix-9p-client`) that still mounts foreign namespaces, both over iroh QUIC
 with ed25519 identity and default-deny capability binds, the `#cpu` exec plane,
 the job protocol (ADR 0009) with ToolFS served per-resource over the mesh
-(`wanix tool serve` + the wanix-sh `tool` builtin), `wanix capsule` world
-snapshots, and a browser cockpit (VS Code workbench extension) that operates
-all of it over direct 9P.
+(`wanix tool serve --tool|--config` + the wanix-sh `tool` builtin),
+guest-defined AppResources (`wanix-appfs` + `wanix app serve`, the chatroom)
+with the HTTP web door (`serve --bind`), task kill and cancellable streaming
+consumers (ADR 0010), `wanix capsule` world snapshots, and a browser cockpit
+(VS Code workbench extension) that operates all of it over direct 9P.
 
 Highest-leverage next work: deepen interactive shells and terminal lifecycle,
 broaden Linux/v86/editor 9P compatibility, finish QEMU/v86 boot workflows,
@@ -251,7 +253,10 @@ tests.
   `&&`/`||` short-circuit, `< > >>` redirects, `$VAR`/`${VAR}`/`$?` expansion at
   execution time, the `echo`/`cat`/`pwd`/`env`/`true`/`false`/`:`/`exit` pipeable
   builtins plus the pipeable `tool PATH [PARAMS_JSON]` one-shot job-protocol
-  client (drives a mounted ToolFS through its visible files, `docs/toolfs.md`)
+  client (drives a mounted ToolFS through its visible files, `docs/toolfs.md`;
+  announces its `job:` crash-resume breadcrumb on stderr, closes only
+  successful jobs — failed/aborted/timed-out runs stay retained for
+  inspection — and exits with the job's recorded exit code)
   and the `cd`/`export`/`unset` special builtins (single-stage), and
   external command launch resolved from a `bin` dir (so `jaq` is just a command —
   `echo '[1,2,3]' | jaq 'map(.+1)'` works) with exported env propagated to
@@ -266,6 +271,22 @@ tests.
   repeatable `--mount-mesh IROH=/path`). See
   [docs/site/content/concepts/wanix-sh.md](docs/site/content/concepts/wanix-sh.md)
   and `shell-command-resolution.md`.
+- Task kill + cancellable streams (ADR 0010): `#task/<id>/ctl` accepts `kill` —
+  `Task::kill` records the distinct "killed" exit and releases fds through the
+  same path as normal exit, and the wasm driver arms a per-run Wasmtime epoch
+  interrupter so a running tier-2 guest dies promptly (the qjs driver has no
+  per-task seam yet: kill on a running qjs task only sets the observable
+  `kill_requested` flag). On top of it the shell is livable around never-EOF
+  device streams: the REPL `cat` streams chunk-by-chunk and cancels on Ctrl-C
+  to a fresh prompt with status 130 (`poll_oneoff` over {source, stdin};
+  honest read readiness crosses the mesh wire via `FileOp::ReadReady`, and raw
+  terminal mode drops ISIG so the guest owns `0x03` at a real pty), Ctrl-C
+  during a foreground external wait is forwarded as `kill` to the child's
+  `#task` ctl (a "killed" wait reads as 130), and `mount-cat PATH --follow` is
+  the streaming host-CLI consumer (one open handle, incremental
+  read→write→flush, exits at EOF/error). Proofs: end-to-end `#term` kill and
+  live-pipe cancel tests in `crates/wanix-wasm/src/driver.rs` and the recipe
+  07/08 transcripts.
 - `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
   `qjs` tasks bind fd 0/1/2 through `#term/<id>/program`; native cooked/raw
   shell modes and served shell sessions use the same `#term` device contract,
@@ -380,14 +401,20 @@ tests.
   Agents delegate to agents via `#agent/<id>/reply`, and `POST /agent` exposes
   the agent as a network service.
 - Job protocol + ToolFS (ADR 0009): `wanix-job` is the shared
-  calling-convention vocabulary and `wanix-tool` is ToolFS v0, the first
-  device that speaks it — a call is a retained job directory (`new` allocates an opaque id,
-  `ctl run` seals input and invokes the runner, validation failures become
-  retained failed jobs with taxonomy `result.json`, foreign job ids read as
-  `NotFound`, lifecycle is lazy TTL expiry through an injected clock).
-  Principal scoping rides `open_view(principal)`, runners are in-process v0
-  (fakes plus the `ModelEngine` seam — a model device is just ToolService with
-  a model runner). Served over the mesh by `wanix-rust tool serve`. Proofs:
+  calling-convention vocabulary, `wanix-jobfs` is the shared machinery every
+  adopter reuses (job table, lifecycle/TTL, per-principal quotas, output caps
+  enforced at finalize, and the `JobRunner` seam with its per-run
+  `RunContext` — job id, absolute deadline, abort flag, `events` progress
+  sink), and `wanix-tool` is ToolFS v0, the first device that speaks it — a
+  call is a retained job directory (`new` allocates an opaque id, `ctl run`
+  seals input and invokes the runner, validation failures become retained
+  failed jobs with taxonomy `result.json`, foreign job ids read as `NotFound`,
+  lifecycle is lazy TTL expiry through an injected clock, and
+  `jobs/<id>/events` is a bounded lossy never-EOF progress stream closed at
+  finalize/expiry/close). Principal scoping rides `open_view(principal)`;
+  runners are the in-process fakes, the `ModelEngine` seam (a model device is
+  just ToolService with a model runner), and the `ProcRunner` process runner
+  (below). Served over the mesh by `wanix-rust tool serve`. Proofs:
   `crates/wanix-tool/src/tests.rs` pins the docs/toolfs.md validation matrix.
 - Composed resource flow (volumes + tools + shell over the mesh, ADR 0007 +
   ADR 0009): `wanix-rust volume create/serve` exports each `~/.wanix/volumes/
@@ -411,7 +438,7 @@ tests.
   `sh`. Walkthrough: `docs/site/content/learn/compose-volumes-and-tools.md` and
   recipe 06 (tested transcript).
 - Guest-defined AppResources (`docs/appfs.md`; the ADR 0007 chatroom worked
-  example, implemented): `wanix-rust app serve --app DIR --state DIR --addr
+  example, implemented): `wanix-rust app serve --app DIR --state DIR --listen
   IP:PORT` runs a manifest-declared qjs guest (`app.wanix.json`, the shared
   `"wanix.resource":"v0"` envelope) behind the `wanix-appfs` file2chan adapter
   and exports the resulting `FileSystem` over one native mesh endpoint — one
@@ -420,15 +447,28 @@ tests.
   tier-1 turns: a detached resident qjs task in a blocking-stdin request loop
   (the qjs-layer blocking `fd_read` above), one discrete op in flight at a
   time as newline-JSON stamped with the verified connection principal
-  (`AppAttachPolicy`), with a host pump thread owning guest output. Declared
+  (`AppAttachPolicy`), with a host pump thread owning guest output. Wire v0.2:
+  the guest's first line is a `hello` declaring proto/files/streams (the tree
+  authority; manifest lists are documentation/fallback), reads are ranged
+  (256 KiB chunks — no line-ceiling cap on app file size), every request
+  carries host-stamped `at_ms` (the chatroom's clock), principals cross as
+  opaque `iroh:<hex>`, a malformed/oversized guest line fails only the
+  in-flight op (only genuine desync latches the channel down), and every op
+  carries a default-30s deadline whose expiry latches the channel honestly
+  `Unreachable`. Declared
   stream files are host-owned never-EOF subscriptions (bounded lossy
   `LineBuffer` fan-out fed by guest publishes; `mount-cat PATH --follow` is
   the streaming CLI consumer) with `who` presence from the
   open-subscription registry; durable state is the explicit `--state` mount,
   so the bundled `examples/chatroom` app survives guest restart with history
-  intact; a dead guest fails ops `Unreachable` while blocked stream readers
+  intact — including self-claimed nicks (`nick` renames only the verified
+  writing principal, `roster` is the raw principal→nick map, `latest` renders
+  `nick (shorthex)` as derived display sugar over raw-principal truth, nicks
+  persist in `/state/nicks`); a dead guest fails ops `Unreachable` while
+  blocked stream readers
   are released with EOF (auto-restart is opt-in: `--restart on-failure`
-  re-runs an exited guest with capped backoff behind the same ticket; serve
+  re-runs an exited or wedged guest — channel latch-down counts as death —
+  with capped backoff behind the same ticket; serve
   death is abrupt — only guest-exit-while-serve-lives gets the clean EOF
   release). Proofs:
   `crates/wanix-appfs/src/tests.rs`, `crates/wanix-cli/src/app/serve/tests.rs`;
@@ -446,7 +486,8 @@ at a time per connection, so a blocking read (e.g. `#plumb/<topic>/recv`) cannot
 be interleaved with a write on the same connection — live pub/sub needs a second
 connection or concurrent frame handling. (The native wire does not have this
 constraint: every open file rides its own QUIC stream.) Ethernet/vnet and
-public/multi-user auth remain explicitly unimplemented trust-boundary work.
+public/multi-user auth (including the web door's off-loopback story and
+per-user web principals) remain explicitly unimplemented trust-boundary work.
 
 ## Code Quality Guardrails
 
@@ -610,33 +651,36 @@ more feature work.
   ADR 0006/0007 authorization layer (thread `aname` 1:1 vs a native
   scope-selection shape), not before. (a) and (b) are small cleanup-cycle items.
 - Job protocol / ToolFS remainder ([docs/toolfs.md](docs/toolfs.md) §Build
-  Slices): the fixed-command process runner shipped (`tool serve --config
-  tools.toml`, `crates/wanix-cli/src/tool/process.rs`); still ahead are
-  catalog integration (one entry per served tool) and the agent adapter.
-  `--mount-mesh` still needs threading to `qjs`/`qjs-term` (the keepalive
-  home, `mesh::mounts`, already exists). `#agent`/`#cpu` convergence on the
-  job grammar waits until those devices are next touched (ADR 0009 §Adopters).
-- AppResource v0 remainder ([docs/appfs.md](docs/appfs.md) §Build Slices /
-  §Status): the served guest is a tier-2 resident qjs loop, not the tier-1
-  turn model with a host handle table (ADR 0010) — move it when turns land.
-  Wire v0.2 shipped the op deadline (`DEFAULT_OP_DEADLINE`), host-stamped
-  `at_ms`, ranged reads, and the hello handshake; `--restart on-failure`
-  shipped the guest restart policy; the WebDoor (`serve --bind`) shipped the
-  generic HTTP gateway. Still ahead: CAS-pinned app manifests (`main` is read
-  from `--app` by path; provenance is a doc note only), per-user gateway
-  principals / a guest `fetch` handler (`wanix/http/1`) so web users stop
-  collapsing into the gateway's one principal, and an off-loopback gateway
-  auth story (today a non-loopback `--listen` with `--bind` is refused at
-  startup).
-- Task-kill gaps (documented on `EpochInterrupter` and `Task::kill`): (a) a
-  task parked inside a blocking *host* read (e.g. a quiet stdin) only dies on
-  its next return to guest code — make the host `Backoff` park loops
-  kill-aware; (b) the qjs driver has no per-task interrupt seam (all qjs tasks
-  share one engine), so kill on a running qjs task only sets the observable
-  `kill_requested` flag; (c) no process groups: while a foreground external
-  runs, the shell's Ctrl-C watcher drains stdin and preserves non-Ctrl-C bytes
-  as type-ahead for the next prompt instead of delivering them to a child that
-  reads inherited stdin.
+  Slices): the catalog story is the open front door — ADR 0007's resource
+  catalog/naming layer (one entry per served volume/tool/app, addressed by
+  name instead of pasted tickets) has no implementation yet. The agent adapter
+  is the other open slice, and `#agent`/`#cpu` convergence on the job grammar
+  (a prompt is a job; `events` already exists on `#agent`) waits until those
+  devices are next touched (ADR 0009 §Adopters). `--mount-mesh` still needs
+  threading to `qjs`/`qjs-term` (the keepalive home, `mesh::mounts`, already
+  exists).
+- AppResource + web-door remainder ([docs/appfs.md](docs/appfs.md) §Build
+  Slices / §Status): the served guest is a tier-2 resident qjs loop, not the
+  tier-1 turn model with a host handle table (ADR 0010) — move it when turns
+  land. CAS-pinned app manifests are still ahead (`main` is read from `--app`
+  by path; provenance is a doc note only). On the gateway: per-user web
+  principals — delegation certs / per-user gateway principals or a guest
+  `fetch` handler (`wanix/http/1`) — so web users stop collapsing into the
+  gateway's one dialer principal, and an off-loopback gateway auth story
+  (today a non-loopback `--listen` with `--bind` is refused at startup).
+- Parked-read cancellation + permit pinning (the kill-shipped residue,
+  documented on `EpochInterrupter`/`Task::kill` and the ADR 0008 liveness
+  note): (a) a task parked inside a blocking *host* read (e.g. a quiet stdin)
+  only dies on its next return to guest code — make the host `Backoff` park
+  loops kill-aware; (b) the qjs driver has no per-task interrupt seam (all qjs
+  tasks share one engine), so kill on a running qjs task only sets the
+  observable `kill_requested` flag; (c) no process groups: while a foreground
+  external runs, the shell's Ctrl-C watcher drains stdin and preserves
+  non-Ctrl-C bytes as type-ahead for the next prompt instead of delivering
+  them to a child that reads inherited stdin; (d) a live-but-idle parked mesh
+  read pins its per-connection session permit — hard-killed subscribers
+  release in bounded time via the pinned QUIC keep-alive/idle posture
+  (5s/30s), but a healthy idle subscriber holds its permit until it closes.
 - CLI UX remainder: the hands-on new-user audit behind commit bc05331 landed
   only its top S/M findings (lean usage errors, per-subcommand `--help`,
   ADR 0008 unreachable text, split peer-id parse diagnostics, copy-pasteable
@@ -645,10 +689,12 @@ more feature work.
   as tickets, so re-derive them by running the binaries as a new user before
   the next UX pass.
 - Module-line health: `just module-lines` is green against the 350-line hard
-  limit, but three modules sit above the 250-line warn limit and should be split
+  limit, but six modules sit above the 250-line warn limit and should be split
   before they grow — `wanix-agent/src/codex.rs` (~307), `wanix-agent/src/
-  exec_server.rs` (~283), and `wanix-cli/src/serve/http/app.rs` (~273, restored
-  from the cockpit work). Keep running `just module-lines` during cleanup.
+  exec_server.rs` (~283), `wanix-cli/src/serve/http/app.rs` (~273),
+  `wanix-sh/src/pipeline.rs` (~267), `wanix-sites/src/lib.rs` (~265), and
+  `wanix-mesh/src/node.rs` (~256). Keep running `just module-lines` during
+  cleanup.
 - Cockpit follow-ups: `v86-shared-demo` is still a no-op stub in
   `workbench/src/web/extension.ts` (marked `// STUB:`); port it next. `#plumb`
   live receive in the self-check probes the publish path only because a blocking

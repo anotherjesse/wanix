@@ -15,7 +15,12 @@ interactive REPL (`crates/wanix-sh`), proven end to end in
 `crates/wanix-wasm/src/driver.rs` tests. Tier-2 blocking now covers the qjs
 layer too: `WasiCtx::fd_read` parks on stdio device fds via the shared
 `wanix_wasi::wait` machinery, proven by a resident QuickJS stdin loop in
-`crates/wanix-qjs`.
+`crates/wanix-qjs`. Tier-2 kill shipped: `#task/<id>/ctl` accepts `kill`
+(`Task::kill` plus the wasm driver's per-run epoch interrupter, releasing fds
+through the same path as normal exit), with the interactive shell's foreground
+Ctrl-C and cancellable streaming `cat` bottoming out on it — the qjs driver
+still lacks a per-task interrupt seam, so kill on a running qjs task only sets
+the observable `kill_requested` flag.
 
 ## Context
 

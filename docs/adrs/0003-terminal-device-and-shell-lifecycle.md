@@ -54,7 +54,9 @@ guest-side shell owns echo, simple editing, newline handling, Ctrl-C line
 cancellation, Ctrl-D exit, and command dispatch. Browser/editor/VM terminal
 clients may translate platform key events into bytes such as `0x03` and `0x04`,
 but those translations are terminal input, not Wanix task cancellation or
-signal delivery.
+signal delivery. When a guest shell chooses to treat Ctrl-C as
+foreground-child cancellation, it writes `kill` to the child's
+`#task/<id>/ctl` (ADR 0010); `#term` itself still carries only bytes.
 
 The bundled QuickJS shell is a guest program inside a Wanix task, not a separate
 process model. Shell behavior should use `qjs:std`, `qjs:os`, and service

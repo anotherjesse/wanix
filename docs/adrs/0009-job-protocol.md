@@ -10,7 +10,9 @@ agents should learn one way to invoke slow or effectful work everywhere
 (`crates/wanix-job` — states/transitions, error taxonomy, report shapes, spec
 envelope) and ToolFS v0 (`crates/wanix-tool`, with the docs/toolfs.md
 validation matrix pinned in `crates/wanix-tool/src/tests.rs`); runners are
-in-process v0. The protocol now crosses the mesh: `wanix tool serve` exports a
+the in-process v0 set plus the fixed-policy process runner (`wanix tool serve
+--config tools.toml`, `crates/wanix-cli/src/tool/process.rs`), which wraps
+real host programs behind the same grammar. The protocol now crosses the mesh: `wanix tool serve` exports a
 ToolFS over the native wire (one endpoint/ticket per tool, per-connection
 principal-scoped `jobs/` views — `crates/wanix-cli/src/tool/serve.rs`),
 `--mount-mesh` dials it into a task/shell namespace, and the wanix-sh `tool`
