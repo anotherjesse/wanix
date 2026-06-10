@@ -5177,6 +5177,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wanix-jobfs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wanix-fs",
+ "wanix-job",
+]
+
+[[package]]
 name = "wanix-kv"
 version = "0.1.0"
 dependencies = [
@@ -5352,6 +5362,7 @@ dependencies = [
  "serde_json",
  "wanix-fs",
  "wanix-job",
+ "wanix-jobfs",
 ]
 
 [[package]]

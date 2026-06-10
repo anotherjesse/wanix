@@ -171,10 +171,13 @@ Proposed root:
   err                    stderr or diagnostics
   status                 structured state snapshot
   result.json            structured final summary
-  events                 optional future progress stream
+  events                 progress stream (never-EOF read while the job lives)
 ```
 
-The minimal v0 can omit `events`; request/response comes first.
+`events` is implemented: a bounded, lossy (drop-oldest) progress stream the
+runner feeds through its `RunContext`; a read blocks for new lines and sees
+EOF only once the job reaches a terminal state (or is dropped). A device that
+cannot honor it may omit it (ADR 0009).
 
 `new` allocates a job and returns an opaque id:
 
@@ -245,7 +248,9 @@ Sketch:
     "maxJobsPerPrincipal": 32,
     "maxBytesPerPrincipal": 16777216,
     "maxTotalJobs": 1024,
-    "maxTotalBytes": 268435456
+    "maxTotalBytes": 268435456,
+    "maxOutBytes": 16777216,
+    "maxErrBytes": 1048576
   },
   "lifecycle": {
     "allocatedTtlMs": 300000,
@@ -257,6 +262,12 @@ Sketch:
   "retryable": true
 }
 ```
+
+`params.schemaPath` is **advertisement only**: v0 serves the schema file for
+callers to read, but validates `params.json` for JSON well-formedness, never
+for schema conformance — runners must treat params as caller input either
+way. `visibility` must be `private` in v0: `ToolService` refuses to construct
+a spec advertising an unimplemented privacy mode.
 
 Keep this intentionally smaller than a full agent tool protocol. It only needs
 to describe the filesystem operation well enough for clients and agents to use
@@ -412,29 +423,39 @@ retries unpleasant.
 
 Split the filesystem contract from host process policy.
 
-Core crate:
+Core crates:
 
 ```text
+wanix-jobfs
+  -> wanix-fs + wanix-job + serde + serde_json
 wanix-tool
-  -> wanix-fs
-  -> serde
-  -> serde_json
+  -> wanix-fs + wanix-job + wanix-jobfs + serde + serde_json
 ```
 
-The core crate owns:
+The contract is split across two crates: `wanix-jobfs` owns the reusable job
+machinery (the job table, lifecycle/quota core, `JobPrincipal`, `JobClock`,
+`JobLimits`/`JobLifecycle`, the `JobRunner`/`RunContext`/`RunOutcome` seam,
+and the job-directory `File` impls), so the second adopter never depends on a
+crate named "tool"; `wanix-tool` owns the tool spec and path layout:
 
 ```text
-ToolService
-ToolFs
-ToolPrincipal
-ToolRunner trait
-ToolSpec
-ToolLimits
-ToolLifecycle
-ToolVisibility
-ToolJob
-fake runner tests
+wanix-jobfs                      wanix-tool
+  JobCore (table + lifecycle)      ToolService (spec surface)
+  JobPrincipal, JobClock           ToolFs (path layout)
+  JobLimits, JobLifecycle          ToolSpec, ToolVisibility
+  JobRunner / RunContext           fake runner tests
+  RunOutcome, job-dir File impls
 ```
+
+A runner receives a `RunContext` per invocation: the job id, the absolute
+deadline (`started_at + runTimeoutMs`; the core finalizes a deadline-ignoring
+runner as `timeout` anyway), the job's live abort flag, and the `events`
+progress sink.
+
+Output caps (`maxOutBytes`/`maxErrBytes`, plus the aggregate `maxTotalBytes`)
+are enforced at finalize: stored bytes are always clamped, and a run that
+would otherwise have succeeded records `runner_failed` (per-stream cap) or
+`quota_exceeded` (aggregate) instead of silently truncating.
 
 Process execution belongs outside the core at first, probably in `wanix-cli`
 or a later `wanix-tool-process` crate:

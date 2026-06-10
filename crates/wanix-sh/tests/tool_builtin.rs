@@ -14,13 +14,18 @@ use wanix_sh::{
     NamespaceOps, ShellError, ShellResult, ShellState, SpawnHandle, SpawnSpec, run_line,
 };
 use wanix_tool::runners::{FailRunner, UpperRunner};
-use wanix_tool::{RunOutcome, ToolPrincipal, ToolRunner, ToolService, ToolSpec};
+use wanix_tool::{RunContext, RunOutcome, ToolPrincipal, ToolRunner, ToolService, ToolSpec};
 
 /// Appends the params' `"suffix"` string to the input (exercises params.json).
 struct SuffixRunner;
 
 impl ToolRunner for SuffixRunner {
-    fn run(&self, input: &[u8], params: Option<&serde_json::Value>) -> RunOutcome {
+    fn run(
+        &self,
+        input: &[u8],
+        params: Option<&serde_json::Value>,
+        _ctx: &RunContext,
+    ) -> RunOutcome {
         let suffix = params
             .and_then(|value| value.get("suffix"))
             .and_then(|value| value.as_str())
@@ -30,7 +35,8 @@ impl ToolRunner for SuffixRunner {
 }
 
 fn mounted(name: &str, runner: Box<dyn ToolRunner>) -> (String, wanix_tool::ToolFs) {
-    let service = ToolService::new(ToolSpec::v0(name, "test tool"), runner, Box::new(|| 0));
+    let service =
+        ToolService::new(ToolSpec::v0(name, "test tool"), runner, Box::new(|| 0)).unwrap();
     let view = service.open_view(ToolPrincipal::local("shell"));
     (format!("/n/{name}"), view)
 }
@@ -171,7 +177,12 @@ fn tool_redirects_both_sides_and_closes_the_job() {
     let status = run(&mut ns, "tool /n/upper < notes.txt > NOTES.txt");
     assert_eq!(status, 0, "stderr: {:?}", String::from_utf8_lossy(&ns.err));
     assert_eq!(ns.files.get("NOTES.txt").unwrap(), b"HELLO MESH");
-    assert!(ns.err.is_empty(), "no diagnostics on success");
+    // Success keeps stderr to the single crash-resume breadcrumb.
+    let err = String::from_utf8_lossy(&ns.err);
+    assert!(
+        err.starts_with("job: /n/upper/jobs/") && err.trim_end().lines().count() == 1,
+        "only the job path breadcrumb on success: {err:?}"
+    );
     // The one-shot helper closes its job: nothing is retained under jobs/.
     let (fs, _) = ns.route("/n/upper").unwrap();
     assert!(
@@ -206,11 +217,24 @@ fn failed_job_reports_taxonomy_kind_on_stderr_and_short_circuits() {
     let mut ns = upper_ns();
     ns.mount("fail", Box::new(FailRunner));
     let status = run(&mut ns, "tool /n/fail < notes.txt && echo never");
-    assert_eq!(status, 1, "a failed job exits non-zero");
+    assert_eq!(status, 2, "a failed job exits with its recorded exitCode");
+    let err = String::from_utf8_lossy(&ns.err);
+    let mut lines = err.lines();
+    assert!(
+        lines
+            .next()
+            .is_some_and(|line| line.starts_with("job: /n/fail/jobs/")),
+        "the job path breadcrumb comes first: {err:?}"
+    );
     assert_eq!(
-        String::from_utf8_lossy(&ns.err),
-        "tool: runner_failed: fail runner always fails\n",
-        "one human line with the taxonomy kind visible"
+        lines.next(),
+        Some("tool: runner_failed: fail runner always fails"),
+        "one human line with the taxonomy kind visible: {err:?}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("deliberate failure"),
+        "the job's err diagnostics follow the taxonomy line: {err:?}"
     );
     assert!(ns.out.is_empty(), "&& short-circuits on the failure");
 }
@@ -226,7 +250,11 @@ fn failed_job_status_flows_to_dollar_question() {
         &mut ns,
     );
     assert_eq!(status, 0, "echo is the final command");
-    assert_eq!(String::from_utf8_lossy(&ns.out), "status=1\n");
+    assert_eq!(
+        String::from_utf8_lossy(&ns.out),
+        "status=2\n",
+        "$? carries the job's recorded exitCode"
+    );
 }
 
 #[test]
@@ -235,10 +263,18 @@ fn invalid_input_failure_uses_the_invalid_input_kind() {
     ns.files
         .insert("bad.bin".into(), vec![0xff, 0xfe, 0x80, 0x81]);
     let status = run(&mut ns, "tool /n/upper < bad.bin");
-    assert_eq!(status, 1);
+    assert_eq!(status, 1, "UpperRunner records exit code 1");
+    let err = String::from_utf8_lossy(&ns.err);
+    let tail = err
+        .split_once('\n')
+        .map(|(breadcrumb, tail)| {
+            assert!(breadcrumb.starts_with("job: /n/upper/jobs/"), "{err:?}");
+            tail
+        })
+        .unwrap_or_default();
     assert_eq!(
-        String::from_utf8_lossy(&ns.err),
-        "tool: invalid_input: input is not valid UTF-8\n"
+        tail,
+        "tool: invalid_input: input is not valid UTF-8\ninput is not valid UTF-8\n"
     );
 }
 

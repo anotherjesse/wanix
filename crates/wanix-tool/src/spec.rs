@@ -3,10 +3,13 @@
 //! [`ToolSpec`] is the mounted source of truth for one ToolFS resource. It
 //! opens with the shared `wanix.resource` envelope from `wanix-job` and adds
 //! the tool-specific sections: input, params, outputs, limits, lifecycle,
-//! visibility, and declared effects. JSON keys are camelCase.
+//! visibility, and declared effects. The quota/retention sections
+//! ([`JobLimits`]/[`JobLifecycle`]) are the shared `wanix-jobfs` shapes.
+//! JSON keys are camelCase.
 
 use serde::{Deserialize, Serialize};
 use wanix_job::ResourceEnvelope;
+use wanix_jobfs::{JobLifecycle, JobLimits};
 
 /// The machine-readable contract of one ToolFS resource (`spec.json`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,11 +24,12 @@ pub struct ToolSpec {
     pub params: ToolParams,
     /// Where the job's outputs land.
     pub outputs: ToolOutputs,
-    /// Quotas and the run time budget.
-    pub limits: ToolLimits,
+    /// Quotas, output caps, and the run time budget.
+    pub limits: JobLimits,
     /// Job retention lifecycle.
-    pub lifecycle: ToolLifecycle,
-    /// Job visibility across principals (v0 always behaves as `private`).
+    pub lifecycle: JobLifecycle,
+    /// Job visibility across principals. v0 implements `private` only;
+    /// [`crate::ToolService`] rejects any other mode.
     pub visibility: ToolVisibility,
     /// Declared effects (ADR 0009 §Discovery) — a trust statement by the
     /// device author, not something the platform can enforce.
@@ -42,8 +46,8 @@ impl ToolSpec {
             input: ToolInput::default(),
             params: ToolParams::default(),
             outputs: ToolOutputs::default(),
-            limits: ToolLimits::default(),
-            lifecycle: ToolLifecycle::default(),
+            limits: JobLimits::default(),
+            lifecycle: JobLifecycle::default(),
             visibility: ToolVisibility::Private,
             side_effects: ToolSideEffects::None,
             retryable: true,
@@ -78,7 +82,11 @@ impl Default for ToolInput {
 #[serde(rename_all = "camelCase")]
 pub struct ToolParams {
     /// Path of the advertised JSON schema file, when one is configured.
-    /// The schema is advertisement: v0 validates JSON well-formedness only.
+    ///
+    /// **Advertisement only**: v0 serves the schema for callers to read and
+    /// validates `params.json` for JSON *well-formedness*, never for schema
+    /// conformance — a runner must treat params as caller input, schema or
+    /// not (`docs/toolfs.md` §"Spec Shape").
     pub schema_path: Option<String>,
     /// Whether `params.json` must be written before `ctl run`.
     pub required: bool,
@@ -119,82 +127,12 @@ pub struct ToolOutput {
     pub content_type: Option<String>,
 }
 
-/// Quotas and the run time budget.
-///
-/// `run_timeout_ms` is declared contract; v0's in-process runners complete
-/// synchronously and enforcement belongs to the process runner.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolLimits {
-    /// Maximum wall-clock run duration in milliseconds.
-    pub run_timeout_ms: u64,
-    /// Maximum simultaneously running jobs per principal.
-    pub max_concurrent_per_principal: u64,
-    /// Maximum live (non-expired) jobs per principal.
-    pub max_jobs_per_principal: u64,
-    /// Maximum stored bytes (`in` + `out` + `err`) per principal.
-    pub max_bytes_per_principal: u64,
-    /// Maximum live (non-expired) jobs across ALL principals.
-    ///
-    /// Per-principal quotas alone do not bound a served tool's memory: an
-    /// open-admission endpoint hands every fresh dialer identity a fresh
-    /// quota, so the job table needs an aggregate guardrail.
-    #[serde(default = "default_max_total_jobs")]
-    pub max_total_jobs: u64,
-    /// Maximum stored bytes (inputs, buffered params, outputs, diagnostics)
-    /// across ALL principals — the aggregate memory bound enforced as input
-    /// and params bytes arrive.
-    #[serde(default = "default_max_total_bytes")]
-    pub max_total_bytes: u64,
-}
-
-fn default_max_total_jobs() -> u64 {
-    1_024
-}
-
-fn default_max_total_bytes() -> u64 {
-    268_435_456 // 256 MiB
-}
-
-impl Default for ToolLimits {
-    fn default() -> Self {
-        Self {
-            run_timeout_ms: 5_000,
-            max_concurrent_per_principal: 2,
-            max_jobs_per_principal: 32,
-            max_bytes_per_principal: 16_777_216,
-            max_total_jobs: default_max_total_jobs(),
-            max_total_bytes: default_max_total_bytes(),
-        }
-    }
-}
-
-/// Job retention lifecycle (all milliseconds).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolLifecycle {
-    /// How long an allocated-but-never-run job lives.
-    pub allocated_ttl_ms: u64,
-    /// How long a `done` job stays inspectable.
-    pub retain_done_ms: u64,
-    /// How long a `failed` or `aborted` job stays inspectable.
-    pub retain_failed_ms: u64,
-}
-
-impl Default for ToolLifecycle {
-    fn default() -> Self {
-        Self {
-            allocated_ttl_ms: 300_000,
-            retain_done_ms: 600_000,
-            retain_failed_ms: 3_600_000,
-        }
-    }
-}
-
 /// Job visibility across principals (`docs/toolfs.md` §"Privacy").
 ///
-/// v0 implements `private` semantics for every mode; the field is contract
-/// advertisement for the modes to come.
+/// v0 implements `private` only; the other modes are reserved contract
+/// vocabulary, and [`crate::ToolService`] refuses to construct a service
+/// that advertises one of them (an honest spec never promises an
+/// unimplemented boundary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolVisibility {
@@ -206,6 +144,19 @@ pub enum ToolVisibility {
     Operator,
     /// Demo-only: no job privacy boundary.
     Public,
+}
+
+impl ToolVisibility {
+    /// The snake_case wire string, identical to the serde encoding.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Private => "private",
+            Self::Shared => "shared",
+            Self::Operator => "operator",
+            Self::Public => "public",
+        }
+    }
 }
 
 /// Declared effects of one run (ADR 0009 §Discovery).

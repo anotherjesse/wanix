@@ -3,38 +3,35 @@
 //! The view implements the job-protocol surface (ADR 0009): root metadata
 //! files, `new`, and the per-job directories. Privacy is enforced here only
 //! in the sense that the bound principal scopes every service call; the
-//! `FileSystem` impl itself never sees a caller-claimed identity.
+//! `FileSystem` impl itself never sees a caller-claimed identity. The
+//! per-file read/write discipline lives in `wanix-jobfs`'s shared `File`
+//! implementations; this module owns only the tool path layout.
 
 use wanix_fs::{
-    DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
+    DirEntry, File, FileSystem, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
+};
+use wanix_jobfs::{
+    AppendFile, BytesFile, CtlFile, EventsFile, JobField, JobPrincipal, NewJobFile,
+    directory_metadata, file_metadata, modes, require_read_only,
 };
 
-use crate::files::{AppendFile, BytesFile, CtlFile, NewJobFile, require_read_only};
-use crate::principal::ToolPrincipal;
-use crate::service::{JobField, ToolService};
-
-pub(crate) mod modes {
-    pub(crate) const DIRECTORY: u32 = 0o555;
-    pub(crate) const READ_FILE: u32 = 0o444;
-    pub(crate) const DATA_FILE: u32 = 0o666;
-    pub(crate) const CTL_FILE: u32 = 0o222;
-}
+use crate::service::ToolService;
 
 /// One principal's view of a ToolFS resource.
 #[derive(Debug, Clone)]
 pub struct ToolFs {
     service: ToolService,
-    principal: ToolPrincipal,
+    principal: JobPrincipal,
 }
 
 impl ToolFs {
-    pub(crate) fn new(service: ToolService, principal: ToolPrincipal) -> Self {
+    pub(crate) fn new(service: ToolService, principal: JobPrincipal) -> Self {
         Self { service, principal }
     }
 
     /// The principal this view acts as.
     #[must_use]
-    pub fn principal(&self) -> &ToolPrincipal {
+    pub fn principal(&self) -> &JobPrincipal {
         &self.principal
     }
 }
@@ -58,7 +55,7 @@ enum JobNode {
     Ctl,
 }
 
-const JOB_FILES: [(&str, JobNode); 7] = [
+const JOB_FILES: [(&str, JobNode); 8] = [
     ("in", JobNode::Field(JobField::In)),
     ("params.json", JobNode::Field(JobField::Params)),
     ("ctl", JobNode::Ctl),
@@ -66,6 +63,7 @@ const JOB_FILES: [(&str, JobNode); 7] = [
     ("err", JobNode::Field(JobField::Err)),
     ("status", JobNode::Field(JobField::Status)),
     ("result.json", JobNode::Field(JobField::Result)),
+    ("events", JobNode::Field(JobField::Events)),
 ];
 
 fn job_node(name: &str) -> FsResult<JobNode> {
@@ -102,14 +100,15 @@ impl ToolFs {
         node: JobNode,
         options: OpenOptions,
     ) -> FsResult<Box<dyn File>> {
+        let core = self.service.core();
         match node {
             JobNode::Ctl => {
                 if !options.write {
                     return Err(FsError::PermissionDenied);
                 }
-                self.service.check_job(&self.principal, id)?;
+                core.check_job(&self.principal, id)?;
                 Ok(Box::new(CtlFile::new(
-                    self.service.clone(),
+                    core.clone(),
                     self.principal.clone(),
                     id.to_owned(),
                 )))
@@ -117,22 +116,31 @@ impl ToolFs {
             JobNode::Field(field @ (JobField::In | JobField::Params))
                 if options.write || options.create || options.truncate =>
             {
-                self.service.check_job(&self.principal, id)?;
+                core.check_job(&self.principal, id)?;
                 if options.truncate {
-                    self.service.reset_field(&self.principal, id, field)?;
+                    core.reset_field(&self.principal, id, field)?;
                 }
                 Ok(Box::new(AppendFile::new(
-                    self.service.clone(),
+                    core.clone(),
                     self.principal.clone(),
                     id.to_owned(),
                     field,
                 )))
             }
+            JobNode::Field(JobField::Events) => {
+                if !options.read || options.write {
+                    return Err(FsError::PermissionDenied);
+                }
+                // The buffer Arc is captured here, under one table lock; the
+                // blocking never-EOF reads then run outside it.
+                let buffer = core.events_handle(&self.principal, id)?;
+                Ok(Box::new(EventsFile::new(buffer)))
+            }
             JobNode::Field(field) => {
                 if !options.read || options.write {
                     return Err(FsError::PermissionDenied);
                 }
-                let bytes = self.service.read_field(&self.principal, id, field)?;
+                let bytes = core.read_field(&self.principal, id, field)?;
                 let mode = match field {
                     JobField::In | JobField::Params => modes::DATA_FILE,
                     _ => modes::READ_FILE,
@@ -143,13 +151,14 @@ impl ToolFs {
     }
 
     fn job_file_metadata(&self, id: &str, node: JobNode) -> FsResult<Metadata> {
+        let core = self.service.core();
         match node {
             JobNode::Ctl => {
-                self.service.check_job(&self.principal, id)?;
+                core.check_job(&self.principal, id)?;
                 Ok(file_metadata(0, modes::CTL_FILE))
             }
             JobNode::Field(field) => {
-                let len = self.service.field_len(&self.principal, id, field)?;
+                let len = core.field_len(&self.principal, id, field)?;
                 let mode = match field {
                     JobField::In | JobField::Params => modes::DATA_FILE,
                     _ => modes::READ_FILE,
@@ -186,14 +195,14 @@ impl FileSystem for ToolFs {
             ToolPath::Usage => {
                 require_read_only(options)?;
                 Ok(Box::new(BytesFile::new(
-                    self.service.usage_json(&self.principal)?,
+                    self.service.core().usage_json(&self.principal)?,
                     modes::READ_FILE,
                 )))
             }
             ToolPath::New => {
                 require_read_only(options)?;
                 Ok(Box::new(NewJobFile::new(
-                    self.service.clone(),
+                    self.service.core().clone(),
                     self.principal.clone(),
                 )))
             }
@@ -205,7 +214,7 @@ impl FileSystem for ToolFs {
         match parse_path(path)? {
             ToolPath::Root | ToolPath::JobsDir => Ok(directory_metadata()),
             ToolPath::JobDir(id) => {
-                self.service.check_job(&self.principal, id)?;
+                self.service.core().check_job(&self.principal, id)?;
                 Ok(directory_metadata())
             }
             ToolPath::Spec => Ok(file_metadata(
@@ -221,7 +230,7 @@ impl FileSystem for ToolFs {
                 modes::READ_FILE,
             )),
             ToolPath::Usage => Ok(file_metadata(
-                self.service.usage_json(&self.principal)?.len() as u64,
+                self.service.core().usage_json(&self.principal)?.len() as u64,
                 modes::READ_FILE,
             )),
             ToolPath::New => Ok(file_metadata(0, modes::READ_FILE)),
@@ -246,12 +255,13 @@ impl FileSystem for ToolFs {
             }
             ToolPath::JobsDir => Ok(self
                 .service
+                .core()
                 .job_ids(&self.principal)?
                 .into_iter()
                 .map(|id| DirEntry::new(id, directory_metadata()))
                 .collect()),
             ToolPath::JobDir(id) => {
-                self.service.check_job(&self.principal, id)?;
+                self.service.core().check_job(&self.principal, id)?;
                 JOB_FILES
                     .iter()
                     .map(|(name, node)| {
@@ -262,12 +272,4 @@ impl FileSystem for ToolFs {
             _ => Err(FsError::NotDirectory),
         }
     }
-}
-
-fn directory_metadata() -> Metadata {
-    Metadata::new(FileType::Directory, 2, modes::DIRECTORY)
-}
-
-pub(crate) fn file_metadata(len: u64, mode: u32) -> Metadata {
-    Metadata::new(FileType::File, len, mode)
 }

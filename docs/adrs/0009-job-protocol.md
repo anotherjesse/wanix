@@ -15,7 +15,13 @@ ToolFS over the native wire (one endpoint/ticket per tool, per-connection
 principal-scoped `jobs/` views — `crates/wanix-cli/src/tool/serve.rs`),
 `--mount-mesh` dials it into a task/shell namespace, and the wanix-sh `tool`
 builtin drives it end to end in the tested walkthrough (recipe
-[06](../site/content/recipes/06-compose-volume-and-tools.md)).
+[06](../site/content/recipes/06-compose-volume-and-tools.md)). The machinery
+behind the grammar (job table, lifecycle/quota core, principal/clock types,
+the `JobRunner`/`RunContext` seam, and the job-dir `File` impls) now lives in
+the shared `crates/wanix-jobfs`, so later adopters depend on it rather than
+on ToolFS. The reserved `events` file **shipped** for ToolFS: a bounded lossy
+progress stream fed by the runner's `RunContext`, never-EOF until the job is
+terminal.
 
 ## Context
 

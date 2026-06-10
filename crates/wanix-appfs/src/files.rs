@@ -14,10 +14,10 @@ use std::sync::Arc;
 
 use wanix_fs::{File, FsError, FsResult, Metadata, OpenOptions};
 
-use crate::buffer::LineBuffer;
 use crate::fs::{file_metadata, modes};
 use crate::protocol::{AppOp, READ_CHUNK_LEN, encode_data};
 use crate::service::Shared;
+use wanix_fs::LineBuffer;
 
 /// Rejects any open that is not strictly read-only.
 pub(crate) fn require_read_only(options: OpenOptions) -> FsResult<()> {

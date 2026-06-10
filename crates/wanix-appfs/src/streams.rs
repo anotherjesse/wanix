@@ -12,9 +12,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use wanix_fs::{FsError, FsResult};
 
-use crate::buffer::LineBuffer;
 use crate::protocol::{AppPublish, decode_data};
 use crate::tree::AppTree;
+use wanix_fs::LineBuffer;
 
 struct Subscriber {
     stream: String,
@@ -56,7 +56,9 @@ impl StreamTable {
         let mut subscribers = self.lock()?;
         let id = subscribers.next_id;
         subscribers.next_id += 1;
-        let buffer = Arc::new(LineBuffer::default());
+        // Bound each subscription to one maximal publish (`MAX_LINE_LEN`), so
+        // a slow reader holds at most one full line's worth of backlog.
+        let buffer = Arc::new(LineBuffer::bounded(crate::protocol::MAX_LINE_LEN));
         if subscribers.closed {
             // The guest is gone: the subscription still registers (so the
             // open succeeds and `who` stays truthful) but reads see EOF

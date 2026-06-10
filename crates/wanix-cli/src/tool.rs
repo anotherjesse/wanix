@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 use wanix_id::NodeIdentity;
 use wanix_tool::runners::{FakeModelEngine, ModelRunner, UpperRunner};
-use wanix_tool::{RunOutcome, ToolClock, ToolRunner, ToolService, ToolSpec};
+use wanix_tool::{RunContext, RunOutcome, ToolClock, ToolRunner, ToolService, ToolSpec};
 
 use crate::CliError;
 use crate::volume::wanix_dir;
@@ -31,31 +31,31 @@ pub(crate) const BUILTIN_TOOL_NAMES: [&str; 3] = ["model", "sha256", "upper"];
 ///
 /// Returns a usage error for a name outside [`BUILTIN_TOOL_NAMES`].
 pub(crate) fn build_tool_service(name: &str) -> Result<ToolService, CliError> {
-    match name {
-        "upper" => Ok(ToolService::new(
+    let (spec, runner): (ToolSpec, Box<dyn ToolRunner>) = match name {
+        "upper" => (
             ToolSpec::v0("upper", "Uppercase UTF-8 text (deterministic, in-process)."),
             Box::new(UpperRunner),
-            wall_clock(),
-        )),
-        "sha256" => Ok(ToolService::new(
-            sha256_spec(),
-            Box::new(Sha256Runner),
-            wall_clock(),
-        )),
-        "model" => Ok(ToolService::new(
+        ),
+        "sha256" => (sha256_spec(), Box::new(Sha256Runner)),
+        "model" => (
             ToolSpec::v0(
                 "model",
                 "Deterministic FAKE model for demos: completes every prompt as \
                  'fake-completion: <prompt>'. No real LLM is behind this tool.",
             ),
             Box::new(ModelRunner::new(std::sync::Arc::new(FakeModelEngine))),
-            wall_clock(),
-        )),
-        other => Err(CliError::usage(format!(
-            "tool serve: unknown built-in tool {other:?} (available: {})",
-            BUILTIN_TOOL_NAMES.join(", ")
-        ))),
-    }
+        ),
+        other => {
+            return Err(CliError::usage(format!(
+                "tool serve: unknown built-in tool {other:?} (available: {})",
+                BUILTIN_TOOL_NAMES.join(", ")
+            )));
+        }
+    };
+    // Built-in specs are private-visibility by construction, so this only
+    // guards future spec edits.
+    ToolService::new(spec, runner, wall_clock())
+        .map_err(|err| CliError::new(format!("tool serve: {err}"), 1))
 }
 
 /// The sha256 spec: arbitrary bytes in, one hex digest line out. Hashing is
@@ -80,7 +80,7 @@ fn sha256_spec() -> ToolSpec {
 struct Sha256Runner;
 
 impl ToolRunner for Sha256Runner {
-    fn run(&self, input: &[u8], _params: Option<&Value>) -> RunOutcome {
+    fn run(&self, input: &[u8], _params: Option<&Value>, _ctx: &RunContext) -> RunOutcome {
         use sha2::{Digest, Sha256};
         let digest = Sha256::digest(input);
         let mut out = String::with_capacity(digest.len() * 2 + 1);
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn sha256_runner_emits_a_lowercase_hex_digest_line() {
-        let outcome = Sha256Runner.run(b"hello", None);
+        let outcome = Sha256Runner.run(b"hello", None, &wanix_tool::RunContext::detached("test"));
         assert_eq!(
             outcome.out,
             b"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\n".to_vec()

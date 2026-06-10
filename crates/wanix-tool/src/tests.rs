@@ -34,7 +34,8 @@ fn clock(time: &Arc<AtomicU64>) -> ToolClock {
 
 fn service_with(spec: ToolSpec, runner: Box<dyn ToolRunner>) -> (ToolService, Arc<AtomicU64>) {
     let time = Arc::new(AtomicU64::new(T0));
-    (ToolService::new(spec, runner, clock(&time)), time)
+    let service = ToolService::new(spec, runner, clock(&time)).expect("private spec");
+    (service, time)
 }
 
 fn upper_view() -> (ToolFs, Arc<AtomicU64>) {
@@ -97,7 +98,8 @@ fn contract_shape_spec_health_and_schema() {
         Some(json!({ "type": "object" })),
         Box::new(UpperRunner),
         clock(&time),
-    );
+    )
+    .expect("private spec");
     let fs = service.open_view(ToolPrincipal::local("alice"));
 
     assert_eq!(
@@ -144,7 +146,8 @@ fn contract_shape_spec_health_and_schema() {
             "out",
             "err",
             "status",
-            "result.json"
+            "result.json",
+            "events"
         ]
     );
 }
@@ -475,7 +478,7 @@ fn global_byte_cap_bounds_buffered_input_across_principals() {
 
 #[test]
 fn limits_deserialize_without_the_aggregate_fields() {
-    // Older spec JSON (pre-aggregate caps) still parses; the caps default in.
+    // Older spec JSON (pre-aggregate/output caps) still parses; caps default in.
     let json = r#"{
         "runTimeoutMs": 5000,
         "maxConcurrentPerPrincipal": 2,
@@ -485,6 +488,203 @@ fn limits_deserialize_without_the_aggregate_fields() {
     let limits: crate::ToolLimits = serde_json::from_str(json).unwrap();
     assert_eq!(limits.max_total_jobs, 1_024);
     assert_eq!(limits.max_total_bytes, 268_435_456);
+    assert_eq!(limits.max_out_bytes, 16_777_216);
+    assert_eq!(limits.max_err_bytes, 1_048_576);
+}
+
+#[test]
+fn non_private_visibility_is_rejected_at_construction() {
+    // An honest spec never advertises an unimplemented privacy mode.
+    for visibility in [
+        crate::ToolVisibility::Shared,
+        crate::ToolVisibility::Operator,
+        crate::ToolVisibility::Public,
+    ] {
+        let mut spec = ToolSpec::v0("upper", "Upper.");
+        spec.visibility = visibility;
+        match ToolService::new(spec, Box::new(UpperRunner), Box::new(|| T0)) {
+            Err(FsError::Other(message)) => {
+                assert!(message.contains(visibility.as_str()), "{message}");
+                assert!(message.contains("private"), "{message}");
+            }
+            other => panic!("expected visibility rejection, got {other:?}"),
+        }
+    }
+}
+
+/// Pins the [`crate::RunContext`] contract: the job id correlates, the
+/// deadline is started_at + runTimeoutMs, and progress feeds `events`.
+struct ContextProbeRunner;
+
+impl ToolRunner for ContextProbeRunner {
+    fn run(
+        &self,
+        _input: &[u8],
+        _params: Option<&Value>,
+        ctx: &crate::RunContext,
+    ) -> crate::RunOutcome {
+        assert!(!ctx.aborted());
+        ctx.progress(format!("job={} deadline={:?}\n", ctx.job_id(), ctx.deadline()).as_bytes());
+        ctx.progress(b"step 2\n");
+        crate::RunOutcome::success(b"ok".to_vec())
+    }
+}
+
+#[test]
+fn run_context_carries_job_id_and_deadline_and_feeds_events() {
+    let (service, _) = service_with(
+        ToolSpec::v0("probe", "Context probe."),
+        Box::new(ContextProbeRunner),
+    );
+    let fs = service.open_view(ToolPrincipal::local("alice"));
+    let id = alloc_job(&fs);
+    write_file(&fs, &format!("jobs/{id}/in"), b"x");
+
+    // Open `events` before the run: the buffer survives across it.
+    let mut events = fs
+        .open(&np(&format!("jobs/{id}/events")), OpenOptions::read())
+        .unwrap();
+    ctl(&fs, &id, "run").unwrap();
+
+    // finalize closed the stream, so the drain terminates with EOF.
+    let drained = String::from_utf8(read_all(&mut events)).unwrap();
+    assert_eq!(
+        drained,
+        format!("job={id} deadline=Some({})\nstep 2\n", T0 + 5_000)
+    );
+    assert_eq!(read_string(&fs, &format!("jobs/{id}/out")), "ok");
+}
+
+#[test]
+fn events_metadata_is_a_read_only_stream_entry() {
+    let (fs, _) = upper_view();
+    let id = alloc_job(&fs);
+    let meta = fs
+        .metadata(&np(&format!("jobs/{id}/events")))
+        .expect("events is part of the fixed job shape");
+    assert_eq!(meta.len(), 0, "streams have no snapshot length");
+    assert!(matches!(
+        fs.open(
+            &np(&format!("jobs/{id}/events")),
+            OpenOptions {
+                write: true,
+                ..OpenOptions::default()
+            }
+        ),
+        Err(FsError::PermissionDenied)
+    ));
+}
+
+/// Advances the injected clock during the run, simulating a runner that
+/// ignored its deadline.
+struct ClockHogRunner {
+    time: Arc<AtomicU64>,
+    advance_ms: u64,
+}
+
+impl ToolRunner for ClockHogRunner {
+    fn run(
+        &self,
+        _input: &[u8],
+        _params: Option<&Value>,
+        _ctx: &crate::RunContext,
+    ) -> crate::RunOutcome {
+        self.time.fetch_add(self.advance_ms, Ordering::SeqCst);
+        crate::RunOutcome::success(b"late".to_vec())
+    }
+}
+
+#[test]
+fn finalize_backstop_records_timeout_for_a_deadline_ignoring_runner() {
+    let time = Arc::new(AtomicU64::new(T0));
+    let runner = ClockHogRunner {
+        time: Arc::clone(&time),
+        advance_ms: 5_001, // default runTimeoutMs is 5000
+    };
+    let service = ToolService::new(
+        ToolSpec::v0("slow", "Deadline ignorer."),
+        Box::new(runner),
+        clock(&time),
+    )
+    .unwrap();
+    let fs = service.open_view(ToolPrincipal::local("alice"));
+    let id = alloc_job(&fs);
+    write_file(&fs, &format!("jobs/{id}/in"), b"x");
+    ctl(&fs, &id, "run").unwrap();
+
+    let result = read_json(&fs, &format!("jobs/{id}/result.json"));
+    assert_eq!(result["state"], json!("failed"));
+    assert_eq!(result["error"]["kind"], json!("timeout"));
+    assert_eq!(result["retryable"], json!(true));
+}
+
+#[test]
+fn oversize_primary_output_fails_runner_failed_and_is_clamped() {
+    let mut spec = ToolSpec::v0("echo", "Echo.");
+    spec.limits.max_out_bytes = 4;
+    let (service, _) = service_with(spec, Box::new(EchoRunner));
+    let fs = service.open_view(ToolPrincipal::local("alice"));
+    let id = alloc_job(&fs);
+    write_file(&fs, &format!("jobs/{id}/in"), b"hello");
+    ctl(&fs, &id, "run").unwrap();
+
+    let result = read_json(&fs, &format!("jobs/{id}/result.json"));
+    assert_eq!(result["state"], json!("failed"));
+    assert_eq!(result["error"]["kind"], json!("runner_failed"));
+    assert_eq!(result["outputBytes"], json!(4));
+    // The stored bytes are clamped to the cap; the failure stays inspectable.
+    assert_eq!(read_string(&fs, &format!("jobs/{id}/out")), "hell");
+}
+
+/// Succeeds while writing oversized diagnostics.
+struct ChattyErrRunner;
+
+impl ToolRunner for ChattyErrRunner {
+    fn run(
+        &self,
+        _input: &[u8],
+        _params: Option<&Value>,
+        _ctx: &crate::RunContext,
+    ) -> crate::RunOutcome {
+        crate::RunOutcome {
+            out: b"ok".to_vec(),
+            err: b"very long diagnostics".to_vec(),
+            exit_code: Some(0),
+            error: None,
+        }
+    }
+}
+
+#[test]
+fn oversize_diagnostics_fail_runner_failed_and_are_clamped() {
+    let mut spec = ToolSpec::v0("chatty", "Chatty err.");
+    spec.limits.max_err_bytes = 4;
+    let (service, _) = service_with(spec, Box::new(ChattyErrRunner));
+    let fs = service.open_view(ToolPrincipal::local("alice"));
+    let id = alloc_job(&fs);
+    write_file(&fs, &format!("jobs/{id}/in"), b"x");
+    ctl(&fs, &id, "run").unwrap();
+
+    let result = read_json(&fs, &format!("jobs/{id}/result.json"));
+    assert_eq!(result["error"]["kind"], json!("runner_failed"));
+    assert_eq!(read_string(&fs, &format!("jobs/{id}/err")), "very");
+}
+
+#[test]
+fn aggregate_byte_cap_counts_stored_outputs_at_finalize() {
+    let mut spec = ToolSpec::v0("echo", "Echo.");
+    spec.limits.max_total_bytes = 8;
+    let (service, _) = service_with(spec, Box::new(EchoRunner));
+    let fs = service.open_view(ToolPrincipal::local("alice"));
+    let id = alloc_job(&fs);
+    // 5 input bytes leave 3 bytes of aggregate headroom for outputs.
+    write_file(&fs, &format!("jobs/{id}/in"), b"sixby");
+    ctl(&fs, &id, "run").unwrap();
+
+    let result = read_json(&fs, &format!("jobs/{id}/result.json"));
+    assert_eq!(result["state"], json!("failed"));
+    assert_eq!(result["error"]["kind"], json!("quota_exceeded"));
+    assert_eq!(read_string(&fs, &format!("jobs/{id}/out")), "six");
 }
 
 #[test]

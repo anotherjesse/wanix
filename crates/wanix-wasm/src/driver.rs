@@ -672,7 +672,8 @@ mod tests {
             ToolSpec::v0("upper", "Uppercase UTF-8 text."),
             Box::new(UpperRunner),
             Box::new(|| 0),
-        );
+        )
+        .expect("private spec");
         let mut ns = namespace_with_pipe(&fs);
         ns.bind(
             Arc::new(service.open_view(ToolPrincipal::local("shell"))),

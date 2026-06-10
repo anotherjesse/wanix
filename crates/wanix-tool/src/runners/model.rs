@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use wanix_job::{ErrorKind, JobError};
 
-use crate::runner::{RunOutcome, ToolRunner};
+use crate::{RunContext, RunOutcome, ToolRunner};
 
 /// The engine seam behind a model tool: complete one prompt.
 pub trait ModelEngine: Send + Sync {
@@ -44,7 +44,7 @@ impl ModelRunner {
 }
 
 impl ToolRunner for ModelRunner {
-    fn run(&self, input: &[u8], _params: Option<&Value>) -> RunOutcome {
+    fn run(&self, input: &[u8], _params: Option<&Value>, _ctx: &RunContext) -> RunOutcome {
         let Ok(prompt) = std::str::from_utf8(input) else {
             return RunOutcome::failure(
                 JobError::new(ErrorKind::InvalidInput, "prompt is not valid UTF-8"),

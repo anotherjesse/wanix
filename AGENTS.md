@@ -33,7 +33,9 @@ keep growing the cockpit's coverage of the mesh devices.
 ## Crate Shape
 
 - `wanix-fs`: filesystem traits, metadata, errors, path rules, in-memory
-  fixtures, and explicit host-directory-backed filesystems for native demos.
+  fixtures, explicit host-directory-backed filesystems for native demos, and
+  `LineBuffer` (the shared bounded, lossy, blocking subscription buffer behind
+  `#plumb` recv, AppFS streams, and job `events`).
 - `wanix-protocol`: dependency-free wire protocol helpers, currently centered
   on 9P frame splitting, tag extraction, version negotiation, and
   server-facing 9P2000.L/Google compatibility codecs.
@@ -110,13 +112,21 @@ Service-device and mesh crates (the distributed layer; each device is a plain
   the legal-transition relation, the nine-kind `ErrorKind` taxonomy,
   `JobStatus`/`JobResult` report shapes, and the shared `wanix.resource` v0
   spec envelope. serde only; no I/O, no wanix-fs.
+- `wanix-jobfs`: the shared job-protocol machinery every job device reuses —
+  `JobCore` (job table, lifecycle/TTL expiry, quotas, output caps, the
+  finalize timeout backstop), `JobPrincipal`/`JobClock`/`JobLimits`/
+  `JobLifecycle`, the `JobRunner` seam with its per-run `RunContext` (job id,
+  deadline, abort flag, `events` progress sink), and the job-directory `File`
+  impls. Adopters own only their spec shape and path layout.
 - `wanix-tool`: ToolFS v0, the first job-protocol device — one host-approved
   operation family as files (`spec.json`, `new`, `jobs/<id>/{in, params.json,
-  ctl, out, err, status, result.json}`). `ToolService` owns spec, clock,
-  runner, and job table; `open_view(principal)` binds a principal-scoped
-  `ToolFs`, so identity comes from the attach seam, never a payload field.
-  Runners are in-process v0 (deterministic fakes plus `ModelRunner` over a
-  `ModelEngine` seam); the process runner is a later crate.
+  ctl, out, err, status, result.json, events}`) over `wanix-jobfs`.
+  `ToolService` owns the spec surface (and rejects non-`private` visibility:
+  v0 implements private job views only); `open_view(principal)` binds a
+  principal-scoped `ToolFs`, so identity comes from the attach seam, never a
+  payload field. Runners are in-process v0 (deterministic fakes plus
+  `ModelRunner` over a `ModelEngine` seam); the process runner is a later
+  crate over the `wanix-jobfs` seam.
 - `wanix-appfs`: AppFS v0, the file2chan adapter (`docs/appfs.md`) — a
   `FileSystem` whose discrete ops on guest-declared paths become newline-JSON
   request events to a guest app over the sync `AppSender`/`AppReceiver` seam
@@ -175,9 +185,10 @@ wanix-kv | wanix-pipe | wanix-plumb | wanix-agent -> wanix-fs (+ wanix-vfs)
 wanix-cas -> wanix-fs + wanix-module-cache
 wanix-id  -> wanix-fs + wanix-vfs
 
-# job protocol: vocabulary + first device
-wanix-job  -> serde   (vocabulary only; NO I/O, NO wanix-fs)
-wanix-tool -> wanix-fs + wanix-job
+# job protocol: vocabulary + shared machinery + first device
+wanix-job   -> serde   (vocabulary only; NO I/O, NO wanix-fs)
+wanix-jobfs -> wanix-fs + wanix-job + serde   (job table, lifecycle, runner seam, job-dir files)
+wanix-tool  -> wanix-fs + wanix-job + wanix-jobfs
 
 # guest-defined resources: the file2chan adapter
 wanix-appfs -> wanix-fs + serde/serde_json + base64   (NO task/engine deps; guest channel is a sync trait seam)
@@ -575,8 +586,8 @@ more feature work.
   scope-selection shape), not before. (a) and (b) are small cleanup-cycle items.
 - Job protocol / ToolFS remainder ([docs/toolfs.md](docs/toolfs.md) §Build
   Slices): the fixed-command **process runner** (wraps a real host program;
-  lives outside `wanix-tool` so its dependency set stays
-  wanix-fs+wanix-job+serde), catalog integration (one entry per served tool),
+  lives outside `wanix-tool`/`wanix-jobfs`, implementing the `wanix-jobfs`
+  `JobRunner`/`RunContext` seam), catalog integration (one entry per served tool),
   and the agent adapter are the slices still ahead. `--mount-mesh` still needs
   threading to `qjs`/`qjs-term` (the keepalive home, `mesh::mounts`, already
   exists). `#agent`/`#cpu` convergence on the job grammar waits until those

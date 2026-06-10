@@ -3,6 +3,7 @@
 //! This crate owns path rules, metadata, file traits, filesystem traits,
 //! errors, and the first in-memory filesystem used by namespace/task tests.
 
+mod buffer;
 mod content_hash;
 mod error;
 mod localfs;
@@ -11,6 +12,7 @@ mod metadata;
 mod path;
 mod traits;
 
+pub use buffer::{DEFAULT_MAX_BUFFERED_BYTES, LineBuffer};
 pub use content_hash::{CONTENT_HASH_HEX_LEN, CONTENT_HASH_LEN, ContentHash};
 pub use error::{FsError, FsResult};
 pub use localfs::LocalFs;

@@ -1,6 +1,6 @@
 [package]
-name = "wanix-tool"
-description = "ToolFS: the first job-protocol device (ADR 0009) — one host-approved operation family exposed as files."
+name = "wanix-jobfs"
+description = "Job-protocol device machinery (ADR 0009): the shared job table, lifecycle/quota core, runner seam, and job-directory File implementations behind ToolFS and later adopters."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -12,10 +12,9 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1"
 wanix-fs = { path = "../wanix-fs" }
 wanix-job = { path = "../wanix-job" }
-wanix-jobfs = { path = "../wanix-jobfs" }
 
 [lib]
-name = "wanix_tool"
+name = "wanix_jobfs"
 path = "src/lib.rs"
 
 [lints]

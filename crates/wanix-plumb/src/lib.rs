@@ -23,7 +23,6 @@ use wanix_fs::{
     DirEntry, File, FileSystem, FileType, FsError, FsResult, Metadata, NormalizedPath, OpenOptions,
 };
 
-mod buffer;
 mod envelope;
 mod files;
 mod local;

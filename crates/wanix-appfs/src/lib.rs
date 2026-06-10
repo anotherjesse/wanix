@@ -55,7 +55,6 @@
 /// Short human-readable crate responsibility used by workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix app filesystem adapter (file2chan)";
 
-mod buffer;
 mod channel;
 mod files;
 mod fs;
@@ -65,7 +64,6 @@ mod service;
 mod streams;
 mod tree;
 
-pub use buffer::LineBuffer;
 pub use channel::{AppReceiver, AppSender};
 pub use fs::AppFs;
 pub use protocol::{
@@ -75,6 +73,7 @@ pub use protocol::{
 };
 pub use service::{AppFsService, AppStreamCloser, DEFAULT_OP_DEADLINE};
 pub use tree::{AppTree, WHO_FILE};
+pub use wanix_fs::LineBuffer;
 
 #[cfg(test)]
 mod tests;

@@ -1,8 +1,8 @@
-//! The acting principal behind one mounted ToolFS view.
+//! The acting principal behind one mounted job-device view.
 
 use std::fmt;
 
-/// The transport-derived identity a ToolFS view acts as.
+/// The transport-derived identity a job-device view acts as.
 ///
 /// Structured and opaque — a `{kind, id}` pair, never a bare 32-byte public
 /// key (ADR 0004 §Open questions, convergence note): delegation certificates
@@ -11,12 +11,12 @@ use std::fmt;
 /// principal always comes from the transport/attach layer (ADR 0009); it is
 /// never read from a payload field.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ToolPrincipal {
+pub struct JobPrincipal {
     kind: String,
     id: String,
 }
 
-impl ToolPrincipal {
+impl JobPrincipal {
     /// A mesh node principal, identified by its verified node id string
     /// (the `remote_id()` of the connection that attached the view).
     pub fn node(id: impl Into<String>) -> Self {
@@ -47,7 +47,7 @@ impl ToolPrincipal {
     }
 }
 
-impl fmt::Display for ToolPrincipal {
+impl fmt::Display for JobPrincipal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.kind, self.id)
     }

@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex, Weak};
 
 use wanix_fs::{FsError, FsResult};
 
-use crate::buffer::LineBuffer;
 use crate::port::{PlumbPort, PlumbStream};
+use wanix_fs::LineBuffer;
 
 /// An in-process `#plumb` backend that broadcasts to same-process subscribers.
 #[derive(Default)]
@@ -76,7 +76,12 @@ impl PlumbPort for LocalPlumbPort {
     }
 
     fn subscribe(&self, topic: &str) -> FsResult<Box<dyn PlumbStream>> {
-        let buffer = Arc::new(LineBuffer::default());
+        // Bounded to a useful backlog of full `MAX_ENVELOPE_LEN` envelopes (16
+        // messages): delivery is best-effort epidemic pub/sub, so a peer that
+        // knows a topic name must not flood an idle subscriber into unbounded
+        // growth — the oldest bytes drop, the same lossy semantics gossip
+        // already has for a lagged subscriber.
+        let buffer = Arc::new(LineBuffer::bounded(16 * crate::MAX_ENVELOPE_LEN));
         let mut topics = self.lock()?;
         // Sweep topics whose subscribers have all dropped before inserting, so
         // the map tracks only live subscriptions and cannot accumulate empty

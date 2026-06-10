@@ -3,17 +3,24 @@
 
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use wanix_fs::{FsError, FsResult};
+use wanix_fs::{FsError, FsResult, LineBuffer};
 use wanix_job::{JobState, JobStatus};
 
-use crate::principal::ToolPrincipal;
-use crate::spec::{ToolLifecycle, ToolLimits};
+use crate::policy::{JobLifecycle, JobLimits};
+use crate::principal::JobPrincipal;
+
+/// Ceiling on one job's buffered `events` backlog. Progress is a bounded,
+/// lossy stream (drop-oldest, like every subscription buffer): a job with no
+/// `events` reader must not let a chatty runner grow host memory.
+const EVENTS_BUFFER_BYTES: usize = 64 * 1024;
 
 /// One job's full record: lifecycle, timestamps, stored bytes, and result.
 #[derive(Debug)]
 pub(crate) struct JobRecord {
-    pub(crate) principal: ToolPrincipal,
+    pub(crate) principal: JobPrincipal,
     pub(crate) state: JobState,
     pub(crate) created_at: u64,
     pub(crate) started_at: Option<u64>,
@@ -28,11 +35,17 @@ pub(crate) struct JobRecord {
     pub(crate) out: Vec<u8>,
     pub(crate) err: Vec<u8>,
     pub(crate) result: Option<wanix_job::JobResult>,
-    pub(crate) abort_requested: bool,
+    /// `ctl abort` sets this; the running [`crate::RunContext`] shares it, so
+    /// the abort is correlatable to the exact run.
+    pub(crate) abort: Arc<AtomicBool>,
+    /// The job's `events` progress stream: fed by the runner through its
+    /// [`crate::RunContext`], drained by `events` readers outside the table
+    /// lock, closed when the job finishes or is dropped.
+    pub(crate) events: Arc<LineBuffer>,
 }
 
 impl JobRecord {
-    fn new(principal: ToolPrincipal, now: u64) -> Self {
+    fn new(principal: JobPrincipal, now: u64) -> Self {
         Self {
             principal,
             state: JobState::Allocated,
@@ -46,7 +59,8 @@ impl JobRecord {
             out: Vec::new(),
             err: Vec::new(),
             result: None,
-            abort_requested: false,
+            abort: Arc::new(AtomicBool::new(false)),
+            events: Arc::new(LineBuffer::bounded(EVENTS_BUFFER_BYTES)),
         }
     }
 
@@ -69,7 +83,7 @@ impl JobRecord {
     }
 }
 
-/// The shared job table, kept behind the service mutex.
+/// The shared job table, kept behind the core mutex.
 #[derive(Debug)]
 pub(crate) struct JobTable {
     seed: u64,
@@ -93,32 +107,40 @@ impl JobTable {
 
     /// Drops expired jobs: allocated/receiving past the allocated TTL and
     /// terminal jobs past their retention deadline. Running jobs never expire.
-    pub(crate) fn expire(&mut self, now: u64, lifecycle: &ToolLifecycle) {
+    /// A dropped job's `events` buffer is closed so a blocked reader observes
+    /// EOF instead of parking on a record that no longer exists.
+    pub(crate) fn expire(&mut self, now: u64, lifecycle: &JobLifecycle) {
         let allocated_ttl = lifecycle.allocated_ttl_ms;
-        self.jobs.retain(|_, job| match job.state {
-            JobState::Running => true,
-            JobState::Allocated | JobState::Receiving => {
-                now < job.created_at.saturating_add(allocated_ttl)
+        self.jobs.retain(|_, job| {
+            let keep = match job.state {
+                JobState::Running => true,
+                JobState::Allocated | JobState::Receiving => {
+                    now < job.created_at.saturating_add(allocated_ttl)
+                }
+                JobState::Done | JobState::Failed | JobState::Aborted => {
+                    job.expires_at.is_none_or(|deadline| now < deadline)
+                }
+            };
+            if !keep {
+                job.events.close();
             }
-            JobState::Done | JobState::Failed | JobState::Aborted => {
-                job.expires_at.is_none_or(|deadline| now < deadline)
-            }
+            keep
         });
     }
 
     /// Allocates a job for `principal`, enforcing the per-principal job cap
-    /// and the table-wide [`ToolLimits::max_total_jobs`] cap (per-principal
+    /// and the table-wide [`JobLimits::max_total_jobs`] cap (per-principal
     /// quotas alone are non-limiting when every dialer can mint a fresh
     /// identity).
     pub(crate) fn alloc(
         &mut self,
-        principal: &ToolPrincipal,
+        principal: &JobPrincipal,
         now: u64,
-        limits: &ToolLimits,
+        limits: &JobLimits,
     ) -> FsResult<String> {
         if self.jobs.len() as u64 >= limits.max_total_jobs {
             return Err(FsError::Other(format!(
-                "quota_exceeded: tool already holds {} live jobs across all callers",
+                "quota_exceeded: device already holds {} live jobs across all callers",
                 limits.max_total_jobs
             )));
         }
@@ -146,7 +168,7 @@ impl JobTable {
 
     /// Looks up `id` for `principal`. A foreign or missing job id is
     /// `NotFound` — never `PermissionDenied` (ADR 0009 §privacy).
-    pub(crate) fn get(&self, principal: &ToolPrincipal, id: &str) -> FsResult<&JobRecord> {
+    pub(crate) fn get(&self, principal: &JobPrincipal, id: &str) -> FsResult<&JobRecord> {
         self.jobs
             .get(id)
             .filter(|job| job.principal == *principal)
@@ -156,7 +178,7 @@ impl JobTable {
     /// Mutable [`JobTable::get`].
     pub(crate) fn get_mut(
         &mut self,
-        principal: &ToolPrincipal,
+        principal: &JobPrincipal,
         id: &str,
     ) -> FsResult<&mut JobRecord> {
         self.jobs
@@ -165,12 +187,15 @@ impl JobTable {
             .ok_or(FsError::NotFound)
     }
 
+    /// Deletes `id`, releasing any blocked `events` reader with EOF.
     pub(crate) fn remove(&mut self, id: &str) {
-        self.jobs.remove(id);
+        if let Some(job) = self.jobs.remove(id) {
+            job.events.close();
+        }
     }
 
     /// This principal's job ids, in stable (BTreeMap) order.
-    pub(crate) fn ids_for(&self, principal: &ToolPrincipal) -> Vec<String> {
+    pub(crate) fn ids_for(&self, principal: &JobPrincipal) -> Vec<String> {
         self.jobs
             .iter()
             .filter(|(_, job)| job.principal == *principal)
@@ -180,7 +205,7 @@ impl JobTable {
 
     /// Live job count and stored byte total for `principal` (the `usage`
     /// numbers and the quota inputs).
-    pub(crate) fn usage(&self, principal: &ToolPrincipal) -> (u64, u64) {
+    pub(crate) fn usage(&self, principal: &JobPrincipal) -> (u64, u64) {
         let mut jobs = 0u64;
         let mut bytes = 0u64;
         for job in self.jobs.values() {
@@ -193,20 +218,20 @@ impl JobTable {
     }
 
     /// How many of this principal's jobs are currently running.
-    pub(crate) fn running_count(&self, principal: &ToolPrincipal) -> u64 {
+    pub(crate) fn running_count(&self, principal: &JobPrincipal) -> u64 {
         self.jobs
             .values()
             .filter(|job| job.principal == *principal && job.state == JobState::Running)
             .count() as u64
     }
 
-    fn job_count(&self, principal: &ToolPrincipal) -> u64 {
+    fn job_count(&self, principal: &JobPrincipal) -> u64 {
         self.usage(principal).0
     }
 
     /// An opaque id: hashed from seed, allocation counter, and principal so
     /// ids are not guessable-sequential across principals.
-    fn next_id(&mut self, principal: &ToolPrincipal) -> String {
+    fn next_id(&mut self, principal: &JobPrincipal) -> String {
         loop {
             self.counter += 1;
             let mut hasher = std::collections::hash_map::DefaultHasher::new();

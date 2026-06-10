@@ -10,6 +10,7 @@ members = [
     "crates/wanix-fs",
     "crates/wanix-id",
     "crates/wanix-job",
+    "crates/wanix-jobfs",
     "crates/wanix-kv",
     "crates/wanix-mesh",
     "crates/wanix-mesh-wire",

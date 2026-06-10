@@ -103,7 +103,7 @@ impl Shared {
         &self,
         stream: &str,
         principal: &str,
-    ) -> FsResult<(u64, Arc<crate::buffer::LineBuffer>)> {
+    ) -> FsResult<(u64, Arc<wanix_fs::LineBuffer>)> {
         self.streams.subscribe(stream, principal)
     }
 

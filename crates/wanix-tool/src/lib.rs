@@ -7,19 +7,22 @@
 //!
 //! ```text
 //! spec.json  params.schema.json  health  usage  new
-//! jobs/<id>/{in, params.json, ctl, out, err, status, result.json}
+//! jobs/<id>/{in, params.json, ctl, out, err, status, result.json, events}
 //! ```
 //!
-//! - [`ToolService`] owns the shared job table; [`ToolService::open_view`]
-//!   returns a principal-scoped [`ToolFs`] — the `FileSystem` itself stays
-//!   principal-blind, and the acting [`ToolPrincipal`] comes from the
+//! - [`ToolService`] owns the spec surface and wraps the shared job machinery
+//!   ([`wanix_jobfs::JobCore`]); [`ToolService::open_view`] returns a
+//!   principal-scoped [`ToolFs`] — the `FileSystem` itself stays
+//!   principal-blind, and the acting [`JobPrincipal`] comes from the
 //!   transport/attach layer, never from a payload field.
-//! - [`ToolRunner`] is the synchronous host-policy seam behind the device;
-//!   v0 ships deterministic in-process runners in [`runners`] (the process
-//!   runner lives outside this crate per `docs/toolfs.md` §"Runner Boundary").
+//! - [`JobRunner`] (re-exported here as `ToolRunner`) is the synchronous
+//!   host-policy seam behind the device; v0 ships deterministic in-process
+//!   runners in [`runners`] (the process runner lives outside this crate per
+//!   `docs/toolfs.md` §"Runner Boundary").
 //! - Job vocabulary (states, the error taxonomy, `status`/`result.json`
-//!   shapes, the `wanix.resource` spec envelope) comes from `wanix-job`;
-//!   this crate adds the machinery: the job table, lifecycle/TTLs, quotas,
+//!   shapes, the `wanix.resource` spec envelope) comes from `wanix-job`; the
+//!   machinery (job table, lifecycle/TTLs, quotas, runner seam, job-dir
+//!   `File` impls) comes from `wanix-jobfs`; this crate adds the tool spec
 //!   and the filesystem surface.
 //!
 //! Timestamps are Unix-epoch milliseconds supplied by the injectable service
@@ -30,23 +33,29 @@
 /// Short crate purpose string for workspace smoke tests.
 pub const CRATE_PURPOSE: &str = "wanix tool device filesystem (job protocol)";
 
-mod files;
 mod fs;
-mod jobs;
-mod principal;
-mod runner;
 pub mod runners;
 mod service;
 mod spec;
 
 pub use fs::ToolFs;
-pub use principal::ToolPrincipal;
-pub use runner::{RunOutcome, ToolRunner};
-pub use service::{ToolClock, ToolService};
+pub use service::ToolService;
 pub use spec::{
-    ToolInput, ToolLifecycle, ToolLimits, ToolOutput, ToolOutputs, ToolParams, ToolSideEffects,
-    ToolSpec, ToolVisibility,
+    ToolInput, ToolOutput, ToolOutputs, ToolParams, ToolSideEffects, ToolSpec, ToolVisibility,
 };
+pub use wanix_jobfs::{JobPrincipal, JobRunner, RunContext, RunOutcome};
+
+/// Deprecated for removal: import [`wanix_jobfs::JobClock`] instead.
+pub use wanix_jobfs::JobClock as ToolClock;
+/// Deprecated for removal: import [`wanix_jobfs::JobLifecycle`] instead.
+pub use wanix_jobfs::JobLifecycle as ToolLifecycle;
+/// Deprecated for removal: import [`wanix_jobfs::JobLimits`] instead.
+pub use wanix_jobfs::JobLimits as ToolLimits;
+/// Deprecated for removal: import [`wanix_jobfs::JobPrincipal`] (re-exported
+/// here as [`JobPrincipal`]) instead.
+pub use wanix_jobfs::JobPrincipal as ToolPrincipal;
+/// Deprecated for removal: import [`wanix_jobfs::JobRunner`] instead.
+pub use wanix_jobfs::JobRunner as ToolRunner;
 
 #[cfg(test)]
 mod tests;
