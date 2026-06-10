@@ -20,4 +20,7 @@ pub(crate) use mounts::{bind_mesh_mounts, bind_mesh_mounts_into};
 pub(crate) use serve::{parse_mesh_serve_command, run_mesh_serve_streaming};
 #[cfg(test)]
 pub(crate) use ticket::dial_iroh_remote_as;
-pub(crate) use ticket::{IROH_SCHEME, IrohMount, MeshTicket, dial_iroh_remote};
+pub(crate) use ticket::{
+    CLI_MESH_MOUNT_DEADLINE, IROH_SCHEME, IrohMount, MeshTicket, ProbeOutcome, dial_iroh_remote,
+    dialer_identity, probe_iroh,
+};

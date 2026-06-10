@@ -5,6 +5,7 @@ mod agent_exec_server;
 mod agent_program;
 mod app;
 mod capsule;
+mod catalog;
 mod collected;
 mod command_args;
 mod cpu;

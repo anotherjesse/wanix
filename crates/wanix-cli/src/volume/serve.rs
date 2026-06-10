@@ -23,8 +23,8 @@ use super::{
     volumes_root,
 };
 use crate::mesh::resource::{
-    ServedEndpoint, bind_endpoints, reject_fixed_port_multi, serve_record_example_line,
-    serve_record_line,
+    ServedEndpoint, bind_endpoints, register_endpoints, reject_fixed_port_multi,
+    serve_record_example_line, serve_record_line,
 };
 use crate::{CliError, write_process_output};
 
@@ -43,11 +43,12 @@ pub(crate) struct VolumeServeCommand {
     selection: VolumeSelection,
     local_addr: Option<SocketAddr>,
     insecure_open: bool,
+    register: Option<String>,
 }
 
 /// Parses `volume serve (--volume NAME ... | --all) [--listen IP:PORT]
-/// [--insecure-open]` (`--addr` stays a parsing synonym for `--listen`,
-/// ADR 0006).
+/// [--register NAME] [--insecure-open]` (`--addr` stays a parsing synonym for
+/// `--listen`, ADR 0006).
 ///
 /// # Errors
 ///
@@ -61,6 +62,7 @@ pub(crate) fn parse_volume_serve_command(
     let mut all = false;
     let mut local_addr = None;
     let mut insecure_open = false;
+    let mut register = None;
     let mut index = 0;
     while index < args.len() {
         let flag = args[index]
@@ -91,6 +93,17 @@ pub(crate) fn parse_volume_serve_command(
                 local_addr = Some(raw.parse::<SocketAddr>().map_err(|error| {
                     CliError::usage(format!("volume serve --listen must be IP:PORT: {error}"))
                 })?);
+                index += 2;
+            }
+            "--register" => {
+                if register.is_some() {
+                    return Err(CliError::usage(
+                        "volume serve: --register given more than once",
+                    ));
+                }
+                let name = value(args, index, "--register")?;
+                crate::catalog::validate_catalog_name(&name)?;
+                register = Some(name);
                 index += 2;
             }
             other => {
@@ -133,6 +146,7 @@ pub(crate) fn parse_volume_serve_command(
         selection,
         local_addr,
         insecure_open,
+        register,
     })
 }
 
@@ -181,6 +195,12 @@ pub(crate) fn run_volume_serve_streaming(
             serve_record_example_line(&volume.ticket_url).as_bytes(),
         )?;
     }
+    register_endpoints(
+        command.register.as_deref(),
+        "volume",
+        &served,
+        process_stderr,
+    )?;
     // Serving runs on each node's owned runtime; park so they stay alive until the
     // process is terminated.
     loop {

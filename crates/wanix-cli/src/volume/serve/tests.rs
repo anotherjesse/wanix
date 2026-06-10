@@ -88,8 +88,40 @@ fn parse_enforces_public_endpoint_posture() {
     parse_volume_serve_command(&args(&["--volume", "notes", "--addr", "127.0.0.1:0"])).unwrap();
 }
 
+#[test]
+fn parse_accepts_register_and_holds_it_to_the_catalog_grammar() {
+    let parsed = parse_volume_serve_command(&args(&[
+        "--volume",
+        "notes",
+        "--listen",
+        "127.0.0.1:0",
+        "--register",
+        "my-notes",
+    ]))
+    .unwrap();
+    assert_eq!(parsed.register.as_deref(), Some("my-notes"));
+
+    // The registered name is a catalog name (stricter than a volume name), and
+    // the grammar is enforced at parse time so the refusal lands before any
+    // endpoint binds.
+    let error = parse_volume_serve_command(&args(&[
+        "--volume",
+        "notes",
+        "--listen",
+        "127.0.0.1:0",
+        "--register",
+        "My_Notes",
+    ]))
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("invalid catalog name"),
+        "{error}"
+    );
+}
+
 // The announce-line format and the fixed-port-multi rule are shared machinery
-// now, pinned in `crate::mesh::resource::tests`.
+// now, pinned in `crate::mesh::resource::tests`. Self-registration
+// (`--register`) is shared too, proven end to end in `crate::catalog::tests`.
 
 #[test]
 fn parse_rejects_bad_combinations() {

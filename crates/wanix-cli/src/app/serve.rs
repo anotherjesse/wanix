@@ -25,7 +25,8 @@ use super::guest::start_app_guest;
 use super::restart::{RestartPolicy, ServiceSlot, spawn_restart_supervisor};
 use super::{app_identity_path, load_app_manifest};
 use crate::mesh::resource::{
-    ServedEndpoint, bind_endpoints, load_identity_at, serve_record_example_line, serve_record_line,
+    ServedEndpoint, bind_endpoints, load_identity_at, register_endpoints,
+    serve_record_example_line, serve_record_line,
 };
 use crate::{CliError, write_process_output};
 
@@ -38,11 +39,12 @@ pub(crate) struct AppServeCommand {
     local_addr: Option<SocketAddr>,
     insecure_open: bool,
     restart: RestartPolicy,
+    register: Option<String>,
 }
 
 /// Parses `app serve --app DIR --state DIR [--name NAME] [--listen IP:PORT]
-/// [--restart on-failure] [--insecure-open]` (`--addr` stays a parsing
-/// synonym for `--listen`, ADR 0006).
+/// [--restart on-failure] [--register NAME] [--insecure-open]` (`--addr`
+/// stays a parsing synonym for `--listen`, ADR 0006).
 ///
 /// # Errors
 ///
@@ -55,6 +57,7 @@ pub(crate) fn parse_app_serve_command(args: &[OsString]) -> Result<AppServeComma
     let mut local_addr = None;
     let mut insecure_open = false;
     let mut restart = RestartPolicy::default();
+    let mut register = None;
     let mut index = 0;
     while index < args.len() {
         let flag = args[index]
@@ -87,6 +90,17 @@ pub(crate) fn parse_app_serve_command(args: &[OsString]) -> Result<AppServeComma
             }
             "--name" => {
                 name = Some(value(args, index, "--name")?);
+                index += 2;
+            }
+            "--register" => {
+                if register.is_some() {
+                    return Err(CliError::usage(
+                        "app serve: --register given more than once",
+                    ));
+                }
+                let register_name = value(args, index, "--register")?;
+                crate::catalog::validate_catalog_name(&register_name)?;
+                register = Some(register_name);
                 index += 2;
             }
             "--listen" | "--addr" => {
@@ -124,6 +138,7 @@ pub(crate) fn parse_app_serve_command(args: &[OsString]) -> Result<AppServeComma
         local_addr,
         insecure_open,
         restart,
+        register,
     })
 }
 
@@ -177,6 +192,7 @@ pub(crate) fn run_app_serve_streaming(
             serve_record_example_line(&endpoint.ticket_url).as_bytes(),
         )?;
     }
+    register_endpoints(command.register.as_deref(), "app", &served, process_stderr)?;
     // Park: the endpoint serves and the guest task runs until the process is
     // terminated. With --restart on-failure the supervisor owns the guest
     // and re-runs it across exits; otherwise a dead guest stays dead (its

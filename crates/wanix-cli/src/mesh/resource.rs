@@ -6,6 +6,7 @@
 //! what each endpoint serves (a [`NativeServeConfig`]); this module owns the
 //! binding loop, the per-resource identity files, and the announce-line format.
 
+use std::io::Write;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
@@ -13,7 +14,7 @@ use std::time::Duration;
 use wanix_id::NodeIdentity;
 use wanix_mesh::{MeshNode, NativeServeConfig};
 
-use crate::CliError;
+use crate::{CliError, write_process_output};
 
 /// How long to wait for public-network connectivity before printing a ticket.
 const ONLINE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -96,6 +97,35 @@ pub(crate) fn serve_record_line(name: &str, ticket_url: &str) -> String {
 /// stable tab record. Starts with `# ` so record parsers skip it as a comment.
 pub(crate) fn serve_record_example_line(ticket_url: &str) -> String {
     format!("# mount with: wanix-rust mount-ls '{ticket_url}'\n")
+}
+
+/// `--register NAME`: self-registration at announce time (ADR 0007 build-order
+/// step 6, shared by `volume serve`/`tool serve`/`app serve`). Writes/updates
+/// one catalog entry per announced ticket and says what it wrote, as `# `
+/// comment lines beside the announce records.
+///
+/// # Errors
+///
+/// Returns a CLI error when an entry cannot be written or the lines cannot be
+/// printed.
+pub(crate) fn register_endpoints(
+    register: Option<&str>,
+    kind: &str,
+    served: &[ServedEndpoint],
+    process_stderr: &mut dyn Write,
+) -> Result<(), CliError> {
+    let Some(register) = register else {
+        return Ok(());
+    };
+    let endpoints: Vec<(String, String)> = served
+        .iter()
+        .map(|endpoint| (endpoint.name.clone(), endpoint.ticket_url.clone()))
+        .collect();
+    let dir = crate::catalog::default_catalog_dir()?;
+    for line in crate::catalog::register_served(&dir, register, kind, &endpoints)? {
+        write_process_output(process_stderr, "stderr", line.as_bytes())?;
+    }
+    Ok(())
 }
 
 /// Builds the dialable `iroh://<peer>?addr=...` ticket for a bound node — the

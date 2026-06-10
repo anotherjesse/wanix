@@ -39,8 +39,9 @@ pub(crate) const IROH_SCHEME: &str = "iroh://";
 
 /// Foreground CLI mesh mounts should feel like local interactive tools: bounded
 /// enough for an agent or shell to recover, without making transient Wi-Fi or
-/// mDNS hiccups look instant-fatal.
-const CLI_MESH_MOUNT_DEADLINE: Duration = Duration::from_secs(5);
+/// mDNS hiccups look instant-fatal. `catalog ls` liveness probes share the
+/// bound: a probe is just a dial that throws the connection away.
+pub(crate) const CLI_MESH_MOUNT_DEADLINE: Duration = Duration::from_secs(5);
 
 /// A parsed `iroh://` dial target: a verified peer id (the resource identity)
 /// plus optional direct-route hints for first contact.
@@ -199,8 +200,9 @@ pub(crate) fn dial_iroh_remote_as(
 /// deliberately a *separate* key from the mesh-serve `node.key`: dial-out
 /// endpoints serve nothing, and several may be bound concurrently (one per
 /// mount/invocation), so reusing the serving identity here would publish
-/// extra discovery routes for the node id peers actually dial.
-fn dialer_identity() -> Result<NodeIdentity, CliError> {
+/// extra discovery routes for the node id peers actually dial. Catalog
+/// liveness probes present the same principal — a probe is a dial.
+pub(crate) fn dialer_identity() -> Result<NodeIdentity, CliError> {
     let path = crate::volume::wanix_dir()?.join("dialer.key");
     crate::mesh::resource::load_identity_at(&path)
 }
@@ -226,6 +228,52 @@ fn dial_iroh_remote_with(
         remote,
         _node: node,
     })
+}
+
+/// The outcome of a bounded liveness probe against an `iroh://` ticket
+/// (`catalog ls`).
+///
+/// Pre-ACL (ADR 0007 Layer 1) every non-answer looks like an outage: the probe
+/// can distinguish "the peer answered" from "no route authenticated within the
+/// deadline" (ADR 0008's typed unreachable shape), but not "down" from "you
+/// are not granted" — that split arrives with the Layer 2 authorization work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProbeOutcome {
+    /// A route authenticated as the ticket's peer id within the deadline.
+    Online,
+    /// No route authenticated within the deadline — the provider is offline or
+    /// not discoverable from here (the outage shape, never a wrong mount).
+    Offline,
+    /// The probe failed before the liveness question was answered: a malformed
+    /// ticket, a bind failure, or a non-timeout transport error.
+    Unknown(String),
+}
+
+/// Probes `addr` with one bounded dial and throws the connection away.
+///
+/// Reuses the exact mount dial path (same identity model, same deadline
+/// semantics), so "online" means precisely "a mount right now would connect".
+pub(crate) fn probe_iroh(identity: &NodeIdentity, addr: &str, deadline: Duration) -> ProbeOutcome {
+    let ticket = match MeshTicket::parse(addr) {
+        Ok(ticket) => ticket,
+        Err(error) => return ProbeOutcome::Unknown(first_line(&error.to_string())),
+    };
+    let node = match MeshNode::bind(identity) {
+        Ok(node) => node.with_deadline(deadline),
+        Err(error) => {
+            return ProbeOutcome::Unknown(format!("failed to bind mesh endpoint: {error}"));
+        }
+    };
+    match node.dialer().dial_native_attach(ticket.endpoint_addr(), "") {
+        Ok(_) => ProbeOutcome::Online,
+        Err(MeshError::Dial(detail)) if detail.contains("timed out") => ProbeOutcome::Offline,
+        Err(error) => ProbeOutcome::Unknown(first_line(&error.to_string())),
+    }
+}
+
+/// Keeps a probe status single-line (usage errors carry a help-pointer line).
+fn first_line(text: &str) -> String {
+    text.lines().next().unwrap_or_default().to_owned()
 }
 
 /// Renders a failed dial for a human (ADR 0008's text-surface rule): a peer
