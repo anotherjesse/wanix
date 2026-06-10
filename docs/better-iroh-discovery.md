@@ -209,23 +209,12 @@ environment without multicast (some CI) needs it. Proof:
 Direct `addr=` still works as a shortcut/fallback, and identity is unchanged: a
 wrong hint fails the dial, never mounts another peer.
 
-> Investigated (Phase 0): with the pinned `iroh = =1.0.0-rc.1`,
-> `MeshNode::bind` uses `presets::N0` (relay + DNS/Pkarr discovery) and
-> `MeshNode::bind_local` uses `presets::Minimal` with `RelayMode::Disabled` (no
-> discovery at all) — see `crates/wanix-mesh/src/node.rs`. So a bare
-> `iroh://PEER` is only resolvable on the public (`bind`) path, never on the
-> `--addr`/loopback path that tests and local demos use; there the `addr=` hint
-> is mandatory. mDNS/LAN discovery is **not** in the workspace — iroh's local
-> discovery lives in a separate `iroh-mdns-address-lookup`-style crate that is not
-> a current dependency. Pulling it in is its own slice, not Phase 0.
-
-Candidate CLI:
-
-```sh
-wanix-rust volume serve --all --discovery local
-wanix-rust mesh-serve --volume notes --discovery local
-qjs-shell --mesh-discovery local --mount-mesh iroh://PEER=/vol/notes
-```
+> Historical (pre-Phase-1 snapshot, superseded by the **Shipped** note above):
+> at investigation time, mDNS/LAN discovery was not in the workspace and a bare
+> `iroh://PEER` was unresolvable on the `--addr`/loopback path. Neither is true
+> anymore — `iroh-mdns-address-lookup` is a `wanix-mesh` dependency, enabled
+> unconditionally in `MeshNode::build_endpoint`, and the candidate
+> `--discovery local` flag sketched here was deliberately not added.
 
 Questions to settle in code:
 

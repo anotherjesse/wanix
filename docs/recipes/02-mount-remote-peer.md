@@ -87,10 +87,11 @@ Expected stderr (the long hex is B's verifying key, your value will differ):
 
 ```
 wanix-rust mesh-serve: node 829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986
-wanix-rust mesh-serve: mount iroh://829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986?addr=127.0.0.1:5680
+wanix-rust mesh-serve: ticket iroh://829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986?addr=127.0.0.1:5680
+wanix-rust mesh-serve: mount with: wanix-rust mount-ls 'iroh://829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986?addr=127.0.0.1:5680'
 ```
 
-That second line is B's **verified address**. Copy it; node A needs it.
+The `ticket` line is B's **verified address**. Copy it; node A needs it.
 
 ```sh
 export NODE_B='iroh://829fbb4aa611715420d2040ee8e894936ed222780127360c2f08b4238bd0f986?addr=127.0.0.1:5680'

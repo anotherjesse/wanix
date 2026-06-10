@@ -32,7 +32,14 @@ I now have enough ground truth to write a blueprint that is accurate to *this* t
 
 This is the build-from blueprint for turning Wanix into a mesh: every node a cryptographic identity, every node exporting its Plan 9 namespace, any node able to import another's and run tasks/agents against it. It synthesizes the verified 9p-client, transport, import/export, cpu, data-plane, trust, and agent-mesh subsystem designs into one consistent whole, with every adversarial correction baked in.
 
-## 0. Ground truth (this is the tree we are building on, and it matters)
+## 0. Ground truth (a historical snapshot of the tree this was written against)
+
+> **What has changed since writing:** every claim in this section was true at
+> writing time and is preserved as the baseline snapshot, but the workspace has
+> moved: `wanix-kv`, `wanix-agent`, `wanix-pipe`, `wanix-cpu`, `wanix-cas`,
+> `wanix-id`, `wanix-mesh`, `wanix-mesh-wire`, and the capsule path all exist
+> now, and `wanix-mesh` pulls in iroh/tokio/quinn (confined to that one crate).
+> See the slice status table in §4 for what shipped.
 
 The subsystem designs were each verified against a *more advanced* tree (`wanix-qemu-phase0`) that already contains `#kv`, `#agent`, `ExecServer`, `AgentEngine`, `wanix_process_runner`, and a capsule path. **None of those exist on this `rust` branch.** I grepped the whole tree: zero hits for `#kv`, `#agent`, `#pipe`, `#cpu`, `capsule`, `AgentEngine`, `ExecServer`, `agent_program`. There is **no iroh, no tokio, no quinn** anywhere — not in `Cargo.lock`, not in any manifest. Every transport today is `std::net::TcpStream` + `std::thread::spawn`-per-connection, or `tungstenite` WS.
 
@@ -183,6 +190,19 @@ It is the exact mirror of `serve_stream`: where the server decodes T-messages an
 ---
 
 ## 4. The build plan — big vertical slices, each ending in a real demo
+
+> **Status (added after the build; the slices below are written in the original
+> imperative voice).** What each slice became:
+>
+> | Slice | Status |
+> | --- | --- |
+> | 1 — 9P client over pipe/TCP | **COMPLETE** — `wanix-9p-client`, the `mount-*` verbs (`tcp://` arm) |
+> | 2 — identity + grants + `SubtreeFs` | **COMPLETE** — `wanix-id` (`AttachPolicy`, `GrantTable`), `SubtreeFs` in `wanix-vfs` |
+> | 3 — iroh transport | **COMPLETE, then superseded in part** — `wanix-mesh` ships, but the Wanix↔Wanix plane is now the native `wanix-mesh-wire` (see the update note at the top); 9P stays the foreign edge |
+> | 4 — `#kv` over the mesh | **COMPLETE** — `wanix-kv`, imports across the mesh |
+> | 5 — CAS data plane + capsules | **COMPLETE** — `wanix-cas` (`LocalCasStore`, `#cas`), `IrohCasStore` in `wanix-mesh`, `wanix capsule` |
+> | 6 — `#cpu` exec plane | **PARTIAL** — `wanix-cpu` + `CpuAcceptor`/`CpuDialer` in `wanix-mesh` + the `wanix-rust cpu` dial verb exist and are tested, but **no CLI serve mode binds the acceptor yet** (dial-only) |
+> | 7 — plumber + agents on the mesh | **COMPLETE** — `wanix-plumb` + `GossipPlumbPort`, the `#agent` device with `RouterEngine`/`RemoteEngine` |
 
 Each slice is a substantial, externally-visible capability that ends in a runnable demo. The ordering follows the verdicts' unanimous advice: **prove the sync control plane locally first; introduce async/iroh once; defer cpu-exec and agent-export until streaming-output plumbing and a grant/jail layer exist.**
 

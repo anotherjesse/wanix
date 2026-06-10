@@ -7,8 +7,11 @@ and the validation path needed before the contract is promoted.
 > Update: the job-directory invocation shape this document introduced has been
 > promoted to a workspace convention — [ADR 0009](adrs/0009-job-protocol.md)
 > (the job protocol) now owns the grammar, the shared error taxonomy, and the
-> job-id-as-idempotency-key rule. ToolFS is its first implementation. `ctl
-> abort` bottoms out in `#task/<id>/ctl kill` (ADR 0010).
+> job-id-as-idempotency-key rule. ToolFS is its first implementation. The abort
+> path is a delegation stack, not one verb: writing `abort` to a ToolFS job's
+> `ctl` asks the runner to cancel the job, and when the job's work is a Wanix
+> `#task`, the runner's cancellation is a write of `kill` to that
+> `#task/<id>/ctl` (ADR 0010).
 >
 > Update: the v0 core crate exists at `crates/wanix-tool` — `ToolService` +
 > principal-scoped `ToolFs` views over the `wanix-job` vocabulary, with the

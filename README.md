@@ -56,18 +56,23 @@ inspect the service devices, repair a broken program through `#agent`, run a
 qjs→wasm→qjs duet on one shared filesystem, serve HTTP apps at
 `/.wanix/app/<name>` with `#kv`-backed state, and self-check the device set.
 
-Try the native demo path from the workspace root:
+Try the native demo path from the workspace root (the first command compiles the
+workspace, which takes a few minutes once):
 
 ```sh
 cargo run --locked --package wanix-cli -- qjs examples/qjs-demo.js
 cargo run --locked --package wanix-cli -- \
   qjs-term --stdin "hello terminal" examples/qjs-term-demo.js
 printf 'write note.txt hello\nls\ncat note.txt\nexit\n' | cargo run --locked --package wanix-cli -- qjs-shell
-# serve the browser cockpit (open the printed URL):
+# serve the browser cockpit (open the printed URL); serve needs an existing root:
+mkdir -p /tmp/wanix-root
 cargo run --locked --package wanix-cli -- \
   serve --root /tmp/wanix-root --bundle workbench-fs9p --wanix-services
 just check
 ```
+
+The Rust port's service devices, exposed as plain filesystems: `#task`, `#term`,
+`#kv`, `#pipe`, `#plumb`, `#cas`, `#agent`, `#cpu`.
 
 The Rust workspace crates and active ADR index are documented in
 [AGENTS.md](AGENTS.md). The mesh design is in
@@ -81,9 +86,11 @@ QuickJS/Wasmtime engine mechanics live in
 namespace, fd, and WASI policy stay in the Wanix crates above it.
 
 
-### Install the Wanix Toolchain
+### Install the Wanix Toolchain (legacy Go CLI)
 
-Download the Wanix CLI from the [latest release](https://github.com/tractordev/wanix/releases/latest)
+These releases are the original Go toolchain from upstream; the Rust port has no
+packaged release yet and is built from source as shown above. Download the Go
+Wanix CLI from the [upstream latest release](https://github.com/tractordev/wanix/releases/latest)
 or install with Homebrew:
 
 ```
@@ -92,9 +99,10 @@ brew install progrium/taps/wanix
 
 If you want to build from source, see the [CONTRIBUTING.md](CONTRIBUTING.md) doc.
 
-### File Services
+### Go Wanix File Services (legacy)
 
-Wanix has a number of built-in file services:
+The original Go/browser Wanix has these built-in file services (the Rust port's
+device set is listed in the Rust-port section above):
 
 * `#task`
 * `#term`
@@ -112,7 +120,7 @@ For now, see [api/](api/) and [api/handle.js](api/handle.js).
 
 ## Contributing
 
-We'd love your contributions! Take a look at our [issues](https://github.com/tractordev/wanix/issues) to see how you can help out. You can also ask questions and participate in [discussions](https://github.com/tractordev/wanix/discussions), however right now most discussion takes place in our [Discord](https://discord.gg/nbrwNXVvVa).
+We'd love your contributions! Take a look at our [issues](https://github.com/tractordev/wanix/issues) to see how you can help out. You can also ask questions and participate in [discussions](https://github.com/tractordev/wanix/discussions), however right now most discussion takes place in our [Discord](https://discord.gg/nQbgRjEBU4).
 
 Be sure to read our [CONTRIBUTING.md](CONTRIBUTING.md) doc to get started.
 

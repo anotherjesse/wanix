@@ -347,7 +347,7 @@ because the keystone is transport-agnostic.
 ## Copy-Paste: Input / Output
 
 Everything below is real. Run from the worktree root
-(`cd /Users/jesse/lw/wanix-qemu-phase0`).
+(`cd <WORKTREE_ROOT>`).
 
 ### (a) The end-to-end mesh test passes
 
@@ -727,7 +727,7 @@ the re-rooting it extends, and `wanix-id` keeps only `Grant` / `GrantTable` /
 ## Copy-Paste: Input / Output
 
 Everything below is real, run from the repo root
-(`cd /Users/jesse/lw/wanix-qemu`).
+(`cd <WORKTREE_ROOT>`).
 
 ### (a) The grant boundary, enforced over real loopback TCP
 
@@ -1068,7 +1068,7 @@ confined to one crate behind one pin.
 ## Copy-Paste: Input / Output
 
 Everything below is real, captured not fabricated, run from the repo root
-(`cd /Users/jesse/lw/wanix-qemu`). The live demo uses a local
+(`cd <WORKTREE_ROOT>`). The live demo uses a local
 direct-address-only endpoint (`--addr 127.0.0.1:PORT`, relays/DNS disabled) so it
 needs no external network — loopback QUIC. The same `iroh://` ticket and the same
 `mount-*` verbs work against a public NAT-crossing endpoint; only the binding
@@ -1408,7 +1408,7 @@ shape the gate permits.
 ## Copy-Paste: Input / Output
 
 Everything below is real, captured not fabricated, run from the repo root
-(`cd /Users/jesse/lw/wanix-qemu`). The live demo uses a local
+(`cd <WORKTREE_ROOT>`). The live demo uses a local
 direct-address-only endpoint (`--addr 127.0.0.1:PORT`, relays/DNS disabled) — the
 local-trust shape the exec-device gate permits — so it needs no external network.
 
