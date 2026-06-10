@@ -19,6 +19,7 @@ use crate::volume::wanix_dir;
 
 mod guest;
 mod serve;
+mod stdio;
 
 pub(crate) use serve::{parse_app_serve_command, run_app_serve_streaming};
 

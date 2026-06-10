@@ -10,8 +10,8 @@ use std::time::Duration;
 use wanix_fs::{File, FileSystem, FileType, FsError, NormalizedPath, OpenOptions};
 
 use crate::{
-    AppChannel, AppErrKind, AppFs, AppFsService, AppOp, AppPublish, AppReply, AppRequest, AppTree,
-    GuestLine, MAX_LINE_LEN, decode_data, encode_data, publish_to_line,
+    AppErrKind, AppFs, AppFsService, AppOp, AppPublish, AppReceiver, AppReply, AppRequest,
+    AppSender, AppTree, GuestLine, MAX_LINE_LEN, decode_data, encode_data, publish_to_line,
 };
 
 /// A scripted guest: each adapter request is answered by a handler that
@@ -20,6 +20,8 @@ use crate::{
 /// a wedged guest. The state records every request and flags any violation of
 /// the one-request-in-flight property.
 type Handler = Box<dyn FnMut(&AppRequest) -> Vec<Vec<u8>> + Send>;
+
+const TEST_DEADLINE: Duration = Duration::from_secs(5);
 
 struct ScriptInner {
     handler: Handler,
@@ -44,7 +46,11 @@ impl ScriptState {
     }
 }
 
-struct ScriptedChannel {
+struct ScriptedSender {
+    state: Arc<ScriptState>,
+}
+
+struct ScriptedReceiver {
     state: Arc<ScriptState>,
 }
 
@@ -52,7 +58,7 @@ fn is_reply(line: &[u8]) -> bool {
     matches!(GuestLine::parse(line), Ok(GuestLine::Reply(_)))
 }
 
-impl AppChannel for ScriptedChannel {
+impl AppSender for ScriptedSender {
     fn send_line(&mut self, line: &[u8]) -> io::Result<()> {
         let mut inner = self.state.inner.lock().unwrap();
         if inner.in_flight {
@@ -68,7 +74,9 @@ impl AppChannel for ScriptedChannel {
         self.state.signal.notify_all();
         Ok(())
     }
+}
 
+impl AppReceiver for ScriptedReceiver {
     fn recv_line(&mut self) -> io::Result<Vec<u8>> {
         let mut inner = self.state.inner.lock().unwrap();
         loop {
@@ -87,7 +95,7 @@ impl AppChannel for ScriptedChannel {
 
 fn scripted(
     handler: impl FnMut(&AppRequest) -> Vec<Vec<u8>> + Send + 'static,
-) -> (Box<dyn AppChannel>, Arc<ScriptState>) {
+) -> (Box<dyn AppSender>, Box<dyn AppReceiver>, Arc<ScriptState>) {
     let state = Arc::new(ScriptState {
         inner: Mutex::new(ScriptInner {
             handler: Box::new(handler),
@@ -99,7 +107,10 @@ fn scripted(
         signal: Condvar::new(),
     });
     (
-        Box::new(ScriptedChannel {
+        Box::new(ScriptedSender {
+            state: Arc::clone(&state),
+        }),
+        Box::new(ScriptedReceiver {
             state: Arc::clone(&state),
         }),
         state,
@@ -113,8 +124,8 @@ fn chat_tree() -> AppTree {
 fn chat_service(
     handler: impl FnMut(&AppRequest) -> Vec<Vec<u8>> + Send + 'static,
 ) -> (AppFsService, Arc<ScriptState>) {
-    let (channel, state) = scripted(handler);
-    (AppFsService::new(chat_tree(), channel), state)
+    let (sender, receiver, state) = scripted(handler);
+    (AppFsService::new(chat_tree(), sender, receiver), state)
 }
 
 fn ok_line(id: u64, ok: serde_json::Value) -> Vec<u8> {
@@ -256,11 +267,17 @@ fn reply_shapes_are_pinned() {
 }
 
 #[test]
-fn err_kinds_map_one_to_one_onto_fs_errors() {
+fn err_kinds_map_onto_fs_error_vocabulary() {
     let cases = [
         ("not_found", FsError::NotFound),
         ("permission_denied", FsError::PermissionDenied),
-        ("not_supported", FsError::NotSupported),
+        // A message-carrying not_supported keeps its text: the guest's
+        // guidance ("read latest instead") must reach the caller instead of
+        // being dropped by the payload-free FsError::NotSupported variant.
+        (
+            "not_supported",
+            FsError::Other("operation not supported: detail".to_owned()),
+        ),
         ("invalid", FsError::InvalidPath("detail".to_owned())),
         ("other", FsError::Other("detail".to_owned())),
     ];
@@ -271,6 +288,12 @@ fn err_kinds_map_one_to_one_onto_fs_errors() {
         };
         assert_eq!(reply.into_result().unwrap_err(), expected, "kind {kind}");
     }
+    // A messageless not_supported keeps the canonical variant.
+    let line = err_line(9, "not_supported", "");
+    let GuestLine::Reply(reply) = GuestLine::parse(&line).unwrap() else {
+        panic!("expected reply");
+    };
+    assert_eq!(reply.into_result().unwrap_err(), FsError::NotSupported);
 }
 
 #[test]
@@ -399,16 +422,18 @@ fn mismatched_reply_id_is_a_protocol_error() {
 
 #[test]
 fn broken_channel_maps_to_unreachable() {
-    struct BrokenChannel;
-    impl AppChannel for BrokenChannel {
+    struct BrokenHalf;
+    impl AppSender for BrokenHalf {
         fn send_line(&mut self, _line: &[u8]) -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "guest exited"))
         }
+    }
+    impl AppReceiver for BrokenHalf {
         fn recv_line(&mut self) -> io::Result<Vec<u8>> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "guest exited"))
         }
     }
-    let service = AppFsService::new(chat_tree(), Box::new(BrokenChannel));
+    let service = AppFsService::new(chat_tree(), Box::new(BrokenHalf), Box::new(BrokenHalf));
     let fs = service.open_view("p");
     let mut file = open(&fs, "post", write_only());
     assert!(matches!(
@@ -440,8 +465,8 @@ fn publish_fans_out_to_all_subscribers_with_independent_cursors() {
 }
 
 #[test]
-fn publish_to_undeclared_stream_fails_the_in_flight_op() {
-    let (service, _state) = chat_service(|request| {
+fn publish_to_undeclared_stream_fails_the_in_flight_op_and_latches_down() {
+    let (service, state) = chat_service(|request| {
         vec![
             publish_line("nope", b"x"),
             ok_line(request.id, serde_json::json!({})),
@@ -453,6 +478,49 @@ fn publish_to_undeclared_stream_fails_the_in_flight_op() {
         file.write(b"x").unwrap_err(),
         FsError::Other(message) if message.contains("undeclared stream")
     ));
+    // The abandoned in-flight reply must not desynchronize later ops: the
+    // protocol violation is terminal, so every subsequent discrete op fails
+    // honestly as Unreachable without reaching the guest.
+    let mut file = open(&fs, "post", write_only());
+    assert!(matches!(
+        file.write(b"y").unwrap_err(),
+        FsError::Unreachable(message) if message.contains("undeclared stream")
+    ));
+    assert_eq!(state.sent().len(), 1, "the downed channel must not be used");
+    // The guest can never publish through this channel again, so the stream
+    // surface is torn down: a fresh subscription reads EOF instead of
+    // parking forever.
+    let mut late = open(&fs, "stream", OpenOptions::read());
+    let mut buf = [0_u8; 8];
+    assert_eq!(late.read(&mut buf).unwrap(), 0);
+}
+
+/// The host owns pumping (ADR 0010): a publish emitted *after* a reply is
+/// fanned out to stream subscribers on arrival, with no further discrete op
+/// on the channel to carry it.
+#[test]
+fn post_reply_publish_reaches_subscribers_without_another_op() {
+    let (service, _state) = chat_service(|request| {
+        vec![
+            ok_line(request.id, serde_json::json!({})),
+            publish_line("stream", b"after the reply\n"),
+        ]
+    });
+    let mut sub = open(&service.open_view("peer-r"), "stream", OpenOptions::read());
+    open(&service.open_view("peer-w"), "post", write_only())
+        .write(b"go")
+        .unwrap();
+
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = [0_u8; 64];
+        let n = sub.read(&mut buf).unwrap();
+        let _ = sender.send(buf[..n].to_vec());
+    });
+    let bytes = receiver
+        .recv_timeout(TEST_DEADLINE)
+        .expect("a post-reply publish must be delivered without another op");
+    assert_eq!(bytes, b"after the reply\n");
 }
 
 #[test]

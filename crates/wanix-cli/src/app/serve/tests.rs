@@ -7,7 +7,7 @@
 use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -79,42 +79,54 @@ fn serve_chatroom(
 /// Mounts a served app ticket at `x` presenting an explicit dialer identity
 /// (the test-only identity injection: each identity is a distinct verified
 /// principal against the served room).
-fn mount_as(identity: &NodeIdentity, ticket_url: &str) -> (Namespace, crate::mesh::IrohMount) {
+fn mount_as(identity: &NodeIdentity, ticket_url: &str) -> (Arc<Namespace>, crate::mesh::IrohMount) {
     let mount = crate::mesh::dial_iroh_remote_as(identity, ticket_url, "").unwrap();
     let mut namespace = Namespace::new();
     namespace
         .bind(mount.remote.clone(), ".", "x", BindOptions::default())
         .unwrap();
-    (namespace, mount)
+    (Arc::new(namespace), mount)
 }
 
-fn read_string(namespace: &Namespace, path: &str) -> String {
-    let mut file = namespace.open(&np(path), OpenOptions::read()).unwrap();
-    let mut out = Vec::new();
-    let mut buf = [0u8; 512];
-    loop {
-        let n = file.read(&mut buf).unwrap();
-        if n == 0 {
-            break;
+/// Reads a whole mesh-mounted file. ADR 0008 leaves open-file replies after
+/// the first deadline-free, so the wait is bounded here: a regression that
+/// wedges the guest must fail the test, not hang CI.
+fn read_string(namespace: &Arc<Namespace>, path: &str) -> String {
+    let namespace = Arc::clone(namespace);
+    let path = path.to_owned();
+    within_deadline("read", move || {
+        let mut file = namespace.open(&np(&path), OpenOptions::read()).unwrap();
+        let mut out = Vec::new();
+        let mut buf = [0u8; 512];
+        loop {
+            let n = file.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
         }
-        out.extend_from_slice(&buf[..n]);
-    }
-    String::from_utf8(out).unwrap()
+        String::from_utf8(out).unwrap()
+    })
 }
 
-fn post(namespace: &Namespace, body: &[u8]) {
-    let mut file = namespace
-        .open(
-            &np("x/post"),
-            OpenOptions {
-                write: true,
-                create: true,
-                truncate: true,
-                ..OpenOptions::default()
-            },
-        )
-        .unwrap();
-    assert_eq!(file.write(body).unwrap(), body.len());
+/// Posts one message over the mesh mount, bounded like [`read_string`].
+fn post(namespace: &Arc<Namespace>, body: &[u8]) {
+    let namespace = Arc::clone(namespace);
+    let body = body.to_vec();
+    within_deadline("post", move || {
+        let mut file = namespace
+            .open(
+                &np("x/post"),
+                OpenOptions {
+                    write: true,
+                    create: true,
+                    truncate: true,
+                    ..OpenOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(file.write(&body).unwrap(), body.len());
+    });
 }
 
 fn message_lines(text: &str) -> Vec<Value> {
@@ -364,6 +376,90 @@ fn guest_exit_unreaches_discrete_ops_and_closes_streams() {
         }
         other => panic!("expected Unreachable after guest exit, got {other:?}"),
     }
+
+    std::fs::remove_dir_all(app_dir).ok();
+    std::fs::remove_dir_all(state).ok();
+}
+
+/// The bounded-pipe liveness proof: the adapter's pump drains guest stdout
+/// even when no operation is in flight, so (a) a post-reply publish burst far
+/// over the 64 KiB stdout pipe reaches a parked subscriber with no further
+/// discrete op, and (b) a request line far over the 64 KiB stdin pipe cannot
+/// deadlock against that undrained backlog (the adapter/guest mutual stall).
+#[test]
+fn large_publish_backlog_and_large_write_do_not_deadlock() {
+    let app_dir = temp_dir("burst-app");
+    std::fs::write(
+        app_dir.join("app.wanix.json"),
+        "{\"wanix.resource\":\"v0\",\"kind\":\"app\",\"name\":\"burst\",\
+         \"runtime\":{\"kind\":\"qjs\",\"main\":\"main.js\"},\
+         \"files\":[\"ping\",\"sink\"],\"streams\":[\"s\"]}",
+    )
+    .unwrap();
+    // A conforming guest: replies first, then (for stat) publishes a 120 KiB
+    // burst — protocol-legal post-reply bytes that park the single-threaded
+    // guest in its stdout write until the host drains them.
+    std::fs::write(
+        app_dir.join("main.js"),
+        "import * as std from \"qjs:std\";\n\
+         const big = \"x\".repeat(120 * 1024);\n\
+         let line;\n\
+         while ((line = std.in.getline()) !== null) {\n\
+           if (!line) continue;\n\
+           const req = JSON.parse(line);\n\
+           std.out.puts(JSON.stringify({ id: req.id, ok: {} }) + \"\\n\");\n\
+           if (req.op === \"stat\") {\n\
+             std.out.puts(JSON.stringify({ publish: { stream: \"s\", data: btoa(big) } }) + \"\\n\");\n\
+           }\n\
+           std.out.flush();\n\
+         }\n",
+    )
+    .unwrap();
+    let state = temp_dir("burst-state");
+    let manifest = load_app_manifest(&app_dir).unwrap();
+    let (_guest, service) = start_app_guest(&app_dir, &state, &manifest).unwrap();
+
+    // Subscribe first so the burst lands in a live buffer.
+    let mut stream = service
+        .open_view("sub")
+        .open(&np("s"), OpenOptions::read())
+        .unwrap();
+
+    let view = service.open_view("writer");
+    within_deadline("stat triggering the post-reply burst", move || {
+        view.metadata(&np("ping")).unwrap();
+    });
+
+    // (a) The burst is delivered without another discrete op on the channel.
+    let collected = within_deadline("post-reply burst delivery", move || {
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        while out.len() < 120 * 1024 {
+            let n = stream.read(&mut buf).unwrap();
+            assert_ne!(n, 0, "stream must not EOF while the guest lives");
+            out.extend_from_slice(&buf[..n]);
+        }
+        out
+    });
+    assert_eq!(collected.len(), 120 * 1024);
+    assert!(collected.iter().all(|&byte| byte == b'x'));
+
+    // (b) A ~100 KiB single write — an encoded request line beyond the stdin
+    // pipe capacity — completes against the same guest.
+    let view = service.open_view("writer");
+    within_deadline("large write against the drained guest", move || {
+        let mut file = view
+            .open(
+                &np("sink"),
+                OpenOptions {
+                    write: true,
+                    ..OpenOptions::default()
+                },
+            )
+            .unwrap();
+        let body = vec![b'y'; 100 * 1024];
+        assert_eq!(file.write(&body).unwrap(), body.len());
+    });
 
     std::fs::remove_dir_all(app_dir).ok();
     std::fs::remove_dir_all(state).ok();

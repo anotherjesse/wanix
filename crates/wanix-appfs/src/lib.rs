@@ -8,8 +8,14 @@
 //! process). The guest decides; the host moves bytes:
 //!
 //! - **Discrete ops go to the guest, one at a time.** The adapter serializes
-//!   request/reply over the [`AppChannel`] under one lock — the guest is a
-//!   single actor and never sees concurrent events.
+//!   requests over the [`AppSender`] under one actor lock — the guest is a
+//!   single actor and never sees concurrent events. The guest→host direction
+//!   is owned by a dedicated pump thread (the [`AppReceiver`]'s single
+//!   reader), so guest output is always drained: publishes deliver on
+//!   arrival, a bounded stdio pipe cannot deadlock against a large request,
+//!   and a guest protocol violation latches the channel down
+//!   ([`wanix_fs::FsError::Unreachable`] thereafter) instead of
+//!   desynchronizing the reply stream.
 //! - **Stream files never touch the guest.** Paths declared as streams in the
 //!   [`AppTree`] are host-owned: each open registers a bounded, lossy,
 //!   never-EOF subscription buffer (the `#plumb` `LineBuffer` discipline:
@@ -45,10 +51,13 @@ mod channel;
 mod files;
 mod fs;
 mod protocol;
+mod pump;
 mod service;
+mod streams;
 mod tree;
 
-pub use channel::AppChannel;
+pub use buffer::LineBuffer;
+pub use channel::{AppReceiver, AppSender};
 pub use fs::AppFs;
 pub use protocol::{
     AppDirEntry, AppErr, AppErrKind, AppOk, AppOp, AppPublish, AppReply, AppRequest, GuestLine,

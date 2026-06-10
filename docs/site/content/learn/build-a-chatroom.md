@@ -33,6 +33,7 @@ honestLimits:
   - "Message timestamps are engine-pinned: Date.now() inside the served qjs guest returns a fixed epoch (observed at=1700000000000 on every message), so ordering is log order, not wall clock."
   - "No shipped CLI verb streams the never-EOF stream file incrementally yet: mount-cat and the shell's cat are collected (they print at EOF), so a parked stream read shows nothing until killed. Bound it with timeout; the live view today is a host-side tail of the --state log."
   - "who is sessions, not heartbeats: a hard-killed subscriber lingers in who until the transport declares its connection dead (observed ~30 s on loopback)."
+  - "Stopping the serve is abrupt process death: a fresh op fails unreachable in ~5 s, but an already-parked stream reader blocks until QUIC liveness fires (~35 s observed) and then gets a transport error, losing its collected bytes. Stream readers are released with EOF only when the guest exits while the serve lives."
   - "Every ticket holder may attach (an open room with unforgeable attribution); allow-list rooms are ADR 0007 Layer 2 follow-up. No auto-restart in v0: a dead guest fails ops Unreachable."
 canonicalCaveatFor: [engine-pinned-guest-clock]
 ---
@@ -70,6 +71,7 @@ The whole chatroom is `examples/chatroom/` — a manifest and one script. The ma
 function handle(request) {
   const { op, path, principal } = request;
   if (op === "stat") return {};
+  if (op === "readdir") fail("not_supported", path + " is a file, not a directory");
   if (op === "write") {
     if (path === "post") return post(principal, decodeText(request.data || ""));
     fail("not_supported", path + " is read-only; write to post");
@@ -215,12 +217,18 @@ Still B. The guest extracts `body` and discards the claimed author (`post()` abo
 
 ## 8. Kill the room; the room remembers
 
-Stop the serve. The guest's stdin pipe closes, the guest sees EOF and exits cleanly, blocked stream readers are released with EOF, and a mounted reader gets the mesh's liveness vocabulary, not a hang:
+Stop the serve with Ctrl-C. That is abrupt process death — the serve has no signal handler, so the guest dies with the host process and no teardown runs. What a mounted client sees depends on what it was doing:
+
+- A **fresh discrete op** (`mount-cat "$T" latest`) fails fast with the mesh's liveness vocabulary, not a hang:
 
 ```text
 resource unreachable: peer bd4e24de... did not answer within 5s — the provider is
 offline or not discoverable from here, and the mount will work again when it returns ...
 ```
+
+- An **already-parked stream reader** is not released promptly: open-file reads carry no per-op deadline ([ADR 0008](/concepts/blocking-stream-eof-contract)), so a parked `mount-cat "$T" stream` keeps blocking until QUIC connection liveness declares the peer dead (~35 s observed on loopback), then fails with a transport error (`resource unreachable: ... connection lost`) — and because `mount-cat` is collected, any bytes it had buffered are lost with it.
+
+The released-with-EOF behavior belongs to a different lifecycle event: when the *guest app* dies while the serve stays up, the host tears the stream surface down, so blocked stream readers observe EOF and discrete ops fail `Unreachable` instead of hanging.
 
 Restart against the same `--state` and read `latest`: every message is back, because the history was never guest RAM — boot reloads `/state/log`. The identity is persisted too (`~/.wanix/app-identities/chatroom.key`), so the peer half of the ticket is unchanged; only the hinted port moved, and on a LAN even your friend's *old* ticket keeps working (mDNS finds the peer; the stale hint is tolerated). The room is a name that survives its process.
 
@@ -233,4 +241,5 @@ The tested transcript with the troubleshooting that real runs produced is [Recip
 - **Engine-pinned clock.** `Date.now()` in the served guest returns a fixed epoch; `at` is deterministic, not wall time.
 - **No streaming CLI consumer yet.** `mount-cat`/shell `cat` collect until EOF, so the never-EOF `stream` shows nothing until the reader is killed; bound experiments with `timeout` and never park `cat` on it in the sh REPL (Ctrl-C there cancels the input line, not a blocked read).
 - **`who` is sessions.** A vanished subscriber lingers until the transport notices (~30 s observed); a clean drop disappears on the next delivery.
+- **Serve death is abrupt.** Ctrl-C runs no teardown: fresh ops fail unreachable in ~5 s, but an already-parked stream reader blocks until QUIC liveness fires (~35 s observed), then gets a transport error and loses its collected bytes. Stream EOF release happens only when the guest exits while the serve lives.
 - **Open room.** Any ticket holder attaches; attribution is unforgeable but admission control is ADR 0007 follow-up. No auto-restart in v0; CAS-pinned code provenance is deferred (`docs/appfs.md` §Provenance).

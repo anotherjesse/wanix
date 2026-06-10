@@ -3,9 +3,10 @@
 //! One JSON object per line. The adapter sends [`AppRequest`] lines; the
 //! guest answers with [`AppReply`] lines and may interleave guest-initiated
 //! [`AppPublish`] lines (`{"publish":{...}}`) between replies. Arbitrary
-//! bytes ride as base64 strings. Error kinds mirror [`FsError`] variants
-//! one-to-one — this is filesystem-error vocabulary, not the ADR 0009 job
-//! taxonomy. Every field is pinned by tests in `src/tests.rs`.
+//! bytes ride as base64 strings. Error kinds map onto [`FsError`] vocabulary
+//! — this is filesystem-error vocabulary, not the ADR 0009 job taxonomy; see
+//! [`AppErr::to_fs_error`] for the one mapping that trades variant for
+//! message. Every field is pinned by tests in `src/tests.rs`.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -123,7 +124,8 @@ impl AppOk {
     }
 }
 
-/// Guest error kinds; each maps onto exactly one [`FsError`] variant.
+/// Guest error kinds; each maps onto [`FsError`] vocabulary (see
+/// [`AppErr::to_fs_error`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppErrKind {
@@ -131,7 +133,9 @@ pub enum AppErrKind {
     NotFound,
     /// The caller may not do this → [`FsError::PermissionDenied`].
     PermissionDenied,
-    /// The app does not support this op here → [`FsError::NotSupported`].
+    /// The app does not support this op here → [`FsError::NotSupported`]
+    /// when messageless; with a message, [`FsError::Other`] prefixed
+    /// `operation not supported:` so the guest's guidance reaches the caller.
     NotSupported,
     /// The request was malformed for this app → [`FsError::InvalidPath`].
     Invalid,
@@ -151,13 +155,25 @@ pub struct AppErr {
 }
 
 impl AppErr {
-    /// Maps the guest error onto its [`FsError`] variant.
+    /// Maps the guest error onto [`FsError`] vocabulary.
+    ///
+    /// `not_found` and `permission_denied` keep their variants
+    /// unconditionally: those kinds are load-bearing filesystem semantics
+    /// (existence probes, permission checks). `FsError::NotSupported` carries
+    /// no payload, and a guest message on `not_supported` is user guidance
+    /// (e.g. "post is write-only; read latest instead") that must reach the
+    /// caller — so a message-carrying `not_supported` surfaces as
+    /// [`FsError::Other`] with the canonical kind text prefixed instead of
+    /// being silently dropped.
     #[must_use]
     pub fn to_fs_error(&self) -> FsError {
         match self.kind {
             AppErrKind::NotFound => FsError::NotFound,
             AppErrKind::PermissionDenied => FsError::PermissionDenied,
-            AppErrKind::NotSupported => FsError::NotSupported,
+            AppErrKind::NotSupported if self.message.is_empty() => FsError::NotSupported,
+            AppErrKind::NotSupported => {
+                FsError::Other(format!("operation not supported: {}", self.message))
+            }
             AppErrKind::Invalid => FsError::InvalidPath(self.message.clone()),
             AppErrKind::Other => FsError::Other(self.message.clone()),
         }

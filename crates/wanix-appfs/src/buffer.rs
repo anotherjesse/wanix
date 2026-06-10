@@ -5,6 +5,10 @@
 //! bound a missed wakeup), and `Ok(0)` is returned only once the buffer is
 //! permanently closed — which the AppFS adapter never does for a live stream
 //! file, making `stream` reads honestly never-EOF while the host owns them.
+//!
+//! The type is exported so hosts can reuse the same bounded drop-oldest
+//! discipline for other guest-fed byte captures (e.g. a resident guest's
+//! stderr) instead of growing an unbounded buffer or copying the pattern.
 
 use std::collections::VecDeque;
 use std::sync::{Condvar, Mutex};
@@ -30,10 +34,11 @@ struct Inner {
     closed: bool,
 }
 
-/// A blocking byte buffer the adapter fans publishes into and a stream
-/// subscriber drains.
+/// A bounded, lossy, blocking byte buffer: the adapter fans publishes into
+/// it and a stream subscriber drains it; hosts may also use it directly for
+/// bounded guest-fed captures.
 #[derive(Default)]
-pub(crate) struct LineBuffer {
+pub struct LineBuffer {
     inner: Mutex<Inner>,
     signal: Condvar,
 }
@@ -52,7 +57,7 @@ impl LineBuffer {
     /// room first, so a slow reader never grows the buffer without bound and
     /// always sees the most recent backlog. A single push larger than the
     /// whole ceiling keeps only its trailing `MAX_BUFFERED_BYTES`.
-    pub(crate) fn push(&self, bytes: &[u8]) {
+    pub fn push(&self, bytes: &[u8]) {
         if let Ok(mut inner) = self.inner.lock() {
             // Drop the oldest bytes until the new data fits under the ceiling.
             let incoming = bytes.len().min(MAX_BUFFERED_BYTES);
@@ -76,7 +81,7 @@ impl LineBuffer {
     /// Stream files are never-EOF while the guest lives; this is the
     /// host-side teardown ([`crate::AppStreamCloser`]) releasing blocked
     /// readers once the guest app has exited.
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.closed = true;
         }
@@ -85,7 +90,11 @@ impl LineBuffer {
 
     /// Drains buffered bytes, blocking until data arrives or the buffer closes.
     /// Returns `Ok(0)` only at end-of-stream (no data and closed).
-    pub(crate) fn read(&self, buf: &mut [u8]) -> FsResult<usize> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError::Other`] when the buffer lock or wait is poisoned.
+    pub fn read(&self, buf: &mut [u8]) -> FsResult<usize> {
         let mut inner = self.lock()?;
         loop {
             if !inner.data.is_empty() {
@@ -109,7 +118,11 @@ impl LineBuffer {
     }
 
     /// Whether a read would return without blocking (data buffered or closed).
-    pub(crate) fn read_ready(&self) -> FsResult<bool> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError::Other`] when the buffer lock is poisoned.
+    pub fn read_ready(&self) -> FsResult<bool> {
         let inner = self.lock()?;
         Ok(!inner.data.is_empty() || inner.closed)
     }

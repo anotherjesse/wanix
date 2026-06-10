@@ -161,7 +161,7 @@ Still attributed to B. The guest keeps only the `body` of a JSON payload and dis
 
 ## 7. Kill the room; restart it; nothing is lost
 
-Ctrl-C the serve in terminal 1. The guest's stdin pipe closes, so it exits cleanly; a mounted reader now gets liveness, not a hang:
+Ctrl-C the serve in terminal 1 — abrupt process death, taking the resident guest with it (the serve has no signal handler; no teardown runs). A *fresh* mounted read now gets liveness, not a hang:
 
 ```sh
 wanix-rust mount-cat "$T" latest
@@ -193,9 +193,10 @@ The room's memory was never guest RAM (`main.js` reloads `/state/log` at boot), 
 
 - **`mount-cat "$T" stream` prints nothing, forever.** Not a bug, two contracts stacking: `stream` is an honest never-EOF read (its own QUIC stream, blocking until a publish), and `mount-cat` is collected — it prints only at EOF. Killing it loses the collected bytes. Always bound it with `timeout` (it still registers a real subscription — `who` shows you), read `latest` for history, and tail the `--state` log for a live view. Do not park `cat` on it in the `sh` REPL either: Ctrl-C there cancels the input line, not a blocked read.
 - **`who` keeps listing someone who left.** A hard-killed subscriber (process killed mid-read) holds its registry entry until the transport declares the connection dead — about 30 s of silence on loopback in this run. Presence is session state, not a heartbeat.
+- **A parked `mount-cat "$T" stream` outlives the serve dying — for ~35 s.** An already-blocked stream read carries no per-op deadline (ADR 0008), so when the serve is killed it keeps blocking until QUIC connection liveness declares the peer dead (~35 s on loopback in our run), then fails with `resource unreachable: ... connection lost` — and its collected bytes are lost. Only a *fresh* op gets the friendly 5 s message above. Blocked stream readers are released with EOF only when the guest exits while the serve stays up.
 - **First `app serve` seems to hang before printing the ticket.** Cold module cache: the QuickJS engine wasm is being compiled (~25 s in this debug-build run). Subsequent starts are ~1 s.
 - **`app serve` refuses to start without `--addr`.** Default-deny, verbatim: "app serve on the public endpoint exposes the app to anyone with its ticket; pass --addr IP:PORT or --insecure-open to deliberately export to the open internet".
-- **Reading `post` fails with `operation not supported`.** It is write-only by the guest's own rules. (The guest's friendlier message — "post is write-only; read latest instead" — does not cross the wire today; only the error kind does.)
+- **Reading `post` fails with `operation not supported: post is write-only; read latest instead`.** It is write-only by the guest's own rules, and the guidance after the colon is the guest's own `not_supported` message, carried across the wire (verbatim from this run: `mount-cat failed to read: operation not supported: post is write-only; read latest instead`).
 - **`resource unreachable: peer ... did not answer within 5s`.** The serve is down. The message says the recovery: the mount works again when the room returns, and the peer id half of the ticket never changes.
 
 ## Cleanup
