@@ -259,11 +259,19 @@ fn ls_without_probe_lists_instantly_and_sorted() {
 
     let output = run_ls_in(&dir, None).unwrap();
     let stdout = String::from_utf8(output.stdout().to_vec()).unwrap();
-    assert_eq!(stdout, format!("alpha\t-\t{a}\nzeta\t-\t{b}\n"));
+    assert_eq!(
+        stdout,
+        format!("# NAME\tSTATUS\tADDRESS\nalpha\tunprobed\t{a}\nzeta\tunprobed\t{b}\n")
+    );
 
-    // An empty catalog lists as nothing, not an error.
+    // An empty catalog lists as a humane stderr hint, not an error and not a
+    // blank line.
     let empty = temp_dir("ls-empty");
-    assert!(run_ls_in(&empty, None).unwrap().stdout().is_empty());
+    let empty_out = run_ls_in(&empty, None).unwrap();
+    assert!(empty_out.stdout().is_empty());
+    let empty_err = String::from_utf8(empty_out.stderr().to_vec()).unwrap();
+    assert!(empty_err.contains("catalog is empty"), "{empty_err}");
+    assert_eq!(empty_out.exit_code(), 0);
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&empty);
 }
@@ -307,12 +315,13 @@ fn ls_probes_render_online_and_offline_within_the_deadline() {
     );
     let stdout = String::from_utf8(output.stdout().to_vec()).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines.len(), 2, "{stdout}");
+    assert_eq!(lines.len(), 3, "{stdout}");
+    assert_eq!(lines[0], "# NAME\tSTATUS\tADDRESS", "{stdout}");
     assert!(
-        lines[0].starts_with("dead\toffline\t"),
+        lines[1].starts_with("dead\toffline\t"),
         "the unserved entry is an outage, not an error: {stdout}"
     );
-    assert!(lines[1].starts_with("live\tonline\t"), "{stdout}");
+    assert!(lines[2].starts_with("live\tonline\t"), "{stdout}");
 
     drop(served);
     let _ = std::fs::remove_dir_all(&dir);

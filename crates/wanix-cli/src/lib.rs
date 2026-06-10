@@ -618,8 +618,14 @@ mod tests {
         let output = run(["--help"]).unwrap();
         let stdout = String::from_utf8_lossy(output.stdout()).into_owned();
         assert!(stdout.contains("quick start:"), "{stdout}");
-        assert!(stdout.contains("mesh-serve --root"), "{stdout}");
-        assert!(stdout.contains("mount-ls 'iroh://"), "{stdout}");
+        // The golden path leads: qjs hero, then the browser cockpit (mirroring
+        // the README and home.md on-ramp), then the mesh as a labeled branch.
+        assert!(stdout.contains("qjs main.js"), "{stdout}");
+        assert!(
+            stdout.contains("serve --root /tmp/wanix-root --bundle workbench-fs9p"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("mesh-serve --help"), "{stdout}");
     }
 
     #[test]

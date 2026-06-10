@@ -6,14 +6,16 @@ use super::CliOutput;
 /// has something to run before reading the wall.
 const QUICK_START: &str = concat!(
     "quick start:\n",
-    "  wanix qjs main.js                                       ",
+    "  wanix qjs main.js                                              ",
     "# run JavaScript as a Wanix task\n",
-    "  wanix mesh-serve --root /tmp/share --addr 127.0.0.1:0   ",
-    "# prints a dialable iroh:// ticket\n",
-    "  wanix mount-ls 'iroh://PEER?addr=IP:PORT'               ",
-    "# paste the ticket the server printed\n",
-    "  wanix SUBCOMMAND --help                                 ",
+    "  wanix serve --root /tmp/wanix-root --bundle workbench-fs9p     ",
+    "# the browser cockpit\n",
+    "  open the printed URL in a browser                              ",
+    "# operate the served namespace\n",
+    "  wanix SUBCOMMAND --help                                        ",
     "# usage for one subcommand\n",
+    "  wanix mesh-serve --help                                        ",
+    "# the Plan 9 mesh: serve + mount a namespace across machines\n",
 );
 
 pub(super) const USAGE: &str = concat!(
@@ -58,9 +60,10 @@ pub(super) const USAGE: &str = concat!(
     "REPL on the host terminal — the guest shell owns echo and line editing, Ctrl-D exits)\n",
     "       wanix p9-stdio --root DIR\n",
     "       wanix mesh-serve (--root DIR | --volume NAME) [--key FILE] [--addr IP:PORT] ",
-    "[--peer HEX --grant ANAME:PREFIX:RIGHTS ...] [--wanix-services] [--insecure-open]\n",
-    "         (--wanix-services binds the #task/#agent exec devices = remote code execution; ",
-    "local-trust only, so it requires a loopback --addr 127.0.0.1:PORT and is refused on any ",
+    "[--peer HEX --grant ANAME:PREFIX:RIGHTS ...] [--wanix-services] [--cpu] [--insecure-open]\n",
+    "         (--wanix-services binds the #task/#agent exec devices = remote code execution, and ",
+    "--cpu binds the #cpu exec plane; both are loopback-only, so each requires a loopback ",
+    "--addr 127.0.0.1:PORT and is refused on any ",
     "non-loopback endpoint — a LAN --addr is mDNS-discoverable. ",
     "--insecure-open exports the host directory read-write, NOT the exec devices, to anyone with the ticket)\n",
     "       wanix cpu --node iroh://PEER[?addr=IP:PORT] [--cwd DIR] [--write] ",

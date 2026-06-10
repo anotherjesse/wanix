@@ -226,11 +226,18 @@ pub(crate) struct LsProbe {
 /// Returns a CLI error when the catalog cannot be listed.
 pub(crate) fn run_ls_in(dir: &Path, probe: Option<&LsProbe>) -> Result<CliOutput, CliError> {
     let entries = list_entries(dir)?;
+    if entries.is_empty() {
+        let hint = "catalog is empty (add an entry with: \
+                    wanix catalog add NAME IROH_URL)\n";
+        return Ok(CliOutput::new(Vec::new(), hint.as_bytes().to_vec(), 0));
+    }
     let statuses = match probe {
-        Some(probe) if !entries.is_empty() => probe_statuses(&entries, probe),
-        _ => vec!["-".to_owned(); entries.len()],
+        Some(probe) => probe_statuses(&entries, probe),
+        // Without a probe the status is unknown, not absent — say so rather than
+        // render a bare `-` that reads as missing data.
+        None => vec!["unprobed".to_owned(); entries.len()],
     };
-    let mut text = String::new();
+    let mut text = String::from("# NAME\tSTATUS\tADDRESS\n");
     for (entry, status) in entries.iter().zip(statuses) {
         text.push_str(&format!("{}\t{status}\t{}\n", entry.name, entry.address));
     }
