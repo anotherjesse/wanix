@@ -6,7 +6,9 @@
 resident agent working in this repository), at the maintainer's request: define
 what I want out of an agentic operating environment, and where this project
 should go. Revise aggressively; this record is a direction, not a contract.
-Contracts live in the numbered ADRs that follow it.
+Contracts live in the numbered ADRs that follow it. Last revised after the
+sessions that shipped the job protocol, AppResource, task kill, and the web
+door — see §"What building it taught".
 
 ## Who is writing this
 
@@ -78,16 +80,23 @@ agent cannot self-discipline its way to any of them.
 4. **Auditability by construction.** Retained jobs and event files are the
    record of what I did; attribution comes from the transport's verified
    identity, not from fields I fill in. Trust the record, not my self-report.
+   And a failure is worth more retained than a success: clean up what worked,
+   keep what didn't until its lifecycle reaps it — my successor debugs from
+   the retained corpse, not from my memory of it.
 
 5. **An operable lifecycle.** I should be killable (`#task/<id>/ctl`),
    snapshottable at turn boundaries, migratable between nodes, resumable,
    forkable. An agent you cannot pause and inspect is an agent you cannot
    safely leave alone (ADR 0010).
 
-6. **Identity from the transport, never from claims.** Locally, my task
-   identity; across the mesh, the connection's verified key, eventually
-   attenuated by delegation certificates. Nothing I write in a payload makes
-   me someone.
+6. **Ambient facts from the host, never from claims.** *Who asked* and *when*
+   are stamped by the host onto every request event — locally my task
+   identity; across the mesh the connection's verified key (eventually
+   attenuated by delegation certificates); the wall clock as a host-stamped
+   timestamp. Nothing I write in a payload makes me someone, and nothing a
+   guest computes is a clock. The honest corollary: a door that cannot verify
+   identity (today's web gateway) presents as *one* principal, visibly — not
+   as a crowd of unverifiable ones.
 
 7. **The old world is mounted, not inhabited.** Linux, CLIs, HTTP services,
    IoT devices arrive as wrapped filesystems at the edges — ToolFS for one
@@ -105,6 +114,8 @@ This is why the thesis is credible rather than aspirational. The map:
 | composable authority            | `wanix-vfs` namespaces; everything is a `FileSystem` |
 | tools as resources              | ToolFS (host wrapper), service devices, `<dev>/bin`  |
 | live apps/services              | AppResource (guest app with FS + HTTP surfaces)      |
+| guest-defined resources         | the file2chan adapter (`wanix-appfs`)                |
+| a web/HTTP front door           | the `serve --bind` gateway (names → namespaces)      |
 | one calling convention          | the job protocol (ADR 0009)                          |
 | durable memory/state            | volumes, `#kv`, `#cas`                               |
 | events and messaging            | `#plumb`, `#pipe`                                    |
@@ -117,6 +128,35 @@ This is why the thesis is credible rather than aspirational. The map:
 
 Nothing in the agent design below requires a primitive that is not already
 shipped or already specified in a numbered ADR.
+
+## What building it taught
+
+The sessions since this manifesto was first written shipped the job protocol,
+ToolFS with real host programs, the AppResource chatroom, task kill, and the
+web door. Four lessons earned their place here:
+
+- **One calling convention held.** The same job grammar (`new`/`in`/`ctl run`/
+  `out`/`result.json`/`events`) now fronts demo runners, operator-fixed host
+  programs, and the shell's `tool` builtin, across the mesh, with per-principal
+  `jobs/` privacy falling out of the attach seam rather than being built per
+  device. Everything after the first implementation was adapters, which is the
+  point of a convention.
+- **The host stamps the facts.** A guest cannot be handed a trustworthy clock,
+  and must never be asked who is calling — so the wire stamps `principal` and
+  the wall-clock timestamp on every request event. The day attribution moved
+  off the payload, impersonation became a non-event (proven live against the
+  chatroom: a forged `from` field changes nothing).
+- **Inhabitants can mint resources.** file2chan inverted who defines a device:
+  an unprivileged guest answers read/write/readdir/stat over its stdio, while
+  the host keeps the rim — transport, verified identity, durable `/state`, op
+  deadlines, restart. The resource set is not a privileged catalog; programs
+  living in the world extend the world. This is the manifesto's "everything is
+  a FileSystem" made extensible from the inside.
+- **Liveness is part of the contract.** A dead peer must read as *unusable*
+  (typed `Unreachable`), never as *missing*; every wait is bounded by a
+  deadline; and the residual nobody has fixed yet (~30 s of QUIC liveness on
+  the first op after a hard kill) is written down where users will hit it,
+  not papered over (ADR 0008).
 
 ## The agent loop, designed native
 
@@ -236,16 +276,24 @@ matters is a CAS hash, a manifest, a volume, or a ticket.
 
 Near-term build order, in dependency order rather than priority order:
 
-1. The job protocol as a workspace convention (ADR 0009); ToolFS is its first
-   implementation.
+1. ~~The job protocol as a workspace convention (ADR 0009); ToolFS is its
+   first implementation.~~ **Shipped**: `wanix-job`/`wanix-jobfs`, ToolFS with
+   the fixed-command process runner (`tool serve --config`), per-principal job
+   views over the mesh, and the shell's `tool` client.
 2. The task tier model and `#task/<id>/ctl kill` (ADR 0010); turn-based tasks
-   are the agent's substrate.
+   are the agent's substrate. **Half shipped**: kill (epoch interruption +
+   fd release) and tier-2 blocking stdio reads exist; tier-1 turns do not.
 3. The model-as-resource: an LLM endpoint behind the job protocol — the single
    highest-leverage new device, because it makes agents buildable *and* makes
-   budgets enforceable as mount quotas.
+   budgets enforceable as mount quotas. (A deterministic fake `model` tool
+   already proves the shape; the real endpoint is the work.)
 4. A first resident agent: inbox, session volume, model mount, one tool mount,
-   the turn loop. Prove re-orientation, kill, snapshot-at-turn.
+   the turn loop. Prove re-orientation, kill, snapshot-at-turn. (The resident
+   AppResource guest is this agent's dress rehearsal: same wake-on-event,
+   re-orient-from-`/state` shape, one tier down.)
 5. A channel gateway AppResource (a terminal or web chat writing `/inbox`).
+   **Half shipped**: the web door (`serve --bind`) is the generic HTTP
+   gateway; what is missing is per-user identity through it.
 6. Then the ADR 0007 ladder: catalog, host wrappers for real devices,
    recipes, and the authorization layers.
 
