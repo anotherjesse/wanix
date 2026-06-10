@@ -623,9 +623,20 @@ more feature work.
   `at_ms`, ranged reads, and the hello handshake; `--restart on-failure`
   shipped the guest restart policy; the WebDoor (`serve --bind`) shipped the
   generic HTTP gateway. Still ahead: CAS-pinned app manifests (`main` is read
-  from `--app` by path; provenance is a doc note only) and per-user gateway
+  from `--app` by path; provenance is a doc note only), per-user gateway
   principals / a guest `fetch` handler (`wanix/http/1`) so web users stop
-  collapsing into the gateway's one principal.
+  collapsing into the gateway's one principal, and an off-loopback gateway
+  auth story (today a non-loopback `--listen` with `--bind` is refused at
+  startup).
+- Task-kill gaps (documented on `EpochInterrupter` and `Task::kill`): (a) a
+  task parked inside a blocking *host* read (e.g. a quiet stdin) only dies on
+  its next return to guest code — make the host `Backoff` park loops
+  kill-aware; (b) the qjs driver has no per-task interrupt seam (all qjs tasks
+  share one engine), so kill on a running qjs task only sets the observable
+  `kill_requested` flag; (c) no process groups: while a foreground external
+  runs, the shell's Ctrl-C watcher drains stdin and preserves non-Ctrl-C bytes
+  as type-ahead for the next prompt instead of delivering them to a child that
+  reads inherited stdin.
 - CLI UX remainder: the hands-on new-user audit behind commit bc05331 landed
   only its top S/M findings (lean usage errors, per-subcommand `--help`,
   ADR 0008 unreachable text, split peer-id parse diagnostics, copy-pasteable

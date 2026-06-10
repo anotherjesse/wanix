@@ -66,6 +66,15 @@ fn parse_allows_single_volume_on_a_fixed_port() {
 }
 
 #[test]
+fn parse_accepts_listen_as_the_canonical_addr_flag() {
+    // --listen is the canonical flag (ADR 0006); --addr stays a synonym.
+    let parsed =
+        parse_volume_serve_command(&args(&["--volume", "notes", "--listen", "127.0.0.1:0"]))
+            .unwrap();
+    assert_eq!(parsed.local_addr, "127.0.0.1:0".parse().ok());
+}
+
+#[test]
 fn parse_enforces_public_endpoint_posture() {
     // No --addr and no --insecure-open is a public endpoint: refused (matches
     // mesh-serve). The check is at parse time, so the collected path refuses it too.

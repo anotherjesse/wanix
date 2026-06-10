@@ -40,8 +40,9 @@ pub(crate) struct AppServeCommand {
     restart: RestartPolicy,
 }
 
-/// Parses `app serve --app DIR --state DIR [--name NAME] [--addr IP:PORT]
-/// [--restart on-failure] [--insecure-open]`.
+/// Parses `app serve --app DIR --state DIR [--name NAME] [--listen IP:PORT]
+/// [--restart on-failure] [--insecure-open]` (`--addr` stays a parsing
+/// synonym for `--listen`, ADR 0006).
 ///
 /// # Errors
 ///
@@ -88,10 +89,10 @@ pub(crate) fn parse_app_serve_command(args: &[OsString]) -> Result<AppServeComma
                 name = Some(value(args, index, "--name")?);
                 index += 2;
             }
-            "--addr" => {
-                let raw = value(args, index, "--addr")?;
+            "--listen" | "--addr" => {
+                let raw = value(args, index, flag)?;
                 local_addr = Some(raw.parse::<SocketAddr>().map_err(|error| {
-                    CliError::usage(format!("app serve --addr must be IP:PORT: {error}"))
+                    CliError::usage(format!("app serve --listen must be IP:PORT: {error}"))
                 })?);
                 index += 2;
             }
@@ -107,13 +108,13 @@ pub(crate) fn parse_app_serve_command(args: &[OsString]) -> Result<AppServeComma
         CliError::usage("app serve: --state DIR is required (the app's durable state mount)")
     })?;
     // Default-deny on the public endpoint (matches tool serve / volume serve):
-    // serving with no --addr hands the app to anyone with its ticket. Open
+    // serving with no --listen hands the app to anyone with its ticket. Open
     // mode has no allow-list, not no identity: every connection is still
     // bound to its verified peer id, so attribution stays unforgeable.
     if local_addr.is_none() && !insecure_open {
         return Err(CliError::usage(
             "app serve on the public endpoint exposes the app to anyone with its ticket; pass \
-             --addr IP:PORT or --insecure-open to deliberately export to the open internet",
+             --listen IP:PORT or --insecure-open to deliberately export to the open internet",
         ));
     }
     Ok(AppServeCommand {

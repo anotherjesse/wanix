@@ -206,9 +206,11 @@ One-shot helpers can be sugar later:
 tool /n/upper < input.txt > output.txt
 ```
 
-That helper would allocate, write `in`, write `run`, read `out` and
-`result.json`, then write `close`. It must remain a client convenience over the
-visible file protocol.
+That helper allocates, writes `in`, writes `run`, reads `out` and
+`result.json`, then writes `close` on success only — a failed job stays
+retained behind the printed `job:` breadcrumb so its `result.json`/`err`/
+`events` remain inspectable until the lifecycle reaps it. It must remain a
+client convenience over the visible file protocol.
 
 ## Spec Shape
 

@@ -11,7 +11,7 @@
 //! echo run              > PATH/jobs/$id/ctl           (synchronous: terminal on return)
 //! cat PATH/jobs/$id/out                               -> stdout
 //! cat PATH/jobs/$id/result.json                       -> success or one-line error
-//! echo close            > PATH/jobs/$id/ctl           (best-effort cleanup)
+//! echo close            > PATH/jobs/$id/ctl           (success only: see below)
 //! ```
 //!
 //! Crash-resume: the job path is printed to stderr (`job: PATH/jobs/<id>`) as
@@ -22,8 +22,12 @@
 //! shape `tool: <error.kind>: <error.message>` (e.g. `tool: invalid_input:
 //! input is not valid UTF-8`), followed by the job's `err` diagnostics, and
 //! the builtin exits with the job's recorded `exitCode` when the result has a
-//! nonzero one (else 1). The trailing `close` is best-effort — a close
-//! failure never masks the real outcome.
+//! nonzero one (else 1). Only a *successful* job is closed (best-effort — a
+//! close failure never masks the output): anything else is deliberately left
+//! retained so the breadcrumb path stays inspectable (`result.json`, `err`,
+//! `events`) until the device's own lifecycle reaps it (`retain_failed_ms`
+//! for failed/aborted jobs, `allocated_ttl_ms` for jobs that never ran —
+//! ADR 0009).
 
 use crate::ns::NamespaceOps;
 use crate::state::ShellState;
@@ -79,8 +83,10 @@ impl From<String> for ToolFailure {
     }
 }
 
-/// Allocates a job, drives it to a terminal state, and always issues the
-/// best-effort `close` — whatever `drive_job` decided is the outcome.
+/// Allocates a job, drives it to a terminal state, and closes it on success
+/// only: a failed (or never-run) job stays retained behind the breadcrumb so
+/// its `result.json`/`err`/`events` remain inspectable until the device's
+/// lifecycle reaps it (ADR 0009 `retain_failed_ms`/`allocated_ttl_ms`).
 fn run_job(
     path: &str,
     params: Option<&str>,
@@ -98,7 +104,9 @@ fn run_job(
     // a successor of a crashed caller can pick the job back up.
     let _ = ns.write_stderr(format!("job: {job}\n").as_bytes());
     let outcome = drive_job(&job, params, stdin, ns);
-    let _ = ns.write_file(&format!("{job}/ctl"), b"close\n", false);
+    if outcome.is_ok() {
+        let _ = ns.write_file(&format!("{job}/ctl"), b"close\n", false);
+    }
     outcome
 }
 

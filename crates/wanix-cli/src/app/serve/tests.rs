@@ -193,6 +193,18 @@ fn parse_requires_app_state_and_endpoint_posture() {
     assert_eq!(parsed.local_addr, "127.0.0.1:0".parse().ok());
     assert!(!parsed.insecure_open);
 
+    // --listen is the canonical flag (ADR 0006); --addr stays a synonym.
+    let listened = parse_app_serve_command(&args(&[
+        "--app",
+        "a",
+        "--state",
+        "s",
+        "--listen",
+        "127.0.0.1:0",
+    ]))
+    .unwrap();
+    assert_eq!(listened.local_addr, "127.0.0.1:0".parse().ok());
+
     // Missing --app / --state are usage errors.
     assert!(parse_app_serve_command(&args(&["--state", "s", "--addr", "127.0.0.1:0"])).is_err());
     assert!(parse_app_serve_command(&args(&["--app", "a", "--addr", "127.0.0.1:0"])).is_err());

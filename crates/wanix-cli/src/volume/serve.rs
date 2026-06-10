@@ -45,8 +45,9 @@ pub(crate) struct VolumeServeCommand {
     insecure_open: bool,
 }
 
-/// Parses `volume serve (--volume NAME ... | --all) [--addr IP:PORT]
-/// [--insecure-open]`.
+/// Parses `volume serve (--volume NAME ... | --all) [--listen IP:PORT]
+/// [--insecure-open]` (`--addr` stays a parsing synonym for `--listen`,
+/// ADR 0006).
 ///
 /// # Errors
 ///
@@ -85,10 +86,10 @@ pub(crate) fn parse_volume_serve_command(
                 names.push(name);
                 index += 2;
             }
-            "--addr" => {
-                let raw = value(args, index, "--addr")?;
+            "--listen" | "--addr" => {
+                let raw = value(args, index, flag)?;
                 local_addr = Some(raw.parse::<SocketAddr>().map_err(|error| {
-                    CliError::usage(format!("volume serve --addr must be IP:PORT: {error}"))
+                    CliError::usage(format!("volume serve --listen must be IP:PORT: {error}"))
                 })?);
                 index += 2;
             }
@@ -117,14 +118,14 @@ pub(crate) fn parse_volume_serve_command(
         reject_fixed_port_multi("volume serve", "volume", local_addr, list.len())?;
     }
     // Default-deny on the public endpoint (matches mesh-serve): serving with no
-    // --addr exports each volume read-write to anyone with its ticket, so require
-    // an explicit --insecure-open. Enforced at parse time so EVERY path — the
-    // streaming runtime and the collected/library path — refuses it, never just
-    // the runtime.
+    // --listen exports each volume read-write to anyone with its ticket, so
+    // require an explicit --insecure-open. Enforced at parse time so EVERY path
+    // — the streaming runtime and the collected/library path — refuses it,
+    // never just the runtime.
     if local_addr.is_none() && !insecure_open {
         return Err(CliError::usage(
             "volume serve on the public endpoint exports each volume read-write to anyone with \
-             its ticket; pass --addr IP:PORT (use port 0 to serve multiple volumes) or \
+             its ticket; pass --listen IP:PORT (use port 0 to serve multiple volumes) or \
              --insecure-open to deliberately export to the open internet",
         ));
     }

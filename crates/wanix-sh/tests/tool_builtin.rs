@@ -218,7 +218,7 @@ fn failed_job_reports_taxonomy_kind_on_stderr_and_short_circuits() {
     ns.mount("fail", Box::new(FailRunner));
     let status = run(&mut ns, "tool /n/fail < notes.txt && echo never");
     assert_eq!(status, 2, "a failed job exits with its recorded exitCode");
-    let err = String::from_utf8_lossy(&ns.err);
+    let err = String::from_utf8_lossy(&ns.err).into_owned();
     let mut lines = err.lines();
     assert!(
         lines
@@ -237,6 +237,20 @@ fn failed_job_reports_taxonomy_kind_on_stderr_and_short_circuits() {
         "the job's err diagnostics follow the taxonomy line: {err:?}"
     );
     assert!(ns.out.is_empty(), "&& short-circuits on the failure");
+    // A failed job is NOT closed: the breadcrumb path stays inspectable
+    // (result.json, err) until the device lifecycle reaps it (ADR 0009).
+    let job_path = err
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("job: "))
+        .unwrap()
+        .to_owned();
+    let result = ns.read_file(&format!("{job_path}/result.json")).unwrap();
+    let result = String::from_utf8_lossy(&result);
+    assert!(
+        result.contains("\"state\":\"failed\""),
+        "failed job retained for inspection: {result}"
+    );
 }
 
 #[test]

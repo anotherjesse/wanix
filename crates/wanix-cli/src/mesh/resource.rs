@@ -79,7 +79,7 @@ pub(crate) fn reject_fixed_port_multi(
 ) -> Result<(), CliError> {
     if count > 1 && local_addr.is_some_and(|addr| addr.port() != 0) {
         return Err(CliError::usage(format!(
-            "{command}: serving {count} {noun}s needs a unique port per endpoint; pass --addr \
+            "{command}: serving {count} {noun}s needs a unique port per endpoint; pass --listen \
              with port 0 (e.g. 127.0.0.1:0) instead of a fixed port"
         )));
     }

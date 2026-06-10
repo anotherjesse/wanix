@@ -203,7 +203,7 @@ job: /n/slow/jobs/jaa994e5538ca35db
 tool: timeout: run deadline exceeded; process killed
 ```
 
-(exit status 1; the whole invocation took 2.15 s — the deadline killed the process, not the sleep ending.) The builtin `close`s its job afterwards, so to *inspect* a timeout drive the raw protocol — the failed job is then retained for `retain_failed_ms`:
+(exit status 1; the whole invocation took 2.15 s — the deadline killed the process, not the sleep ending.) The builtin closes only *successful* jobs, so this failed run stays retained behind the `job:` breadcrumb for `retain_failed_ms` — `mount-cat "$SLOW" "jobs/<id>/result.json"` works after the fact. The same retained shape, driven by the raw protocol:
 
 ```sh
 J=$(wanix-rust mount-cat "$SLOW" new)
@@ -262,7 +262,7 @@ A caller cannot choose the executable, argv, cwd, or env — only input bytes. W
 
 ## Troubleshooting (friction actually hit while testing)
 
-- **`result.json` reads `file does not exist` right after a `tool` builtin run.** The builtin writes `close` when done (best-effort cleanup), releasing retention early. For a retained, inspectable job drive the raw protocol (`new`/`in`/`ctl run`) yourself, as in steps 5–6.
+- **`result.json` reads `file does not exist` after a *successful* `tool` builtin run.** The builtin closes a job that succeeded (its `out` already reached your stdout), releasing retention early. Failed, aborted, and timed-out jobs are deliberately left retained behind the `job:` breadcrumb until `retain_failed_ms` expires, so their `result.json`/`err`/`events` stay inspectable.
 - **Plain `mount-cat events` on a running job prints nothing.** Same collected-vs-streaming split as everywhere: `events` never EOFs while the job lives, so use `--follow` for the live view; a plain read works once the job is terminal (the stream is closed, so the backlog EOFs).
 - **`tool serve --config ... --listen 127.0.0.1:5700` is rejected with more than one tool.** Each tool is its own endpoint; a fixed nonzero port cannot back several. Use port `0`.
 - **No `--listen` at all is refused.** Default-deny, verbatim: "tool serve on the public endpoint exposes each tool to anyone with its ticket; pass --listen IP:PORT (use port 0 to serve multiple tools) or --insecure-open to deliberately export to the open internet".
