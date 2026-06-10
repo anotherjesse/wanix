@@ -3,6 +3,6 @@
   "kind": "app",
   "name": "chatroom",
   "runtime": { "kind": "qjs", "main": "main.js" },
-  "files": ["post", "latest", "status"],
+  "files": ["post", "latest", "status", "nick", "roster"],
   "streams": ["stream"]
 }

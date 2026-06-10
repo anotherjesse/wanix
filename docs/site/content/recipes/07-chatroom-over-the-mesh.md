@@ -68,7 +68,9 @@ wanix-rust mount-ls "$T"
 
 ```text
 latest
+nick
 post
+roster
 status
 stream
 who
@@ -81,10 +83,10 @@ wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-{"at":1765000000000,"from":"iroh:36469a42...","body":"morning! mounted the room over the mesh"}
+{"at":1765000000000,"from":"(36469a42)","body":"morning! mounted the room over the mesh"}
 ```
 
-No username was supplied anywhere. `from` is A's persisted dialer key (`~/.wanix/dialer.key`) as the scheme-prefixed principal `iroh:<hex>`, taken from the verified QUIC handshake by the serve's attach policy — never from the payload. `at` is the host-stamped wall clock (`at_ms`) the adapter puts on every request — the guest's one trusted time source (wire v0.2).
+No username was supplied anywhere. `from` is the derived display of A's persisted dialer key (`~/.wanix/dialer.key`): `(shorthex)` — the first 8 hex chars of the scheme-prefixed principal `iroh:<hex>` taken from the verified QUIC handshake by the serve's attach policy, never from the payload. Writing a name to `nick` renders it `nick (shorthex)` instead; `roster` is the raw principal→nick map, the raw principal stays in the stored log, and you can only ever name *yourself* — a nick is display sugar, never authority (two principals claiming the same nick stay disambiguated by shorthex). `at` is the host-stamped wall clock (`at_ms`) the adapter puts on every request — the guest's one trusted time source (wire v0.2).
 
 ## 3. Person B: a second principal on one machine
 
@@ -96,8 +98,8 @@ HOME=/tmp/bob wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-{"at":1765000000000,"from":"iroh:36469a42...","body":"morning! mounted the room over the mesh"}
-{"at":1765000000113,"from":"iroh:04bd5311...","body":"hey A — same room, different key"}
+{"at":1765000000000,"from":"(36469a42)","body":"morning! mounted the room over the mesh"}
+{"at":1765000000113,"from":"(04bd5311)","body":"hey A — same room, different key"}
 ```
 
 ```sh
@@ -154,7 +156,7 @@ wanix-rust mount-cat "$T" latest | tail -1
 ```
 
 ```text
-{"at":1765000000404,"from":"iroh:04bd5311...","body":"hi, this is definitely A"}
+{"at":1765000000404,"from":"(04bd5311)","body":"hi, this is definitely A"}
 ```
 
 Still attributed to B. The guest keeps only the `body` of a JSON payload and discards any claimed author; the principal it stamps came from the host, which took it from the transport. Identity rides the transport; `post` carries body only.

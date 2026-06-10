@@ -83,6 +83,17 @@ fn principal_of(identity: &NodeIdentity) -> String {
     format!("iroh:{}", identity.peer_id().to_hex())
 }
 
+/// The derived display attribution `latest` renders for a principal with no
+/// nick: "(shorthex)", the first 8 hex chars after the scheme prefix.
+fn short_display(identity: &NodeIdentity) -> String {
+    format!("({})", &identity.peer_id().to_hex()[..8])
+}
+
+/// The derived display attribution for a principal that claimed `nick`.
+fn nick_display(nick: &str, identity: &NodeIdentity) -> String {
+    format!("{nick} {}", short_display(identity))
+}
+
 /// Mounts a served app ticket at `x` presenting an explicit dialer identity
 /// (the test-only identity injection: each identity is a distinct verified
 /// principal against the served room).
@@ -116,24 +127,34 @@ fn read_string(namespace: &Arc<Namespace>, path: &str) -> String {
     })
 }
 
+/// Writes one whole body to a mesh-mounted guest file, bounded like
+/// [`read_string`]; a guest err reply surfaces as the returned `FsError`.
+fn try_write(namespace: &Arc<Namespace>, path: &str, body: &[u8]) -> Result<(), FsError> {
+    let namespace = Arc::clone(namespace);
+    let path = path.to_owned();
+    let body = body.to_vec();
+    within_deadline("write", move || {
+        let mut file = namespace.open(
+            &np(&path),
+            OpenOptions {
+                write: true,
+                create: true,
+                truncate: true,
+                ..OpenOptions::default()
+            },
+        )?;
+        assert_eq!(file.write(&body)?, body.len());
+        Ok(())
+    })
+}
+
+fn write_file(namespace: &Arc<Namespace>, path: &str, body: &[u8]) {
+    try_write(namespace, path, body).unwrap();
+}
+
 /// Posts one message over the mesh mount, bounded like [`read_string`].
 fn post(namespace: &Arc<Namespace>, body: &[u8]) {
-    let namespace = Arc::clone(namespace);
-    let body = body.to_vec();
-    within_deadline("post", move || {
-        let mut file = namespace
-            .open(
-                &np("x/post"),
-                OpenOptions {
-                    write: true,
-                    create: true,
-                    truncate: true,
-                    ..OpenOptions::default()
-                },
-            )
-            .unwrap();
-        assert_eq!(file.write(&body).unwrap(), body.len());
-    });
+    write_file(namespace, "x/post", body);
 }
 
 fn message_lines(text: &str) -> Vec<Value> {
@@ -214,9 +235,11 @@ fn parse_requires_app_state_and_endpoint_posture() {
 }
 
 /// The attribution proof: two dialer identities post to one served room, and
-/// every message carries the transport-verified principal — including when a
-/// client smuggles a fake `from` inside the body. `who` reflects exactly the
-/// principals holding open stream subscriptions, and `status` is readable.
+/// every message is attributed to the transport-verified principal — rendered
+/// by `latest` as the derived "(shorthex)" display while the raw principal
+/// stays in the stored log — including when a client smuggles a fake `from`
+/// inside the body. `who` reflects exactly the principals holding open stream
+/// subscriptions as RAW full principals, and `status` is readable.
 #[test]
 fn two_peers_chat_with_verified_attribution_and_presence() {
     let state = temp_dir("chat");
@@ -230,7 +253,7 @@ fn two_peers_chat_with_verified_attribution_and_presence() {
     let (ns_b, _mount_b) = mount_as(&id_b, &served[0].ticket_url);
 
     // A posts a body that CLAIMS to be from "mallory": the claimed author is
-    // discarded, the verified principal is stamped.
+    // discarded, the verified principal is stamped (and rendered shorthex).
     post(&ns_a, b"{\"from\":\"mallory\",\"body\":\"hello from A\"}");
     let latest = read_string(&ns_b, "x/latest");
     assert!(
@@ -239,7 +262,7 @@ fn two_peers_chat_with_verified_attribution_and_presence() {
     );
     let lines = message_lines(&latest);
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["from"], Value::String(principal_a.clone()));
+    assert_eq!(lines[0]["from"], Value::String(short_display(&id_a)));
     assert_eq!(lines[0]["body"], Value::String("hello from A".to_owned()));
     assert!(lines[0]["at"].is_u64(), "missing timestamp: {latest}");
 
@@ -247,8 +270,14 @@ fn two_peers_chat_with_verified_attribution_and_presence() {
     post(&ns_b, b"hi from B");
     let lines = message_lines(&read_string(&ns_a, "x/latest"));
     assert_eq!(lines.len(), 2);
-    assert_eq!(lines[1]["from"], Value::String(principal_b.clone()));
+    assert_eq!(lines[1]["from"], Value::String(short_display(&id_b)));
     assert_eq!(lines[1]["body"], Value::String("hi from B".to_owned()));
+
+    // Display is derived, truth is the key: the stored log keeps the raw
+    // verified principals.
+    let log = std::fs::read_to_string(state.join("log")).unwrap();
+    assert!(log.contains(&principal_a), "raw principal missing: {log}");
+    assert!(log.contains(&principal_b), "raw principal missing: {log}");
 
     // who = the principals currently holding open stream subscriptions
     // (sorted, one per line) — a foreign principal is just another member.
@@ -268,6 +297,115 @@ fn two_peers_chat_with_verified_attribution_and_presence() {
     assert_eq!(status["messages"], Value::from(2));
 
     drop(served);
+    std::fs::remove_dir_all(state).ok();
+}
+
+/// The nick proof: nicks are self-claimed display sugar keyed by the
+/// transport-verified principal. You can only ever name YOURSELF — B writing
+/// `nick` changes B's entry and never A's; duplicate nick strings stay
+/// disambiguated by shorthex; invalid nicks are refused without side effects;
+/// `roster` is the raw principal->nick map; and nicks survive a guest restart
+/// like the log.
+#[test]
+fn nicks_are_self_claimed_disambiguated_and_durable() {
+    let state = temp_dir("nick");
+    let (guest, service, served) = serve_chatroom(&state, 150);
+
+    let id_a = NodeIdentity::from_secret_bytes([151u8; 32]);
+    let id_b = NodeIdentity::from_secret_bytes([152u8; 32]);
+    let principal_a = principal_of(&id_a);
+    let principal_b = principal_of(&id_b);
+    let (ns_a, mount_a) = mount_as(&id_a, &served[0].ticket_url);
+    let (ns_b, mount_b) = mount_as(&id_b, &served[0].ticket_url);
+
+    // A claims a nick (whitespace trimmed); B claims its own. Each write
+    // names exactly the writer: B's write cannot touch A's entry.
+    write_file(&ns_a, "x/nick", b"  alice  ");
+    write_file(&ns_b, "x/nick", b"bob");
+    let roster: Value = serde_json::from_str(&read_string(&ns_b, "x/roster")).unwrap();
+    assert_eq!(
+        roster[principal_a.as_str()],
+        Value::String("alice".to_owned())
+    );
+    assert_eq!(
+        roster[principal_b.as_str()],
+        Value::String("bob".to_owned())
+    );
+
+    post(&ns_a, b"hello");
+    post(&ns_b, b"hi");
+    let lines = message_lines(&read_string(&ns_a, "x/latest"));
+    assert_eq!(
+        lines[0]["from"],
+        Value::String(nick_display("alice", &id_a))
+    );
+    assert_eq!(lines[1]["from"], Value::String(nick_display("bob", &id_b)));
+
+    // B claims A's nick string: legal (a nick is never authority), and the
+    // shorthex keeps the two authors distinguishable. A's entry is untouched.
+    write_file(&ns_b, "x/nick", b"alice");
+    let lines = message_lines(&read_string(&ns_a, "x/latest"));
+    assert_eq!(
+        lines[0]["from"],
+        Value::String(nick_display("alice", &id_a))
+    );
+    assert_eq!(
+        lines[1]["from"],
+        Value::String(nick_display("alice", &id_b))
+    );
+    assert_ne!(lines[0]["from"], lines[1]["from"]);
+
+    // Invalid nicks are refused — control characters and over-cap lengths —
+    // and a refused write changes nothing.
+    assert!(try_write(&ns_b, "x/nick", b"evil\x07name").is_err());
+    assert!(try_write(&ns_b, "x/nick", &[b'x'; 64]).is_err());
+    let roster: Value = serde_json::from_str(&read_string(&ns_b, "x/roster")).unwrap();
+    assert_eq!(
+        roster[principal_b.as_str()],
+        Value::String("alice".to_owned())
+    );
+
+    // Display is derived, truth is the key: the stored log keeps the raw
+    // principal. (`who` likewise stays raw host truth — proven in the
+    // attribution test above.)
+    let log = std::fs::read_to_string(state.join("log")).unwrap();
+    assert!(log.contains(&principal_a), "raw principal missing: {log}");
+
+    // Nicks persist in /state/nicks and survive a guest restart like the log.
+    drop(ns_a);
+    drop(ns_b);
+    drop(mount_a);
+    drop(mount_b);
+    drop(served);
+    drop(service);
+    let task = guest.task.clone();
+    within_deadline("nick guest exit", move || task.wait_exit().unwrap());
+
+    let (_guest2, _service2, served2) = serve_chatroom(&state, 153);
+    let (ns2, _mount2) = mount_as(
+        &NodeIdentity::from_secret_bytes([154u8; 32]),
+        &served2[0].ticket_url,
+    );
+    let lines = message_lines(&read_string(&ns2, "x/latest"));
+    assert_eq!(
+        lines[0]["from"],
+        Value::String(nick_display("alice", &id_a))
+    );
+    assert_eq!(
+        lines[1]["from"],
+        Value::String(nick_display("alice", &id_b))
+    );
+    let roster: Value = serde_json::from_str(&read_string(&ns2, "x/roster")).unwrap();
+    assert_eq!(
+        roster[principal_a.as_str()],
+        Value::String("alice".to_owned())
+    );
+    assert_eq!(
+        roster[principal_b.as_str()],
+        Value::String("alice".to_owned())
+    );
+
+    drop(served2);
     std::fs::remove_dir_all(state).ok();
 }
 

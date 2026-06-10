@@ -59,7 +59,7 @@ The whole chatroom is `examples/chatroom/` — a manifest and one script. The ma
   "kind": "app",
   "name": "chatroom",
   "runtime": { "kind": "qjs", "main": "main.js" },
-  "files": ["post", "latest", "status"],
+  "files": ["post", "latest", "status", "nick", "roster"],
   "streams": ["stream"]
 }
 ```
@@ -73,23 +73,32 @@ function handle(request) {
   if (op === "stat") {
     if (path === "latest") return { size: textBytes(latestText()).length };
     if (path === "status") return { size: textBytes(statusText()).length };
+    if (path === "roster") return { size: textBytes(rosterText()).length };
     return {};
   }
   if (op === "readdir") fail("not_supported", path + " is a file, not a directory");
   if (op === "write") {
     if (path === "post") return post(request, decodeText(request.data || ""));
-    fail("not_supported", path + " is read-only; write to post");
+    if (path === "nick") return setNick(request, decodeText(request.data || ""));
+    fail("not_supported", path + " is read-only; write to post or nick");
   }
   if (op === "read") {
     if (path === "latest") return rangeReply(latestText(), request);  // honors offset/len
     if (path === "status") return rangeReply(statusText(), request);
-    fail("not_supported", "post is write-only; read latest instead");
+    if (path === "roster") return rangeReply(rosterText(), request);
+    fail("not_supported", path + " is write-only; read latest or roster instead");
   }
   fail("not_found", "unknown path " + path);
 }
 
 // Wire v0.2 handshake: declare the protocol version and the tree first.
-reply({ hello: { proto: 1, files: ["post", "latest", "status"], streams: ["stream"] } });
+reply({
+  hello: {
+    proto: 1,
+    files: ["post", "latest", "status", "nick", "roster"],
+    streams: ["stream"],
+  },
+});
 
 // The resident loop: one request in flight at a time (the adapter
 // guarantees it), blocking in getline between events. stdin EOF means the
@@ -140,7 +149,7 @@ The same two-line record every resource server prints: `iroh://PEER` is the room
 
 ```sh
 wanix-rust mount-ls 'iroh://bd4e24de...?addr=127.0.0.1:43490'
-# latest  post  status  stream  who
+# latest  nick  post  roster  status  stream  who
 ```
 
 ## 3. Post with no username anywhere
@@ -152,10 +161,10 @@ wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-{"at":1765000000000,"from":"iroh:36469a42...","body":"morning! mounted the room over the mesh"}
+{"at":1765000000000,"from":"(36469a42)","body":"morning! mounted the room over the mesh"}
 ```
 
-You never typed a name, yet the message is attributed. `from` is your persisted dialer key as the scheme-prefixed principal `iroh:<hex>` (`~/.wanix/dialer.key`, `crates/wanix-cli/src/mesh/ticket.rs`): the serve edge binds each connection's *verified* QUIC peer identity into a principal-scoped view (`AppAttachPolicy`, `crates/wanix-cli/src/app/serve.rs`), and the adapter stamps that principal into every event the guest sees. Identity rides the transport; the payload carries body only.
+You never typed a name, yet the message is attributed. `from` is the *derived display* of your persisted dialer key — `(shorthex)`, the first 8 hex chars of the scheme-prefixed principal `iroh:<hex>` (`~/.wanix/dialer.key`, `crates/wanix-cli/src/mesh/ticket.rs`); write a name to `nick` and it renders `nick (shorthex)` instead, while the raw principal stays in the stored log and in `roster`'s keys (display is derived, truth is the key). The serve edge binds each connection's *verified* QUIC peer identity into a principal-scoped view (`AppAttachPolicy`, `crates/wanix-cli/src/app/serve.rs`), and the adapter stamps that principal into every event the guest sees. Identity rides the transport; the payload carries body only — and a nick is display sugar you can only ever claim for *yourself*, never authority: two principals may pick the same nick and the shorthex disambiguates them.
 
 One honest detail to notice now: `at` is the host-stamped `at_ms` carried on every request (wire v0.2) — the guest never trusts its own clock, which inside the served qjs engine is pinned to a fixed epoch.
 
@@ -169,8 +178,8 @@ HOME=/tmp/bob wanix-rust mount-cat "$T" latest
 ```
 
 ```text
-{"at":1765000000000,"from":"iroh:36469a42...","body":"morning! mounted the room over the mesh"}
-{"at":1765000000113,"from":"iroh:04bd5311...","body":"hey A — same room, different key"}
+{"at":1765000000000,"from":"(36469a42)","body":"morning! mounted the room over the mesh"}
+{"at":1765000000113,"from":"(04bd5311)","body":"hey A — same room, different key"}
 ```
 
 First contact mints `/tmp/bob/.wanix/dialer.key`; B is `04bd5311...` from then on, durably. Two people, zero accounts, zero configuration — the handshake is the login.
@@ -218,7 +227,7 @@ wanix-rust mount-cat "$T" latest | tail -1
 ```
 
 ```text
-{"at":1765000000404,"from":"iroh:04bd5311...","body":"hi, this is definitely A"}
+{"at":1765000000404,"from":"(04bd5311)","body":"hi, this is definitely A"}
 ```
 
 Still B. The guest extracts `body` and discards the claimed author (`post()` above), and it *could not* honor the claim even if it wanted to — the principal in every event comes from the host, which took it from the QUIC handshake. There is no API for lying about who you are. The lesson generalizes: `post` carries body only; identity rides the transport.
