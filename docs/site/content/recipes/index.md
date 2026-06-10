@@ -19,6 +19,8 @@ Copy-paste transcripts that produce a real result, each linking up to the use ca
 
 Every recipe is a verbatim shell transcript with expected output — paste it, watch it work, then follow the link up to the use case that explains *why*. Recipes are the "how"; use cases are the "why".
 
+> **For a 5-minute live demo:** run the `qjs` hero on the [home page](/) (terminal-only, no setup) then [Recipe 07 — Chatroom over the mesh](/recipes/07-chatroom-over-the-mesh). Both are self-contained and output-verified, and Recipe 07 is the strongest showcase of Wanix mesh identity. Pre-build the binary first.
+
 ## Pages
 
 - [**Scaffold a project with wanix new**](/recipes/00-scaffold-a-project) — Generate a JS or Rust Wanix project with the guest SDK wired in.

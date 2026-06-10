@@ -50,6 +50,8 @@ hello from a Wanix namespace
 
 That line is literal, not marketing. `examples/qjs-demo.js` runs in QuickJS hosted by Wasmtime; its `std.loadFile("main.js")` reads from the **task's Wanix namespace**, not the host path; `std.loadFile("#task/self/id")` reaches the task service filesystem at `#task`; and the ES import resolves through the namespace too. QuickJS is just the engine *inside* the task — Wanix owns task identity, the namespace, stdio/fds, env/cwd, and exit status (`rust-walkthrough.md:57-89`).
 
+> **For a 5-minute live demo:** run the `qjs` hero above (terminal-only, no setup) then [Recipe 07 — Chatroom over the mesh](/recipes/07-chatroom-over-the-mesh). Both are self-contained and output-verified, and Recipe 07 is the strongest showcase of Wanix mesh identity. Pre-build the binary first — see [build & install](/reference/build-and-install).
+
 ## The thesis, in one line
 
 > **Everything is a file, every process has its own namespace, and one 9P contract reaches local services and remote machines alike.**

@@ -146,15 +146,15 @@ job: /n/rot13/jobs/j46fc075103b33b2f
 And the `tempfile` mapping is invisible to the caller — bytes in, bytes out (here piping a mounted volume file from recipe 06 through `sortlines`):
 
 ```sh
-wanix sh -c 'cat /vol/notes/fruit.txt | tool /n/sort' \
-  --mount-mesh "$SORT=/n/sort" --mount-mesh "$VOL=/vol/notes"
+wanix sh -c 'cat /vol/notes/fruit.txt | tool /n/sortlines' \
+  --mount-mesh "$SORT=/n/sortlines" --mount-mesh "$VOL=/vol/notes"
 ```
 
 ```text
 apple
 mango
 pear
-job: /n/sort/jobs/jb5ba1bab9fa49368
+job: /n/sortlines/jobs/jb5ba1bab9fa49368
 ```
 
 ## 4. Watch a job live: `events` + `mount-cat --follow`

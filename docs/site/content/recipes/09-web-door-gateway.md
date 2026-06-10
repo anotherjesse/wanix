@@ -44,6 +44,8 @@ wanix app serve --app examples/chatroom --state /tmp/room --addr 127.0.0.1:0 --r
 # chatroom	iroh://71b44428...?addr=127.0.0.1:46350
 ```
 
+The very first `app serve` in a fresh environment takes ~25 s (debug build, cold module cache compiling the QuickJS wasm) before the ticket appears; subsequent starts take about a second. **Presenter tip:** pre-warm the module cache with one throwaway `app serve` before the audience arrives.
+
 ## 1. One gateway, two named origins
 
 Bind the bundled web client *and* the room under the name `chat` (they share one origin, so the page fetches the room's files with no CORS), and a plain directory under a second name. A NAME without a dot gets `.localhost` appended; repeated `--bind` for one NAME unions at the origin root, earliest bind winning path conflicts. No `--wanix-services` needed.

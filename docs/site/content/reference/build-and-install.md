@@ -40,7 +40,7 @@ From the workspace root:
 cargo build --locked --package wanix-cli
 ```
 
-The first build compiles the whole workspace (a few minutes is normal); after that, rebuilds are fast. The binary lands at `./target/debug/wanix`.
+The first build compiles the whole workspace — expect 3–6 minutes and ~32 crates; it is compiling, not hung. **Pre-build the binary before any live demo.** After that, rebuilds are fast. The binary lands at `./target/debug/wanix`.
 
 ## 3. Alias it
 

@@ -40,7 +40,11 @@ runs a qjs-to-wasm duet on one shared filesystem, serves HTTP apps with
 
 ## Try It
 
-Build the CLI once from the workspace root:
+Build the CLI once from the workspace root (the first build compiles the whole
+workspace — expect 3–6 minutes and ~32 crates once; it is compiling, not hung,
+so pre-build the binary before any live demo). See
+[/reference/build-and-install](docs/site/content/reference/build-and-install.md)
+for the build + alias setup:
 
 ```sh
 cargo build --locked --package wanix-cli
@@ -67,8 +71,8 @@ just check
 The workspace crates and active ADR index are documented in [AGENTS.md](AGENTS.md).
 The mesh design is in [docs/mesh-blueprint.md](docs/mesh-blueprint.md) and
 [docs/mesh-the-missing-half-of-9p.md](docs/mesh-the-missing-half-of-9p.md).
-Hands-on recipes live in [docs/recipes/](docs/recipes/), and a longer manual
-walkthrough lives in [rust-walkthrough.md](rust-walkthrough.md).
+Hands-on recipes live in [docs/site/content/recipes/](docs/site/content/recipes/),
+and a longer manual walkthrough lives in [rust-walkthrough.md](rust-walkthrough.md).
 
 ## Contributing
 

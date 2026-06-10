@@ -90,6 +90,8 @@ wanix app serve --app examples/chatroom --state /tmp/room \
 # registered catalog entry room -> iroh://e1de10e6...?addr=127.0.0.1:51637 (...)
 ```
 
+The very first `app serve` in a fresh environment takes ~25 s (debug build, cold module cache compiling the QuickJS wasm) before the ticket appears; subsequent starts take about a second. **Presenter tip:** pre-warm the module cache with one throwaway `app serve` before the audience arrives.
+
 (One endpoint registers as `NAME`; a serve announcing several — `tool serve --tool upper --tool sha256 --register text` — registers each as `NAME-<resource>`: executed, that run wrote `text-upper` and `text-sha256`.)
 
 An entry is one pretty-printed JSON file, no daemon anywhere:
@@ -118,6 +120,7 @@ wanix catalog ls
 ```
 
 ```text
+# NAME	STATUS	ADDRESS
 notes	online	iroh://b070895d...?addr=127.0.0.1:51277
 room	online	iroh://e1de10e6...?addr=127.0.0.1:51637
 upper	online	iroh://8c7a7009...?addr=127.0.0.1:49531
@@ -126,6 +129,7 @@ upper	online	iroh://8c7a7009...?addr=127.0.0.1:49531
 Kill the `upper` serve (Ctrl-C its terminal) and list again — the *name* stays, the resource is honestly offline:
 
 ```text
+# NAME	STATUS	ADDRESS
 notes	online	iroh://b070895d...?addr=127.0.0.1:51277
 room	online	iroh://e1de10e6...?addr=127.0.0.1:51637
 upper	offline	iroh://8c7a7009...?addr=127.0.0.1:49531
@@ -137,7 +141,7 @@ Restart it with the same `--register upper` and the entry is overwritten in plac
 upper	online	iroh://8c7a7009...?addr=127.0.0.1:54872
 ```
 
-`catalog ls --no-probe` lists instantly with status `-`. `catalog add NAME IROH_URL`, `show NAME`, and `rm NAME` are the manual verbs; `add` refuses to overwrite without `--force`.
+`catalog ls --no-probe` lists instantly with status `unprobed`. `catalog add NAME IROH_URL`, `show NAME`, and `rm NAME` are the manual verbs; `add` refuses to overwrite without `--force`. An empty catalog prints a humane `catalog is empty (add an entry with: ...)` hint on stderr instead of nothing.
 
 ## 3. Mount by bare name
 
@@ -278,6 +282,7 @@ no recipe "writing-desk" (recipes /tmp/fresh/.wanix/recipes); save one with `wan
 Names and compositions are plain files, so moving them is `cp`:
 
 ```sh
+rm -rf /tmp/fresh   # if /tmp/fresh already exists, remove it first so cp -r does not nest into catalog/catalog
 mkdir -p /tmp/fresh/.wanix
 cp -r ~/.wanix/catalog  /tmp/fresh/.wanix/catalog
 cp -r ~/.wanix/recipes  /tmp/fresh/.wanix/recipes

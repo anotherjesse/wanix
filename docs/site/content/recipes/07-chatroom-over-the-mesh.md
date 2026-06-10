@@ -74,6 +74,7 @@ wanix mount-ls "$T"
 ```
 
 ```text
+bin
 latest
 nick
 post
@@ -247,7 +248,7 @@ to the room, so every browser user posts as the gateway's key.
 - **`who` keeps listing someone who left.** A hard-killed subscriber (process killed mid-read) holds its registry entry until the transport declares the connection dead — about 30 s of silence on loopback in this run. Presence is session state, not a heartbeat.
 - **A parked `mount-cat "$T" stream --follow` outlives the serve dying — for ~33 s.** An already-blocked stream read carries no per-op deadline (ADR 0008), so when the serve is killed it keeps blocking until QUIC connection liveness declares the peer dead (33 s on loopback in this run), then fails with `resource unreachable: mesh: mesh wire transport error: quic recv read failed: connection lost`. Everything `--follow` printed before the death is already on your screen — only a still-buffered collected read loses bytes. Only a *fresh* op gets the friendly 5 s message above. Blocked stream readers are released with EOF only when the guest exits while the serve stays up.
 - **First `app serve` seems to hang before printing the ticket.** Cold module cache: the QuickJS engine wasm is being compiled (~25 s in this debug-build run). Subsequent starts are ~1 s.
-- **`app serve` refuses to start without `--addr`.** Default-deny, verbatim: "app serve on the public endpoint exposes the app to anyone with its ticket; pass --addr IP:PORT or --insecure-open to deliberately export to the open internet".
+- **`app serve` refuses to start without `--listen`.** Default-deny, verbatim: "app serve on the public endpoint exposes the app to anyone with its ticket; pass --listen IP:PORT or --insecure-open to deliberately export to the open internet". (`--addr` still parses as an alias for `--listen`.)
 - **Reading `post` fails with `operation not supported`.** It is write-only by the guest's own rules, and the guidance after the colon is the guest's own `not_supported` message, carried across the wire (verbatim from this run: `mount-cat failed to read: operation not supported: post is write-only; read latest or roster instead`).
 - **A nick is refused with `invalid`.** The guest validates: 32 chars max after trimming, no control characters — a bad nick fails the write and changes nothing (verbatim from this run: `mount-write failed: invalid argument: nick longer than 32 characters`; `roster` was untouched).
 - **`resource unreachable: peer ... did not answer within 5s`.** The serve is down. The message says the recovery: the mount works again when the room returns, and the peer id half of the ticket never changes.
