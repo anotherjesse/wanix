@@ -1,0 +1,17 @@
+[package]
+name = "wanix-appfs"
+description = "AppFS v0: the file2chan adapter — a FileSystem whose discrete operations become newline-JSON events to a guest app, with host-owned never-EOF stream files."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = "0.22"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+wanix-fs = { path = "../wanix-fs" }
