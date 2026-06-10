@@ -230,8 +230,9 @@ tests.
   line editing per ADR 0003 (echo, backspace, Ctrl-C line cancel, Ctrl-D exit) —
   proven end-to-end through `#term` by
   `shell_repl_serves_a_terminal_session_over_blocking_reads`. Tab completion,
-  history, and arrow keys are deliberately not built yet, and a native-terminal
-  CLI entry for wasm shell tasks (the `qjs-shell` analog) is still missing. See
+  history, and arrow keys are deliberately not built yet. The native-terminal
+  CLI entry is `wanix-rust sh` (`-c LINE` or interactive, with `--env`/`--cwd`/
+  repeatable `--mount-mesh IROH=/path`). See
   [docs/site/content/concepts/wanix-sh.md](docs/site/content/concepts/wanix-sh.md)
   and `shell-command-resolution.md`.
 - `wanix-rust qjs-term main.js` and `wanix-rust qjs-shell`: terminal-backed
@@ -339,8 +340,20 @@ tests.
   `NotFound`, lifecycle is lazy TTL expiry through an injected clock).
   Principal scoping rides `open_view(principal)`, runners are in-process v0
   (fakes plus the `ModelEngine` seam — a model device is just ToolService with
-  a model runner). Not yet mounted by serve or the mesh. Proofs:
+  a model runner). Served over the mesh by `wanix-rust tool serve`. Proofs:
   `crates/wanix-tool/src/tests.rs` pins the docs/toolfs.md validation matrix.
+- Composed resource flow (volumes + tools + shell over the mesh, ADR 0007 +
+  ADR 0009): `wanix-rust volume create/serve` exports each `~/.wanix/volumes/
+  <name>` dir as its own native-wire endpoint (one ticket per resource, persisted
+  per-resource ed25519 identity), `wanix-rust tool serve --tool upper|sha256|
+  model` does the same for built-in ToolFS devices (every connection bound to a
+  private per-principal `jobs/` view from the verified `remote_id()`), and
+  `wanix-rust sh -c '...' --mount-mesh TICKET=/path ...` composes them: `cat <
+  /vol/notes/hello.txt | tool /n/upper > /vol/notes/HELLO.txt` reads one peer,
+  runs a job on another, and writes back to the first. The dialer identity is
+  ephemeral per dial, so a remount is a new principal to job-scoped servers.
+  Walkthrough: `docs/site/content/learn/compose-volumes-and-tools.md` and
+  recipe 06 (tested transcript).
 - `wanix-rust capsule`: freezes a Wanix world into a portable, CAS-backed
   `.wcap` (via `wanix-cas`) that can be loaded elsewhere; live mesh peers and
   ephemeral handles are not portable.
