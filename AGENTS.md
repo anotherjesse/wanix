@@ -305,6 +305,21 @@ tests.
   tasks, attach terminals, and read/write every device through service files.
   WASI guests resolve any `#name` device path from the namespace root, so a
   `qjs`/`wasm` task can open e.g. `#kv/<key>` regardless of its cwd.
+- `serve --bind NAME=DIR|NAME=iroh://PEER` (the WebDoor): one generic
+  HTTP→namespace gateway on the serve door. Each NAME is one composed
+  namespace (static dirs + dialed mesh mounts unioned at the root) served at
+  `http://NAME.localhost:PORT` by Host-header routing, so a webapp and the
+  room it talks to share one origin (no CORS); bare localhost serves an index
+  of bound names. Sized files send whole; zero-length device files stream as
+  chunked transfer (SSE `data:` lines under `Accept: text/event-stream`, so a
+  browser `EventSource` follows a never-EOF `stream` live); POST/PUT writes;
+  dirs serve `index.html` or a JSON listing; `FsError` maps honestly
+  (`Unreachable`→503+`Retry-After`). Loopback-only in v0 (ADR 0006-style
+  refusal). v0 principal honesty: the gateway dials with ITS dialer key, so a
+  mounted room sees one principal for all web users (per-user web identity =
+  delegation certs / gateway principals, docs/appfs.md). Demo:
+  `examples/chatroom/web` + recipe 07 §8; proofs in
+  `crates/wanix-cli/src/serve/webdoor/tests.rs`.
 - `serve --bundle fs9p`: browser filesystem client over direct 9P.
 - `serve --bundle workbench-fs9p`: the browser cockpit — a Code OSS/workbench
   launch path where the bootstrap passes the discovered direct-9P route into the

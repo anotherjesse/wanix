@@ -10,6 +10,7 @@ pub(super) const SERVE_VALUE_OPTIONS: &[(&str, ServeValueOption)] = &[
     ("--p9", ServeValueOption::P9),
     ("--peer", ServeValueOption::Peer),
     ("--grant", ServeValueOption::Grant),
+    ("--bind", ServeValueOption::Bind),
 ];
 
 pub(super) const SERVE_FLAG_OPTIONS: &[(&str, ServeFlagOption)] = &[
@@ -41,6 +42,7 @@ pub(super) enum ServeValueOption {
     P9,
     Peer,
     Grant,
+    Bind,
 }
 
 impl ServeValueOption {
@@ -53,6 +55,7 @@ impl ServeValueOption {
             Self::P9 => "serve --p9",
             Self::Peer => "serve --peer",
             Self::Grant => "serve --grant",
+            Self::Bind => "serve --bind",
         }
     }
 
@@ -63,6 +66,7 @@ impl ServeValueOption {
             Self::Bundle => "NAME",
             Self::Peer => "HEX",
             Self::Grant => "ANAME:PREFIX:RIGHTS",
+            Self::Bind => "NAME=DIR or NAME=iroh://PEER",
         }
     }
 }

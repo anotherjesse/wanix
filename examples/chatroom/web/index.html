@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wanix chatroom</title>
+  <style>
+    body { font: 15px/1.45 system-ui, sans-serif; max-width: 44rem; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.2rem; }
+    #notice { background: #fff5d6; border: 1px solid #e0c860; padding: .5rem .75rem; font-size: .85rem; border-radius: 4px; }
+    #log { border: 1px solid #ccc; border-radius: 4px; padding: .5rem .75rem; height: 20rem; overflow-y: auto; }
+    #log p { margin: .25rem 0; }
+    #log .from { color: #555; font-size: .85rem; margin-right: .5rem; }
+    #log .you { color: #1a6b1a; font-size: .8rem; margin-left: .4rem; }
+    form { display: flex; gap: .5rem; margin-top: .75rem; }
+    form input[type=text] { flex: 1; padding: .35rem .5rem; }
+    #status { color: #777; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <h1>wanix chatroom</h1>
+  <p id="notice">
+    <strong>One principal, many browsers:</strong> this page talks to the room
+    through the Wanix gateway, which dials the mesh with <em>its</em> key. The
+    room therefore records every post from this page — from every browser
+    using this gateway — as the same author: the gateway. Messages below are
+    shown exactly as the room records them; "via this gateway" marks posts
+    this page sent in this session. Per-user identity over HTTP is future
+    work (delegation certs / gateway principals — docs/appfs.md).
+  </p>
+  <div id="log"></div>
+  <form id="post-form">
+    <input id="message" type="text" placeholder="say something" autocomplete="off" autofocus>
+    <button>post</button>
+  </form>
+  <form id="nick-form">
+    <input id="nick" type="text" placeholder="display name for the gateway principal" autocomplete="off">
+    <button>set nick</button>
+  </form>
+  <p id="status">connecting…</p>
+  <script src="app.js"></script>
+</body>
+</html>

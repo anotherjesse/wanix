@@ -98,6 +98,7 @@ pub(super) const USAGE: &str = concat!(
     "[--json] [--no-kvm] [--exec]\n",
     "       wanix-rust serve [--root DIR | DIR] [--listen HOST:PORT] ",
     "[--p9 HOST:PORT [--peer HEX --grant ANAME:PREFIX:RIGHTS ...]] ",
+    "[--bind NAME=DIR | NAME=iroh://PEER ...] ",
     "[--bundle NAME] [--wanix-services] [--once]\n",
     "       wanix-rust --help",
 );

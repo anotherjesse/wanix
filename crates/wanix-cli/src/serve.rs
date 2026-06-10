@@ -14,6 +14,7 @@ mod http;
 mod raw9p;
 mod roots;
 mod terminal_ws;
+mod webdoor;
 mod ws_duplex;
 
 #[cfg(test)]
@@ -60,6 +61,12 @@ fn run_serve_with_listener_inner(
     // `--wanix-services` binds the `#task`/`#agent` exec devices (RCE). Refuse
     // it on a non-loopback HTTP door before binding the raw-9P door too.
     enforce_services_trust_boundary(&command, local_addr, None)?;
+    // The WebDoor gateway (`--bind`) enforces its own loopback-only rule and
+    // dials its mesh mounts before the first connection is accepted.
+    let roots = match webdoor::start_webdoor(&command.binds, local_addr, process_stderr)? {
+        Some(door) => roots.with_webdoor(door),
+        None => roots,
+    };
     let roots = start_raw9p_door_for_serve(&command, &roots, process_stderr)?;
     write_serve_startup_status(
         &roots,

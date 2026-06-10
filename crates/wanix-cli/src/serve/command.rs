@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use wanix_9p::PeerId;
 
 use super::raw9p::grant::{GrantSpec, parse_peer};
+use super::webdoor::WebBind;
 use crate::CliError;
 
 pub(crate) const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7654";
@@ -29,6 +30,9 @@ pub(crate) struct ServeCommand {
     /// Capability grants for `peer`, scoped to the served namespace at attach
     /// time. Requires `--peer`.
     pub(super) grants: Vec<GrantSpec>,
+    /// WebDoor gateway origins, one per `--bind NAME=DIR|NAME=iroh://PEER`
+    /// (repeatable). Subject to the loopback-only gateway trust rule.
+    pub(super) binds: Vec<WebBind>,
 }
 
 pub(crate) fn parse_serve_command(args: &[OsString]) -> Result<ServeCommand, CliError> {
@@ -90,6 +94,7 @@ impl<'a> ServeCommandParser<'a> {
             ServeValueOption::P9 => self.parts.set_p9_addr(value),
             ServeValueOption::Peer => self.parts.set_peer(value),
             ServeValueOption::Grant => self.parts.push_grant(value),
+            ServeValueOption::Bind => self.parts.push_bind(value),
         }
     }
 
@@ -133,6 +138,7 @@ struct ServeCommandParts {
     p9_addr: Option<String>,
     peer: Option<PeerId>,
     grants: Vec<GrantSpec>,
+    binds: Vec<WebBind>,
 }
 
 impl ServeCommandParts {
@@ -200,6 +206,11 @@ impl ServeCommandParts {
         Ok(())
     }
 
+    fn push_bind(&mut self, value: &OsString) -> Result<(), CliError> {
+        self.binds.push(WebBind::parse(&value.to_string_lossy())?);
+        Ok(())
+    }
+
     fn finish(self) -> Result<ServeCommand, CliError> {
         // A grant names a capability for a peer; a peer/grant with no raw-9P
         // door is dead config, so require `--p9`. (The websocket door stays
@@ -223,6 +234,7 @@ impl ServeCommandParts {
             p9_addr: self.p9_addr,
             peer: self.peer,
             grants: self.grants,
+            binds: self.binds,
         })
     }
 }

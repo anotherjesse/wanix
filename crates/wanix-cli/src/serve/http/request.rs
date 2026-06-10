@@ -17,7 +17,22 @@ pub(in crate::serve) fn peek_request_target(header_bytes: &[u8]) -> Option<&str>
 pub(in crate::serve) fn parse_http_request(bytes: &[u8]) -> Result<PathBuf, HttpStatus> {
     let header = request_header(bytes)?;
     let target = request_line_target(header)?;
-    safe_relative_path(target)
+    let mut path = safe_relative_path(target)?;
+    if path.as_os_str().is_empty() {
+        path.push("index.html");
+    }
+    Ok(path)
+}
+
+/// The request path for the WebDoor gateway: any method (the gateway maps
+/// verbs itself), and `/` stays the empty path (the origin root — a directory
+/// request, not an implicit `index.html`).
+pub(in crate::serve) fn gateway_request_path(bytes: &[u8]) -> Result<PathBuf, HttpStatus> {
+    let header = request_header(bytes)?;
+    let request_line = first_header_line(header)?;
+    let (_method, raw_path, version) = request_line_parts(request_line)?;
+    validate_http_version(version)?;
+    safe_relative_path(raw_path)
 }
 
 fn request_header(bytes: &[u8]) -> Result<&str, HttpStatus> {
@@ -76,9 +91,6 @@ fn safe_relative_path(raw_path: &str) -> Result<PathBuf, HttpStatus> {
     let mut path = PathBuf::new();
     for raw_segment in path_without_query.split('/') {
         push_safe_segment(&mut path, raw_segment)?;
-    }
-    if path.as_os_str().is_empty() {
-        path.push("index.html");
     }
     Ok(path)
 }

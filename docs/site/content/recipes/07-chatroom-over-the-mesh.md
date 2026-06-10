@@ -14,6 +14,8 @@ sourceRefs:
   - crates/wanix-appfs/src/buffer.rs:18-25
   - crates/wanix-cli/src/mesh/ticket.rs:195-206
   - crates/wanix-id/src/identity.rs:90-93
+  - crates/wanix-cli/src/serve/webdoor.rs
+  - examples/chatroom/web/app.js
 seeAlso:
   - learn/build-a-chatroom
   - concepts/guest-defined-resources
@@ -28,6 +30,7 @@ honestLimits:
   - "Message timestamps are the host-stamped at_ms on each request (wire v0.2), not the guest's clock — Date.now() inside the served qjs guest is still engine-pinned and should not be used for time."
   - "mount-cat is collected (prints at EOF), so reading the never-EOF stream file shows nothing until the process is killed — bound it with timeout; the live view today is a host-side tail of the --state log."
   - "Any ticket holder may attach (attribution stays unforgeable); allow-list rooms and CAS-pinned code provenance are deferred (docs/appfs.md)."
+  - "The WebDoor gateway is ONE principal to the room: every browser user posts as the gateway's dialer key, and a web-set nick names that shared principal. Per-user web identity needs delegation certs / gateway principals (docs/appfs.md §Identity And Trust) — not v0."
 canonicalCaveatFor: []
 ---
 
@@ -192,6 +195,66 @@ wanix-rust mount-cat "$T" status      # the OLD ticket — stale port hint — s
 The room's memory was never guest RAM (`main.js` reloads `/state/log` at boot), the identity key survives the process, and on loopback/LAN even the stale ticket keeps working: the peer half is the address, mDNS finds the new route, the hint is just a hint. Both a bare `iroh://bd4e24de...` (no `?addr=` at all) and the old ticket reached the restarted room in this run.
 
 The manual restart is also automatable: `app serve ... --restart on-failure` supervises the guest, re-running it with capped backoff whenever it exits and swapping the fresh adapter behind the *same* ticket and endpoint. Connections opened against the dead generation keep failing honestly (`Unreachable`); new connections reach the restarted room.
+
+## 8. Put a browser on it: the WebDoor gateway
+
+A browser has no iroh key — so the `serve` HTTP door can act as a gateway:
+`--bind NAME=SOURCE` (repeatable) composes, per NAME, one namespace from every
+source bound to it and serves it at `http://NAME.localhost:PORT` by
+`Host`-header routing (`*.localhost` resolves to loopback by resolver
+convention — zero DNS setup). Bind the bundled web client *and* the room under
+one name and they share one origin, so the page fetches the room's files with
+no CORS:
+
+```sh
+T='iroh://bd4e24de...?addr=127.0.0.1:43490'    # the room ticket from step 1
+wanix-rust serve --root /tmp/empty \
+  --bind chat=examples/chatroom/web \
+  --bind "chat=$T" \
+  --bind docs=docs/site/content \
+  --listen 127.0.0.1:7699
+# wanix-rust serve: gateway origin http://chat.localhost:7699/
+# wanix-rust serve: gateway origin http://docs.localhost:7699/
+```
+
+(`docs` shows the same door serving a plain static site: any directory bound
+to a name is an origin — `http://docs.localhost:7699/` lists it as JSON when
+there is no `index.html`, and serves files by content type.)
+
+Open `http://chat.localhost:7699/` for the webapp (post form, live
+EventSource feed, nick form), or drive it with curl — the bare host lists the
+bound names, and the room's files are plain same-origin URLs:
+
+```sh
+curl http://127.0.0.1:7699/                            # index of bound names
+curl -X POST -d 'hello from curl' http://chat.localhost:7699/post
+curl http://chat.localhost:7699/latest
+curl -N http://chat.localhost:7699/stream              # chunked, never-EOF: lines arrive as posted
+curl -N -H 'Accept: text/event-stream' http://chat.localhost:7699/stream   # same feed as SSE
+```
+
+The mapping is generic, not chat-specific: GET of a sized file returns it
+whole; GET of a zero-length device file streams as chunked transfer (or SSE
+`data:` lines under `Accept: text/event-stream`); POST/PUT writes the body;
+GET of a directory serves its `index.html` or a JSON listing; and errors map
+honestly — kill the room's `app serve` and `GET /latest` answers
+`503 Service Unavailable` with `Retry-After: 5` (an outage, never a 404).
+The gateway is loopback-only in v0: a non-loopback `--listen` with `--bind`
+is refused at startup (the ADR 0006 trust rule; off-loopback gateway auth is
+recorded follow-up work).
+
+> **v0 gateway principals — read this before demoing identity.** The gateway
+> dials the room with **its** dialer key (`~/.wanix/dialer.key`), so the room
+> sees one principal for ALL web users: every browser post lands as the same
+> `(shorthex)` — the gateway's — and a nick set through the web names the
+> gateway principal, shared by everyone on that gateway. Session isolation,
+> if any, is gateway/HTTP-layer state only, never mesh principal enforcement,
+> and the webapp deliberately does not fake per-user attribution: it shows
+> messages exactly as the room records them and only locally tags posts it
+> sent itself. The mesh wire binds one principal per connection, and that
+> connection is dialed by the gateway, not the browser; the future per-user
+> path is delegation certs / gateway principals threaded into the attach
+> (docs/appfs.md §Identity And Trust), out of scope here.
 
 ## Troubleshooting (friction actually hit while testing)
 

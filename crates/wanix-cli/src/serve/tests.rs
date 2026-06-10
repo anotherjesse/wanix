@@ -167,6 +167,7 @@ fn run_serve_p9_door_reports_bind_errors() {
         p9_addr: Some("127.0.0.1:notaport".to_owned()),
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let mut stderr = Vec::new();
@@ -195,6 +196,7 @@ fn run_serve_refuses_wanix_services_on_non_loopback_p9_door() {
         p9_addr: Some("0.0.0.0:0".to_owned()),
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let mut stderr = Vec::new();
@@ -224,6 +226,7 @@ fn run_serve_refuses_wanix_services_on_non_loopback_http_door() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
     // Bind 0.0.0.0:0 so `local_addr()` reports an unspecified (non-loopback) IP.
     let listener = TcpListener::bind("0.0.0.0:0").unwrap();
@@ -261,6 +264,7 @@ fn run_serve_allows_wanix_services_on_loopback_http_door() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -308,6 +312,7 @@ fn run_serve_p9_door_serves_services_namespace_over_raw_tcp() {
         p9_addr: Some("127.0.0.1:0".to_owned()),
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let serve_thread = thread::spawn(move || {
@@ -393,6 +398,7 @@ fn run_serve_streaming_reports_bind_errors() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
     let mut stderr = Vec::new();
 
@@ -423,6 +429,7 @@ fn serve_once_returns_static_file_with_browser_isolation_headers() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -478,6 +485,7 @@ fn serve_once_returns_mjs_static_file_as_javascript() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -517,6 +525,7 @@ fn serve_once_reports_bundle_url_when_configured() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -557,6 +566,7 @@ fn serve_once_returns_direct_v86_bundle_page() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -817,6 +827,7 @@ fn serve_once_returns_fs9p_bundle_page() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -913,6 +924,7 @@ fn serve_once_returns_workbench_fs9p_bundle_page() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1053,6 +1065,7 @@ fn serve_once_returns_workbench_assets_outside_served_root() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1109,6 +1122,7 @@ std.out.puts("target " + target + "\n");
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
     let handle = thread::spawn(move || {
         let mut stderr = Vec::new();
@@ -1142,6 +1156,7 @@ fn serve_once_returns_direct_v86_embedded_asset_over_static_collision() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1245,6 +1260,7 @@ fn serve_once_keeps_direct_v86_asset_paths_static_without_direct_bundle() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1290,6 +1306,7 @@ fn serve_once_keeps_other_bundles_on_static_root() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1329,6 +1346,7 @@ fn serve_once_returns_well_known_discovery_document() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1440,6 +1458,7 @@ fn serve_once_returns_rootfs_handoff_manifest() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -1505,6 +1524,7 @@ fn serve_rootfs_handoff_reports_unprepared_roots_and_reserves_route() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2248,6 +2268,7 @@ fn serve_once_exports_9p_over_binary_websocket() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2306,6 +2327,7 @@ fn serve_concurrent_loop_serves_http_while_9p_websocket_stays_open() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2355,6 +2377,7 @@ fn serve_concurrent_loop_serves_two_9p_websockets() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2410,6 +2433,7 @@ fn serve_once_exports_9p_on_well_known_export_path() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2481,6 +2505,7 @@ fn serve_once_exports_symlink_readlink_over_direct_9p() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2598,6 +2623,7 @@ std.exit(6);
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2748,6 +2774,7 @@ fn serve_once_exports_google_2_walkgetattr_on_well_known_path() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2806,6 +2833,7 @@ fn serve_once_exports_9p_compatibility_probes_on_well_known_path() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2887,6 +2915,7 @@ fn serve_once_rejects_reserved_ethernet_websocket_path() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2935,6 +2964,7 @@ fn serve_http_keeps_well_known_routes_reserved() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {
@@ -2978,6 +3008,7 @@ fn serve_http_keeps_qjs_shell_route_reserved_when_services_enabled() {
         p9_addr: None,
         peer: None,
         grants: Vec::new(),
+        binds: Vec::new(),
     };
 
     let handle = thread::spawn(move || {

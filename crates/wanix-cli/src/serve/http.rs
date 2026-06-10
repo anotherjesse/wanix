@@ -9,19 +9,22 @@ use super::{ServeRoots, connection::ServeConnectionError};
 
 mod agent;
 pub(super) mod app;
+pub(super) mod gateway;
 mod request;
 mod response;
 mod routes;
 mod static_serve;
+mod stream;
 
 pub(super) use request::{
-    header_end, parse_http_request, peek_request_target, percent_decode, request_target,
-    websocket_rejection_response,
+    gateway_request_path, header_end, parse_http_request, peek_request_target, percent_decode,
+    request_target, websocket_rejection_response,
 };
 pub(super) use response::{HttpStatus, StaticResponse};
 pub(super) use static_serve::{
     path_to_url_relative, read_disk_static_response, read_static_response,
 };
+pub(super) use stream::StreamingResponse;
 
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
@@ -63,8 +66,16 @@ pub(super) fn serve_http_connection(
     peer_addr: SocketAddr,
 ) -> Result<(), ServeConnectionError> {
     let request = read_http_request(&mut stream)?;
-    let response = http_response(roots, &request, peer_addr);
-    write_static_response(stream, response)
+    // The WebDoor owns every request addressed to a bound gateway name (all
+    // verbs, and the streamed never-EOF bodies a StaticResponse cannot carry);
+    // everything else keeps the classic single-shot response path.
+    match gateway::gateway_response(roots, &request) {
+        Some(gateway::GatewayResponse::Static(response)) => write_static_response(stream, response),
+        Some(gateway::GatewayResponse::Stream(body)) => {
+            stream::write_streaming_response(stream, body)
+        }
+        None => write_static_response(stream, http_response(roots, &request, peer_addr)),
+    }
 }
 
 pub(super) fn http_response(
@@ -111,13 +122,19 @@ fn site_gateway_response(
 
 /// Returns the raw `Host` header value, if present.
 fn request_host_header(request: &[u8]) -> Option<&str> {
+    request_header_value(request, "host")
+}
+
+/// Returns a request header's trimmed value by case-insensitive name.
+fn request_header_value<'a>(request: &'a [u8], name: &str) -> Option<&'a str> {
     request_header_str(request)?
         .lines()
         .skip(1)
         .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.trim()
-                .eq_ignore_ascii_case("host")
+            let (header, value) = line.split_once(':')?;
+            header
+                .trim()
+                .eq_ignore_ascii_case(name)
                 .then(|| value.trim())
         })
 }

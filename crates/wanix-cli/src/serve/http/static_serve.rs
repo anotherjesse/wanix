@@ -88,8 +88,8 @@ fn content_type(path: &Path) -> &'static str {
 
 /// Maps a (lowercased) file extension to a static content type. Keys on the
 /// extension only, so it works identically for a host `Path` and a virtual
-/// filesystem path.
-fn content_type_for_extension(extension: Option<&str>) -> &'static str {
+/// filesystem path. Shared with the WebDoor gateway's file mapping.
+pub(in crate::serve) fn content_type_for_extension(extension: Option<&str>) -> &'static str {
     const TYPES: &[(&str, &str)] = &[
         ("html", "text/html; charset=utf-8"),
         ("js", "text/javascript; charset=utf-8"),

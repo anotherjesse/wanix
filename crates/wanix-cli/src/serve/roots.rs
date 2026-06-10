@@ -16,6 +16,7 @@ use wanix_term::TermDevice;
 use wanix_vfs::{BindOptions, BindPosition, Namespace};
 use wanix_wasm::WasmTaskDriver;
 
+use super::webdoor::WebDoor;
 use crate::{CliError, quickjs_runner};
 
 #[derive(Clone)]
@@ -49,6 +50,10 @@ pub(super) struct ServeRoots {
     pub(super) local_addr: SocketAddr,
     pub(super) bundle: Option<String>,
     pub(super) wanix_services: bool,
+    /// The WebDoor gateway: `--bind` name→namespace origins plus the mesh
+    /// keepalives that hold its `iroh://` mounts alive. Empty (and inert) when
+    /// no `--bind` was given.
+    pub(super) webdoor: Arc<WebDoor>,
 }
 
 impl ServeRoots {
@@ -89,7 +94,16 @@ impl ServeRoots {
             local_addr,
             bundle,
             wanix_services,
+            webdoor: Arc::new(WebDoor::empty()),
         })
+    }
+
+    /// Installs the built WebDoor gateway (`serve --bind ...`). The door's
+    /// mesh keepalives ride this `Arc`, so they live as long as any connection
+    /// can still touch a gateway origin.
+    pub(super) fn with_webdoor(mut self, webdoor: Arc<WebDoor>) -> Self {
+        self.webdoor = webdoor;
+        self
     }
 
     /// Records the bound raw-9P door address so discovery and startup status can
