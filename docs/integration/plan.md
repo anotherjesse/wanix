@@ -396,10 +396,11 @@ later cycle; this slice draws the seam.
 - `workbench/src/web/mesh-panel.ts` (add a "Mount peer from browser" command
   that prompts for ws:// URL + token, calls `WanixPeer.connect`, binds the
   result into the cockpit's filesystem view at `/n/<id>`).
-- `crates/wanix-cli/src/p9_ws/connection.rs` (accept a session token query
-  parameter on the WebSocket handshake; refuse non-loopback peers without a
-  matching grant entry — mirrors the Slice 4 exec-export gate from the mesh
-  blueprint).
+- `crates/wanix-cli/src/serve/connection.rs` (the serve 9P WebSocket
+  handshake; the standalone `p9_ws` module this slice originally targeted is
+  retired into `serve` per ADR 0006 — accept a session token query parameter
+  on the handshake; refuse non-loopback peers without a matching grant
+  entry — mirrors the Slice 4 exec-export gate from the mesh blueprint).
 - `crates/wanix-cli/src/serve/discovery.rs` (advertise the peer-attach
   endpoint and current loopback-only policy so the cockpit can show it
   honestly).

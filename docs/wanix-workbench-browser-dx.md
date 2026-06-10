@@ -5,7 +5,9 @@
 > `wanix-9p-client` over the mesh, so the workbench-as-bundle framing below is
 > historical context for how we got here, not a description of the current
 > direction. Treat the workflow notes as DX lessons we carried forward into the
-> cockpit/peer model.
+> cockpit/peer model. The screenshots referenced below
+> (`assets/wanix-workbench-browser-dx/...`) were not carried into this tree;
+> the image links are intentionally unresolved.
 
 # Wanix Workbench In The Browser: The Small Wins That Made It Usable
 
