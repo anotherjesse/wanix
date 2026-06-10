@@ -1,10 +1,11 @@
-//! `wanix tool`: built-in ToolFS devices served over the native mesh wire.
+//! `wanix tool`: ToolFS devices served over the native mesh wire.
 //!
 //! A tool is one host-approved operation family exposed as files
 //! (`docs/toolfs.md`, ADR 0009): the host fixes the operation and its policy,
 //! a caller supplies only input bytes through the mounted job protocol. This
-//! module owns the built-in v0 tool registry (in-process runners only — the
-//! process runner is a later crate) and the per-tool endpoint identities;
+//! module owns the tool registry — the built-in v0 tools plus, via
+//! `tool serve --config tools.toml`, host-program tools behind the
+//! [`process::ProcRunner`] — and the per-tool endpoint identities;
 //! `tool serve` itself lives in [`serve`].
 
 use std::path::PathBuf;
@@ -18,11 +19,15 @@ use wanix_tool::{RunContext, RunOutcome, ToolClock, ToolRunner, ToolService, Too
 use crate::CliError;
 use crate::volume::wanix_dir;
 
+mod config;
+mod process;
 mod serve;
 
+use config::ToolConfigFile;
 pub(crate) use serve::{parse_tool_serve_command, run_tool_serve_streaming};
 
-/// The built-in v0 tools, sorted; the only names `tool serve --tool` accepts.
+/// The built-in v0 tools, sorted; `tool serve --tool` also accepts
+/// `--config`-defined names, which shadow same-named built-ins.
 pub(crate) const BUILTIN_TOOL_NAMES: [&str; 3] = ["model", "sha256", "upper"];
 
 /// Builds the [`ToolService`] for one built-in tool name, on the wall clock.
@@ -89,6 +94,19 @@ impl ToolRunner for Sha256Runner {
         }
         out.push('\n');
         RunOutcome::success(out.into_bytes())
+    }
+}
+
+/// Builds the [`ToolService`] for `name` from the merged registry: a
+/// `tools.toml` definition when one exists (config shadows a built-in of the
+/// same name), the built-in otherwise.
+pub(crate) fn build_named_tool_service(
+    name: &str,
+    config: Option<&ToolConfigFile>,
+) -> Result<ToolService, CliError> {
+    match config.and_then(|file| file.get(name)) {
+        Some(tool) => tool.build_service(name),
+        None => build_tool_service(name),
     }
 }
 

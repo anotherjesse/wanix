@@ -489,13 +489,16 @@ Process runner policy:
 
 ## CLI And Server Shape
 
-Possible local server command:
+The local server command (shipped):
 
 ```sh
-wanix tool serve --config tools.toml
+wanix tool serve --config tools.toml --listen 127.0.0.1:0
 ```
 
-Possible config sketch:
+The config shape (shipped; `limits`/`lifecycle` keys map onto the
+`JobLimits`/`JobLifecycle` fields, so `spec.json` advertises exactly what was
+configured; `input`/`output` are `stdin|tempfile` / `stdout|tempfile`, with
+`{input}`/`{output}` argv placeholders for the `tempfile` mappings):
 
 ```toml
 [tools.upper]
@@ -633,8 +636,19 @@ agent projection
    byte/job limits, and concurrency limits — including the aggregate
    `maxTotalJobs`/`maxTotalBytes` caps, since per-principal quotas alone do not
    bound served-tool memory.
-5. **Process runner.** Add fixed-command process execution outside the core
-   crate, with stdin/stdout and temp-file mapping.
+5. **Process runner (shipped).** `wanix tool serve --config tools.toml` serves
+   real host programs behind the fixed-policy inversion: `ProcRunner` in
+   `wanix-cli` spawns the config-fixed absolute command and argv (no shell
+   anywhere; `{input}`/`{output}` are the only placeholders, each tied to its
+   `tempfile` mapping) with an empty environment in a private per-job temp
+   workdir (removed afterwards), feeds input by `stdin` or `tempfile`, streams
+   child stderr lines into the job's `events` file, bounds stdout/stderr
+   capture at the spec caps (the child is killed past them, `runner_failed`),
+   kills at the `RunContext` deadline (`timeout`) and on `ctl abort`
+   (`aborted`), and always reaps the child. Config tools shadow same-named
+   built-ins; with no `--tool`, every configured tool is served. Proofs:
+   `crates/wanix-cli/src/tool/serve/proc_tests.rs` (real subprocesses over the
+   mesh) and `crates/wanix-cli/src/tool/process_tests.rs`.
 6. **Tool server (shipped).** `wanix tool serve --tool NAME [--tool NAME ...]`
    serves each ToolFS as its own native endpoint (one ticket and one persisted
    identity per tool) in one process, binding every connection to a

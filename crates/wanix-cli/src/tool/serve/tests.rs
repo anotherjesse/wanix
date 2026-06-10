@@ -22,7 +22,7 @@ fn np(path: &str) -> NormalizedPath {
 }
 
 /// Mounts a served tool ticket through the production native client at `x`.
-fn mount(ticket_url: &str) -> (Namespace, crate::mesh::IrohMount) {
+pub(super) fn mount(ticket_url: &str) -> (Namespace, crate::mesh::IrohMount) {
     bind_at_x(crate::mesh::dial_iroh_remote(ticket_url, "").unwrap())
 }
 
@@ -39,7 +39,7 @@ fn bind_at_x(mount: crate::mesh::IrohMount) -> (Namespace, crate::mesh::IrohMoun
     (namespace, mount)
 }
 
-fn read_string(namespace: &Namespace, path: &str) -> String {
+pub(super) fn read_string(namespace: &Namespace, path: &str) -> String {
     let mut file = namespace.open(&np(path), OpenOptions::read()).unwrap();
     let mut out = Vec::new();
     let mut buf = [0u8; 256];
@@ -53,7 +53,7 @@ fn read_string(namespace: &Namespace, path: &str) -> String {
     String::from_utf8(out).unwrap()
 }
 
-fn write_file(namespace: &Namespace, path: &str, bytes: &[u8]) {
+pub(super) fn write_file(namespace: &Namespace, path: &str, bytes: &[u8]) {
     let mut file = namespace
         .open(
             &np(path),
@@ -68,7 +68,7 @@ fn write_file(namespace: &Namespace, path: &str, bytes: &[u8]) {
     assert_eq!(file.write(bytes).unwrap(), bytes.len());
 }
 
-fn job_ids(namespace: &Namespace) -> Vec<String> {
+pub(super) fn job_ids(namespace: &Namespace) -> Vec<String> {
     namespace
         .read_dir(&np("x/jobs"))
         .unwrap()
@@ -80,7 +80,7 @@ fn job_ids(namespace: &Namespace) -> Vec<String> {
 /// Runs one complete job through a mounted tool: cat new, write in, ctl run,
 /// read out + result.json. The ctl close step is the caller's, so tests can
 /// inspect the job first.
-fn run_job(namespace: &Namespace, input: &[u8]) -> (String, String, Value) {
+pub(super) fn run_job(namespace: &Namespace, input: &[u8]) -> (String, String, Value) {
     let id = read_string(namespace, "x/new").trim().to_owned();
     write_file(namespace, &format!("x/jobs/{id}/in"), input);
     write_file(namespace, &format!("x/jobs/{id}/ctl"), b"run\n");
@@ -160,7 +160,7 @@ fn announces_one_iroh_ticket_record_per_tool() {
         "upper".to_owned(),
         NodeIdentity::from_secret_bytes([101u8; 32]),
     )];
-    let served = bind_tool_endpoints(tools, Some(loopback())).unwrap();
+    let served = bind_tool_endpoints(tools, None, Some(loopback())).unwrap();
     assert_eq!(served.len(), 1);
     let line = serve_record_line(&served[0].name, &served[0].ticket_url);
     assert!(line.starts_with("upper\tiroh://"), "{line}");
@@ -184,7 +184,7 @@ fn serves_tools_with_a_full_job_lifecycle_over_the_mesh() {
             NodeIdentity::from_secret_bytes([103u8; 32]),
         ),
     ];
-    let served = bind_tool_endpoints(tools, Some(loopback())).unwrap();
+    let served = bind_tool_endpoints(tools, None, Some(loopback())).unwrap();
     assert_eq!(served.len(), 2);
     // Distinct peer ids: each tool is an independent mesh resource/ticket.
     assert_ne!(served[0].node.peer_id(), served[1].node.peer_id());
@@ -225,7 +225,7 @@ fn two_peers_see_disjoint_jobs() {
         "upper".to_owned(),
         NodeIdentity::from_secret_bytes([104u8; 32]),
     )];
-    let served = bind_tool_endpoints(tools, Some(loopback())).unwrap();
+    let served = bind_tool_endpoints(tools, None, Some(loopback())).unwrap();
 
     // Two distinct dialer identities are two distinct verified principals
     // against one served tool. (The production dial path presents ONE
@@ -268,7 +268,7 @@ fn same_identity_redial_resumes_jobs() {
         "upper".to_owned(),
         NodeIdentity::from_secret_bytes([107u8; 32]),
     )];
-    let served = bind_tool_endpoints(tools, Some(loopback())).unwrap();
+    let served = bind_tool_endpoints(tools, None, Some(loopback())).unwrap();
     let dialer = NodeIdentity::from_secret_bytes([108u8; 32]);
 
     let (ns_a, mount_a) = mount_as(&dialer, &served[0].ticket_url);

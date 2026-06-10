@@ -19,7 +19,8 @@ use wanix_mesh::NativeServeConfig;
 use wanix_tool::{ToolPrincipal, ToolService};
 use wanix_vfs::Rights;
 
-use super::{BUILTIN_TOOL_NAMES, build_tool_service, load_tool_identity};
+use super::config::{ToolConfigFile, load_tool_config};
+use super::{BUILTIN_TOOL_NAMES, build_named_tool_service, load_tool_identity};
 use crate::mesh::resource::{
     ServedEndpoint, bind_endpoints, reject_fixed_port_multi, serve_record_example_line,
     serve_record_line,
@@ -27,24 +28,31 @@ use crate::mesh::resource::{
 use crate::{CliError, write_process_output};
 
 /// A parsed `tool serve` invocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ToolServeCommand {
     tools: Vec<String>,
+    config: Option<ToolConfigFile>,
     local_addr: Option<SocketAddr>,
     insecure_open: bool,
 }
 
-/// Parses `tool serve --tool NAME [--tool NAME ...] [--addr IP:PORT]
-/// [--insecure-open]`.
+/// Parses `tool serve [--config TOOLS.toml] [--tool NAME ...]
+/// [--listen IP:PORT] [--insecure-open]` (`--addr` stays a parsing synonym
+/// for `--listen`, ADR 0006).
+///
+/// `--config` defines host-program tools (shadowing same-named built-ins);
+/// `--tool` selects from the merged registry, defaulting to every configured
+/// tool when a config is given.
 ///
 /// # Errors
 ///
-/// Returns a usage error when no `--tool` is given, a name is not a built-in
-/// tool or is duplicated, an option lacks its value, a multi-tool serve is
-/// pinned to a fixed nonzero port, or the public endpoint is not explicitly
-/// opted into.
+/// Returns a usage error when no tool is selected, a name is neither
+/// configured nor built-in or is duplicated, the config is invalid, an option
+/// lacks its value, a multi-tool serve is pinned to a fixed nonzero port, or
+/// the public endpoint is not explicitly opted into.
 pub(crate) fn parse_tool_serve_command(args: &[OsString]) -> Result<ToolServeCommand, CliError> {
     let mut tools: Vec<String> = Vec::new();
+    let mut config: Option<ToolConfigFile> = None;
     let mut local_addr = None;
     let mut insecure_open = false;
     let mut index = 0;
@@ -57,14 +65,15 @@ pub(crate) fn parse_tool_serve_command(args: &[OsString]) -> Result<ToolServeCom
                 insecure_open = true;
                 index += 1;
             }
+            "--config" => {
+                if config.is_some() {
+                    return Err(CliError::usage("tool serve: --config given more than once"));
+                }
+                config = Some(load_tool_config(value(args, index, "--config")?.as_ref())?);
+                index += 2;
+            }
             "--tool" => {
                 let name = value(args, index, "--tool")?;
-                if !BUILTIN_TOOL_NAMES.contains(&name.as_str()) {
-                    return Err(CliError::usage(format!(
-                        "tool serve: unknown built-in tool {name:?} (available: {})",
-                        BUILTIN_TOOL_NAMES.join(", ")
-                    )));
-                }
                 if tools.contains(&name) {
                     return Err(CliError::usage(format!(
                         "tool serve: --tool {name} given more than once"
@@ -73,10 +82,10 @@ pub(crate) fn parse_tool_serve_command(args: &[OsString]) -> Result<ToolServeCom
                 tools.push(name);
                 index += 2;
             }
-            "--addr" => {
-                let raw = value(args, index, "--addr")?;
+            "--listen" | "--addr" => {
+                let raw = value(args, index, flag)?;
                 local_addr = Some(raw.parse::<SocketAddr>().map_err(|error| {
-                    CliError::usage(format!("tool serve --addr must be IP:PORT: {error}"))
+                    CliError::usage(format!("tool serve --listen must be IP:PORT: {error}"))
                 })?);
                 index += 2;
             }
@@ -87,26 +96,55 @@ pub(crate) fn parse_tool_serve_command(args: &[OsString]) -> Result<ToolServeCom
             }
         }
     }
+    // --tool names resolve against the merged registry (config first, then
+    // built-ins), wherever --config appeared on the command line.
+    for name in &tools {
+        let known = config.as_ref().is_some_and(|file| file.get(name).is_some())
+            || BUILTIN_TOOL_NAMES.contains(&name.as_str());
+        if !known {
+            let mut available: Vec<String> = config
+                .as_ref()
+                .map(ToolConfigFile::names)
+                .unwrap_or_default();
+            let unshadowed: Vec<String> = BUILTIN_TOOL_NAMES
+                .iter()
+                .filter(|builtin| !available.iter().any(|name| name == *builtin))
+                .map(ToString::to_string)
+                .collect();
+            available.extend(unshadowed);
+            return Err(CliError::usage(format!(
+                "tool serve: unknown tool {name:?} (available: {})",
+                available.join(", ")
+            )));
+        }
+    }
     if tools.is_empty() {
-        return Err(CliError::usage(
-            "tool serve: specify one or more --tool NAME",
-        ));
+        match &config {
+            // A config with no selection serves every configured tool.
+            Some(file) => tools = file.names(),
+            None => {
+                return Err(CliError::usage(
+                    "tool serve: specify one or more --tool NAME (or --config TOOLS.toml)",
+                ));
+            }
+        }
     }
     reject_fixed_port_multi("tool serve", "tool", local_addr, tools.len())?;
     // Default-deny on the public endpoint (matches volume serve / mesh-serve):
-    // serving with no --addr hands a runnable tool to anyone with its ticket,
-    // so require an explicit --insecure-open. Note what the flag does NOT skip:
-    // the verified peer identity still binds every connection to its own
-    // private job view — open mode has no allow-list, not no identity.
+    // serving with no --listen hands a runnable tool to anyone with its
+    // ticket, so require an explicit --insecure-open. Note what the flag does
+    // NOT skip: the verified peer identity still binds every connection to its
+    // own private job view — open mode has no allow-list, not no identity.
     if local_addr.is_none() && !insecure_open {
         return Err(CliError::usage(
             "tool serve on the public endpoint exposes each tool to anyone with its ticket; \
-             pass --addr IP:PORT (use port 0 to serve multiple tools) or --insecure-open to \
+             pass --listen IP:PORT (use port 0 to serve multiple tools) or --insecure-open to \
              deliberately export to the open internet",
         ));
     }
     Ok(ToolServeCommand {
         tools,
+        config,
         local_addr,
         insecure_open,
     })
@@ -136,7 +174,7 @@ pub(crate) fn run_tool_serve_streaming(
     for name in &command.tools {
         tools.push((name.clone(), load_tool_identity(name)?));
     }
-    let served = bind_tool_endpoints(tools, command.local_addr)?;
+    let served = bind_tool_endpoints(tools, command.config.as_ref(), command.local_addr)?;
     for tool in &served {
         write_process_output(
             process_stderr,
@@ -163,11 +201,12 @@ pub(crate) fn run_tool_serve_streaming(
 /// serve.
 pub(crate) fn bind_tool_endpoints(
     tools: Vec<(String, NodeIdentity)>,
+    config: Option<&ToolConfigFile>,
     local_addr: Option<SocketAddr>,
 ) -> Result<Vec<ServedEndpoint>, CliError> {
     let mut resources = Vec::with_capacity(tools.len());
     for (name, identity) in tools {
-        let service = build_tool_service(&name)?;
+        let service = build_named_tool_service(&name, config)?;
         let policy = Arc::new(ToolAttachPolicy { service });
         resources.push((name, identity, NativeServeConfig::per_peer(policy)));
     }
@@ -194,5 +233,7 @@ impl AttachPolicy for ToolAttachPolicy {
     }
 }
 
+#[cfg(test)]
+mod proc_tests;
 #[cfg(test)]
 mod tests;
